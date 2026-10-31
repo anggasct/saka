@@ -1,0 +1,24 @@
+body { margin: 0; display: flex; height: 100vh; font: 15px/1.6 system-ui, sans-serif; }
+aside { width: 300px; display: flex; flex-direction: column; border-right: 1px solid #ddd; }
+#filter { margin: 8px; padding: 6px; }
+#files { overflow: auto; font-size: 12px; }
+#files a { display: block; padding: 2px 8px; color: #333; text-decoration: none; white-space: nowrap; }
+main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#title { padding: 6px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; }
+#editor { flex: 1; overflow: hidden; }
+#editor .cm-editor { height: 100%; }
+.cm-content { max-width: 760px; margin: 0 auto; }
+.cm-h1 { font-size: 1.8em; font-weight: 700; }
+.cm-h2 { font-size: 1.5em; font-weight: 700; }
+.cm-h3 { font-size: 1.25em; font-weight: 600; }
+.cm-h4, .cm-h5, .cm-h6 { font-weight: 600; }
+.cm-codeblock { font-family: ui-monospace, monospace; background: #f6f6f6; }
+.cm-quote { border-left: 3px solid #ccc; padding-left: 8px; color: #555; }
+.cm-link, .cm-wikilink { color: #5b4bd6; cursor: pointer; }
+.cm-unresolved { color: #a77; text-decoration: underline dotted; }
+.cm-task { margin: 0 4px 0 0; vertical-align: middle; }
+.cm-properties { border: 1px solid #e3e3e3; border-radius: 6px; padding: 6px 10px; margin: 4px 0 10px; font-size: 13px; }
+.cm-properties-title { font-weight: 600; color: #666; cursor: pointer; margin-bottom: 4px; }
+.cm-prop { display: flex; gap: 12px; }
+.cm-prop-key { width: 140px; color: #777; }
+.cm-prop-value { flex: 1; }

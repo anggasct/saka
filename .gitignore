@@ -1,0 +1,11 @@
+/target/
+node_modules/
+/.dev/
+/spikes/*/out/
+
+/spikes/*/web/dist/
+
+# Local bridges to the Obsidian vault; do not commit
+project-docs
+AGENTS.md
+.worktree/

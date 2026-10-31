@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# Run a command in its own user cgroup so builds and test sessions cannot
+# starve other services on the shared VPS.
+exec systemd-run --user --scope --quiet --collect \
+  -p MemoryMax="${SAKA_MEM_MAX:-4G}" \
+  -p CPUQuota="${SAKA_CPU_QUOTA:-400%}" \
+  -p TasksMax="${SAKA_TASKS_MAX:-1024}" \
+  "$@"

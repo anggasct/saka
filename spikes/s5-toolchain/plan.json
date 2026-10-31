@@ -1,0 +1,13 @@
+{
+  "cache_dir": ".dev/cache",
+  "work_dir": ".dev/s5",
+  "memory_max": "2G",
+  "cpu_quota": "150%",
+  "tasks_max": "512",
+  "envs": [
+    { "name": "go-old", "repo": "~/projects/go-app", "check": "go build ./... && go vet ./..." },
+    { "name": "mixed-a", "repo": "~/projects/go-node-app", "check": "pnpm install --frozen-lockfile --ignore-scripts && go list ./... >/dev/null" },
+    { "name": "mixed-b", "repo": "~/projects/go-node-app", "check": "pnpm install --frozen-lockfile --ignore-scripts && go list ./... >/dev/null" },
+    { "name": "node-new", "repo": "~/projects/node-app", "check": "npm ci --ignore-scripts --no-audit --no-fund && npx tsc --version" }
+  ]
+}

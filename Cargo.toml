@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["spikes/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+publish = false
