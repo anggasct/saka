@@ -455,13 +455,10 @@ impl Engine {
         let last = task.session.as_ref().map_or(0, |s| s.last_offset);
         let from_offset = if last == 0 { 0 } else { last + 1 };
         match self.ports.agents.reattach(&session, from_offset).await {
-            Ok(r) => {
-                tracing::info!(session_id = %id, runner_version = %r.runner_version, from_offset, "session reattached");
-                Ok(Effect::Fact(TaskInput::SessionReattached {
-                    runner_version: r.runner_version,
-                    from_offset,
-                }))
-            }
+            Ok(r) => Ok(Effect::Fact(TaskInput::SessionReattached {
+                runner_version: r.runner_version,
+                from_offset,
+            })),
             Err(e) if e.code == "version_mismatch" => {
                 let _ = self.ports.agents.stop(id, Some(&session.runner_unit)).await;
                 Ok(Effect::Fact(TaskInput::SessionGone {

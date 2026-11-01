@@ -133,6 +133,18 @@ enum TaskCmd {
         #[arg(long)]
         reason: String,
     },
+    #[command(about = "Sends a message to the task's running or idle agent session")]
+    Steer { id: String, text: String },
+    #[command(about = "Stops the agent's current turn; the session waits for a steer")]
+    Interrupt { id: String },
+    #[command(about = "Ends the task's agent session and blocks the task")]
+    Stop {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    #[command(about = "Prints what the task's agent sessions did, in order")]
+    Timeline { id: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -152,6 +164,19 @@ enum PermissionCmd {
         decision: Decision,
         #[arg(help = "Sent to the agent with a deny", long)]
         message: Option<String>,
+        #[arg(
+            help = "With allow: allow the same request in this project from now on",
+            long
+        )]
+        remember: bool,
+    },
+    #[command(about = "Lists the project's remembered permission rules")]
+    Rules { project: String },
+    #[command(about = "Revokes a remembered permission rule")]
+    Revoke {
+        id: String,
+        #[arg(long)]
+        reason: String,
     },
 }
 
@@ -253,6 +278,22 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     TaskCmd::Cancel { id, reason } => {
                         client.task_action(&id, "cancel", &reason).await
                     }
+                    TaskCmd::Steer { id, text } => {
+                        client
+                            .task_session(&id, "steer", &serde_json::json!({ "text": text }))
+                            .await
+                    }
+                    TaskCmd::Interrupt { id } => {
+                        client
+                            .task_session(&id, "interrupt", &serde_json::json!({}))
+                            .await
+                    }
+                    TaskCmd::Stop { id, reason } => {
+                        client
+                            .task_session(&id, "stop", &serde_json::json!({ "reason": reason }))
+                            .await
+                    }
+                    TaskCmd::Timeline { id } => client.task_timeline(&id).await,
                 }
             })
         }
@@ -265,12 +306,19 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                         id,
                         decision,
                         message,
+                        remember,
                     } => {
                         let d = match decision {
                             Decision::Allow => "allow",
                             Decision::Deny => "deny",
                         };
-                        client.permission_answer(&id, d, message.as_deref()).await
+                        client
+                            .permission_answer(&id, d, message.as_deref(), remember)
+                            .await
+                    }
+                    PermissionCmd::Rules { project } => client.permission_rules(&project).await,
+                    PermissionCmd::Revoke { id, reason } => {
+                        client.permission_revoke(&id, &reason).await
                     }
                 }
             })

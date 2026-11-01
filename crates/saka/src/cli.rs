@@ -456,16 +456,133 @@ impl Client {
         }
     }
 
+    async fn session_of(&self, task: &str) -> Result<String, ExitCode> {
+        match self.get(&format!("/api/v1/work-items/{task}")).await {
+            Ok(a) if a.ok() => match a.body["session"]["id"].as_str() {
+                Some(id) => Ok(id.to_string()),
+                None => {
+                    err("error: invalid_state {\"state\":\"no_session\"}");
+                    Err(ExitCode::from(EXIT_CONFLICT))
+                }
+            },
+            Ok(a) => Err(fail(&a)),
+            Err(code) => Err(code),
+        }
+    }
+
+    pub async fn task_session(&self, task: &str, action: &str, body: &Value) -> ExitCode {
+        let session = match self.session_of(task).await {
+            Ok(s) => s,
+            Err(code) => return code,
+        };
+        match self
+            .post(&format!("/api/v1/sessions/{session}/{action}"), body, None)
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn task_timeline(&self, task: &str) -> ExitCode {
+        let sessions = match self
+            .get(&format!("/api/v1/sessions?work_item_id={task}"))
+            .await
+        {
+            Ok(a) if a.ok() => a.body,
+            Ok(a) => return fail(&a),
+            Err(code) => return code,
+        };
+        let mut rows = Vec::new();
+        for s in sessions["items"].as_array().into_iter().flatten() {
+            let id = text(&s["id"]);
+            let mut after: Option<u64> = None;
+            loop {
+                let cursor = after.map(|a| format!("&after={a}")).unwrap_or_default();
+                let page = match self
+                    .get(&format!("/api/v1/sessions/{id}/timeline?limit=500{cursor}"))
+                    .await
+                {
+                    Ok(a) if a.ok() => a.body,
+                    Ok(a) => return fail(&a),
+                    Err(code) => return code,
+                };
+                for item in page["items"].as_array().into_iter().flatten() {
+                    let mut row = item.clone();
+                    row["session_id"] = Value::String(id.clone());
+                    rows.push(row);
+                }
+                match page["next_after"].as_u64() {
+                    Some(next) => after = Some(next),
+                    None => break,
+                }
+            }
+        }
+        if self.json {
+            out(&json!({ "items": rows }).to_string());
+        } else {
+            for r in &rows {
+                out(&format!(
+                    "{}  {}  {}",
+                    text(&r["at"]),
+                    text(&r["kind"]),
+                    text(&r["summary"]).replace('\n', " ")
+                ));
+            }
+        }
+        ExitCode::SUCCESS
+    }
+
+    pub async fn permission_rules(&self, project: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self
+            .get(&format!("/api/v1/projects/{id}/permission-rules"))
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                lines(b, |r| {
+                    format!(
+                        "{}  {}  {}",
+                        text(&r["id"]),
+                        text(&r["tool"]),
+                        r["command"].as_str().unwrap_or_default()
+                    )
+                    .trim_end()
+                    .to_string()
+                })
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn permission_revoke(&self, id: &str, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/permission-rules/{id}/revoke"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} revoked", text(&b["id"]))),
+            Err(code) => code,
+        }
+    }
+
     pub async fn permission_answer(
         &self,
         id: &str,
         decision: &str,
         message: Option<&str>,
+        remember: bool,
     ) -> ExitCode {
         match self
             .post(
                 &format!("/api/v1/permission-requests/{id}/answer"),
-                &json!({ "decision": decision, "message": message }),
+                &json!({ "decision": decision, "message": message, "remember": remember }),
                 None,
             )
             .await

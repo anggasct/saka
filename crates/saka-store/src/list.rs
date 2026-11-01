@@ -347,6 +347,31 @@ pub fn live_session_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
     )
 }
 
+pub fn resumed_session_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    counts(
+        conn,
+        "SELECT resume_cause, COUNT(*) FROM session WHERE resume_cause IS NOT NULL GROUP BY resume_cause ORDER BY resume_cause",
+    )
+}
+
+pub fn budget_exhausted_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    counts(
+        conn,
+        "SELECT json_extract(params, '$.dimension'), COUNT(*) FROM blocker WHERE code = 'budget_exhausted'
+         GROUP BY 1 ORDER BY 1",
+    )
+}
+
+pub fn usage_totals(conn: &Connection) -> Result<Vec<(String, i64, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT account, ifnull(SUM(ifnull(input_tokens, 0) + ifnull(output_tokens, 0)), 0),
+           ifnull(SUM(ifnull(cost_usd_micros, 0)), 0)
+         FROM usage_record GROUP BY account ORDER BY account",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
 pub fn pending_permission_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row(
         "SELECT COUNT(*) FROM permission_request WHERE state = 'pending'",

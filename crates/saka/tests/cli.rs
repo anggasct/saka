@@ -539,3 +539,91 @@ fn spec_approve_summarizes_a_re_approval_and_spec_withdraw_closes_a_spec() {
     );
     assert_eq!(stdout(&withdrawn).trim(), "withdrawn solo");
 }
+
+#[test]
+fn task_and_permission_commands_drive_a_session_and_remembered_rules() {
+    use saka_core::vocab::SessionState;
+    use saka_testkit::{AgentOutcome, AgentScript};
+
+    let mut sim = Sim::new(SimConfig {
+        agent: AgentScript {
+            outcome: AgentOutcome::Hang,
+            ask: Some((
+                "Bash".into(),
+                serde_json::json!({ "command": "npm install" }),
+            )),
+            ..AgentScript::default()
+        },
+        ..SimConfig::default()
+    });
+    let server = serve(&sim);
+    sim.approve();
+    assert!(sim.run_until(5_000, |s| !s.task(1).permissions.is_empty()));
+    let task = sim.task(1).item.id.to_string();
+    let request = sim.task(1).permissions[0].id.to_string();
+    let err = |o: &Output| String::from_utf8_lossy(&o.stderr).into_owned();
+
+    let answered = saka(
+        &server,
+        &["permission", "answer", &request, "allow", "--remember"],
+    );
+    assert_eq!(code(&answered), 0, "{}", err(&answered));
+    let rules = saka(&server, &["permission", "rules", "tasks"]);
+    assert_eq!(code(&rules), 0, "{}", err(&rules));
+    let line = stdout(&rules);
+    assert!(line.trim_end().ends_with("Bash  npm install"), "{line}");
+    let rule = line.split_whitespace().next().unwrap().to_string();
+    assert!(sim.run_until(5_000, |s| {
+        s.task(1)
+            .session
+            .is_some_and(|x| x.state == SessionState::Running)
+    }));
+
+    let steered = saka(&server, &["task", "steer", &task, "keep going"]);
+    assert_eq!(code(&steered), 0, "{}", err(&steered));
+    assert!(stdout(&steered).trim().ends_with("running"));
+    let interrupted = saka(&server, &["task", "interrupt", &task]);
+    assert_eq!(code(&interrupted), 0, "{}", err(&interrupted));
+    assert!(stdout(&interrupted).trim().ends_with("interrupted"));
+    assert!(sim.run_until(5_000, |s| {
+        s.task(1)
+            .session
+            .is_some_and(|x| x.state == SessionState::Idle)
+    }));
+    assert_eq!(code(&saka(&server, &["task", "interrupt", &task])), 4);
+    let stopped = saka(&server, &["task", "stop", &task, "--reason", "wrong file"]);
+    assert_eq!(code(&stopped), 0, "{}", err(&stopped));
+    assert!(stdout(&stopped).trim().ends_with("failed"));
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["task", "stop", &task, "--reason", "again"]
+        )),
+        4
+    );
+
+    let timeline = saka(&server, &["task", "timeline", &task]);
+    assert_eq!(code(&timeline), 0, "{}", err(&timeline));
+    let printed: Vec<String> = stdout(&timeline).lines().map(String::from).collect();
+    let session = sim.task(1).session.unwrap().id;
+    assert_eq!(printed.len(), sim.timeline(session).len());
+    assert!(
+        printed.iter().any(|l| l.contains("  steer  keep going")),
+        "{printed:?}"
+    );
+    assert!(printed.iter().any(|l| l.contains("  permission  ")));
+
+    let revoked = saka(
+        &server,
+        &["permission", "revoke", &rule, "--reason", "too broad"],
+    );
+    assert_eq!(code(&revoked), 0, "{}", err(&revoked));
+    assert_eq!(stdout(&revoked).trim(), format!("{rule} revoked"));
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["permission", "revoke", &rule, "--reason", "again"]
+        )),
+        4
+    );
+}
