@@ -10,6 +10,7 @@ use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
     RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
+use crate::job::JobKind;
 use crate::model::{Coded, ProjectRepo};
 use crate::time::Timestamp;
 use crate::vocab::{
@@ -288,6 +289,13 @@ pub enum Event {
         work_item_id: WorkItemId,
         change_request_id: ChangeRequestId,
     },
+    /// A job ran out of attempts. The engine records it next to the blocker it causes.
+    #[serde(rename = "engine.job.exhausted")]
+    JobExhausted {
+        job_id: uuid::Uuid,
+        kind: JobKind,
+        last_error: Coded,
+    },
 }
 
 /// What a turn asks of the agent. The runtime renders the text.
@@ -309,6 +317,7 @@ pub enum Stream {
     WorkItem(WorkItemId),
     Session(SessionId),
     PermissionRequest(PermissionRequestId),
+    Job(uuid::Uuid),
 }
 
 impl Stream {
@@ -320,6 +329,7 @@ impl Stream {
             Stream::WorkItem(_) => "work_item",
             Stream::Session(_) => "session",
             Stream::PermissionRequest(_) => "permission_request",
+            Stream::Job(_) => "job",
         }
     }
 
@@ -331,6 +341,7 @@ impl Stream {
             Stream::WorkItem(id) => id.0,
             Stream::Session(id) => id.0,
             Stream::PermissionRequest(id) => id.0,
+            Stream::Job(id) => id,
         }
     }
 }
@@ -404,6 +415,7 @@ impl Event {
             | E::ChangeRequestUpdated { work_item_id, .. }
             | E::ChangeRequestMerged { work_item_id, .. }
             | E::ChangeRequestClosed { work_item_id, .. } => Stream::WorkItem(*work_item_id),
+            E::JobExhausted { job_id, .. } => Stream::Job(*job_id),
         }
     }
 

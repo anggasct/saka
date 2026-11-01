@@ -1733,7 +1733,8 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SpecRegistered { .. }
         | E::SpecRevisionRecorded { .. }
         | E::SpecApproved { .. }
-        | E::SpecShipped { .. } => {}
+        | E::SpecShipped { .. }
+        | E::JobExhausted { .. } => {}
     }
 }
 
