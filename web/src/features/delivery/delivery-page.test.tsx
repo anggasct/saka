@@ -68,7 +68,7 @@ describe("DeliveryPage", () => {
       within(alert).getByRole("button", { name: "Try again" }),
     );
     expect(
-      await screen.findByRole("heading", { name: "saka-dogfood" }),
+      await screen.findByRole("heading", { name: "tasks" }),
     ).toBeInTheDocument();
   });
 
@@ -92,7 +92,7 @@ describe("DeliveryPage", () => {
     expect(within(first).getByText("ci_red")).toBeInTheDocument();
     expect(within(first).getByRole("link", { name: "PR #12" })).toHaveAttribute(
       "href",
-      "https://github.com/anggasct/saka-dogfood/pull/12",
+      "https://github.com/acme/tasks/pull/12",
     );
     expect(within(second).getByText("Queued")).toBeInTheDocument();
     expect(
