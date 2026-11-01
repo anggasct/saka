@@ -13,7 +13,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::action::{Action, Produced};
-use crate::views::{ProjectView, RevisionInfo, SpecView};
+use crate::views::{ProjectView, RevisionInfo, SpecView, step_items};
 use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
 
 const REASON_MAX: usize = 500;
@@ -274,12 +274,11 @@ impl Engine {
                 .map(RevisionInfo::from)
                 .ok_or_else(|| EngineError::Internal("revision not found".into()))?,
         };
-        let work_items = self
-            .store
-            .read(|c| read::load_tasks(c, TaskSet::Spec(spec.id)))?
-            .iter()
-            .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
-            .collect();
+        let work_items = step_items(
+            &self
+                .store
+                .read(|c| read::load_tasks(c, TaskSet::Spec(spec.id)))?,
+        );
         let created = existing.is_none();
         let view = self.spec_view_with(spec, revision, work_items)?;
         if let Some(action) = action {
@@ -374,13 +373,15 @@ impl Engine {
         batch.replaced_spec_dependencies.push(spec.id);
         let mut after = Some(spec.clone());
         let mut created = Vec::new();
+        let mut current = tasks.clone();
         for e in &events {
             after = spec::evolve(after, e, now);
             match e {
                 Event::WorkItemCreated { .. } => {
                     if let Some(t) = task::evolve(None, e, now) {
                         created.push(t.clone());
-                        batch.tasks.push(t);
+                        batch.tasks.push(t.clone());
+                        current.push(t);
                     }
                 }
                 Event::WorkItemRepinned { work_item_id, .. }
@@ -388,8 +389,12 @@ impl Engine {
                     if matches!(e, Event::WorkItemRepinned { .. }) {
                         batch.replaced_work_item_dependencies.push(*work_item_id);
                     }
-                    let current = tasks.iter().find(|t| t.item.id == *work_item_id).cloned();
-                    batch.tasks.extend(task::evolve(current, e, now));
+                    if let Some(t) = current.iter_mut().find(|t| t.item.id == *work_item_id)
+                        && let Some(next) = task::evolve(Some(t.clone()), e, now)
+                    {
+                        *t = next.clone();
+                        batch.tasks.push(next);
+                    }
                 }
                 _ => {}
             }
@@ -410,17 +415,91 @@ impl Engine {
             .as_ref()
             .map(RevisionInfo::from)
             .ok_or_else(|| EngineError::Internal("revision not found".into()))?;
-        let work_items = created
-            .iter()
-            .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
-            .collect();
-        let result = self.spec_view_with(after, revision, work_items)?;
+        let result = self.spec_view_with(after, revision, step_items(&current))?;
         if let Some(action) = action {
             let reply = (action.respond)(Produced::Spec(&result, false));
             batch.action =
                 Some(action.record(self, cause, Some(spec.project_id), Some(spec_id.0), reply));
         }
         self.commit(&batch)?;
+        if let Some(from) = spec.approved_revision_id {
+            let count = |kind: &str| events.iter().filter(|e| e.kind() == kind).count();
+            let restored = events
+                .iter()
+                .filter(|e| matches!(e, Event::WorkItemRepinned { restored: true, .. }))
+                .count();
+            tracing::info!(
+                spec_id = %spec_id.0,
+                from_revision_id = %from.0,
+                to_revision_id = %view.id.0,
+                kept = tasks.iter().filter(|t| t.item.state.has_started()).count(),
+                repinned = count("delivery.work_item.repinned") - restored,
+                restored,
+                added = count("delivery.work_item.created"),
+                superseded = count("delivery.work_item.superseded"),
+                "spec re-approved"
+            );
+        }
+        Ok(result)
+    }
+
+    pub fn withdraw_spec(&self, spec_id: SpecId, why: &str, cause: &Cause) -> Result<SpecView> {
+        self.withdraw_spec_with(spec_id, why, cause, None)
+    }
+
+    pub fn withdraw_spec_with(
+        &self,
+        spec_id: SpecId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<SpecView> {
+        let reason = reason(why)?;
+        let _guard = self.locked()?;
+        let now = self.now();
+        let (spec, tasks) = self.store.read(|c| {
+            Ok((
+                read::load_spec(c, spec_id)?,
+                read::load_tasks(c, TaskSet::Spec(spec_id))?,
+            ))
+        })?;
+        let spec = spec.ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let items: Vec<_> = tasks.iter().map(|t| t.item.clone()).collect();
+        let events = spec::withdraw(&spec, &items, reason)?;
+        let mut batch = Batch::new(now);
+        let mut after = Some(spec.clone());
+        let mut current = tasks;
+        for e in &events {
+            after = spec::evolve(after, e, now);
+            if let Event::WorkItemSuperseded { work_item_id, .. } = e
+                && let Some(t) = current.iter_mut().find(|t| t.item.id == *work_item_id)
+                && let Some(next) = task::evolve(Some(t.clone()), e, now)
+            {
+                *t = next.clone();
+                batch.tasks.push(next);
+            }
+            self.push_event(&mut batch, e, Some(spec.project_id), cause, now);
+        }
+        let after = after.ok_or_else(|| EngineError::Internal("spec lost on withdraw".into()))?;
+        batch.specs.push(after.clone());
+        let revision = self
+            .store
+            .read(|c| read::load_revision(c, after.latest_revision_id))?
+            .as_ref()
+            .map(RevisionInfo::from)
+            .ok_or_else(|| EngineError::Internal("revision not found".into()))?;
+        let result = self.spec_view_with(after, revision, step_items(&current))?;
+        if let Some(action) = action {
+            let reply = (action.respond)(Produced::Spec(&result, false));
+            batch.action =
+                Some(action.record(self, cause, Some(spec.project_id), Some(spec_id.0), reply));
+        }
+        self.commit(&batch)?;
+        tracing::info!(
+            spec_id = %spec_id.0,
+            superseded = events.len() - 1,
+            "spec withdrawn"
+        );
         Ok(result)
     }
 

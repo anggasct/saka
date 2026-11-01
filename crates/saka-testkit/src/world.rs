@@ -113,6 +113,7 @@ struct State {
     next_request: u32,
     docs: BTreeMap<String, Vec<u8>>,
     inaccessible: BTreeSet<String>,
+    prompts: Vec<String>,
 }
 
 pub struct FakeWorld {
@@ -146,6 +147,7 @@ impl FakeWorld {
                 next_request: 0,
                 docs: BTreeMap::new(),
                 inaccessible: BTreeSet::new(),
+                prompts: Vec::new(),
             }),
         }
     }
@@ -176,6 +178,10 @@ impl FakeWorld {
 
     pub fn has_events(&self) -> bool {
         !self.state().events.is_empty()
+    }
+
+    pub fn prompts(&self) -> Vec<String> {
+        self.state().prompts.clone()
     }
 
     pub fn prs(&self) -> Vec<Pr> {
@@ -697,8 +703,9 @@ impl Agents for FakeWorld {
         })
     }
 
-    async fn send_turn(&self, session: &SessionRef, turn: u32, _text: &str) -> PortResult<()> {
+    async fn send_turn(&self, session: &SessionRef, turn: u32, text: &str) -> PortResult<()> {
         let mut s = self.state();
+        s.prompts.push(text.to_string());
         let ask = s.script.ask.clone();
         let fs = s.session_mut(session)?;
         if !fs.turns.insert(turn) {

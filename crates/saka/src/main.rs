@@ -90,6 +90,15 @@ enum SpecCmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    #[command(about = "Withdraws a spec that has no active tasks")]
+    Withdraw {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "Path of the spec file from the repo root")]
+        path: String,
+        #[arg(long)]
+        reason: String,
+    },
     #[command(about = "Prints a spec template that passes lint")]
     Template {
         #[arg(long, default_value = "en", help = "Template language: en or id")]
@@ -209,6 +218,14 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         }) => {
             let client = Client::new(&server(cli.server)?, cli.json);
             current_thread()?.block_on(client.spec_approve(&project, &path, reason.as_deref()))
+        }
+        Command::Spec(SpecCmd::Withdraw {
+            project,
+            path,
+            reason,
+        }) => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(client.spec_withdraw(&project, &path, &reason))
         }
         Command::Spec(SpecCmd::Template { locale }) => {
             let client = Client::new(&server(cli.server)?, cli.json);

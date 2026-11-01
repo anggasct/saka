@@ -33,6 +33,13 @@ describe("startEventStream", () => {
     expect([...fake.listeners.keys()]).toEqual(
       EVENT_KINDS.map((k) => `${k}.v1`),
     );
+    for (const kind of [
+      "spec.spec.withdrawn",
+      "delivery.work_item.repinned",
+      "delivery.work_item.superseded",
+    ]) {
+      expect(fake.listeners.has(`${kind}.v1`)).toBe(true);
+    }
   });
 
   it("invalidates the queries of the event's stream", async () => {

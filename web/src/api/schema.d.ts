@@ -180,6 +180,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/specs/{spec_id}/withdraw": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["withdraw_spec"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items": {
     parameters: {
       query?: never;
@@ -461,6 +477,7 @@ export interface components {
         /** Format: uuid */
         project_id: string;
         revision: components["schemas"]["Revision"];
+        revision_plan?: components["schemas"]["RevisionPlan"] | null;
         shipped_at?: string | null;
         slug: string;
         /** @description `draft | ready | approved | shipped | withdrawn` */
@@ -501,6 +518,7 @@ export interface components {
         spec_revision_id?: string | null;
         stage?: string | null;
         stage_phase?: string | null;
+        /** @description `queued | awaiting_start | admitted | in_stage | blocked | taken_over | done | cancelled | superseded` */
         state: string;
         step_id?: string | null;
         /** Format: int32 */
@@ -534,6 +552,17 @@ export interface components {
       tool: string;
       /** Format: uuid */
       work_item_id: string;
+    };
+    PlanStep: {
+      /** @description `keep | repin | restore | add | supersede | conflict` */
+      action: string;
+      /** @description Changed fields in the order `work`, `ac`, `commands`, `after`; only for `changed`. */
+      fields: string[];
+      /** @description `changed | removed`, only for `conflict`. */
+      reason?: string | null;
+      step_id: string;
+      /** Format: uuid */
+      work_item_id?: string | null;
     };
     /** @description RFC 9457 problem details. */
     Problem: {
@@ -599,6 +628,16 @@ export interface components {
       parser_version: number;
       source_commit: string;
     };
+    /** @description What approving the latest revision again would do to each step. */
+    RevisionPlan: {
+      /** Format: uuid */
+      from_revision_id: string;
+      /** @description No conflict, clean lint, and the current parser. */
+      ready: boolean;
+      steps: components["schemas"]["PlanStep"][];
+      /** Format: uuid */
+      to_revision_id: string;
+    };
     Session: {
       cli: string;
       cli_version?: string | null;
@@ -653,6 +692,7 @@ export interface components {
       /** Format: uuid */
       project_id: string;
       revision: components["schemas"]["Revision"];
+      revision_plan?: components["schemas"]["RevisionPlan"] | null;
       shipped_at?: string | null;
       slug: string;
       /** @description `draft | ready | approved | shipped | withdrawn` */
@@ -761,6 +801,7 @@ export interface components {
       spec_revision_id?: string | null;
       stage?: string | null;
       stage_phase?: string | null;
+      /** @description `queued | awaiting_start | admitted | in_stage | blocked | taken_over | done | cancelled | superseded` */
       state: string;
       step_id?: string | null;
       /** Format: int32 */
@@ -1209,6 +1250,42 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["OptionalReason"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Spec"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  withdraw_spec: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        spec_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
       };
     };
     responses: {

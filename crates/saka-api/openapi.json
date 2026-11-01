@@ -681,6 +681,64 @@
         }
       }
     },
+    "/api/v1/specs/{spec_id}/withdraw": {
+      "post": {
+        "tags": [
+          "specs"
+        ],
+        "operationId": "withdraw_spec",
+        "parameters": [
+          {
+            "name": "spec_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Spec"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items": {
       "get": {
         "tags": [
@@ -1591,6 +1649,17 @@
                 "revision": {
                   "$ref": "#/components/schemas/Revision"
                 },
+                "revision_plan": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RevisionPlan",
+                      "description": "Null unless the spec is approved and a newer revision is recorded."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "shipped_at": {
                   "type": [
                     "string",
@@ -1772,7 +1841,8 @@
                   ]
                 },
                 "state": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "`queued | awaiting_start | admitted | in_stage | blocked | taken_over | done | cancelled | superseded`"
                 },
                 "step_id": {
                   "type": [
@@ -1882,6 +1952,44 @@
           },
           "work_item_id": {
             "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PlanStep": {
+        "type": "object",
+        "required": [
+          "step_id",
+          "action",
+          "fields"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`keep | repin | restore | add | supersede | conflict`"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Changed fields in the order `work`, `ac`, `commands`, `after`; only for `changed`."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`changed | removed`, only for `conflict`."
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "work_item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid"
           }
         }
@@ -2100,6 +2208,36 @@
           }
         }
       },
+      "RevisionPlan": {
+        "type": "object",
+        "description": "What approving the latest revision again would do to each step.",
+        "required": [
+          "from_revision_id",
+          "to_revision_id",
+          "ready",
+          "steps"
+        ],
+        "properties": {
+          "from_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "No conflict, clean lint, and the current parser."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            }
+          },
+          "to_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "Session": {
         "type": "object",
         "required": [
@@ -2298,6 +2436,17 @@
           },
           "revision": {
             "$ref": "#/components/schemas/Revision"
+          },
+          "revision_plan": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevisionPlan",
+                "description": "Null unless the spec is approved and a newer revision is recorded."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "shipped_at": {
             "type": [
@@ -2720,7 +2869,8 @@
             ]
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "description": "`queued | awaiting_start | admitted | in_stage | blocked | taken_over | done | cancelled | superseded`"
           },
           "step_id": {
             "type": [

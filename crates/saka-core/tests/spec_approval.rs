@@ -733,3 +733,59 @@ proptest! {
         }
     }
 }
+
+const ALL_STATES: [WorkItemState; 9] = [
+    WorkItemState::Queued,
+    WorkItemState::AwaitingStart,
+    WorkItemState::Admitted,
+    WorkItemState::InStage,
+    WorkItemState::Blocked,
+    WorkItemState::TakenOver,
+    WorkItemState::Done,
+    WorkItemState::Cancelled,
+    WorkItemState::Superseded,
+];
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn superseded_tasks_are_never_admitted_and_never_count_as_cancelled(
+        states in prop::collection::vec(0usize..9, 1..8),
+        slots in 0usize..6,
+    ) {
+        let tasks: Vec<Task> = states
+            .iter()
+            .enumerate()
+            .map(|(i, s)| task_of(item(u32::try_from(i).unwrap() + 1, ALL_STATES[*s])))
+            .collect();
+        let snapshot = Snapshot {
+            specs: vec![approved_spec(FROM)],
+            tasks: tasks.clone(),
+            work_item_dependencies: vec![],
+            spec_dependencies: vec![],
+        };
+        let admitted: Vec<WorkItemId> = reconcile(&snapshot, &cfg(), slots, NOW)
+            .into_iter()
+            .filter_map(|a| match a {
+                Action::Decide(id, TaskInput::Admit) => Some(id),
+                _ => None,
+            })
+            .collect();
+        let cancelled = tasks.iter().any(|t| t.item.state == WorkItemState::Cancelled);
+        let active = tasks
+            .iter()
+            .filter(|t| matches!(t.item.state, WorkItemState::Admitted | WorkItemState::InStage))
+            .count();
+        let queued: Vec<WorkItemId> = tasks
+            .iter()
+            .filter(|t| t.item.state == WorkItemState::Queued)
+            .map(|t| t.item.id)
+            .collect();
+        for id in &admitted {
+            prop_assert!(queued.contains(id));
+        }
+        let expected = if cancelled { 0 } else { queued.len().min(slots.saturating_sub(active)) };
+        prop_assert_eq!(admitted.len(), expected);
+    }
+}

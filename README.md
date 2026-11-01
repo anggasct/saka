@@ -9,7 +9,8 @@ cargo build --release -p saka --features embed-web   # after `corepack pnpm buil
 saka serve                                            # API, workers, and the web app on 127.0.0.1:7420
 saka project add https://github.com/<owner>/<repo> --path docs
 saka spec template > docs/specs/<spec>.md            # a spec that passes lint (--locale id for Indonesian)
-saka spec approve <project> docs/specs/<spec>.md
+saka spec approve <project> docs/specs/<spec>.md       # again after an edit: repins steps that have not started
+saka spec withdraw <project> docs/specs/<spec>.md --reason "<why>"
 saka task list
 ```
 

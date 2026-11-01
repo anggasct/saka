@@ -27,3 +27,4 @@ uuid.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 saka-testkit = { path = "../saka-testkit" }
+tracing-subscriber.workspace = true

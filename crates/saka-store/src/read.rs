@@ -634,29 +634,39 @@ pub fn revision_view(conn: &Connection, id: SpecRevisionId) -> Result<Option<Rev
     let Some(r) = load_revision(conn, id)? else {
         return Ok(None);
     };
-    let mut steps: Vec<StepPlan> = match r.model.get("steps") {
+    revision_view_of(id, r.lint_ok, &r.lint_issues, &r.model, r.parser_version).map(Some)
+}
+
+pub fn revision_view_of(
+    id: SpecRevisionId,
+    lint_ok: bool,
+    issues: &Value,
+    model: &Value,
+    parser_version: u32,
+) -> Result<RevisionView> {
+    let mut steps: Vec<StepPlan> = match model.get("steps") {
         Some(steps) => serde_json::from_value(steps.clone())?,
         None => Vec::new(),
     };
     // Version 1 models predate the After column: their steps always ran in order.
-    if r.parser_version < 2 {
+    if parser_version < 2 {
         for step in steps.iter_mut().filter(|s| s.index > 1) {
             step.after = vec![format!("S{}", step.index - 1)];
         }
     }
-    let depends_on = match r.model.get("depends_on") {
+    let depends_on = match model.get("depends_on") {
         Some(list) => serde_json::from_value(list.clone())?,
         None => Vec::new(),
     };
-    Ok(Some(RevisionView {
+    Ok(RevisionView {
         id,
-        lint_ok: r.lint_ok,
-        issues: r.lint_issues,
+        lint_ok,
+        issues: issues.clone(),
         steps,
-        parser_version: r.parser_version,
-        priority: r.model.get("priority").and_then(Value::as_i64).unwrap_or(0),
+        parser_version,
+        priority: model.get("priority").and_then(Value::as_i64).unwrap_or(0),
         depends_on,
-    }))
+    })
 }
 
 pub fn load_repo(conn: &Connection, id: RepoId) -> Result<Option<Repo>> {

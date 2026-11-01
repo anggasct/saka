@@ -57,3 +57,30 @@ saka: spec
 "
     )
 }
+
+pub const APPROVAL_PATH: &str = "docs/specs/approval.md";
+
+pub fn approval_spec(frontmatter: &str, steps: &[(&str, &str)]) -> String {
+    let rows: String = steps
+        .iter()
+        .enumerate()
+        .map(|(i, (work, ac))| format!("| S{} | {work} | {ac} | `make test` |\n", i + 1))
+        .collect();
+    format!(
+        "---
+saka: spec
+{frontmatter}---
+# Approval
+
+## Acceptance criteria
+
+- **AC-01**: the first part works.
+- **AC-02**: the second part works.
+
+## Steps
+
+| Step | Work | AC | Done when |
+|------|------|----|-----------|
+{rows}"
+    )
+}
