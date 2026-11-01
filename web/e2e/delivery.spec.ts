@@ -9,10 +9,10 @@ const LONG =
 
 const project = {
   id: PROJECT_ID,
-  name: "saka-dogfood-with-a-rather-long-project-name",
+  name: "tasks-with-a-rather-long-project-name",
   workspace: {
     repo_id: "0193f0c4-1b2a-7c3d-9e8f-001122334400",
-    full_name: "anggasct/saka-dogfood",
+    full_name: "acme/tasks",
     project_path: "docs",
     base_branch: "main",
   },
@@ -86,7 +86,7 @@ const tasks = [
     change_request: {
       id: "c",
       number: 12,
-      url: "https://github.com/anggasct/saka-dogfood/pull/12",
+      url: "https://github.com/acme/tasks/pull/12",
       state: "open",
       head_sha: "a",
       base_branch: "main",

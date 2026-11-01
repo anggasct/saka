@@ -190,10 +190,10 @@ mod tests {
     #[test]
     fn a_valid_file_parses() {
         let cfg = parse(
-            b"[project]\nname = \"saka-dogfood\"\n\n[[repo]]\nname = \"app\"\nurl = \"https://github.com/acme/app\"\n",
+            b"[project]\nname = \"tasks\"\n\n[[repo]]\nname = \"app\"\nurl = \"https://github.com/acme/app\"\n",
         )
         .unwrap();
-        assert_eq!(cfg.name, "saka-dogfood");
+        assert_eq!(cfg.name, "tasks");
         assert_eq!(
             cfg.repos,
             [RepoEntry {

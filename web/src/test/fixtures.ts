@@ -9,10 +9,10 @@ export const SPEC_ID = "0193f0c4-1b2a-7c3d-9e8f-001122334466";
 
 export const project: ProjectItem = {
   id: PROJECT_ID,
-  name: "saka-dogfood",
+  name: "tasks",
   workspace: {
     repo_id: "0193f0c4-1b2a-7c3d-9e8f-001122334400",
-    full_name: "anggasct/saka-dogfood",
+    full_name: "acme/tasks",
     project_path: "docs",
     base_branch: "main",
   },
@@ -85,7 +85,7 @@ export const blockedTask = task(1, {
   change_request: {
     id: "0193f0c4-1b2a-7c3d-9e8f-001122334499",
     number: 12,
-    url: "https://github.com/anggasct/saka-dogfood/pull/12",
+    url: "https://github.com/acme/tasks/pull/12",
     state: "open",
     head_sha: "a1b2".padEnd(40, "0"),
     base_branch: "main",
