@@ -212,7 +212,7 @@ impl Api {
     fn status(&self, path: &str) -> Option<u16> {
         let request = self.http.get(format!("{}{path}", self.base));
         self.runtime
-            .block_on(request.send())
+            .block_on(async move { request.send().await })
             .ok()
             .map(|r| r.status().as_u16())
     }
