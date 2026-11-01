@@ -12,6 +12,7 @@
 )]
 
 mod clock;
+pub mod fake_claude;
 pub mod fixtures;
 mod sim;
 mod world;

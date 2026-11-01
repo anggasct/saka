@@ -3,10 +3,14 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps
+.PHONY: check deps test-systemd
 
 check:
 	$(LIMITED) cargo xtask check
 
 deps:
 	$(LIMITED) cargo xtask deps
+
+# Needs a user systemd instance; part of `make e2e` (not run in CI).
+test-systemd:
+	$(LIMITED) cargo xtask test-systemd

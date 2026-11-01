@@ -7,6 +7,7 @@
 pub mod agent;
 pub mod env;
 pub mod scm;
+pub mod supervisor;
 
 use saka_core::ids::IdSource;
 use saka_core::time::Timestamp;
@@ -19,6 +20,7 @@ pub use scm::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome,
     PushRequest, RepoRef, Scm,
 };
+pub use supervisor::{RunnerUnit, Supervisor, UnitLimits};
 
 /// Wall-clock time in milliseconds since the Unix epoch (UTC). Virtual in tests.
 pub trait Clock: Send + Sync {
