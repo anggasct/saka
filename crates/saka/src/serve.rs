@@ -324,6 +324,7 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
         AgentsConfig {
             claude: ClaudeSettings {
                 command: cfg.agent.command.clone(),
+                account: cfg.account_name(),
                 account_dir: cfg.account_dir().to_string_lossy().into_owned(),
                 model: Some(cfg.agent.model.clone()).filter(|m| !m.is_empty()),
                 path: config::paths_of(&cfg.agent.path),

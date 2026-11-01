@@ -8,10 +8,10 @@ use saka_core::policy::RequestPath;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
 use saka_ports::{
-    Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession,
+    Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession, Link,
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, RepoInfo, RepoRef, RunnerEvent,
-    RunnerEventKind, Scm, SessionLaunch, SessionRef, WorktreeState,
+    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RepoInfo, RepoRef,
+    RunnerEvent, RunnerEventKind, Scm, SessionLaunch, SessionRef, WorktreeState,
 };
 use serde_json::{Value, json};
 
@@ -32,6 +32,25 @@ pub enum AgentOutcome {
 pub struct AgentScript {
     pub outcome: AgentOutcome,
     pub ask: Option<(String, Value)>,
+    pub usage: TurnUsage,
+    pub rate_limit: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnUsage {
+    pub cost_usd_micros: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
+impl Default for TurnUsage {
+    fn default() -> Self {
+        TurnUsage {
+            cost_usd_micros: 1_000,
+            input_tokens: 100,
+            output_tokens: 50,
+        }
+    }
 }
 
 impl Default for AgentScript {
@@ -39,9 +58,13 @@ impl Default for AgentScript {
         AgentScript {
             outcome: AgentOutcome::Commit,
             ask: None,
+            usage: TurnUsage::default(),
+            rate_limit: None,
         }
     }
 }
+
+pub const SIM_RUNNER_VERSION: &str = "sim";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiScript {
@@ -64,6 +87,8 @@ pub struct Stats {
     pub interrupts: u32,
     pub answers_to_cli: u32,
     pub answer_frames: u32,
+    pub steers_to_cli: u32,
+    pub reattaches: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -91,11 +116,18 @@ pub struct Pr {
 struct FakeSession {
     env: EnvironmentId,
     running: bool,
-    next_offset: u64,
+    connected: bool,
+    silent_since: Option<Timestamp>,
+    other_version: bool,
+    generation: u32,
+    log: Vec<RunnerEvent>,
     turns: BTreeSet<u32>,
+    open_turn: Option<u32>,
+    current_turn: u32,
     asked: bool,
     waiting_turn: Option<u32>,
     answered: BTreeSet<String>,
+    steers: BTreeSet<u32>,
 }
 
 struct State {
@@ -115,6 +147,7 @@ struct State {
     docs: BTreeMap<String, Vec<u8>>,
     inaccessible: BTreeSet<String>,
     prompts: Vec<String>,
+    resumes: Vec<Option<String>>,
 }
 
 pub struct FakeWorld {
@@ -150,6 +183,7 @@ impl FakeWorld {
                 docs: BTreeMap::new(),
                 inaccessible: BTreeSet::new(),
                 prompts: Vec::new(),
+                resumes: Vec::new(),
             }),
         }
     }
@@ -200,6 +234,49 @@ impl FakeWorld {
 
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
         self.state().is_ancestor(ancestor, descendant)
+    }
+
+    pub fn resumes(&self) -> Vec<Option<String>> {
+        self.state().resumes.clone()
+    }
+
+    pub fn session_log(&self, id: SessionId) -> Vec<RunnerEvent> {
+        self.state()
+            .sessions
+            .get(&id)
+            .map(|s| s.log.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn disconnect_all(&self) {
+        let mut s = self.state();
+        for fs in s.sessions.values_mut().filter(|f| f.connected) {
+            fs.connected = false;
+            fs.generation += 1;
+        }
+        s.events.clear();
+    }
+
+    pub fn kill_runner(&self, id: SessionId) {
+        let mut s = self.state();
+        if let Some(fs) = s.sessions.get_mut(&id) {
+            fs.running = false;
+            fs.connected = false;
+        }
+        s.events.retain(|e| e.session_id != id);
+    }
+
+    pub fn silence_runner(&self, id: SessionId) {
+        let now = self.clock.now();
+        if let Some(fs) = self.state().sessions.get_mut(&id) {
+            fs.silent_since = Some(now);
+        }
+    }
+
+    pub fn swap_runner_version(&self, id: SessionId) {
+        if let Some(fs) = self.state().sessions.get_mut(&id) {
+            fs.other_version = true;
+        }
     }
 
     pub fn running_sessions(&self) -> Vec<SessionId> {
@@ -340,14 +417,19 @@ impl State {
         let Some(s) = self.sessions.get_mut(&session) else {
             return;
         };
-        let offset = s.next_offset;
-        s.next_offset += 1;
-        self.events.push_back(RunnerEvent {
+        if matches!(kind, RunnerEventKind::TurnEnded { .. }) {
+            s.open_turn = None;
+        }
+        let event = RunnerEvent {
             session_id: session,
-            offset,
+            offset: s.log.len() as u64,
             at,
             kind,
-        });
+        };
+        s.log.push(event.clone());
+        if s.connected && s.silent_since.is_none() {
+            self.events.push_back(event);
+        }
     }
 
     fn work(&mut self, session: SessionId, turn: u32, at: Timestamp) {
@@ -355,6 +437,10 @@ impl State {
             return;
         };
         let outcome = self.script.outcome.clone();
+        let usage = self.script.usage;
+        if let Some(info) = self.script.rate_limit.clone() {
+            self.emit(session, at, RunnerEventKind::RateLimit { info });
+        }
         let end = |s: &mut State, status: &str| {
             s.emit(
                 session,
@@ -362,10 +448,10 @@ impl State {
                 RunnerEventKind::TurnEnded {
                     turn,
                     status: status.to_string(),
-                    cost_usd_micros: Some(1_000),
-                    input_tokens: Some(100),
-                    output_tokens: Some(50),
-                    result_summary: None,
+                    cost_usd_micros: Some(usage.cost_usd_micros),
+                    input_tokens: Some(usage.input_tokens),
+                    output_tokens: Some(usage.output_tokens),
+                    result_summary: Some(format!("turn {turn} done")),
                 },
             );
         };
@@ -423,7 +509,7 @@ impl State {
 
     fn session_mut(&mut self, session: &SessionRef) -> PortResult<&mut FakeSession> {
         match self.sessions.get_mut(&session.session_id) {
-            Some(s) if s.running => Ok(s),
+            Some(s) if s.running && s.connected && s.silent_since.is_none() => Ok(s),
             _ => Err(PortError::retryable(
                 "runner_unreachable",
                 json!({ "session_id": session.session_id }),
@@ -687,14 +773,22 @@ impl Agents for FakeWorld {
             FakeSession {
                 env: launch.environment.environment_id,
                 running: true,
-                next_offset: 0,
+                connected: true,
+                silent_since: None,
+                other_version: false,
+                generation: 0,
+                log: Vec::new(),
                 turns: BTreeSet::new(),
+                open_turn: None,
+                current_turn: 0,
                 asked: false,
                 waiting_turn: None,
                 answered: BTreeSet::new(),
+                steers: BTreeSet::new(),
             },
         );
         s.stats.session_starts += 1;
+        s.resumes.push(launch.resume_cli_session_id.clone());
         let at = self.clock.now();
         s.emit(
             id,
@@ -723,6 +817,8 @@ impl Agents for FakeWorld {
         if !fs.turns.insert(turn) {
             return Ok(());
         }
+        fs.open_turn = Some(turn);
+        fs.current_turn = turn;
         let first = turn == 1;
         let ask_now = ask.filter(|_| !fs.asked);
         if ask_now.is_some() {
@@ -792,9 +888,115 @@ impl Agents for FakeWorld {
 
     async fn interrupt(&self, session: &SessionRef) -> PortResult<()> {
         let mut s = self.state();
-        s.session_mut(session)?;
+        let open = s.session_mut(session)?.open_turn;
         s.stats.interrupts += 1;
+        if let Some(turn) = open {
+            let at = self.clock.now();
+            s.emit(
+                session.session_id,
+                at,
+                RunnerEventKind::TurnEnded {
+                    turn,
+                    status: "error_during_execution".into(),
+                    cost_usd_micros: Some(10),
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    result_summary: None,
+                },
+            );
+        }
         Ok(())
+    }
+
+    async fn steer(&self, session: &SessionRef, n: u32, text: &str) -> PortResult<()> {
+        let mut s = self.state();
+        let fs = s.session_mut(session)?;
+        if !fs.steers.insert(n) {
+            return Ok(());
+        }
+        let turn = fs.current_turn;
+        s.stats.steers_to_cli += 1;
+        s.prompts.push(text.to_string());
+        let at = self.clock.now();
+        s.emit(
+            session.session_id,
+            at,
+            RunnerEventKind::Steer {
+                n,
+                turn,
+                text: text.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn reattach(&self, session: &SessionRef, from_offset: u64) -> PortResult<Reattached> {
+        let mut s = self.state();
+        let unreachable = || {
+            PortError::retryable(
+                "runner_unreachable",
+                json!({ "session_id": session.session_id }),
+            )
+        };
+        let fs = s
+            .sessions
+            .get_mut(&session.session_id)
+            .ok_or_else(unreachable)?;
+        if !fs.running || fs.silent_since.is_some() {
+            return Err(unreachable());
+        }
+        if fs.other_version {
+            fs.running = false;
+            return Err(PortError::permanent(
+                "version_mismatch",
+                json!({ "session_id": session.session_id }),
+            ));
+        }
+        fs.connected = true;
+        let replay: Vec<RunnerEvent> = fs
+            .log
+            .iter()
+            .filter(|e| e.offset >= from_offset)
+            .cloned()
+            .collect();
+        let next_offset = fs.log.len() as u64;
+        s.events.retain(|e| e.session_id != session.session_id);
+        s.events.extend(replay);
+        s.stats.reattaches += 1;
+        Ok(Reattached {
+            runner_version: SIM_RUNNER_VERSION.into(),
+            next_offset,
+        })
+    }
+
+    async fn unit_active(&self, session: &SessionRef) -> PortResult<bool> {
+        Ok(self
+            .state()
+            .sessions
+            .get(&session.session_id)
+            .is_some_and(|s| s.running))
+    }
+
+    fn link(&self, session: SessionId) -> Link {
+        let now = self.clock.now();
+        match self.state().sessions.get(&session) {
+            Some(s) if s.connected => Link::Open {
+                silent_ms: s.silent_since.map_or(0, |since| now.since(since)),
+            },
+            Some(s) => Link::Closed {
+                generation: s.generation,
+            },
+            None => Link::Closed { generation: 0 },
+        }
+    }
+
+    fn disconnect(&self, session: SessionId) {
+        let mut s = self.state();
+        if let Some(fs) = s.sessions.get_mut(&session).filter(|f| f.connected) {
+            fs.connected = false;
+            fs.generation += 1;
+        }
+        s.events.retain(|e| e.session_id != session);
     }
 
     async fn stop(&self, session_id: SessionId, _runner_unit: Option<&str>) -> PortResult<()> {
@@ -803,6 +1005,7 @@ impl Agents for FakeWorld {
             && fs.running
         {
             fs.running = false;
+            fs.connected = false;
             s.stats.sessions_stopped += 1;
             s.events.retain(|e| e.session_id != session_id);
         }

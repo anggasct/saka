@@ -149,6 +149,7 @@ fn ask_script() -> AgentScript {
             "Bash".into(),
             json!({ "command": "make deploy && echo ok" }),
         )),
+        ..AgentScript::default()
     }
 }
 

@@ -4,9 +4,7 @@ use std::sync::OnceLock;
 
 use proptest::prelude::*;
 use saka_core::job::JobKind;
-use saka_core::vocab::{
-    BlockerCode, ResumeCause, SessionState, SpecState, Stage, StagePhase, WorkItemState,
-};
+use saka_core::vocab::{BlockerCode, SessionState, SpecState, Stage, StagePhase, WorkItemState};
 use saka_testkit::{AgentOutcome, AgentScript, Operator, Sim, SimConfig, SimOutcome, Step};
 use serde_json::json;
 
@@ -16,6 +14,7 @@ fn waiting_script() -> AgentScript {
     AgentScript {
         outcome: AgentOutcome::Commit,
         ask: Some(("Bash".into(), json!({ "command": "make deploy" }))),
+        ..AgentScript::default()
     }
 }
 
@@ -29,7 +28,7 @@ fn settle(sim: &mut Sim) {
 }
 
 #[test]
-fn a_restart_loses_live_sessions_and_the_task_resumes_them_once() {
+fn a_restart_reattaches_live_sessions_and_the_task_keeps_its_session() {
     let mut sim = Sim::new(SimConfig {
         agent: waiting_script(),
         operator: Operator {
@@ -45,24 +44,18 @@ fn a_restart_loses_live_sessions_and_the_task_resumes_them_once() {
             .session
             .is_some_and(|x| x.state == SessionState::Waiting)
     }));
-    let runner = sim.world.running_sessions();
-    assert_eq!(runner.len(), 1);
+    let before = sim.task(1).session.unwrap();
 
     sim.restart();
-    let t = sim.task(1);
-    assert_eq!(t.item.state, WorkItemState::InStage);
-    assert!(t.open_blocker().is_none());
-    assert_eq!(t.session.unwrap().state, SessionState::Lost);
-
     sim.cfg.operator.answer = Some(true);
     assert!(sim.run_to_shipped(STEPS));
+    let sessions = sim.sessions(1);
+    assert_eq!(sessions.len(), 1, "the session survives the restart");
+    assert_eq!(sessions[0].id, before.id);
+    assert_eq!(sessions[0].state, SessionState::Ended);
+    assert!(sim.stats().reattaches >= 1);
     let stats = sim.stats();
     assert_eq!((stats.prs_opened, stats.merges), (2, 2));
-    let sessions = sim.sessions(1);
-    assert_eq!(sessions.len(), 2);
-    assert_eq!(sessions[0].state, SessionState::Resumed);
-    assert_eq!(sessions[1].resumed_from_session_id, Some(sessions[0].id));
-    assert_eq!(sessions[1].resume_cause, Some(ResumeCause::Lost));
 }
 
 #[test]
@@ -215,7 +208,7 @@ proptest! {
             sim.operate();
             sim.step();
             steps += 1;
-            prop_assert!(steps < STEPS, "stuck: {:?}", sim.tasks().iter().map(|t| (t.item.state, t.item.stage_phase, t.open_blocker().map(|b| b.code))).collect::<Vec<_>>());
+            prop_assert!(steps < STEPS, "stuck: {:?}", sim.tasks().iter().map(|t| (t.item.state, t.item.stage_phase, t.open_blocker().map(|b| (b.code, b.params.clone())))).collect::<Vec<_>>());
         }
         prop_assert!(sim.restarts >= 1);
         prop_assert_eq!(sim.outcome(), expected);

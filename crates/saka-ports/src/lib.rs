@@ -10,7 +10,10 @@ use saka_core::time::Timestamp;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub use agent::{Agents, LaunchedSession, RunnerEvent, RunnerEventKind, SessionLaunch, SessionRef};
+pub use agent::{
+    Agents, LaunchedSession, Link, Reattached, RunnerEvent, RunnerEventKind, SessionLaunch,
+    SessionRef,
+};
 pub use docs::{DocFile, DocSource};
 pub use env::{EnvRef, Environments, PrepareRequest, PreparedEnvironment, WorktreeState};
 pub use git::{GitAccess, GitRemote, Repos};

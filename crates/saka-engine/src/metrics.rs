@@ -130,6 +130,7 @@ pub struct Readiness {
     pub migrations: bool,
     pub worker: bool,
     pub reconciler: bool,
+    pub sessions_reattached: bool,
 }
 
 impl Engine {
@@ -172,6 +173,13 @@ impl Engine {
             migrations,
             worker: self.counters.worker_started.load(Ordering::SeqCst),
             reconciler: self.counters.reconciler_started.load(Ordering::SeqCst),
+            sessions_reattached: self.store.job_counts().is_ok_and(|counts| {
+                !counts.iter().any(|(kind, state, n)| {
+                    kind == "session.reattach"
+                        && matches!(state.as_str(), "queued" | "leased" | "failed")
+                        && *n > 0
+                })
+            }),
         }
     }
 }

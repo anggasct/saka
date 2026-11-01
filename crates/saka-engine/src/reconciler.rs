@@ -1,9 +1,15 @@
+use saka_core::job::{Job, JobKind};
+use saka_core::model::Task;
 use saka_core::reconcile::{Action, Snapshot, reconcile, waiting};
 use saka_core::spec;
-use saka_core::task::TaskInput;
 use saka_store::{Batch, TaskSet, read};
 
-use crate::{Engine, EngineError, Extra, Mode, Result};
+use saka_ports::Link;
+use serde_json::json;
+
+use crate::{Engine, Extra, Mode, Result};
+
+const RUNNER_SILENCE_MS: i64 = 30_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
@@ -61,6 +67,10 @@ impl Engine {
                 }
             }
         }
+        for job in self.monitor(&snapshot.tasks) {
+            let project = project_of(&snapshot.tasks, &job);
+            self.push_job(&mut jobs, job, project, &cause);
+        }
         if !jobs.jobs.is_empty() {
             // Jobs that already exist keep their row: keys are unique.
             self.store.commit(&jobs)?;
@@ -104,21 +114,48 @@ impl Engine {
             .store
             .read(|c| read::load_tasks(c, TaskSet::Reconcile))?;
         let cause = self.cause("system:recovery");
-        let mut lost = 0;
-        for task in tasks.iter().filter(|t| t.live_session().is_some()) {
-            match self.decide(
-                task.item.id,
-                Some(TaskInput::ServerRestarted),
-                Mode::Fact,
-                &cause,
-                Extra::default(),
-            ) {
-                Ok(events) if !events.is_empty() => lost += 1,
-                Ok(_) => {}
-                Err(EngineError::Rejected(_)) => {}
-                Err(e) => return Err(e),
+        let mut batch = Batch::new(self.now());
+        for job in self.monitor(&tasks) {
+            let project = Some(project_of(&tasks, &job));
+            self.push_job(&mut batch, job, project.flatten(), &cause);
+        }
+        let queued = batch.jobs.len();
+        if queued > 0 {
+            self.commit(&batch)?;
+        }
+        Ok(queued)
+    }
+
+    fn monitor(&self, tasks: &[Task]) -> Vec<Job> {
+        let mut jobs = Vec::new();
+        for (task, session) in tasks
+            .iter()
+            .filter_map(|t| t.live_session().map(|s| (t, s)))
+        {
+            match self.ports.agents.link(session.id) {
+                Link::Open { silent_ms } if silent_ms > RUNNER_SILENCE_MS => {
+                    tracing::info!(session_id = %session.id, silent_ms, "runner is silent; reconnecting");
+                    self.ports.agents.disconnect(session.id);
+                }
+                Link::Open { .. } => {}
+                Link::Closed { generation } => jobs.push(Job::new(
+                    JobKind::SessionReattach,
+                    format!("{}:{}:{generation}", session.id, self.boot),
+                    json!({ "work_item_id": task.item.id, "session_id": session.id }),
+                    self.now(),
+                )),
             }
         }
-        Ok(lost)
+        jobs
     }
+}
+
+fn project_of(tasks: &[Task], job: &Job) -> Option<saka_core::ids::ProjectId> {
+    tasks
+        .iter()
+        .find(|t| {
+            job.payload.get("work_item_id").and_then(|v| v.as_str())
+                == Some(t.item.id.to_string().as_str())
+        })
+        .map(|t| t.item.project_id)
 }

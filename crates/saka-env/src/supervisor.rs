@@ -122,6 +122,10 @@ impl Supervisor for SystemdSupervisor {
             ))
         }
     }
+
+    async fn is_active(&self, name: &str) -> PortResult<bool> {
+        Ok(Self::is_active(name).await)
+    }
 }
 
 pub struct DirectSupervisor {
@@ -195,5 +199,15 @@ impl Supervisor for DirectSupervisor {
             let _ = child.wait().await;
         }
         Ok(())
+    }
+
+    async fn is_active(&self, name: &str) -> PortResult<bool> {
+        let mut children = self
+            .children
+            .lock()
+            .map_err(|_| failed("supervisor_poisoned", "children lock"))?;
+        Ok(children
+            .get_mut(name)
+            .is_some_and(|c| matches!(c.try_wait(), Ok(None))))
     }
 }

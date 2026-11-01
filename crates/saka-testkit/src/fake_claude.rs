@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 pub const SCRIPT_VAR: &str = "SAKA_FAKE_CLAUDE";
 pub const SECRETS_VAR: &str = "SAKA_FAKE_SECRETS";
 pub const ASKED_COMMAND: &str = "make deploy";
+pub const TOOL_OUTPUT_SECRET: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 
 fn out(v: &Value) {
     let mut stdout = std::io::stdout().lock();
@@ -20,6 +21,7 @@ fn result(subtype: &str) -> Value {
     json!({
         "type": "result",
         "subtype": subtype,
+        "num_turns": 1,
         "total_cost_usd": 0.001,
         "usage": { "input_tokens": 10, "output_tokens": 5 },
         "result": "done",
@@ -39,6 +41,7 @@ pub fn main() -> i32 {
         .unwrap_or_default();
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
+    let resumed = std::env::args().any(|a| a == "--resume");
     let mut turn = 0;
     while let Some(Ok(line)) = lines.next() {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
@@ -62,6 +65,20 @@ pub fn main() -> i32 {
                 }
                 if has("exit") {
                     return 1;
+                }
+                if has("resume-empty") && resumed && turn == 1 {
+                    out(
+                        &json!({ "type": "result", "subtype": "success", "num_turns": 0, "result": "" }),
+                    );
+                }
+                if has("tools") {
+                    out(
+                        &json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "name": "Bash", "input": { "command": "go test ./..." } }] } }),
+                    );
+                    let long = format!("token {TOOL_OUTPUT_SECRET} {}", "x".repeat(800));
+                    out(
+                        &json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "is_error": true, "content": [{ "type": "text", "text": long }] }] } }),
+                    );
                 }
                 if has("ask") && turn == 1 {
                     out(&json!({

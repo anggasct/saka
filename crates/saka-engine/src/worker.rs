@@ -157,7 +157,18 @@ impl Engine {
                 self.ports.agents.interrupt(&session).await?;
                 Ok(Effect::Nothing)
             }
-            JobKind::SessionSteer | JobKind::SessionReattach => Ok(Effect::Skipped),
+            JobKind::SessionSteer => {
+                let Some(session) = self.session_ref(&task, field(p, "session_id")?) else {
+                    return Ok(Effect::Skipped);
+                };
+                let text: String = field(p, "text")?;
+                self.ports
+                    .agents
+                    .steer(&session, field(p, "n")?, &text)
+                    .await?;
+                Ok(Effect::Nothing)
+            }
+            JobKind::SessionReattach => self.reattach(&task, field(p, "session_id")?).await,
             JobKind::SessionStop => {
                 let session: SessionId = field(p, "session_id")?;
                 let unit: Option<String> = p
@@ -412,6 +423,7 @@ impl Engine {
                 session_id,
                 work_item_id: task.item.id,
                 environment: self.env_ref(task, env)?,
+                resume_cli_session_id: saka_core::resume::plan(task).and_then(|p| p.cli_session_id),
             })
             .await?;
         Ok(Effect::Fact(TaskInput::SessionLaunched {
@@ -424,6 +436,35 @@ impl Engine {
             socket_path: launched.socket_path,
             log_path: launched.log_path,
         }))
+    }
+
+    async fn reattach(&self, task: &Task, id: SessionId) -> Execution {
+        let Some(session) = self.session_ref(task, id) else {
+            return Ok(Effect::Skipped);
+        };
+        if !self.ports.agents.unit_active(&session).await? {
+            return Ok(Effect::Fact(TaskInput::SessionGone {
+                cause: "runner_exited".into(),
+            }));
+        }
+        let last = task.session.as_ref().map_or(0, |s| s.last_offset);
+        let from_offset = if last == 0 { 0 } else { last + 1 };
+        match self.ports.agents.reattach(&session, from_offset).await {
+            Ok(r) => {
+                tracing::info!(session_id = %id, runner_version = %r.runner_version, from_offset, "session reattached");
+                Ok(Effect::Fact(TaskInput::SessionReattached {
+                    runner_version: r.runner_version,
+                    from_offset,
+                }))
+            }
+            Err(e) if e.code == "version_mismatch" => {
+                let _ = self.ports.agents.stop(id, Some(&session.runner_unit)).await;
+                Ok(Effect::Fact(TaskInput::SessionGone {
+                    cause: "version_mismatch".into(),
+                }))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn send_turn(

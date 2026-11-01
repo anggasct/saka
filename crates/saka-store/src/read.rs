@@ -441,6 +441,7 @@ pub(crate) fn session(row: &Row<'_>) -> Result<Session> {
         idle_since: opt_ts(row, "idle_since")?,
         interrupt_requested: opt_vocab(row, "interrupt_requested")?,
         steers: optional_u32(row, "steers")?,
+        last_offset: u64_col(row, "last_offset")?,
         recorded_turn: optional_u32(row, "recorded_turn")?,
         recorded_running_ms: optional_i64(row, "recorded_running_ms")?,
         started_at: opt_ts(row, "started_at")?,
@@ -470,6 +471,85 @@ pub fn sessions(conn: &Connection, work_item: WorkItemId) -> Result<Vec<Session>
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
         out.push(session(row)?);
+    }
+    Ok(out)
+}
+
+pub fn timeline(
+    conn: &Connection,
+    session: SessionId,
+    after: Option<u64>,
+    limit: u32,
+) -> Result<Vec<saka_core::model::SessionActivity>> {
+    let after = after.map_or(-1, |a| i64::try_from(a).unwrap_or(i64::MAX));
+    let mut stmt = conn.prepare(
+        "SELECT * FROM session_activity WHERE session_id = ?1 AND \"offset\" > ?2
+         ORDER BY \"offset\" LIMIT ?3",
+    )?;
+    let mut q = stmt.query(params![session.0.to_string(), after, limit])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(activity(row)?);
+    }
+    Ok(out)
+}
+
+pub fn activities_after(
+    conn: &Connection,
+    seq: i64,
+    limit: u32,
+) -> Result<Vec<(i64, saka_core::model::SessionActivity)>> {
+    let mut stmt =
+        conn.prepare("SELECT * FROM session_activity WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
+    let mut q = stmt.query(params![seq, limit])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push((row.get("seq")?, activity(row)?));
+    }
+    Ok(out)
+}
+
+fn activity(row: &Row<'_>) -> Result<saka_core::model::SessionActivity> {
+    Ok(saka_core::model::SessionActivity {
+        session_id: SessionId(uuid(row, "session_id")?),
+        offset: u64_col(row, "offset")?,
+        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        at: ts(row, "at")?,
+        kind: row.get("kind")?,
+        summary: row.get("summary")?,
+        data: json(row, "data")?,
+    })
+}
+
+pub fn usage_records(
+    conn: &Connection,
+    work_item: Option<WorkItemId>,
+    session: Option<SessionId>,
+) -> Result<Vec<saka_core::model::UsageRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM usage_record WHERE (?1 IS NULL OR work_item_id = ?1) AND (?2 IS NULL OR session_id = ?2)
+         ORDER BY ended_at, id",
+    )?;
+    let mut q = stmt.query(params![
+        work_item.map(|w| w.0.to_string()),
+        session.map(|s| s.0.to_string())
+    ])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(saka_core::model::UsageRecord {
+            id: saka_core::ids::UsageRecordId(uuid(row, "id")?),
+            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+            stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
+            session_id: SessionId(uuid(row, "session_id")?),
+            account: row.get("account")?,
+            turn: u32_col(row, "turn")?,
+            status: row.get("status")?,
+            input_tokens: row.get("input_tokens")?,
+            output_tokens: row.get("output_tokens")?,
+            cost_usd_micros: row.get("cost_usd_micros")?,
+            running_ms: row.get("running_ms")?,
+            ended_at: ts(row, "ended_at")?,
+        });
     }
     Ok(out)
 }

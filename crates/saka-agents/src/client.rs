@@ -1,4 +1,7 @@
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use saka_core::ids::SessionId;
 use saka_core::time::Timestamp;
@@ -9,11 +12,21 @@ use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::protocol::{self, LogEvent, PROTOCOL_VERSION, RunnerFrame, ServerFrame};
+use crate::protocol::{self, LogEvent, RunnerFrame, ServerFrame};
 
 pub struct RunnerConnection {
     writer: Mutex<OwnedWriteHalf>,
     pub next_offset: u64,
+    pub runner_version: String,
+    last_frame_ms: Arc<AtomicI64>,
+    closed: Arc<AtomicBool>,
+}
+
+fn wall_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
 }
 
 fn unreachable(session: SessionId, why: &str) -> PortError {
@@ -31,31 +44,11 @@ impl RunnerConnection {
         server_version: &str,
         sink: mpsc::UnboundedSender<RunnerEvent>,
     ) -> PortResult<RunnerConnection> {
-        Self::connect_with(
-            socket,
-            session,
-            PROTOCOL_VERSION,
-            from_offset,
-            server_version,
-            sink,
-        )
-        .await
-    }
-
-    pub async fn connect_with(
-        socket: &Path,
-        session: SessionId,
-        protocol_version: u32,
-        from_offset: u64,
-        server_version: &str,
-        sink: mpsc::UnboundedSender<RunnerEvent>,
-    ) -> PortResult<RunnerConnection> {
         let stream = UnixStream::connect(socket)
             .await
             .map_err(|e| unreachable(session, &e.to_string()))?;
         let (read, mut writer) = stream.into_split();
         let hello = ServerFrame::Hello {
-            protocol_version,
             server_version: server_version.to_string(),
             from_offset,
         };
@@ -69,15 +62,23 @@ impl RunnerConnection {
             .await
             .map_err(|e| unreachable(session, &e.to_string()))?
             .ok_or_else(|| unreachable(session, "closed"))?;
-        let next_offset = match protocol::decode::<RunnerFrame>(&first) {
-            Ok(RunnerFrame::Hello { next_offset, .. }) => next_offset,
+        let (next_offset, runner_version) = match protocol::decode::<RunnerFrame>(&first) {
+            Ok(RunnerFrame::Hello {
+                next_offset,
+                runner_version,
+                ..
+            }) => (next_offset, runner_version),
             Ok(RunnerFrame::Error { code }) => {
                 return Err(PortError::permanent(code, json!({ "session_id": session })));
             }
             _ => return Err(unreachable(session, "no hello")),
         };
+        let last_frame_ms = Arc::new(AtomicI64::new(wall_ms()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let (seen, gone) = (Arc::clone(&last_frame_ms), Arc::clone(&closed));
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
+                seen.store(wall_ms(), Ordering::SeqCst);
                 match protocol::decode::<RunnerFrame>(&line) {
                     Ok(RunnerFrame::Event(event)) => {
                         if let Some(ev) = to_runner_event(session, event)
@@ -92,11 +93,23 @@ impl RunnerConnection {
                     _ => {}
                 }
             }
+            gone.store(true, Ordering::SeqCst);
         });
         Ok(RunnerConnection {
             writer: Mutex::new(writer),
             next_offset,
+            runner_version,
+            last_frame_ms,
+            closed,
         })
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    pub fn silent_ms(&self) -> i64 {
+        (wall_ms() - self.last_frame_ms.load(Ordering::SeqCst)).max(0)
     }
 
     pub async fn send(&self, session: SessionId, frame: &ServerFrame) -> PortResult<()> {
@@ -134,6 +147,13 @@ pub fn to_runner_event(session_id: SessionId, event: LogEvent) -> Option<RunnerE
         "activity" => RunnerEventKind::Activity {
             category: text("category"),
             summary: text("summary"),
+            tool: get(d, "tool"),
+            is_error: get(d, "is_error"),
+        },
+        "steer" => RunnerEventKind::Steer {
+            n: get(d, "n")?,
+            turn: get(d, "turn").unwrap_or_default(),
+            text: text("text"),
         },
         "permission_request" => RunnerEventKind::PermissionRequest {
             request_id: text("request_id"),

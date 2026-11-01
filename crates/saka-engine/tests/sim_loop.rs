@@ -84,7 +84,10 @@ fn sim_with(agent: AgentScript, f: impl FnOnce(&mut SimConfig)) -> Sim {
 }
 
 fn script(outcome: AgentOutcome) -> AgentScript {
-    AgentScript { outcome, ask: None }
+    AgentScript {
+        outcome,
+        ..AgentScript::default()
+    }
 }
 
 fn run_to_block(sim: &mut Sim) -> BlockerCode {
@@ -161,6 +164,7 @@ fn running_past_the_budget_interrupts_and_blocks_as_budget_exhausted_not_countin
     let ask = AgentScript {
         outcome: AgentOutcome::Hang,
         ask: Some(("Bash".into(), json!({ "command": "make deploy" }))),
+        ..AgentScript::default()
     };
     let mut sim = sim_with(ask, |_| {});
     assert!(sim.run_until(STEPS, |s| {
@@ -199,6 +203,7 @@ fn an_unmatched_tool_request_waits_for_the_operator_and_is_delivered_once() {
             "Bash".into(),
             json!({ "command": "make deploy && echo ok" }),
         )),
+        ..AgentScript::default()
     };
     let mut sim = sim_with(ask, |_| {});
     assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
@@ -256,6 +261,7 @@ fn policy_answers_matching_requests_and_denies_git_push() {
         let ask = AgentScript {
             outcome: AgentOutcome::Commit,
             ask: Some(("Bash".into(), json!({ "command": command }))),
+            ..AgentScript::default()
         };
         let mut sim = sim_with(ask, |c| c.rules = rules.clone());
         assert!(

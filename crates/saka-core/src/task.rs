@@ -868,7 +868,10 @@ impl Decider<'_> {
 
     fn turn_accepted(&self, turn: u32) -> Vec<Event> {
         self.with_live_session(|s| {
-            if s.turns == turn && matches!(s.state, SessionState::Starting | SessionState::Idle) {
+            if s.turns == turn
+                && turn > s.recorded_turn
+                && matches!(s.state, SessionState::Starting | SessionState::Idle)
+            {
                 vec![self.session_state(s, SessionState::Running)]
             } else {
                 vec![]
@@ -1037,14 +1040,7 @@ impl Decider<'_> {
             return vec![];
         };
         let live = session.state.is_live();
-        if session.turns != turn
-            || turn <= session.recorded_turn
-            || (live
-                && !matches!(
-                    session.state,
-                    SessionState::Running | SessionState::Waiting | SessionState::Interrupted
-                ))
-        {
+        if session.turns != turn || turn <= session.recorded_turn {
             return vec![];
         }
         let running = if live {
@@ -2048,6 +2044,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 idle_since: None,
                 interrupt_requested: None,
                 steers: 0,
+                last_offset: 0,
                 recorded_turn: 0,
                 recorded_running_ms: 0,
                 started_at: Some(now),

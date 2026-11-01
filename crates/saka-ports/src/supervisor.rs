@@ -22,4 +22,6 @@ pub trait Supervisor: Send + Sync {
     async fn start(&self, unit: &RunnerUnit) -> PortResult<()>;
 
     async fn stop(&self, name: &str) -> PortResult<()>;
+
+    async fn is_active(&self, name: &str) -> PortResult<bool>;
 }
