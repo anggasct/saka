@@ -432,4 +432,13 @@ mod tests {
         let rules = "[[permission.rule]]\nid = \"read\"\neffect = \"allow\"\ntools = [\"Read\"]\n";
         assert_eq!(Config::parse(rules).unwrap().permission.rule.len(), 1);
     }
+
+    #[test]
+    fn the_example_config_parses_with_every_field_set() {
+        let cfg = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
+        assert_eq!(cfg.scm.len(), 1);
+        assert_eq!(cfg.scm[0].app_id, 123456);
+        assert_eq!(cfg.agent.limits.cpu_quota, "200%");
+        assert_eq!(cfg.permission.rule.len(), 3);
+    }
 }

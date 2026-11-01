@@ -3,7 +3,7 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps test-systemd
+.PHONY: check deps e2e test-systemd
 
 check:
 	$(LIMITED) cargo xtask check
@@ -14,3 +14,7 @@ deps:
 # Needs a user systemd instance; part of `make e2e` (not run in CI).
 test-systemd:
 	$(LIMITED) cargo xtask test-systemd
+
+# Opt-in: a real loop against a test repository with real credentials (see README).
+e2e: test-systemd
+	$(LIMITED) cargo xtask e2e

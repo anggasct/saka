@@ -1,0 +1,58 @@
+# Saka operator config: $XDG_CONFIG_HOME/saka/config.toml, or the file named by SAKA_CONFIG.
+# Every field is optional except an [[scm]] entry's id, provider, app_id, and private_key_file.
+# Unknown fields are an error (config_unknown_field).
+
+[server]
+listen = "127.0.0.1:7420"          # loopback only; any other address exits with code 2
+allowed_origins = []               # extra browser origins, e.g. "http://localhost:5173" for the Vite dev server
+data_dir = "~/.local/share/saka"   # default $XDG_DATA_HOME/saka
+
+[scheduler]
+max_active_tasks = 2               # 1..=16
+
+[[scm]]
+id = "github"                      # ^[a-z0-9-]{1,32}$, unique
+provider = "github"
+api_url = "https://api.github.com"
+web_url = "https://github.com"
+app_id = 123456
+private_key_file = "~/.config/saka/github-app.pem"   # mode 0600, owned by you (else config_key_file_mode)
+poll_interval_secs = 15            # 5..=300
+ci_appear_timeout_secs = 600       # 60..=3600
+merge_method = "squash"            # merge | squash | rebase
+
+[agent]
+cli = "claude"
+command = "claude"                 # looked up in agent.path
+account_dir = "~/.local/share/saka/agents/claude/default"   # CLAUDE_CONFIG_DIR; log in once by hand
+model = ""                         # empty = the CLI default
+path = ["~/.local/bin", "/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+max_running_minutes = 60           # running time; time spent waiting for a permission answer is not counted
+max_followup_turns = 1
+limits = { memory_max = "4G", cpu_quota = "200%", tasks_max = 512 }
+
+[git]
+author_name = "Saka Agent"
+author_email = "agent@saka.invalid"
+
+# Permission rules for agent sessions. Built-in rules come first and cannot be turned off:
+# file tools outside the worktree and any Bash command containing `git push` are denied.
+# Precedence: deny > ask > allow; no matching rule means ask. A `commands` glob matches the
+# whole command and never matches one containing ; & | ` $( > < or a newline.
+
+[[permission.rule]]
+id = "read-tools"                  # ^[a-z0-9-]{1,64}$, unique
+effect = "allow"                   # allow | deny | ask
+tools = ["Read", "Glob", "Grep", "LS", "TodoWrite"]
+
+[[permission.rule]]
+id = "edit-in-worktree"
+effect = "allow"
+tools = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+paths = ["**"]                     # globs relative to the worktree
+
+[[permission.rule]]
+id = "safe-commands"
+effect = "allow"
+tools = ["Bash"]
+commands = ["go test *", "go vet *", "go build *", "gofmt *", "npm test*", "npm run *", "git status*", "git diff*", "git add *", "git commit *", "git log*", "ls *", "cat *"]

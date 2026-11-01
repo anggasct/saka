@@ -2,19 +2,53 @@
 
 A self-hosted delivery loop for coding agents: an approved spec becomes one task per step, each task runs an agent session in its own worktree, and Saka opens, gates, and merges the pull request before starting the next step.
 
+## Running
+
+```sh
+cargo build --release -p saka --features embed-web   # after `corepack pnpm build` in web/
+saka serve                                            # API, workers, and the web app on 127.0.0.1:7420
+saka project add https://github.com/<owner>/<repo> --path docs
+saka spec approve <project> docs/specs/<spec>.md
+saka task list
+```
+
+Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
+
 ## Development
 
 | Path | Contents |
 |---|---|
 | `crates/` | The product crates; the allowed dependencies between them are checked by `cargo xtask deps` |
-| `xtask/` | Repository tasks (`cargo xtask check`, `cargo xtask deps`) |
+| `web/` | The web app (Vite, React), embedded in the binary with `--features embed-web` |
+| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `test-systemd`, `e2e` |
 | `spikes/` | Research experiments, excluded from every check |
 
 ```sh
-make check   # format, lint, tests, dependency direction, and the pure-crate rules
+make check          # format, lint, tests, dependency direction, source hygiene, API drift, web checks
+make test-systemd   # the session supervisor in a real user systemd unit
+make e2e            # test-systemd, then one real delivery loop (needs credentials, see below)
 ```
 
-The Rust toolchain is pinned in `rust-toolchain.toml`. On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.
+The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/package.json` (run pnpm as `corepack pnpm` from `web/`). On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.
+
+## End-to-end run
+
+`make e2e` drives one real loop: Claude Code writes the code, GitHub runs CI, and Saka merges. It is not part of CI and needs:
+
+- a user systemd instance (`systemctl --user is-system-running` says `running` or `degraded`), `git`, and the `claude` CLI;
+- a test repository you own, with a `docs/saka.toml` naming the repository itself, a Go module in `cli/`, and a CI workflow that runs on `pull_request` for any base branch;
+- a GitHub App installed on that repository with these repository permissions: Contents read and write, Pull requests read and write, Checks read, Commit statuses read, Metadata read (no webhook needed). Download a private key and `chmod 600` it;
+- a Claude Code account directory that is already logged in: `CLAUDE_CONFIG_DIR=<dir> claude`, then `/login`.
+
+| Variable | Value |
+|---|---|
+| `SAKA_E2E_GITHUB_APP_ID` | The App ID |
+| `SAKA_E2E_GITHUB_PRIVATE_KEY_FILE` | Path to the private key (mode 0600) |
+| `SAKA_E2E_REPO` | `<owner>/<name>` of the test repository |
+| `SAKA_E2E_CLAUDE_CONFIG_DIR` | The logged-in Claude Code account directory |
+| `SAKA_E2E_MODEL` | Optional; default `haiku` |
+
+The run creates base branch `e2e/<run-id>` from the default branch and commits a two-step spec to it (`xtask/src/e2e/fixture-spec.md.tmpl`). It then starts `saka serve` with a config of its own, registers the project, approves the spec, and merges each step through the CLI once CI passes. A permission request whose command is one of the spec's Done when commands is allowed; any other request is denied with a hint. The run must finish within 30 minutes with the spec shipped, two merged pull requests, and their task branches deleted. After that the base branch is deleted. When a run fails, the base branch is kept for inspection, and the server log is in `target/e2e/<run-id>/serve.log`.
 
 ## Spikes
 

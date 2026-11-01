@@ -1,0 +1,18 @@
+---
+saka: spec
+---
+# End-to-end run {run_id}
+
+Two small steps that drive the delivery loop against a real repository. The second step builds on what the first one merged.
+
+## Acceptance criteria
+
+- **AC-01**: `e2e-runs/{run_id}/s1.md` exists, and the Go test `cli/internal/e2e/s1_test.go` reads it and passes.
+- **AC-02**: `e2e-runs/{run_id}/s2.md` exists and quotes the line written in `e2e-runs/{run_id}/s1.md`.
+
+## Steps
+
+| Step | Work | AC | Done when |
+|------|------|----|-----------|
+| S1 | Create `e2e-runs/{run_id}/s1.md` with one line of text, and a Go test `cli/internal/e2e/s1_test.go` (package `e2e`) that reads that file and fails when it is missing or empty | AC-01 | `test -f e2e-runs/{run_id}/s1.md` `cd cli && go test ./...` |
+| S2 | Create `e2e-runs/{run_id}/s2.md` that quotes the line in `e2e-runs/{run_id}/s1.md` | AC-02 | `test -f e2e-runs/{run_id}/s2.md` |

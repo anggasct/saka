@@ -188,3 +188,37 @@ fn issue_codes_serialize_as_snake_case() {
     );
     assert_eq!(LintCode::StepAcUnknown.as_str(), "step_ac_unknown");
 }
+
+#[test]
+fn the_end_to_end_fixture_spec_is_ready() {
+    let template = include_str!("../../../xtask/src/e2e/fixture-spec.md.tmpl");
+    let run_id = "20261101-093000-1a2b";
+    let text = template.replace("{run_id}", run_id);
+    let parsed = parse(&format!("docs/specs/e2e-{run_id}.md"), text.as_bytes());
+    assert!(parsed.is_ready(), "{:?}", parsed.issues);
+    let model = parsed.model.unwrap();
+    assert_eq!(model.slug, format!("e2e-{run_id}"));
+    let steps: Vec<(&str, Vec<&str>)> = model
+        .steps
+        .iter()
+        .map(|s| {
+            (
+                s.id.as_str(),
+                s.commands.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (
+                "S1",
+                vec![
+                    "test -f e2e-runs/20261101-093000-1a2b/s1.md",
+                    "cd cli && go test ./..."
+                ]
+            ),
+            ("S2", vec!["test -f e2e-runs/20261101-093000-1a2b/s2.md"]),
+        ]
+    );
+}
