@@ -1728,6 +1728,8 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::WorkItemCreated { .. }
+        | E::RepoRegistered { .. }
+        | E::ProjectRegistered { .. }
         | E::SpecRegistered { .. }
         | E::SpecRevisionRecorded { .. }
         | E::SpecApproved { .. }

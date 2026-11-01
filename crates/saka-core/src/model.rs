@@ -12,10 +12,51 @@ use crate::ids::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome, GateSource,
-    PermissionState, SessionState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState,
-    Trigger, WorkItemOrigin, WorkItemState,
+    Autonomy, BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome,
+    GateSource, PermissionState, SessionState, SpecOrigin, SpecState, Stage, StagePhase,
+    StageRunState, Trigger, WorkItemOrigin, WorkItemState, WorkflowPreset,
 };
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Repo {
+    pub id: RepoId,
+    pub integration_id: String,
+    pub provider: String,
+    pub full_name: String,
+    pub url: String,
+    pub default_branch: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: ProjectId,
+    pub name: String,
+    pub workspace_repo_id: RepoId,
+    pub project_path: String,
+    pub base_branch: String,
+    pub config_commit: String,
+    pub autonomy: Autonomy,
+    pub workflow_preset: WorkflowPreset,
+    pub repos: Vec<ProjectRepo>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectRepo {
+    pub repo_id: RepoId,
+    pub name: String,
+    pub is_default: bool,
+    pub path_scope: Vec<String>,
+}
+
+impl Project {
+    pub fn default_repo(&self) -> Option<RepoId> {
+        self.repos.iter().find(|r| r.is_default).map(|r| r.repo_id)
+    }
+}
 
 /// A code with parameters, used for failures, end reasons, and blockers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
