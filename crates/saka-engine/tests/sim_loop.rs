@@ -1,6 +1,3 @@
-//! The delivery loop in the simulation: approve to shipped, session outcomes, permissions,
-//! sync, and operator commands.
-
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use saka_core::rejection::Rejection;
@@ -53,7 +50,6 @@ fn a_two_step_spec_runs_from_approve_to_shipped() {
     assert!(prs[0].body.contains("**Spec:** `docs/specs/tasks-done.md`"));
     assert_eq!(prs[0].title, "Add the done command");
 
-    // S2 started from a base that already holds S1's merge.
     let s1_merge = sim
         .task(1)
         .change_request
@@ -63,7 +59,6 @@ fn a_two_step_spec_runs_from_approve_to_shipped() {
     let s2_base = sim.task(2).environment.unwrap().base_sha.unwrap();
     assert!(sim.world.is_ancestor(&s1_merge, &s2_base));
 
-    // Sync cleaned up after each task.
     for step in [1, 2] {
         let t = sim.task(step);
         assert_eq!(t.item.state, WorkItemState::Done);
@@ -167,7 +162,6 @@ fn running_too_long_interrupts_and_blocks_as_session_timeout_not_counting_waits(
             .session
             .is_some_and(|x| x.state == SessionState::Waiting)
     }));
-    // Two hours waiting for an answer do not count.
     let waited_from = sim.engine().now();
     assert!(sim.run_until(STEPS, |s| s.engine().now().since(waited_from)
         > 2 * 3_600_000));
@@ -205,7 +199,6 @@ fn an_unmatched_tool_request_waits_for_the_operator_and_is_delivered_once() {
     };
     let mut sim = sim_with(ask, |_| {});
     assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
-    // Time passes; nothing moves without an answer.
     for _ in 0..50 {
         sim.step();
     }
@@ -226,7 +219,6 @@ fn an_unmatched_tool_request_waits_for_the_operator_and_is_delivered_once() {
         engine.answer_permission(request.id, false, None, &cause),
         Err(EngineError::Rejected(Rejection::PermissionAlreadyAnswered))
     ));
-    // S2 asks the same; the operator allows it from now on.
     sim.cfg.operator.answer = Some(true);
     assert!(sim.run_until(STEPS, |s| s.spec().state == SpecState::Shipped));
     let stats = sim.stats();
@@ -294,7 +286,6 @@ fn policy_answers_matching_requests_and_denies_git_push() {
 fn sync_marks_done_only_when_the_merge_is_on_the_base_branch() {
     let mut sim = sim_with(AgentScript::default(), |_| {});
     assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Done));
-    // The pass that sees S1 done admits S2.
     assert_eq!(sim.task(2).item.state, WorkItemState::Queued);
     sim.engine().reconcile().unwrap();
     assert_eq!(sim.task(2).item.state, WorkItemState::Admitted);
@@ -394,7 +385,6 @@ fn cancel_stops_the_session_tears_down_and_ends_the_task() {
             Err(EngineError::Rejected(Rejection::InvalidState { .. }))
         ));
     }
-    // The rest of the spec never starts.
     for _ in 0..50 {
         sim.step();
     }

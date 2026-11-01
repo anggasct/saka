@@ -1,14 +1,3 @@
-//! Shell around the core: loads state, calls the core, and writes events, projections, and
-//! jobs; runs workers and the reconciler.
-//!
-//! Every decision is `load → decide → commit` under one lock, so two decisions about the
-//! same task never interleave. Side effects (port calls) run outside the lock; their
-//! results come back as facts the core decides on.
-//!
-//! The pieces are callable one at a time (`run_next_job`, `reconcile`, `on_runner_event`),
-//! which is how the simulation drives the engine deterministically. [`Engine::run`] loops
-//! them for the server.
-
 mod action;
 mod commands;
 mod metrics;
@@ -50,21 +39,15 @@ pub use views::{
 };
 pub use worker::{JobReport, JobResult};
 
-/// Operator settings the engine applies.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub loop_cfg: LoopConfig,
-    /// `scheduler.max_active_tasks`.
     pub max_active_tasks: usize,
-    /// Operator permission rules, compiled.
     pub policy: Policy,
-    /// Lease owner name for this process's workers.
     pub worker_id: String,
-    /// `[[scm]]` entries; a project's repo URL picks one by host.
     pub integrations: Vec<Integration>,
 }
 
-/// The adapters the engine uses.
 #[derive(Clone)]
 pub struct Ports {
     pub clock: Arc<dyn Clock>,
@@ -77,14 +60,12 @@ pub struct Ports {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
-    /// The core refused the command.
     #[error(transparent)]
     Rejected(#[from] Rejection),
     #[error("{field}: {code}")]
     Invalid { field: &'static str, code: String },
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// An adapter call made for the command failed.
     #[error("port: {}", .0.code)]
     Port(#[from] PortError),
     #[error("internal: {0}")]
@@ -93,7 +74,6 @@ pub enum EngineError {
 
 pub type Result<T> = std::result::Result<T, EngineError>;
 
-/// Who caused a write: stored on each event and job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cause {
     pub actor: String,
@@ -101,29 +81,22 @@ pub struct Cause {
     pub correlation_id: Uuid,
 }
 
-/// The local operator, as recorded on events and permission answers.
 pub const OPERATOR: &str = "operator:local";
 
-/// How a decision treats a refusal from the core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// A command from a person: a refusal is returned and nothing is written.
     Command,
-    /// A fact from outside: a refusal means it no longer applies; the rest is written.
     Fact,
 }
 
-/// Extra rows written with a decision.
 #[derive(Default)]
 struct Extra<'a> {
     outcome: Option<JobOutcome>,
     events: Vec<Event>,
     jobs: Vec<Job>,
-    /// The API action and what its response shows.
     action: Option<(&'a Action<'a>, Shows)>,
 }
 
-/// What the response of an action on a task shows.
 #[derive(Debug, Clone, Copy)]
 enum Shows {
     Task,
@@ -167,7 +140,6 @@ impl Engine {
         self.ports.ids.new_id()
     }
 
-    /// A cause with a fresh correlation id.
     pub fn cause(&self, actor: &str) -> Cause {
         Cause {
             actor: actor.to_string(),
@@ -176,7 +148,6 @@ impl Engine {
         }
     }
 
-    /// Resolves after the next commit that wrote events.
     pub async fn changed(&self) {
         self.changed.notified().await;
     }
@@ -193,7 +164,6 @@ impl Engine {
             .ok_or(EngineError::Rejected(Rejection::NotFound))
     }
 
-    /// `load → decide → commit` for one task.
     fn decide(
         &self,
         id: WorkItemId,
@@ -258,7 +228,6 @@ impl Engine {
         Ok(events)
     }
 
-    /// Evolves the task through `events`, adding the event rows and the jobs they cause.
     fn apply(
         &self,
         batch: &mut Batch,
@@ -323,8 +292,6 @@ impl Engine {
         Ok(seqs)
     }
 
-    /// Runs workers and the reconciler until `shutdown` turns true. Call [`Engine::recover`]
-    /// first.
     pub async fn run(self: Arc<Self>, workers: usize, mut shutdown: watch::Receiver<bool>) {
         let mut tasks = tokio::task::JoinSet::new();
         self.counters
@@ -370,6 +337,5 @@ impl Engine {
     }
 }
 
-/// How often the reconciler runs when nothing changed.
 pub const RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
 const IDLE_POLL: Duration = Duration::from_millis(500);

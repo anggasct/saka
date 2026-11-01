@@ -1,6 +1,3 @@
-//! One decision = one transaction: the action request, events, projections, new jobs, and
-//! the outcome of the job that produced the decision are written together or not at all.
-
 use rusqlite::{Transaction, params};
 use saka_core::ids::ProjectId;
 use saka_core::job::Job;
@@ -15,7 +12,6 @@ use uuid::Uuid;
 use crate::codec::{i64_of, to_json, value_json};
 use crate::error::{Result, StoreError};
 
-/// An event as stored: the core's wire kind and payload plus the envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventRecord {
     pub id: Uuid,
@@ -31,7 +27,6 @@ pub struct EventRecord {
     pub payload: Value,
 }
 
-/// A mutation received through the control API, kept for audit and idempotent replay.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionRecord {
     pub id: Uuid,
@@ -48,7 +43,6 @@ pub struct ActionRecord {
     pub created_at: Timestamp,
 }
 
-/// A spec revision row (append-only).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecRevisionRow {
     pub id: Uuid,
@@ -64,7 +58,6 @@ pub struct SpecRevisionRow {
     pub created_at: Timestamp,
 }
 
-/// A job to enqueue, with its envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewJob {
     pub id: Uuid,
@@ -74,8 +67,6 @@ pub struct NewJob {
     pub correlation_id: Uuid,
 }
 
-/// How the job that produced this batch ended. Checked against the lease first, so a
-/// worker that lost its lease writes nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobOutcome {
     Succeeded {
@@ -118,7 +109,6 @@ impl Batch {
     }
 }
 
-/// Writes the batch; returns the `seq` of each event in order.
 pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     // Events are written before the rows they describe; foreign keys are checked at commit.
     tx.pragma_update(None, "defer_foreign_keys", "ON")?;

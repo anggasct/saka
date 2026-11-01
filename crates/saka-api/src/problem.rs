@@ -1,5 +1,3 @@
-//! Errors as RFC 9457 problem details: `code` + `params`, never a sentence.
-
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use saka_core::rejection::Rejection;
@@ -8,7 +6,6 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 tokio::task_local! {
-    /// The correlation id of the request being served.
     pub static CORRELATION: Uuid;
 }
 
@@ -50,7 +47,6 @@ impl ApiError {
         ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", json!({}))
     }
 
-    /// The problem body (without the correlation id, which is added when sent).
     pub fn body(&self) -> Value {
         json!({
             "type": format!("urn:saka:problem:{}", self.code),
@@ -62,7 +58,6 @@ impl ApiError {
     }
 }
 
-/// Sends a problem body, adding the request's correlation id.
 pub fn problem_response(status: StatusCode, mut body: Value) -> Response {
     let id = correlation();
     if let Value::Object(map) = &mut body {

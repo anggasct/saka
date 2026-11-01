@@ -1,5 +1,3 @@
-//! The control API against the simulation's engine (real SQLite, fake world).
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -110,7 +108,6 @@ impl Api {
         self.sim.engine().last_seq().unwrap()
     }
 
-    /// A second project in the fixture repo, at `other/`, with a spec file.
     fn add_other_project(&mut self, spec_file: &str, spec: &str) -> String {
         self.sim.world.put_doc(
             "other/saka.toml",
@@ -200,7 +197,6 @@ fn a_spec_is_read_from_the_base_branch_linted_and_approved_with_if_match() {
         )
     );
 
-    // Registering the same content again records no new revision.
     let again = api.post(
         &format!("/api/v1/projects/{project}/specs"),
         &[],
@@ -234,7 +230,6 @@ fn a_spec_is_read_from_the_base_branch_linted_and_approved_with_if_match() {
     assert_eq!(r.body["approved_revision_id"], revision.as_str());
     assert!(r.body["steps"][0]["work_item_id"].is_string());
 
-    // One transaction: the approval and one task per step, with consecutive seqs.
     let events = api.sim.engine().events_after(before, 100).unwrap();
     let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
     assert_eq!(
@@ -264,7 +259,6 @@ fn a_spec_is_read_from_the_base_branch_linted_and_approved_with_if_match() {
 #[test]
 fn registration_refusals_carry_their_codes() {
     let mut api = Api::new(SimConfig::default());
-    // The fixture project already lives at `docs/`.
     api.sim.world.put_doc(
         "docs/saka.toml",
         b"[project]\nname = \"tasks\"\n\n[[repo]]\nname = \"app\"\nurl = \"https://github.com/acme/tasks\"\n",
@@ -360,7 +354,6 @@ fn registration_refusals_carry_their_codes() {
     );
     let r = api.post(&specs, &[], json!({ "path": "src/main.md" }));
     assert_eq!(r.body["params"]["errors"][0]["code"], "outside_project");
-    // Another file whose title gives the same slug.
     api.sim
         .world
         .put_doc("docs/specs/tasks-done-copy.md", TWO_STEP_SPEC.as_bytes());
@@ -376,7 +369,6 @@ fn registration_refusals_carry_their_codes() {
         r.body
     );
 
-    // Lint errors keep the spec from approval.
     api.sim
         .world
         .put_doc("docs/specs/broken.md", b"---\nsaka: spec\n---\n# Broken\n");
@@ -457,7 +449,6 @@ fn a_repeated_key_replays_the_response_and_a_reused_key_is_refused() {
         "idempotency_key_required",
     );
 
-    // A refusal is replayed too.
     api.sim.approve();
     let id = api.sim.task(1).item.id.0;
     let retry = format!("/api/v1/work-items/{id}/actions/retry");
@@ -504,7 +495,6 @@ fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     );
     let r = api.post(&merge, &[("if-match", &etag)], json!({}));
     problem(&r, StatusCode::CONFLICT, "merge_not_ready");
-    // No check has reported yet, so there is no gate result.
     assert_eq!(r.body["params"]["gate_outcome"], Value::Null);
     assert_eq!(
         r.body["params"]["head_sha"],
@@ -679,7 +669,6 @@ fn guards_errors_meta_and_pagination_follow_the_conventions() {
         })
     );
 
-    // Two tasks, one per page; the cursor only works with the same filter.
     api.sim.approve();
     let first = api.get("/api/v1/work-items?limit=1");
     assert_eq!(first.body["items"].as_array().unwrap().len(), 1);
@@ -881,7 +870,6 @@ fn the_event_stream_resumes_after_the_last_event_id_with_keep_alives() {
         .map(|n| n.parse().unwrap())
         .collect();
     assert_eq!(ids, (3..=start).collect::<Vec<_>>());
-    // The header wins over the query.
     let both = read(&[("last-event-id", &start.to_string())], 0);
     assert!(!both.contains("id: "));
     problem(

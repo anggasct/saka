@@ -1,6 +1,3 @@
-//! The [`Scm`] port for GitHub, through a GitHub App. Pushes go through Saka's own git
-//! ([`Repos`]) with the App's installation token; everything else is the REST API.
-
 pub mod app;
 pub mod ci;
 
@@ -62,8 +59,6 @@ impl GitHub {
         self.app.call(full_name, method, url, body).await
     }
 
-    /// The commit a merged pull request put on the base branch: the `merged` event's
-    /// commit (pull request objects no longer carry it in this API version).
     async fn merge_commit(&self, full_name: &str, number: u64) -> PortResult<String> {
         let (owner, name) = split_repo(full_name)?;
         let n = number.to_string();
@@ -112,7 +107,6 @@ impl GitHub {
 
 #[async_trait]
 impl Scm for GitHub {
-    /// Reads the repository (and so checks that the App can reach it).
     async fn repository(&self, _integration_id: &str, full_name: &str) -> PortResult<RepoInfo> {
         let reply = self.repo_call(full_name, Method::GET, &[], None).await?;
         if reply.status == StatusCode::NOT_FOUND {

@@ -21,6 +21,7 @@ globset = "0.4.21"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 proptest = "1.12.0"
+ra-ap-rustc_lexer = "0.181.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls"] }
 rustix = { version = "1.1.6", default-features = false, features = ["std"] }

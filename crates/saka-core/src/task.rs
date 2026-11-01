@@ -1,8 +1,3 @@
-//! Task decisions: one work item from admission through `dev → merge → sync` to done.
-//!
-//! Facts from the outside (job results, runner events, poll results) that arrive late or
-//! twice are ignored with no events. Commands from people are rejected with a reason.
-
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
@@ -28,7 +23,6 @@ use crate::vocab::{
     WorkItemOrigin, WorkItemState,
 };
 
-/// Operator limits the decisions apply.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopConfig {
     pub max_followup_turns: u32,
@@ -38,13 +32,11 @@ pub struct LoopConfig {
     pub merge_method: MergeMethod,
 }
 
-/// Pending permission requests become `expired` with this source when their session ends.
 pub const SESSION_ENDED_SOURCE: &str = "system:session_ended";
 const DENIED_BY_OPERATOR: &str = "Denied by the operator.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskInput {
-    /// The scheduler picked this task.
     Admit,
     EnvironmentPrepared {
         environment_id: EnvironmentId,
@@ -66,7 +58,6 @@ pub enum TaskInput {
         cli_session_id: String,
         model: Option<String>,
     },
-    /// The runner accepted a requested turn.
     TurnAccepted {
         turn: u32,
     },
@@ -104,9 +95,7 @@ pub enum TaskInput {
         code: Option<i32>,
         signal: Option<i32>,
     },
-    /// Timers: running time and CI appearance.
     Tick,
-    /// The server started; sessions it did not reattach to are lost.
     ServerRestarted,
     BranchPushed {
         sha: String,
@@ -393,7 +382,6 @@ impl Decider<'_> {
         }
     }
 
-    /// Ends the live session (if any) and expires its pending permission requests.
     fn end_session(&self, state: SessionState, code: &str, params: Value) -> Vec<Event> {
         let Some(session) = self.task.live_session() else {
             return vec![];
@@ -1137,7 +1125,6 @@ impl Decider<'_> {
                 state: self.state_name(),
             });
         };
-        // A new session needs a ready environment; a ready one is reused.
         let env_ready = self.task.ready_environment().is_some();
         if entry == StagePhase::RunningSession && !env_ready {
             entry = StagePhase::PreparingEnvironment;
@@ -1234,7 +1221,6 @@ impl Decider<'_> {
     }
 }
 
-/// Where a retry starts for each blocker code; `None` when only cancel is possible.
 pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
     use BlockerCode as B;
     Some(match code {
@@ -1269,7 +1255,6 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
     })
 }
 
-/// Applies one event to a task. `None` + `WorkItemCreated` creates it.
 pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task> {
     if let Event::WorkItemCreated {
         work_item_id,
@@ -1753,7 +1738,6 @@ fn session_mut(t: &mut Task, id: SessionId, now: Timestamp) -> Option<&mut Sessi
     Some(s)
 }
 
-/// The operator actions the task accepts now, in the order `merge`, `retry`, `cancel`.
 pub fn available_actions(task: &Task) -> Vec<&'static str> {
     let mut actions = Vec::new();
     let merge_ready = task.is_at(Stage::Merge, StagePhase::AwaitingMerge)

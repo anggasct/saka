@@ -1,6 +1,3 @@
-//! The `saka` binary: the server (`serve`, `migrate`), the session runner, and the thin
-//! operator commands that call the server's API.
-
 mod cli;
 mod config;
 mod logging;
@@ -21,11 +18,14 @@ use crate::config::Config;
     about = "A self-hosted delivery loop for coding agents."
 )]
 struct Cli {
-    /// The server to talk to (default: `server.listen` from the config).
-    #[arg(long, global = true, env = "SAKA_SERVER")]
+    #[arg(
+        help = "The server to talk to (default: `server.listen` from the config)",
+        long,
+        global = true,
+        env = "SAKA_SERVER"
+    )]
     server: Option<String>,
-    /// Print the API response body as JSON.
-    #[arg(long, global = true)]
+    #[arg(help = "Print the API response body as JSON", long, global = true)]
     json: bool,
     #[command(subcommand)]
     command: Command,
@@ -33,43 +33,47 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Runs the server: API, workers, and reconciler.
+    #[command(about = "Runs the server: API, workers, and reconciler")]
     Serve,
-    /// Applies pending database migrations (after a backup) and exits.
+    #[command(about = "Applies pending database migrations (after a backup) and exits")]
     Migrate,
-    /// Runs one agent session (started by the server, not by hand).
-    #[command(hide = true)]
+    #[command(
+        about = "Runs one agent session (started by the server, not by hand)",
+        hide = true
+    )]
     Runner {
         #[arg(long)]
         session: String,
         #[arg(long)]
         launch: PathBuf,
     },
-    /// Projects.
+    #[command(about = "Projects")]
     #[command(subcommand)]
     Project(ProjectCmd),
-    /// Specs.
+    #[command(about = "Specs")]
     #[command(subcommand)]
     Spec(SpecCmd),
-    /// Tasks.
+    #[command(about = "Tasks")]
     #[command(subcommand)]
     Task(TaskCmd),
-    /// Permission requests from agent sessions.
+    #[command(about = "Permission requests from agent sessions")]
     #[command(subcommand)]
     Permission(PermissionCmd),
 }
 
 #[derive(Subcommand)]
 enum ProjectCmd {
-    /// Registers the project folder of a repo (its `saka.toml`).
+    #[command(about = "Registers the project folder of a repo (its `saka.toml`)")]
     Add {
-        /// HTTPS URL of the repo.
+        #[arg(help = "HTTPS URL of the repo")]
         workspace_url: String,
-        /// The project folder, `.` for the repo root.
-        #[arg(long, default_value = "docs")]
+        #[arg(
+            help = "The project folder, `.` for the repo root",
+            long,
+            default_value = "docs"
+        )]
         path: String,
-        /// Default: the repo's default branch.
-        #[arg(long)]
+        #[arg(help = "Default: the repo's default branch", long)]
         base_branch: Option<String>,
     },
     List,
@@ -77,11 +81,11 @@ enum ProjectCmd {
 
 #[derive(Subcommand)]
 enum SpecCmd {
-    /// Reads the spec at the tip of the base branch and approves it.
+    #[command(about = "Reads the spec at the tip of the base branch and approves it")]
     Approve {
-        /// Project id or name.
+        #[arg(help = "Project id or name")]
         project: String,
-        /// Path of the spec file from the repo root.
+        #[arg(help = "Path of the spec file from the repo root")]
         path: String,
         #[arg(long)]
         reason: Option<String>,
@@ -95,17 +99,16 @@ enum TaskCmd {
         project: Option<String>,
         #[arg(long)]
         spec: Option<String>,
-        /// One or more states, comma-separated.
-        #[arg(long)]
+        #[arg(help = "One or more states, comma-separated", long)]
         state: Option<String>,
     },
-    /// Merges the task's change at the head whose CI passed.
+    #[command(about = "Merges the task's change at the head whose CI passed")]
     Merge {
         id: String,
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Tries the stopped stage again.
+    #[command(about = "Tries the stopped stage again")]
     Retry {
         id: String,
         #[arg(long)]
@@ -133,8 +136,7 @@ enum PermissionCmd {
     Answer {
         id: String,
         decision: Decision,
-        /// Sent to the agent with a deny.
-        #[arg(long)]
+        #[arg(help = "Sent to the agent with a deny", long)]
         message: Option<String>,
     },
 }

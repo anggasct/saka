@@ -1,6 +1,3 @@
-//! Read queries. Tasks are loaded table by table for a set of work items (one query per
-//! table, mapped in memory), never row by row.
-
 use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -21,14 +18,10 @@ use crate::codec::{json, opt_json, opt_uuid, opt_vocab, u32_col, u64_col, uuid, 
 use crate::error::{Result, StoreError};
 use crate::write::{ActionRecord, SpecRevisionRow};
 
-/// Which work items to load.
 #[derive(Debug, Clone, Copy)]
 pub enum TaskSet<'a> {
     Ids(&'a [WorkItemId]),
-    /// Everything the reconciler looks at: tasks not done or cancelled, plus every task of
-    /// an approved spec (admission needs to know which earlier steps are done).
     Reconcile,
-    /// Every task of one spec.
     Spec(SpecId),
 }
 
@@ -73,7 +66,6 @@ fn work_item(row: &Row<'_>) -> Result<WorkItem> {
     })
 }
 
-/// Rows of `table` for the selected work items, newest first.
 fn rows<T>(
     conn: &Connection,
     sql_select: &str,
@@ -277,12 +269,10 @@ pub fn load_task(conn: &Connection, id: WorkItemId) -> Result<Option<Task>> {
     Ok(load_tasks(conn, TaskSet::Ids(&[id]))?.into_iter().next())
 }
 
-/// The task a session belongs to.
 pub fn session_work_item(conn: &Connection, session: SessionId) -> Result<Option<WorkItemId>> {
     owner(conn, "session", session.0)
 }
 
-/// The task a permission request belongs to.
 pub fn permission_work_item(
     conn: &Connection,
     request: PermissionRequestId,
@@ -307,7 +297,6 @@ fn owner(conn: &Connection, table: &'static str, id: Uuid) -> Result<Option<Work
         .transpose()
 }
 
-/// When each running session last entered `running`, from the event log.
 fn running_since(
     conn: &Connection,
     selection: &str,
@@ -518,7 +507,6 @@ pub fn approved_specs(conn: &Connection) -> Result<Vec<Spec>> {
     Ok(out)
 }
 
-/// The revision of `spec` with this content hash, if one was recorded.
 pub fn revision_by_hash(
     conn: &Connection,
     spec: SpecId,
@@ -562,7 +550,6 @@ pub fn load_revision(conn: &Connection, id: SpecRevisionId) -> Result<Option<Spe
     )
 }
 
-/// The revision as the approval decision needs it: lint result and the steps.
 pub fn revision_view(conn: &Connection, id: SpecRevisionId) -> Result<Option<RevisionView>> {
     let Some(r) = load_revision(conn, id)? else {
         return Ok(None);
@@ -655,7 +642,6 @@ pub(crate) fn project_row(row: &Row<'_>) -> Result<Project> {
     })
 }
 
-/// An event as read back for streaming.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredEvent {
     pub seq: i64,
@@ -672,7 +658,6 @@ pub struct StoredEvent {
     pub payload: Value,
 }
 
-/// Events with `seq > after`, in order, at most `limit`.
 pub fn events_after(conn: &Connection, after: i64, limit: u32) -> Result<Vec<StoredEvent>> {
     let mut stmt = conn.prepare("SELECT * FROM event WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
     let mut q = stmt.query(params![after, limit])?;
@@ -696,7 +681,6 @@ pub fn events_after(conn: &Connection, after: i64, limit: u32) -> Result<Vec<Sto
     Ok(out)
 }
 
-/// The stored response of an earlier request with the same idempotency key.
 pub fn find_action(conn: &Connection, actor: &str, key: &str) -> Result<Option<ActionRecord>> {
     one(
         conn,
@@ -721,7 +705,6 @@ pub fn find_action(conn: &Connection, actor: &str, key: &str) -> Result<Option<A
     )
 }
 
-/// Highest attempt per stage for one task (used by tests and diagnostics).
 pub fn attempts(conn: &Connection, id: WorkItemId) -> Result<BTreeMap<Stage, u32>> {
     let mut stmt = conn.prepare("SELECT stage, MAX(attempt) AS attempt FROM stage_run WHERE work_item_id = ?1 GROUP BY stage")?;
     let mut q = stmt.query([id.0.to_string()])?;

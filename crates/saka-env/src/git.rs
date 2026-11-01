@@ -1,6 +1,3 @@
-//! Runs Saka's own `git`: a clean environment (no global or system config, no prompt),
-//! and remote credentials only through `GIT_CONFIG_*` variables of the child.
-
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -9,7 +6,6 @@ use saka_ports::{GitRemote, PortError};
 use serde_json::json;
 use tokio::process::Command;
 
-/// Local commands; network commands get [`NETWORK_TIMEOUT`].
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(60);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
 const STDERR_MAX: usize = 500;
@@ -43,7 +39,6 @@ fn tail(text: &str) -> String {
     chars[start..].iter().collect()
 }
 
-/// A git command that failed; `op` names what Saka was doing.
 pub fn failed(op: &str, out: &GitOutput) -> PortError {
     PortError::retryable(
         "git_failed",
@@ -52,7 +47,6 @@ pub fn failed(op: &str, out: &GitOutput) -> PortError {
 }
 
 impl Git {
-    /// `program` is the `git` binary; `path` is the `PATH` its helpers see.
     pub fn new(program: impl Into<PathBuf>, path: impl Into<String>) -> Git {
         Git {
             program: program.into(),
@@ -60,12 +54,10 @@ impl Git {
         }
     }
 
-    /// Runs `git -C <dir> <args>` without network access to a remote.
     pub async fn local(&self, dir: &Path, args: &[&str]) -> Result<GitOutput, PortError> {
         self.run(dir, args, None, LOCAL_TIMEOUT).await
     }
 
-    /// Runs `git -C <dir> <args>` against `remote`, whose config reaches only this child.
     pub async fn remote(
         &self,
         dir: &Path,
@@ -129,7 +121,6 @@ impl Git {
     }
 }
 
-/// The remote refused the credentials (as opposed to a network or repository error).
 pub fn auth_refused(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
     s.contains("authentication failed")

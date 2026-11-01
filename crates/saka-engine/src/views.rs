@@ -1,6 +1,3 @@
-//! Read models for the control API: what each resource is built from, and the paged
-//! lists. The API turns these into JSON; nothing here formats a response.
-
 use saka_core::ids::{
     PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
@@ -15,20 +12,16 @@ use crate::{Engine, Result};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectView {
     pub project: Project,
-    /// The repos the project uses, the workspace repo first.
     pub repos: Vec<Repo>,
 }
 
-/// A revision without its content.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevisionInfo {
     pub id: SpecRevisionId,
     pub source_commit: String,
     pub content_hash: String,
     pub lint_ok: bool,
-    /// `[{code, line, params}]`.
     pub issues: Value,
-    /// The parsed model (`title`, `acceptance_criteria`, `steps`), `{}` when it did not parse.
     pub model: Value,
     pub created_at: Timestamp,
 }
@@ -50,9 +43,7 @@ impl From<&SpecRevisionRow> for RevisionInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecView {
     pub spec: Spec,
-    /// The latest revision.
     pub revision: RevisionInfo,
-    /// `(step id, work item)` for the steps that have a task.
     pub work_items: Vec<(String, WorkItemId)>,
 }
 
@@ -65,7 +56,6 @@ pub struct PermissionView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskDetail {
     pub task: Task,
-    /// Every stage run, oldest first.
     pub stage_runs: Vec<StageRun>,
 }
 
@@ -75,7 +65,6 @@ pub struct SessionView {
     pub project_id: ProjectId,
 }
 
-/// One page of a list and the key of its last row when more may follow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Paged<T> {
     pub items: Vec<T>,
@@ -90,7 +79,6 @@ fn paged<T>(mut rows: Vec<T>, page: &Page, key: impl Fn(&T) -> Key) -> Paged<T> 
     Paged { items: rows, next }
 }
 
-/// One more row than asked for tells whether another page exists.
 fn probe(page: &Page) -> Page {
     Page {
         after: page.after,
@@ -242,7 +230,6 @@ impl Engine {
             }))
     }
 
-    /// Events with `seq > after`, in order.
     pub fn events_after(&self, after: i64, limit: u32) -> Result<Vec<StoredEvent>> {
         Ok(self.store.read(|c| read::events_after(c, after, limit))?)
     }

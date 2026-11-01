@@ -1,6 +1,3 @@
-//! The [`Agents`] port for Claude Code: writes `launch.json`, starts `saka runner` through
-//! the supervisor, and keeps one connection per live session.
-
 use std::collections::HashMap;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -24,21 +21,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY: Duration = Duration::from_millis(50);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Where the adapter puts things, and how it starts the runner.
 #[derive(Debug, Clone)]
 pub struct AgentsConfig {
     pub claude: ClaudeSettings,
-    /// `data_dir/sessions`.
     pub sessions_dir: PathBuf,
-    /// `$XDG_RUNTIME_DIR`.
     pub runtime_dir: PathBuf,
-    /// The `saka` binary; the unit runs `<runner_program> runner --session <id> --launch <file>`.
     pub runner_program: PathBuf,
     pub limits: UnitLimits,
-    /// Values to redact exactly (for example tokens Saka knows).
     pub known_values: Vec<String>,
     pub server_version: String,
-    /// Extra variables for the CLI; only tests set this (the fake CLI's script).
     pub extra_env: Vec<(String, String)>,
 }
 
@@ -96,7 +87,6 @@ impl ClaudeAgents {
         result
     }
 
-    /// The launch spec this adapter writes for `launch`.
     pub fn launch_spec(
         &self,
         program: &Path,

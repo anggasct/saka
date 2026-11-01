@@ -1,6 +1,3 @@
-//! CI at a head, normalized: check runs (the newest run per name) and commit statuses
-//! become [`Check`]s with one status and conclusion vocabulary.
-
 use std::collections::BTreeMap;
 
 use saka_core::gate::Check;
@@ -11,7 +8,6 @@ fn url(v: &Value) -> Option<String> {
     v.as_str().filter(|s| !s.is_empty()).map(String::from)
 }
 
-/// A conclusion this version does not know counts as a failure, so it never passes a gate.
 fn conclusion(value: &str) -> CheckConclusion {
     value.parse().unwrap_or(CheckConclusion::Failure)
 }
@@ -46,7 +42,6 @@ pub fn from_check_runs(runs: &[Value]) -> Vec<Check> {
     newest.into_values().map(|(_, check)| check).collect()
 }
 
-/// The combined status lists the latest status per context.
 pub fn from_statuses(statuses: &[Value]) -> Vec<Check> {
     let mut by_context: BTreeMap<String, Check> = BTreeMap::new();
     for s in statuses {

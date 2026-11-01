@@ -1,13 +1,8 @@
-//! Runner protocol v1: one JSON object per line over a unix socket. Every frame carries
-//! `"v": 1` and `"t": "<type>"`; unknown fields are ignored, unknown types are answered
-//! with `error{code:"frame_unknown"}`.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
-/// Server → runner.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ServerFrame {
@@ -22,7 +17,6 @@ pub enum ServerFrame {
     },
     PermissionAnswer {
         request_id: String,
-        /// `allow` or `deny`.
         behavior: String,
         #[serde(default)]
         message: Option<String>,
@@ -31,7 +25,6 @@ pub enum ServerFrame {
     Shutdown,
 }
 
-/// Runner → server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum RunnerFrame {
@@ -47,26 +40,20 @@ pub enum RunnerFrame {
     },
 }
 
-/// One line of `events.ndjson`, and the body of an `event` frame. `data` is redacted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEvent {
-    /// 0-based line number.
     pub offset: u64,
-    /// Milliseconds since the Unix epoch (UTC).
     pub at: i64,
     pub kind: String,
     pub data: Value,
 }
 
-/// Why a line is not a frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Malformed {
-    /// Valid JSON with a type this version does not know.
     Unknown(String),
     Invalid,
 }
 
-/// The frame as one line, ending in `\n`.
 pub fn encode<T: Serialize>(frame: &T) -> String {
     let mut value = serde_json::to_value(frame).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut value {
@@ -95,7 +82,6 @@ fn strip_version(value: Value) -> Value {
     }
 }
 
-/// An `event` frame's fields as a map (for tests and logs).
 pub fn event_fields(event: &LogEvent) -> Map<String, Value> {
     match serde_json::to_value(event) {
         Ok(Value::Object(map)) => map,

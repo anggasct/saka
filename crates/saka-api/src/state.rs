@@ -1,5 +1,3 @@
-//! Shared server state: the engine (set once it is ready), settings, and HTTP counters.
-
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -14,9 +12,7 @@ use crate::spa::Assets;
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
     pub server_version: String,
-    /// Browser origins allowed besides the server's own.
     pub allowed_origins: Vec<String>,
-    /// Between `: keep-alive` comments on the event stream.
     pub keep_alive: Duration,
 }
 
@@ -52,12 +48,10 @@ impl AppState {
         }))
     }
 
-    /// Serves requests from now on (before this, they get `503 not_ready`).
     pub fn set_engine(&self, engine: Arc<Engine>) {
         let _ = self.0.engine.set(engine);
     }
 
-    /// Serves the web app from `assets` for every path that is not the API.
     pub fn set_assets(&self, assets: Arc<dyn Assets>) {
         let _ = self.0.assets.set(assets);
     }
@@ -95,7 +89,6 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// One lock per idempotency key, so two requests with the same key run one at a time.
     pub(crate) fn key_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut keys = self
             .0
@@ -105,7 +98,6 @@ impl AppState {
         keys.entry(key.to_string()).or_default().clone()
     }
 
-    /// Forgets the key's lock once nobody holds or waits for it.
     pub(crate) fn release_key(&self, key: &str) {
         let mut keys = self
             .0

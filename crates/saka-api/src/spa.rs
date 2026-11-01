@@ -1,6 +1,3 @@
-//! The web app: built files under `/`, `index.html` for every client route, and never the
-//! app for an `/api/*` path.
-
 use std::borrow::Cow;
 
 use axum::body::Body;
@@ -11,16 +8,13 @@ use axum::response::{IntoResponse, Response};
 use crate::problem::ApiError;
 use crate::state::AppState;
 
-/// One built file.
 #[derive(Debug, Clone)]
 pub struct Asset {
     pub bytes: Cow<'static, [u8]>,
     pub mime: String,
 }
 
-/// Where the built web app comes from (embedded in release builds, a map in tests).
 pub trait Assets: Send + Sync {
-    /// `path` is relative, e.g. `index.html` or `assets/index-1a2b3c.js`.
     fn get(&self, path: &str) -> Option<Asset>;
 }
 
@@ -71,7 +65,6 @@ pub async fn serve(State(state): State<AppState>, method: Method, uri: Uri) -> R
     }
 }
 
-/// The app built into the binary (`--features embed-web`, after `pnpm --dir web build`).
 #[cfg(feature = "embed-web")]
 mod embedded {
     use super::{Asset, Assets};
@@ -93,7 +86,6 @@ mod embedded {
     }
 }
 
-/// The embedded web app, when this build has one.
 pub fn embedded() -> Option<std::sync::Arc<dyn Assets>> {
     #[cfg(feature = "embed-web")]
     {

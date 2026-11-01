@@ -1,9 +1,3 @@
-//! Job worker: claim a job, check it is still wanted, run its side effect through a port,
-//! and commit the result with the job's outcome in one transaction.
-//!
-//! The three parts are separate so a test can stop between the side effect and the commit,
-//! which is what a crash at the worst moment looks like.
-
 use saka_core::event::{Event, Prompt};
 use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId, WorkItemId};
 use saka_core::job::{Job, JobKind};
@@ -21,12 +15,9 @@ use tracing::Instrument;
 
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, text};
 
-/// How many times sync checks for the merge commit on the base branch, and the pause
-/// between checks.
 pub const VERIFY_ROUNDS: u32 = 3;
 pub const VERIFY_PAUSE_MS: i64 = 30_000;
 
-/// What running one job did.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JobReport {
     pub kind: JobKind,
@@ -37,28 +28,17 @@ pub struct JobReport {
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobResult {
     Succeeded,
-    /// No longer wanted; no side effect ran.
     Skipped,
-    Retrying {
-        code: String,
-    },
-    Exhausted {
-        code: String,
-    },
-    /// Another worker took the job over after this one's lease ran out.
+    Retrying { code: String },
+    Exhausted { code: String },
     LeaseLost,
 }
 
-/// The result of a side effect.
 #[derive(Debug)]
 pub enum Effect {
-    /// A fact for the task.
     Fact(TaskInput),
-    /// Nothing for the core to decide.
     Nothing,
-    /// The job no longer applies.
     Skipped,
-    /// Check again later (sync verification rounds).
     Later(Job),
 }
 
@@ -77,7 +57,6 @@ fn internal(e: EngineError) -> PortError {
 }
 
 impl Engine {
-    /// Claims, runs, and completes the next due job. `None` when no job is due.
     pub async fn run_next_job(&self) -> Result<Option<JobReport>> {
         let Some(job) = self.claim_job()? else {
             return Ok(None);
@@ -110,7 +89,6 @@ impl Engine {
         Ok(self.store.claim_job(&self.cfg.worker_id, self.now())?)
     }
 
-    /// Runs the side effect while extending the lease.
     async fn execute_leased(&self, job: &ClaimedJob) -> Execution {
         let run = self.execute(job);
         tokio::pin!(run);
@@ -127,7 +105,6 @@ impl Engine {
         }
     }
 
-    /// Runs the job's side effect. Writes nothing.
     pub async fn execute(&self, job: &ClaimedJob) -> Execution {
         if job.is_over_limit() {
             return Err(PortError::permanent(
@@ -201,7 +178,6 @@ impl Engine {
         }
     }
 
-    /// Writes the job's outcome together with what the core decides about its result.
     pub fn complete_job(&self, job: &ClaimedJob, execution: Execution) -> Result<JobReport> {
         let owner = self.cfg.worker_id.clone();
         let cause = Cause {
@@ -331,8 +307,6 @@ impl Engine {
         self.commit(&batch).map(|_| ())
     }
 
-    // Lookups.
-
     fn repo_ref(&self, task: &Task) -> std::result::Result<RepoRef, PortError> {
         let repo = self
             .store
@@ -368,7 +342,6 @@ impl Engine {
         })
     }
 
-    /// The task's live session, when it is the one named.
     fn session_ref(&self, task: &Task, id: SessionId) -> Option<SessionRef> {
         task.live_session()
             .filter(|s| s.id == id)
@@ -378,8 +351,6 @@ impl Engine {
                 socket_path: s.socket_path.clone(),
             })
     }
-
-    // Side effects.
 
     async fn env_prepare(&self, task: &Task, run: StageRunId) -> Execution {
         let current = task.stage_run.as_ref().is_some_and(|r| r.id == run);

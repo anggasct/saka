@@ -15,8 +15,6 @@ const queryClient = new QueryClient({
 const router = createRouter({ routeTree, context: { queryClient } });
 
 declare module "@tanstack/react-router" {
-  // Declaration merging is the router's typing contract.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- module augmentation needs an interface
   interface Register {
     router: typeof router;
   }

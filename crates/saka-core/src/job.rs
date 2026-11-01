@@ -1,6 +1,3 @@
-//! Side effects as data. The engine stores each job in the same transaction as the
-//! events that caused it; a worker runs it through a port and reports the result back.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -50,8 +47,6 @@ job_kinds! {
 }
 
 impl JobKind {
-    /// The blocker a job leaves behind when it runs out of attempts; `None` for cleanup
-    /// jobs, which the reconciler simply schedules again.
     pub fn exhausted_blocker(self) -> Option<(BlockerCode, Value)> {
         let scm =
             |phase: StagePhase| Some((BlockerCode::ScmUnavailable, json!({ "phase": phase })));
@@ -107,7 +102,6 @@ impl Job {
     }
 }
 
-/// Idempotency key prefixes, as documented for each job kind.
 fn key_prefix(kind: JobKind) -> &'static str {
     match kind {
         JobKind::EnvPrepare => "env.prepare",

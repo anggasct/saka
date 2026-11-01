@@ -1,5 +1,3 @@
-//! `/api/v1` handlers.
-
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::time::Duration;
@@ -16,9 +14,7 @@ use saka_core::ids::{
 use saka_engine::{
     AddProject, EngineError, PermissionFilter, Produced, Reply, StoredEvent, WorkItemFilter,
 };
-use serde::Deserialize;
 use serde_json::Value;
-use utoipa::IntoParams;
 
 use crate::dto::{self, CAPABILITIES};
 use crate::http::{
@@ -64,15 +60,6 @@ macro_rules! tri {
         }
     };
 }
-
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct ListQuery {
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-}
-
-// Projects.
 
 #[utoipa::path(
     post, path = "/api/v1/projects", tag = "projects",
@@ -128,10 +115,10 @@ pub async fn add_project(
 }
 
 #[utoipa::path(
-    get, path = "/api/v1/projects", tag = "projects", params(ListQuery),
+    get, path = "/api/v1/projects", tag = "projects", params(dto::ListQuery),
     responses((status = 200, body = dto::Page<dto::Project>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
 )]
-pub async fn list_projects(State(s): State<AppState>, Query(q): Query<ListQuery>) -> Response {
+pub async fn list_projects(State(s): State<AppState>, Query(q): Query<dto::ListQuery>) -> Response {
     let engine = tri!(s.engine());
     let p = tri!(page(q.cursor.as_deref(), q.limit, "projects"));
     let paged = tri!(engine.projects(&p));
@@ -157,8 +144,6 @@ pub async fn get_project(State(s): State<AppState>, Path(id): Path<String>) -> R
         None => ApiError::not_found().into_response(),
     }
 }
-
-// Specs.
 
 #[utoipa::path(
     post, path = "/api/v1/projects/{project_id}/specs", tag = "specs",
@@ -218,24 +203,15 @@ pub async fn add_spec(
     .await
 }
 
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct SpecListQuery {
-    /// One or more of `draft, ready, approved, shipped, withdrawn`, comma-separated.
-    pub state: Option<String>,
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-}
-
 #[utoipa::path(
     get, path = "/api/v1/projects/{project_id}/specs", tag = "specs",
-    params(("project_id" = uuid::Uuid, Path), SpecListQuery),
+    params(("project_id" = uuid::Uuid, Path), dto::SpecListQuery),
     responses((status = 200, body = dto::Page<dto::Spec>), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
 )]
 pub async fn list_specs(
     State(s): State<AppState>,
     Path(project): Path<String>,
-    Query(q): Query<SpecListQuery>,
+    Query(q): Query<dto::SpecListQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
     let project = ProjectId(tri!(path_id(&project)));
@@ -335,19 +311,6 @@ pub async fn approve_spec(
     .await
 }
 
-// Work items.
-
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct WorkItemQuery {
-    pub project_id: Option<String>,
-    pub spec_id: Option<String>,
-    /// One or more states, comma-separated.
-    pub state: Option<String>,
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-}
-
 fn opt_id(raw: Option<&str>, field: &str) -> Result<Option<uuid::Uuid>, ApiError> {
     match raw.filter(|r| !r.is_empty()) {
         None => Ok(None),
@@ -359,12 +322,12 @@ fn opt_id(raw: Option<&str>, field: &str) -> Result<Option<uuid::Uuid>, ApiError
 }
 
 #[utoipa::path(
-    get, path = "/api/v1/work-items", tag = "delivery", params(WorkItemQuery),
+    get, path = "/api/v1/work-items", tag = "delivery", params(dto::WorkItemQuery),
     responses((status = 200, body = dto::Page<dto::WorkItem>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
 )]
 pub async fn list_work_items(
     State(s): State<AppState>,
-    Query(q): Query<WorkItemQuery>,
+    Query(q): Query<dto::WorkItemQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
     let filter = WorkItemFilter {
@@ -542,26 +505,13 @@ pub async fn cancel(
     task_action(s, id, method, uri, headers, raw, TaskAction::Cancel).await
 }
 
-// Runtime.
-
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct PermissionQuery {
-    /// One or more of `pending, allowed, denied, expired`, comma-separated.
-    pub state: Option<String>,
-    pub project_id: Option<String>,
-    pub work_item_id: Option<String>,
-    pub cursor: Option<String>,
-    pub limit: Option<u32>,
-}
-
 #[utoipa::path(
-    get, path = "/api/v1/permission-requests", tag = "runtime", params(PermissionQuery),
+    get, path = "/api/v1/permission-requests", tag = "runtime", params(dto::PermissionQuery),
     responses((status = 200, body = dto::Page<dto::PermissionRequest>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
 )]
 pub async fn list_permissions(
     State(s): State<AppState>,
-    Query(q): Query<PermissionQuery>,
+    Query(q): Query<dto::PermissionQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
     let filter = PermissionFilter {
@@ -656,8 +606,6 @@ pub async fn get_session(State(s): State<AppState>, Path(id): Path<String>) -> R
     }
 }
 
-// System.
-
 #[utoipa::path(
     get, path = "/api/v1/meta", tag = "system",
     responses((status = 200, body = dto::Meta))
@@ -672,13 +620,6 @@ pub async fn meta(State(s): State<AppState>) -> Response {
             capabilities: CAPABILITIES.iter().map(|c| c.to_string()).collect(),
         },
     )
-}
-
-#[derive(Debug, Deserialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-pub struct EventsQuery {
-    /// Start after this `seq` (`Last-Event-ID` wins when both are given).
-    pub after: Option<String>,
 }
 
 fn sse_event(e: &StoredEvent) -> Event {
@@ -700,7 +641,7 @@ fn sse_event(e: &StoredEvent) -> Event {
 
 #[utoipa::path(
     get, path = "/api/v1/events", tag = "system",
-    params(EventsQuery, ("Last-Event-ID" = Option<String>, Header, description = "Resume after this seq")),
+    params(dto::EventsQuery, ("Last-Event-ID" = Option<String>, Header, description = "Resume after this seq")),
     responses(
         (status = 200, content_type = "text/event-stream", body = dto::StreamEvent, description = "One `data` per event, `id` = seq"),
         (status = 422, body = dto::Problem, content_type = "application/problem+json"),
@@ -709,7 +650,7 @@ fn sse_event(e: &StoredEvent) -> Event {
 pub async fn events(
     State(s): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<EventsQuery>,
+    Query(q): Query<dto::EventsQuery>,
 ) -> Response {
     let engine = tri!(s.engine().cloned());
     let from_header = headers
@@ -757,7 +698,6 @@ pub async fn events(
         .into_response()
 }
 
-/// Unknown `/api/*` paths.
 pub async fn api_not_found() -> Response {
     ApiError::not_found().into_response()
 }

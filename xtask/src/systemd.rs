@@ -1,6 +1,3 @@
-//! `cargo xtask test-systemd`: the supervisor test against the user systemd instance.
-//! Not part of `check` (CI runners have no user systemd); `make e2e` runs it.
-
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};

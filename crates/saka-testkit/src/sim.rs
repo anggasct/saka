@@ -1,9 +1,3 @@
-//! The loop simulation: a real engine on a real SQLite file, fake ports, virtual time.
-//!
-//! [`Sim::step`] does one unit of work in a fixed order (a runner event, else a due job,
-//! else a reconciler pass, else time moves on), so a run is reproducible. A test can
-//! restart the engine at any step, or stop it between a job's side effect and its commit.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,18 +16,12 @@ use crate::clock::{FakeClock, FakeIds};
 use crate::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
 use crate::world::{AgentScript, CiScript, FakeWorld, Stats};
 
-/// How far time moves when nothing is due: the reconciler interval.
 pub const IDLE_TICK_MS: i64 = 5_000;
 
-/// What the simulated operator does on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operator {
-    /// Merge every task whose gate passed.
     pub merge: bool,
-    /// Retry tasks blocked with one of these codes. A restart loses live sessions, and a
-    /// crash can use up a job's last attempt.
     pub retry: Vec<BlockerCode>,
-    /// Answer pending permission requests: `Some(true)` allows, `Some(false)` denies.
     pub answer: Option<bool>,
 }
 
@@ -76,17 +64,14 @@ impl Default for SimConfig {
     }
 }
 
-/// One unit of simulated work.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     RunnerEvent,
     Job(JobReport),
     Reconciled,
-    /// Nothing was due; time moved on by [`IDLE_TICK_MS`].
     Idle,
 }
 
-/// The end state that must not depend on when the engine crashed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimOutcome {
     pub spec_state: SpecState,
@@ -95,9 +80,7 @@ pub struct SimOutcome {
     pub merges: u32,
     pub pushes: u32,
     pub branches_deleted: u32,
-    /// Remote branches left besides the base branch.
     pub leftover_branches: Vec<String>,
-    /// Every merge commit is on the base branch.
     pub merges_on_base: bool,
 }
 
@@ -109,7 +92,6 @@ pub struct Sim {
     pub project_id: ProjectId,
     pub spec_id: SpecId,
     pub revision_id: SpecRevisionId,
-    /// Engine restarts so far.
     pub restarts: u32,
     dir: tempfile::TempDir,
     engine: Option<Arc<Engine>>,
@@ -117,7 +99,6 @@ pub struct Sim {
 }
 
 impl Sim {
-    /// A fresh database with the fixture project and its two-step spec registered.
     pub fn new(cfg: SimConfig) -> Sim {
         let clock = Arc::new(FakeClock::new());
         let ids = Arc::new(FakeIds::default());
@@ -224,15 +205,12 @@ impl Sim {
         Arc::clone(self.engine.as_ref().expect("engine is running"))
     }
 
-    /// Drops the engine and its store, then starts a new one on the same database file.
     pub fn restart(&mut self) {
         self.engine = None;
         self.restarts += 1;
         self.start_engine();
     }
 
-    /// Claims a due job and runs its side effect, then restarts without recording the
-    /// result. `false` when no job was due.
     pub fn crash_mid_job(&mut self) -> bool {
         let engine = self.engine();
         let Some(job) = engine.claim_job().unwrap() else {
@@ -252,7 +230,6 @@ impl Sim {
             .unwrap()
     }
 
-    /// Tasks of the fixture spec, by step.
     pub fn tasks(&self) -> Vec<Task> {
         let engine = self.engine();
         let mut tasks: Vec<Task> = engine
@@ -283,7 +260,6 @@ impl Sim {
         self.world.stats()
     }
 
-    /// Runs a future on the simulation's runtime.
     pub fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
         self.rt.block_on(f)
     }
@@ -310,7 +286,6 @@ impl Sim {
         Step::Idle
     }
 
-    /// The operator's moves, as configured.
     pub fn operate(&mut self) {
         let engine = self.engine();
         let cause = engine.cause("human:operator:local");
@@ -339,8 +314,6 @@ impl Sim {
         }
     }
 
-    /// Steps (with the operator acting between steps) until `done` holds. `false` if it
-    /// still does not after `max_steps`.
     pub fn run_until(&mut self, max_steps: usize, mut done: impl FnMut(&Sim) -> bool) -> bool {
         for _ in 0..max_steps {
             if done(self) {
@@ -352,7 +325,6 @@ impl Sim {
         done(self)
     }
 
-    /// Runs until the spec is shipped.
     pub fn run_to_shipped(&mut self, max_steps: usize) -> bool {
         self.run_until(max_steps, |s| s.spec().state == SpecState::Shipped)
     }

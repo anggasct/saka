@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+ra-ap-rustc_lexer.workspace = true
+regex.workspace = true
 serde_json.workspace = true
 
 [lints.rust]

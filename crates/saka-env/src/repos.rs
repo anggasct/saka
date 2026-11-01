@@ -1,12 +1,3 @@
-//! Bare mirrors and task worktrees.
-//!
-//! - Mirror: `repos_dir/<repo_id>.git`, remote `origin` without credentials, branches
-//!   fetched into `refs/remotes/origin/*`.
-//! - Environment: `envs_dir/<environment_id>/` holds `worktree/` (on the task branch,
-//!   made from `origin/<base>`), the session's `home/` and `tmp/`, and `base-sha`.
-//!
-//! Git work on one repo runs one command sequence at a time.
-
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -27,9 +18,7 @@ const BASE_FILE: &str = "base-sha";
 
 #[derive(Debug, Clone)]
 pub struct ReposConfig {
-    /// `data_dir/repos`.
     pub repos_dir: PathBuf,
-    /// `data_dir/envs`.
     pub envs_dir: PathBuf,
     pub git: Git,
 }
@@ -48,7 +37,6 @@ fn is_sha(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// A branch, path, or commit given to git must not read as an option.
 fn arg(value: &str, field: &str) -> PortResult<()> {
     if value.is_empty() || value.starts_with('-') || value.contains('\0') {
         return Err(PortError::permanent(
@@ -93,7 +81,6 @@ impl GitRepos {
         }
     }
 
-    /// Creates the mirror if needed and points `origin` at `url`.
     async fn ensure_mirror(&self, repo: &RepoRef, url: &str) -> PortResult<PathBuf> {
         let bare = self.mirror_path(repo.repo_id);
         if !bare.join("HEAD").is_file() {
@@ -122,7 +109,6 @@ impl GitRepos {
         Ok(bare)
     }
 
-    /// Runs a remote command, getting new credentials once if the remote refuses them.
     async fn with_remote<T, F>(&self, repo: &RepoRef, op: &str, mut step: F) -> PortResult<T>
     where
         F: AsyncStep<T>,
@@ -169,7 +155,6 @@ impl GitRepos {
         Ok(out.ok().then(|| out.text()).filter(|s| is_sha(s)))
     }
 
-    /// Worktrees of this mirror: `(path, branch ref)`.
     async fn worktrees(&self, bare: &Path) -> PortResult<Vec<(PathBuf, Option<String>)>> {
         let out = self
             .git_ok(bare, &["worktree", "list", "--porcelain"], "worktree_list")
@@ -213,10 +198,8 @@ impl GitRepos {
     }
 }
 
-/// One attempt of a remote command.
 enum Step<T> {
     Done(T),
-    /// Git ran and failed; the output decides whether to retry with new credentials.
     Failed(GitOutput),
 }
 
@@ -396,9 +379,6 @@ impl Repos for GitRepos {
 
 #[async_trait]
 impl Environments for GitRepos {
-    /// The engine prepares an environment only while the task has no ready one, so a
-    /// worktree of an earlier, unfinished environment that still holds the task branch is
-    /// removed first.
     async fn prepare(&self, request: &PrepareRequest) -> PortResult<PreparedEnvironment> {
         arg(&request.branch, "branch")?;
         arg(&request.base_branch, "base_branch")?;
@@ -554,9 +534,6 @@ impl Environments for GitRepos {
     }
 }
 
-/// Canonicalizes `raw` (absolute, or relative to the worktree) the way the file system
-/// would follow it, including `..` after a symlink. Parts that do not exist yet are taken
-/// as written. A dangling symlink counts as outside.
 pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
     let outside = || RequestPath {
         path: raw.to_string(),

@@ -1,5 +1,3 @@
-// A fake API behind `fetch`: each route answers with a status and a JSON body.
-
 import { vi } from "vitest";
 
 export type Route = {
@@ -9,7 +7,6 @@ export type Route = {
 
 export type Routes = Record<string, Route | (() => Route | Promise<never>)>;
 
-/** Replaces `fetch`; routes are `"<path>"` without the query string. */
 export function fakeApi(routes: Routes) {
   const calls: string[] = [];
   const fetchMock = vi.fn(async (input: Request | string | URL) => {
@@ -49,7 +46,6 @@ export function problem(status: number, code: string): Response {
   );
 }
 
-/** Never answers. */
 export function pending(): Promise<never> {
   return new Promise<never>(() => undefined);
 }

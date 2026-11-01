@@ -5,12 +5,10 @@ use saka_core::time::Timestamp;
 use saka_ports::{Clock, Ids};
 use uuid::Uuid;
 
-/// Virtual time: moves only when a test advances it.
 #[derive(Debug)]
 pub struct FakeClock(AtomicI64);
 
 impl FakeClock {
-    /// 2026-01-01T00:00:00Z.
     pub const START: Timestamp = Timestamp(1_767_225_600_000);
 
     pub fn new() -> FakeClock {
@@ -38,7 +36,6 @@ impl Clock for FakeClock {
     }
 }
 
-/// Ids from a counter, so runs are reproducible.
 #[derive(Debug, Default)]
 pub struct FakeIds(Mutex<u128>);
 

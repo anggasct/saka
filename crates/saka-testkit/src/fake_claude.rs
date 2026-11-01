@@ -1,15 +1,3 @@
-//! A fake Claude Code CLI speaking stream-json on stdio, for runner tests.
-//!
-//! `SAKA_FAKE_CLAUDE` lists what each user turn does, comma separated:
-//! - `ask`: on the first turn, ask to run `make deploy` and wait for the answer;
-//! - `secrets`: print every value in `SAKA_FAKE_SECRETS` (a JSON array) in text, in a tool
-//!   call, on a non-JSON line, and on stderr;
-//! - `commit`: write a file in the working directory and commit it with `git`;
-//! - `hang`: never end the turn;
-//! - `exit`: exit with code 1 without a result.
-//!
-//! Every other turn ends with a `success` result.
-
 use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
@@ -38,7 +26,6 @@ fn result(subtype: &str) -> Value {
     })
 }
 
-/// Runs the fake; returns the exit code.
 pub fn main() -> i32 {
     let script: Vec<String> = std::env::var(SCRIPT_VAR)
         .unwrap_or_default()

@@ -1,6 +1,3 @@
-// Catalog lookups for server codes: unknown codes fall back to a generic message with
-// the code, so a newer server never shows a blank.
-
 import type { MessageKey } from "@/i18n/messages";
 import { CATALOGS } from "@/i18n/messages";
 

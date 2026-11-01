@@ -1,5 +1,3 @@
-//! `saka.toml` in a project folder: the project name and the one repo it uses.
-
 use serde::Deserialize;
 use serde_json::{Value, json};
 use toml::Spanned;
@@ -16,7 +14,6 @@ pub struct RepoEntry {
     pub url: String,
 }
 
-/// One problem: `{code, field, line}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub code: &'static str,
@@ -70,7 +67,6 @@ fn repo_name_ok(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// Parses the file; every problem found is returned (a TOML error stops at the first).
 pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Err(vec![Issue {

@@ -1,5 +1,3 @@
-//! A two-step spec through the pure core: decide → evolve → react, step by step.
-
 #![allow(
     clippy::unwrap_used,
     reason = "test helpers fail loudly on a broken setup"
@@ -48,7 +46,6 @@ fn cfg() -> LoopConfig {
     }
 }
 
-/// Holds the projections and applies decisions the way the engine will.
 struct World {
     ids: Counter,
     now: Timestamp,
@@ -195,7 +192,6 @@ impl World {
         (i.state, i.stage, i.stage_phase)
     }
 
-    /// Runs one step from admission to an open change waiting for CI.
     fn run_to_awaiting_ci(&mut self, step: u32) {
         self.decide(step, TaskInput::Admit);
         self.decide(step, prepared(step));
@@ -312,7 +308,6 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     assert_eq!(w.task(1).item.branch, "saka/tasks-done/s1");
     assert_eq!(w.task(2).item.task_key, "tasks-done/s2");
 
-    // Only the first step is admitted.
     assert_eq!(w.admits(), vec![1]);
     w.decide(1, TaskInput::Admit);
     assert_eq!(w.place(1), (WorkItemState::Admitted, None, None));
@@ -346,7 +341,6 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         SessionState::Running
     );
 
-    // An unmatched tool request waits for a person.
     w.decide(1, ask("req-1", 800));
     assert_eq!(
         w.task(1).session.as_ref().unwrap().state,
@@ -388,10 +382,8 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         },
     );
     assert!(w.task(1).permissions[0].delivered_at.is_some());
-    // The same CLI request twice is recorded once.
     assert!(w.decide(1, ask("req-1", 801)).is_empty());
 
-    // Dirty worktree: one follow-up, then clean with a commit.
     w.decide(1, turn_ended(1, "success"));
     assert_eq!(w.take_jobs(), vec![JobKind::EnvInspectWorktree]);
     let events = w.decide(1, inspected(1, true, 0));
@@ -434,7 +426,6 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     assert_eq!(w.task(1).attempts.get(&Stage::Merge), Some(&1));
     assert_eq!(w.take_jobs(), vec![JobKind::ScmPollChangeRequest]);
 
-    // Merge waits for green CI at the current head.
     let version = w.task(1).item.version;
     assert!(matches!(
         w.try_decide(
@@ -453,7 +444,6 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         observed('b', vec![check("test", Some(CheckConclusion::Success))]),
     );
     assert_eq!(w.place(1).2, Some(StagePhase::AwaitingMerge));
-    // Polling the same state again changes nothing.
     assert!(
         w.decide(
             1,
@@ -510,7 +500,6 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     w.decide(1, TaskInput::EnvironmentTornDown);
     assert_eq!(w.place(1).0, WorkItemState::Done);
 
-    // The second step starts as soon as the first is done.
     assert_eq!(w.admits(), vec![2]);
     w.run_to_awaiting_ci(2);
     w.decide(
@@ -662,7 +651,6 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
     assert_eq!(blocker.params["checks"], json!(["test"]));
     assert_eq!(t.stage_run.as_ref().unwrap().state, StageRunState::Blocked);
 
-    // Retry goes back to a new session in the same environment, with the failure in the prompt.
     w.decide(
         1,
         TaskInput::Retry {
@@ -700,7 +688,6 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
         matches!(&events[1], Event::SessionTurnRequested { prompt: Prompt::WorkPacket { retry_of: Some(Coded { code, .. }) }, .. } if code == "ci_red")
     );
 
-    // The new push updates the existing change instead of opening another one.
     w.decide(1, TaskInput::TurnAccepted { turn: 1 });
     w.decide(1, turn_ended(1, "success"));
     w.decide(
@@ -757,7 +744,6 @@ fn running_time_excludes_waiting_for_a_person() {
     w.decide(1, TaskInput::TurnAccepted { turn: 1 });
     w.now = w.now.plus_ms(10 * 60_000);
     w.decide(1, ask("r", 801));
-    // Waiting for hours does not count.
     w.now = w.now.plus_ms(5 * 60 * 60_000);
     assert!(w.decide(1, TaskInput::Tick).is_empty());
     let id = PermissionRequestId(Uuid::from_u128(801));
@@ -967,7 +953,6 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
         ),
         Err(Rejection::InvalidState { .. })
     ));
-    // A cancelled step stops the rest of the spec.
     assert_eq!(w.admits(), Vec::<u32>::new());
 
     let mut w = World::new();
@@ -1009,7 +994,6 @@ fn exhausted_jobs_leave_the_mapped_blocker() {
     let b = w.task(1).open_blocker().unwrap();
     assert_eq!(b.code, BlockerCode::EnvSetupFailed);
     assert_eq!(b.params["error"]["code"], json!("git_failed"));
-    // Retrying an environment failure prepares a new environment.
     w.decide(
         1,
         TaskInput::Retry {
@@ -1018,7 +1002,6 @@ fn exhausted_jobs_leave_the_mapped_blocker() {
     );
     assert_eq!(w.place(1).0, WorkItemState::Admitted);
     assert_eq!(w.take_jobs(), vec![JobKind::EnvPrepare]);
-    // Cleanup jobs never block.
     assert!(
         w.decide(
             1,
@@ -1051,7 +1034,6 @@ fn reconcile_recreates_the_job_of_the_current_phase() {
         .collect();
     assert_eq!(polls.len(), 1);
     assert!(polls[0].starts_with("scm.poll:"));
-    // Within the same poll interval the key does not change.
     w.now = w.now.plus_ms(1);
     let again: Vec<String> = w
         .reconcile()

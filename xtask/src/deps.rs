@@ -1,8 +1,3 @@
-//! Dependency direction between Saka crates, and the I/O-free rule for the pure crates.
-//!
-//! The allowed edges mirror the crate map in the architecture document. A crate that is
-//! not in the map is a violation until the map is extended.
-
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
@@ -13,7 +8,6 @@ use crate::metadata;
 
 const ADAPTER_DEPS: &[&str] = &["saka-core", "saka-ports"];
 
-/// Internal crates each crate may depend on (normal and build dependencies).
 const ALLOWED: &[(&str, &[&str])] = &[
     ("saka-core", &[]),
     ("saka-spec", &["saka-core"]),
@@ -68,13 +62,10 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("xtask", &[]),
 ];
 
-/// Test-only crate every crate may use as a dev-dependency.
 const TESTKIT: &str = "saka-testkit";
 
-/// Crates that must stay free of async runtimes, storage, networking, and randomness.
 const PURE: &[&str] = &["saka-core", "saka-spec"];
 
-/// External crates the pure crates must not pull in, directly or transitively.
 const FORBIDDEN_IN_PURE: &[&str] = &[
     "tokio", "rusqlite", "reqwest", "axum", "hyper", "mio", "socket2", "rand",
 ];
@@ -137,7 +128,6 @@ pub fn run() -> Result<()> {
 
 struct Graph<'a> {
     names: HashMap<&'a str, &'a str>,
-    /// Package id -> (dependency package id, normal or build edge, dev edge).
     edges: HashMap<&'a str, Vec<(&'a str, bool, bool)>>,
 }
 
@@ -176,7 +166,6 @@ impl<'a> Graph<'a> {
         self.names.get(id).copied().unwrap_or(id)
     }
 
-    /// Shortest runtime path from `start` to a package named `target`, as crate names.
     fn runtime_path(&self, start: &'a str, target: &str) -> Option<Vec<String>> {
         let mut seen = BTreeSet::from([start]);
         let mut queue = std::collections::VecDeque::from([vec![start]]);
@@ -205,7 +194,6 @@ fn allowed(krate: &str) -> Option<&'static [&'static str]> {
         .map(|(_, deps)| *deps)
 }
 
-/// Checks the workspace in `meta` (the JSON of `cargo metadata --format-version 1`).
 pub fn check(meta: &Value) -> Vec<Violation> {
     let graph = Graph::new(meta);
     let product: BTreeSet<String> = metadata::product_packages(meta)
@@ -275,8 +263,6 @@ mod tests {
 
     use super::{Violation, check};
 
-    /// Minimal `cargo metadata` output: `members` are workspace crates under `crates/`,
-    /// `external` are registry crates, `edges` are (from, to, kind).
     fn meta(members: &[&str], external: &[&str], edges: &[(&str, &str, Option<&str>)]) -> Value {
         let id = |n: &str| format!("{n} 0.1.0");
         let packages: Vec<Value> = members

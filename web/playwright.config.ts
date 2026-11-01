@@ -1,6 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Browsers live in the repo (`PLAYWRIGHT_BROWSERS_PATH`, see package.json scripts).
 export default defineConfig({
   testDir: "e2e",
   fullyParallel: true,

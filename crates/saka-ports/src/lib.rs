@@ -1,9 +1,3 @@
-//! Port traits and data types shared by the engine and the adapters.
-//!
-//! The engine talks to the outside only through these traits; adapters implement them
-//! and the binary wires them together. Ports are async (the shell runs on tokio) and
-//! object safe, so the engine holds them as `Arc<dyn …>`.
-
 pub mod agent;
 pub mod docs;
 pub mod env;
@@ -26,17 +20,14 @@ pub use scm::{
 };
 pub use supervisor::{RunnerUnit, Supervisor, UnitLimits};
 
-/// Wall-clock time in milliseconds since the Unix epoch (UTC). Virtual in tests.
 pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
-/// New ids: UUIDv7 in production, deterministic in tests.
 pub trait Ids: Send + Sync {
     fn new_id(&self) -> Uuid;
 }
 
-/// Lends an [`Ids`] port to the core, which takes ids through [`IdSource`].
 pub struct IdsSource<'a>(pub &'a dyn Ids);
 
 impl IdSource for IdsSource<'_> {
@@ -45,18 +36,12 @@ impl IdSource for IdsSource<'_> {
     }
 }
 
-/// A failed port call, as a code with parameters.
-///
-/// `retryable` errors (network, 5xx, 429, a runner that is not reachable yet) are tried
-/// again with backoff; the rest end the job at once. Business outcomes such as a rejected
-/// push are not errors: they are part of the port's result type.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("{code}")]
 pub struct PortError {
     pub code: String,
     pub params: Value,
     pub retryable: bool,
-    /// Earliest time to try again (for example a rate limit reset), if the adapter knows.
     pub retry_at: Option<Timestamp>,
 }
 
@@ -79,7 +64,6 @@ impl PortError {
         }
     }
 
-    /// The error as stored in `job.last_error`.
     pub fn to_json(&self) -> Value {
         json!({ "code": self.code, "params": self.params })
     }

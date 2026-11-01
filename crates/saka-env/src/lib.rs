@@ -1,5 +1,3 @@
-//! Task environments (bare mirrors and git worktrees) and the session supervisor.
-
 pub mod git;
 pub mod repos;
 pub mod supervisor;

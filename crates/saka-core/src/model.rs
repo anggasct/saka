@@ -1,5 +1,3 @@
-//! Projection rows the decisions read and `evolve` produces. Each struct mirrors one table.
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -58,7 +56,6 @@ impl Project {
     }
 }
 
-/// A code with parameters, used for failures, end reasons, and blockers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coded {
     pub code: String,
@@ -83,7 +80,6 @@ pub struct Spec {
     pub updated_at: Timestamp,
 }
 
-/// One step of an approved revision, as the decisions need it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepPlan {
     pub id: String,
@@ -91,12 +87,10 @@ pub struct StepPlan {
     pub work: String,
 }
 
-/// The latest revision of a spec, as the approval decision needs it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RevisionView {
     pub id: SpecRevisionId,
     pub lint_ok: bool,
-    /// Lint issues as stored (`[{code, line, params}]`).
     pub issues: Value,
     pub steps: Vec<StepPlan>,
 }
@@ -217,7 +211,6 @@ pub struct Session {
     pub turns: u32,
     pub followups: u32,
     pub running_ms: i64,
-    /// When the session last entered `running`; not stored, loaded from the event log.
     pub running_since: Option<Timestamp>,
     pub cost_usd_micros: Option<i64>,
     pub input_tokens: Option<i64>,
@@ -230,7 +223,6 @@ pub struct Session {
 }
 
 impl Session {
-    /// Running time including the current stretch in `running`.
     pub fn running_ms_at(&self, now: Timestamp) -> i64 {
         self.running_ms + self.running_since.map_or(0, |since| now.since(since))
     }
@@ -253,27 +245,17 @@ pub struct PermissionRequest {
     pub delivered_at: Option<Timestamp>,
 }
 
-/// Everything a decision about one task reads: the task and its current parts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub item: WorkItem,
-    /// The latest stage run.
     pub stage_run: Option<StageRun>,
-    /// The latest gate result of the latest stage run.
     pub gate: Option<GateResult>,
-    /// The open blocker, or the one resolved last.
     pub blocker: Option<Blocker>,
     pub change_request: Option<ChangeRequest>,
-    /// The latest environment.
     pub environment: Option<Environment>,
-    /// The latest session.
     pub session: Option<Session>,
-    /// Permission requests of the latest session that are pending or not yet delivered.
-    /// Requests answered and delivered during a decision stay here so they get written.
     pub permissions: Vec<PermissionRequest>,
-    /// Highest attempt number per stage.
     pub attempts: BTreeMap<Stage, u32>,
-    /// Earlier stage runs replaced during a decision; the engine writes them. Loaded empty.
     pub retired_runs: Vec<StageRun>,
 }
 

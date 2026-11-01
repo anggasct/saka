@@ -1,5 +1,3 @@
-//! The server's end of a runner connection: hello, then frames out and events in.
-
 use std::path::Path;
 
 use saka_core::ids::SessionId;
@@ -15,7 +13,6 @@ use crate::protocol::{self, LogEvent, PROTOCOL_VERSION, RunnerFrame, ServerFrame
 
 pub struct RunnerConnection {
     writer: Mutex<OwnedWriteHalf>,
-    /// The runner's next offset when the connection opened.
     pub next_offset: u64,
 }
 
@@ -27,8 +24,6 @@ fn unreachable(session: SessionId, why: &str) -> PortError {
 }
 
 impl RunnerConnection {
-    /// Connects and says hello; events with `offset ≥ from_offset` (replayed, then live)
-    /// go to `sink` in order.
     pub async fn connect(
         socket: &Path,
         session: SessionId,
@@ -47,7 +42,6 @@ impl RunnerConnection {
         .await
     }
 
-    /// As [`RunnerConnection::connect`], speaking `protocol_version` (tests use others).
     pub async fn connect_with(
         socket: &Path,
         session: SessionId,
@@ -120,7 +114,6 @@ fn get<T: for<'de> serde::Deserialize<'de>>(data: &Value, key: &str) -> Option<T
         .and_then(|v| serde_json::from_value(v).ok())
 }
 
-/// A logged event as the engine sees it. Kinds this version does not know are dropped.
 pub fn to_runner_event(session_id: SessionId, event: LogEvent) -> Option<RunnerEvent> {
     let d = &event.data;
     let text = |key: &str| {

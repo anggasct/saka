@@ -1,6 +1,3 @@
-//! The `saka` binary: operator commands against an in-process server, and the exit codes
-//! of `serve` and `migrate`.
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -19,7 +16,6 @@ use serde_json::Value;
 
 const SAKA: &str = env!("CARGO_BIN_EXE_saka");
 
-/// Serves the simulation's engine on a free loopback port.
 fn serve(sim: &Sim) -> String {
     let state = AppState::new(ApiConfig::new("0.1.0-test"));
     state.set_engine(sim.engine());
@@ -182,7 +178,6 @@ fn operator_commands_call_the_api_and_exit_with_documented_codes() {
         "server unreachable"
     );
 
-    // Every mutation carried its own generated key.
     let keys: Vec<String> = sim
         .engine()
         .store()

@@ -1,9 +1,6 @@
-//! Which queued tasks start next.
-
 use crate::ids::{SpecId, WorkItemId};
 use crate::time::Timestamp;
 
-/// A queued task whose spec is approved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub work_item_id: WorkItemId,
@@ -11,16 +8,11 @@ pub struct Candidate {
     pub priority: i64,
     pub spec_approved_at: Timestamp,
     pub step_index: u32,
-    /// The previous step of the same spec is done (always true for the first step).
     pub previous_step_done: bool,
-    /// Another task of the same spec is admitted, in a stage, or blocked.
     pub spec_has_active_task: bool,
-    /// A task of the same spec was cancelled; the rest of the spec never starts.
     pub spec_has_cancelled_task: bool,
 }
 
-/// Picks tasks to admit: eligible candidates ordered by priority (highest first), then
-/// spec approval time, then step, then id, at most one per spec, within the free slots.
 pub fn select(
     candidates: &[Candidate],
     active_tasks: usize,

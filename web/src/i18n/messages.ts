@@ -1,5 +1,3 @@
-// Message catalogs. `en` defines the keys; every locale has the same keys.
-
 import en from "./en.json";
 import id from "./id.json";
 
@@ -10,7 +8,6 @@ export type Locale = (typeof LOCALES)[number];
 
 export const CATALOGS: Record<Locale, Record<MessageKey, string>> = { en, id };
 
-/** Keys present in one catalog and missing in another, per locale. */
 export function missingKeys(
   catalogs: Record<string, Record<string, string>>,
 ): Record<string, string[]> {

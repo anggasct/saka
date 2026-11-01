@@ -1,5 +1,3 @@
-// Fails when src/api/schema.d.ts is not what openapi-typescript makes from the
-// committed OpenAPI document.
 import { readFileSync } from "node:fs";
 
 import openapiTS, { astToString } from "openapi-typescript";

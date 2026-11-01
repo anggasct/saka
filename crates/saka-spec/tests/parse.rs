@@ -1,5 +1,3 @@
-//! Parser and lint behaviour over the fixtures in `tests/fixtures`.
-
 use saka_spec::{LintCode, MAX_SPEC_BYTES, parse};
 use serde_json::json;
 
@@ -62,7 +60,6 @@ fn crlf_line_endings_parse_the_same() {
     assert_eq!(a, b);
 }
 
-/// Each lint code comes from its own fixture, at the expected line.
 #[test]
 fn each_lint_code_has_a_fixture() {
     let cases: &[(&str, &[u8], LintCode, u32)] = &[

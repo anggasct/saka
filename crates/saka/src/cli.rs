@@ -1,8 +1,3 @@
-//! The operator subcommands: thin calls to the control API of a running server.
-//!
-//! Exit codes: 0 done, 1 error, 2 usage, 3 the spec has lint issues, 4 conflict (409) or
-//! stale precondition (412). `--json` prints the API response body as it came.
-
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -18,7 +13,6 @@ pub struct Client {
     pub json: bool,
 }
 
-/// An API answer.
 pub struct Answer {
     pub status: u16,
     pub body: Value,
@@ -39,7 +33,6 @@ fn err(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
-/// Prints a refusal and picks the exit code.
 fn fail(a: &Answer) -> ExitCode {
     let code = a.body["code"].as_str().unwrap_or("error");
     err(&format!("error: {code} {}", a.body["params"]));
@@ -81,7 +74,6 @@ impl Client {
             .await
     }
 
-    /// A mutation with a fresh `Idempotency-Key`.
     pub async fn post(
         &self,
         path: &str,
@@ -99,7 +91,6 @@ impl Client {
         self.send(req).await
     }
 
-    /// Prints the body (`--json`) or the summary, then exits 0.
     fn done(&self, a: &Answer, summary: impl FnOnce(&Value) -> String) -> ExitCode {
         if self.json {
             out(&a.body.to_string());
@@ -147,7 +138,6 @@ impl Client {
         }
     }
 
-    /// A project by id, or by name.
     async fn project_id(&self, project: &str) -> Result<String, ExitCode> {
         if project.parse::<Uuid>().is_ok() {
             return Ok(project.to_string());
@@ -170,7 +160,6 @@ impl Client {
             })
     }
 
-    /// Reads the spec at the tip of the base branch, then approves that revision.
     pub async fn spec_approve(&self, project: &str, path: &str, reason: Option<&str>) -> ExitCode {
         let id = match self.project_id(project).await {
             Ok(id) => id,

@@ -1,12 +1,8 @@
-// One event stream for the app: every domain event invalidates the queries that show
-// its stream.
-
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { platform } from "@/platform";
 import type { EventStream } from "@/platform";
 
-/** Every event kind the server sends (SSE `event` = `<kind>.v1`). */
 export const EVENT_KINDS = [
   "workspace.repo.registered",
   "workspace.project.registered",
@@ -52,7 +48,6 @@ export const QUERY_ROOTS = {
   permissions: "permission-requests",
 } as const;
 
-/** The query roots each stream type affects. */
 const AFFECTS: Record<string, readonly string[]> = {
   repo: [QUERY_ROOTS.projects],
   project: [QUERY_ROOTS.projects],
@@ -83,7 +78,6 @@ function streamTypeOf(data: string): string | undefined {
   return undefined;
 }
 
-/** Opens the stream; returns a function that closes it. */
 export function startEventStream(
   queryClient: QueryClient,
   open: (url: string) => EventStream = platform.eventSource,

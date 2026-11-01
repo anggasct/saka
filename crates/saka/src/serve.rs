@@ -1,7 +1,3 @@
-//! `saka serve` and `saka migrate`: the composition root. Adapters are built from the
-//! operator config and handed to the engine; the HTTP server answers `/healthz` from the
-//! start and the API once the store is migrated and the engine runs.
-
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
@@ -35,7 +31,6 @@ use crate::config::{self, Config, ConfigError};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const WORKERS: usize = 4;
 
-/// Exit code for a config or database the binary refuses to run with.
 pub const EXIT_REFUSED: u8 = 2;
 
 pub struct SystemClock;
@@ -58,7 +53,6 @@ fn unknown_integration(id: &str) -> PortError {
     PortError::permanent("scm_integration_unknown", json!({ "integration_id": id }))
 }
 
-/// One `Scm` over every configured integration, by `integration_id`.
 struct ScmRouter(HashMap<String, Arc<GitHub>>);
 
 impl ScmRouter {
@@ -99,7 +93,6 @@ impl Scm for ScmRouter {
     }
 }
 
-/// One `GitAccess` over every configured integration.
 struct AccessRouter(HashMap<String, Arc<GitHubApp>>);
 
 #[async_trait]
@@ -122,7 +115,6 @@ fn refuse(e: &ConfigError) -> ExitCode {
     ExitCode::from(EXIT_REFUSED)
 }
 
-/// Opens (and migrates) the store; a migration the binary cannot run is exit code 2.
 fn open_store(data_dir: &Path, now: Timestamp) -> Result<Store, ExitCode> {
     if let Err(e) = std::fs::create_dir_all(data_dir) {
         tracing::error!(code = "data_dir_unwritable", error = %e, path = %data_dir.display(), "cannot create the data directory");

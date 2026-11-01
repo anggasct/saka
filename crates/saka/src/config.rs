@@ -1,6 +1,3 @@
-//! The operator config: `$XDG_CONFIG_HOME/saka/config.toml`, or the file in `SAKA_CONFIG`.
-//! Unknown fields are errors; paths may start with `~/`.
-
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -9,7 +6,6 @@ use saka_core::policy::RuleSpec;
 use saka_core::vocab::MergeMethod;
 use serde::Deserialize;
 
-/// A config problem: a stable code and what it is about.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{code}: {detail}")]
 pub struct ConfigError {
@@ -227,7 +223,6 @@ pub struct Permission {
     pub rule: Vec<RuleSpec>,
 }
 
-/// Where the config file is.
 pub fn path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("SAKA_CONFIG") {
         return Some(PathBuf::from(p));
@@ -242,7 +237,6 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// `~/x` → `$HOME/x`.
 pub fn expand(p: &str) -> PathBuf {
     match (p.strip_prefix("~/"), home()) {
         (Some(rest), Some(h)) => h.join(rest),
@@ -259,7 +253,6 @@ fn id_ok(id: &str, max: usize) -> bool {
 }
 
 impl Config {
-    /// Reads the file; a missing file at the default place is the default config.
     pub fn load() -> Result<Config, ConfigError> {
         let explicit = std::env::var_os("SAKA_CONFIG").is_some();
         let Some(path) = path() else {
@@ -381,7 +374,6 @@ impl Config {
         }
     }
 
-    /// Each private key file must be a file of this user with mode 0600.
     pub fn check_key_files(&self) -> Result<(), ConfigError> {
         for s in &self.scm {
             let path = expand(&s.private_key_file);
@@ -401,7 +393,6 @@ impl Config {
     }
 }
 
-/// Whether a socket address is loopback.
 pub fn is_loopback(addr: &SocketAddr) -> bool {
     addr.ip().is_loopback()
 }

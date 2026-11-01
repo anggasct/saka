@@ -1,7 +1,3 @@
-//! Job queue: claim with a lease, extend it while running, finish through a [`Batch`].
-//!
-//! [`Batch`]: crate::Batch
-
 use rusqlite::{Connection, params};
 use saka_core::ids::ProjectId;
 use saka_core::job::JobKind;
@@ -12,9 +8,7 @@ use uuid::Uuid;
 use crate::codec::{json, opt_json, opt_uuid, u32_col, uuid};
 use crate::error::{Result, StoreError};
 
-/// How long a claim lasts unless extended.
 pub const LEASE_MS: i64 = 60_000;
-/// How often a running job extends its lease.
 pub const LEASE_EXTEND_MS: i64 = 20_000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +18,6 @@ pub struct ClaimedJob {
     pub idempotency_key: String,
     pub project_id: Option<ProjectId>,
     pub payload: Value,
-    /// Attempts started, including this one.
     pub attempts: u32,
     pub max_attempts: u32,
     pub last_error: Option<Value>,
@@ -35,12 +28,10 @@ pub struct ClaimedJob {
 }
 
 impl ClaimedJob {
-    /// This attempt is past the limit (a lease expired on the last allowed attempt).
     pub fn is_over_limit(&self) -> bool {
         self.attempts > self.max_attempts
     }
 
-    /// The `run_at` for the next attempt: `min(2^attempts × 5 s, 10 min)` after `now`.
     pub fn backoff(&self, now: Timestamp) -> Timestamp {
         let exp = self.attempts.min(10);
         let ms = (5_000_i64 << exp).min(600_000);
@@ -48,7 +39,6 @@ impl ClaimedJob {
     }
 }
 
-/// Claims the oldest runnable job: queued or failed and due, or leased with an expired lease.
 pub(crate) fn claim(conn: &Connection, owner: &str, now: Timestamp) -> Result<Option<ClaimedJob>> {
     let mut stmt = conn.prepare(
         "UPDATE job SET state = 'leased', lease_owner = ?1, lease_until = ?2, attempts = attempts + 1, updated_at = ?3
@@ -101,7 +91,6 @@ pub(crate) fn extend_lease(
     }
 }
 
-/// Count of jobs per `(kind, state)`, for metrics.
 pub(crate) fn counts(conn: &Connection) -> Result<Vec<(String, String, i64)>> {
     let mut stmt = conn.prepare(
         "SELECT kind, state, COUNT(*) FROM job GROUP BY kind, state ORDER BY kind, state",
@@ -110,7 +99,6 @@ pub(crate) fn counts(conn: &Connection) -> Result<Vec<(String, String, i64)>> {
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
-/// Age of the oldest job that is due and waiting, in milliseconds.
 pub(crate) fn oldest_ready_age(conn: &Connection, now: Timestamp) -> Result<Option<i64>> {
     let run_at: Option<i64> = conn.query_row(
         "SELECT MIN(run_at) FROM job WHERE state IN ('queued', 'failed') AND run_at <= ?1",

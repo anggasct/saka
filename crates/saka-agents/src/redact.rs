@@ -1,15 +1,10 @@
-//! Redaction of everything the CLI prints, before it is written, sent, or logged. Each
-//! match becomes `«secret:<name>»`. It cannot be turned off.
-
 use std::borrow::Cow;
 
 use regex::Regex;
 use serde_json::Value;
 
-/// Known values shorter than this are not redacted (too likely to hit normal text).
 pub const KNOWN_VALUE_MIN: usize = 8;
 
-/// `(name, pattern, replacement)`, in the order they are applied.
 const PATTERNS: &[(&str, &str, &str)] = &[
     (
         "private_key",
@@ -53,7 +48,6 @@ const PATTERNS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Names of the patterns, `known_value` first.
 pub const PATTERN_NAMES: &[&str] = &[
     "known_value",
     "private_key",
@@ -104,7 +98,6 @@ impl Redactor {
         out
     }
 
-    /// Redacts every string (and object key) in `value`.
     pub fn value(&self, value: &mut Value) {
         match value {
             Value::String(s) => {
@@ -125,7 +118,6 @@ impl Redactor {
     }
 }
 
-/// One sample per pattern, for tests that feed every pattern through the runner.
 pub fn samples(known_value: &str) -> Vec<(&'static str, String)> {
     vec![
         ("known_value", known_value.to_string()),

@@ -1,6 +1,3 @@
-//! Forward-only migrations embedded in the binary, checked by SHA-256. An existing database
-//! is backed up before pending migrations run.
-
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +15,6 @@ pub(crate) fn checksum(sql: &str) -> String {
     format!("sha256:{hex}")
 }
 
-/// What a migration run did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationReport {
     pub applied: Vec<i64>,
@@ -92,7 +88,6 @@ fn migrate_with(
     Ok(report)
 }
 
-/// `VACUUM INTO` a temporary name, fsync, then rename into place.
 fn backup(conn: &Connection, dir: &Path, now: Timestamp, version: i64) -> Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let target = dir.join(format!("saka-{}-pre-{version:04}.db", now.0));
@@ -109,7 +104,6 @@ fn backup(conn: &Connection, dir: &Path, now: Timestamp, version: i64) -> Result
     Ok(target)
 }
 
-/// Highest migration recorded in the database, if any.
 pub fn current_version(conn: &Connection) -> Result<Option<i64>> {
     let exists: Option<String> = conn
         .query_row(
