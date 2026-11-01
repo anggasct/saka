@@ -1000,8 +1000,17 @@ impl Decider<'_> {
         if expected_version != self.item().version {
             return Err(Rejection::VersionStale);
         }
-        let in_merge =
-            self.item().state == WorkItemState::InStage && self.item().stage == Some(Stage::Merge);
+        // A task stopped in the merge stage (red CI, a conflict) is not ready to merge,
+        // rather than in the wrong state.
+        let in_merge = match self.item().state {
+            WorkItemState::InStage => self.item().stage == Some(Stage::Merge),
+            WorkItemState::Blocked => self
+                .task
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.stage == Stage::Merge),
+            _ => false,
+        };
         if !in_merge || self.task.is_at(Stage::Merge, StagePhase::Merging) {
             return Err(Rejection::InvalidState {
                 state: self.state_name(),

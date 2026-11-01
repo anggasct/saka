@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod env;
+pub mod git;
 pub mod scm;
 pub mod supervisor;
 
@@ -16,6 +17,7 @@ use uuid::Uuid;
 
 pub use agent::{Agents, LaunchedSession, RunnerEvent, RunnerEventKind, SessionLaunch, SessionRef};
 pub use env::{EnvRef, Environments, PrepareRequest, PreparedEnvironment, WorktreeState};
+pub use git::{GitAccess, GitRemote, Repos};
 pub use scm::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome,
     PushRequest, RepoRef, Scm,

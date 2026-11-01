@@ -1,5 +1,9 @@
-//! Task environments (git worktrees) and the session supervisor.
+//! Task environments (bare mirrors and git worktrees) and the session supervisor.
 
+pub mod git;
+pub mod repos;
 pub mod supervisor;
 
+pub use git::Git;
+pub use repos::{GitRepos, ReposConfig};
 pub use supervisor::{DirectSupervisor, SystemdSupervisor};
