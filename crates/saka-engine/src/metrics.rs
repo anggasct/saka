@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use saka_core::admission::Waiting;
+use saka_core::ids::WorkItemId;
 use saka_core::job::JobKind;
 use saka_store::list;
 
@@ -12,6 +14,7 @@ use crate::{Engine, Result};
 pub struct Counters {
     job_runs: Mutex<BTreeMap<(String, String), u64>>,
     adapter_requests: Mutex<BTreeMap<(String, String), u64>>,
+    waiting: Mutex<BTreeMap<WorkItemId, Vec<Waiting>>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -61,6 +64,49 @@ impl Counters {
     }
 }
 
+impl Counters {
+    pub(crate) fn note_waiting(&self, current: Vec<(WorkItemId, Vec<Waiting>)>) {
+        let Ok(mut waiting) = self.waiting.lock() else {
+            return;
+        };
+        let current: BTreeMap<WorkItemId, Vec<Waiting>> = current.into_iter().collect();
+        for (id, waits) in &current {
+            if waiting.get(id) == Some(waits) {
+                continue;
+            }
+            let kind = waits.first().map_or("", Waiting::kind);
+            let depends_on: Vec<String> = waits
+                .iter()
+                .map(|w| match w {
+                    Waiting::Step { work_item_id, .. } => work_item_id.to_string(),
+                    Waiting::Spec { spec_id, .. } => spec_id.to_string(),
+                })
+                .collect();
+            tracing::info!(
+                work_item_id = %id,
+                waiting_on_kind = kind,
+                depends_on = %depends_on.join(","),
+                "task waits for its dependencies"
+            );
+        }
+        *waiting = current;
+    }
+
+    fn waiting_counts(&self) -> Vec<(String, i64)> {
+        let waiting = self.waiting.lock().map(|w| w.clone()).unwrap_or_default();
+        ["spec", "step"]
+            .into_iter()
+            .map(|reason| {
+                let n = waiting
+                    .values()
+                    .filter(|waits| waits.iter().any(|w| w.kind() == reason))
+                    .count();
+                (reason.to_string(), i64::try_from(n).unwrap_or(i64::MAX))
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricsSnapshot {
     pub jobs: Vec<(String, String, i64)>,
@@ -71,6 +117,7 @@ pub struct MetricsSnapshot {
     pub work_items: Vec<(String, i64)>,
     pub stage_durations: Vec<(String, String, i64)>,
     pub adapter_requests: Vec<(String, String, u64)>,
+    pub admission_waiting: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +150,7 @@ impl Engine {
             work_items: items,
             stage_durations: durations,
             adapter_requests: copy(&self.counters.adapter_requests),
+            admission_waiting: self.counters.waiting_counts(),
         })
     }
 

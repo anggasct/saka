@@ -117,6 +117,8 @@ impl World {
             lint_ok: true,
             issue_codes: vec![],
             title: "Mark tasks as done".into(),
+            parser_version: 2,
+            priority: 0,
         };
         let mut ctx = Ctx { now, ids: &mut ids };
         let spec_events = spec::record_revision(
@@ -153,10 +155,10 @@ impl World {
             lint_ok: true,
             lint_issues: json!([]),
             model: json!({ "steps": [
-                { "id": "S1", "index": 1, "work": "Add done", "ac": ["AC-01"], "commands": ["go test ./..."], "line": 3 },
-                { "id": "S2", "index": 2, "work": "Show done", "ac": ["AC-01"], "commands": ["npm test"], "line": 4 },
+                { "id": "S1", "index": 1, "work": "Add done", "ac": ["AC-01"], "commands": ["go test ./..."], "after": [], "line": 3 },
+                { "id": "S2", "index": 2, "work": "Show done", "ac": ["AC-01"], "commands": ["npm test"], "after": ["S1"], "line": 4 },
             ]}),
-            parser_version: 1,
+            parser_version: 2,
             created_at: now,
         });
         store.commit(&batch).unwrap();
@@ -187,12 +189,19 @@ impl World {
         let events = spec::approve(
             &self.spec,
             &view,
-            self.spec.latest_revision_id,
-            None,
-            self.project.default_repo().unwrap(),
+            spec::Approval {
+                if_match: self.spec.latest_revision_id,
+                reason: None,
+                default_repo: self.project.default_repo().unwrap(),
+                parser_version: 2,
+                depends_on_line: 1,
+                project_specs: &[],
+                project_graph: &[],
+            },
             &mut ctx,
         )
         .unwrap();
+        let (spec_rows, item_rows) = spec::approval_graph(&self.spec, &view, &events);
         let mut tasks = Vec::new();
         for e in &events {
             self.spec = spec::evolve(Some(self.spec.clone()), e, self.now).unwrap();
@@ -208,6 +217,8 @@ impl World {
         }
         batch.specs.push(self.spec.clone());
         batch.tasks = tasks.clone();
+        batch.spec_dependencies = spec_rows;
+        batch.work_item_dependencies = item_rows;
         self.store.commit(&batch).unwrap();
         tasks
     }
@@ -436,7 +447,35 @@ fn a_whole_task_round_trips_through_the_schema() {
         .read(|c| read::load_tasks(c, TaskSet::Reconcile))
         .unwrap();
     assert_eq!(set.len(), 2);
-    assert_eq!(w.store.read(read::approved_specs).unwrap().len(), 1);
+    assert_eq!(w.store.read(read::reconcile_specs).unwrap().len(), 1);
+}
+
+#[test]
+fn approve_writes_the_step_graph_with_the_work_items() {
+    let mut w = World::new();
+    let tasks = w.approve();
+    let id = |n: u32| {
+        tasks
+            .iter()
+            .find(|t| t.item.step_index == Some(n))
+            .unwrap()
+            .item
+            .id
+    };
+    let queued = w.store.read(read::queued_work_item_dependencies).unwrap();
+    let pairs: Vec<_> = queued
+        .iter()
+        .map(|d| (d.work_item_id, d.depends_on_work_item_id))
+        .collect();
+    assert_eq!(pairs, vec![(id(2), id(1))]);
+    assert_eq!(
+        w.store
+            .read(|c| read::work_item_dependencies_of(c, &[id(2), id(1)]))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(count(&w.store, "spec_dependency"), 0);
 }
 
 #[test]
@@ -727,8 +766,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(1));
+    assert_eq!(w.store.migration().applied, vec![1, 2]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(2));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -752,12 +791,13 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         StepPlan {
             id: "S2".into(),
             index: 2,
-            work: "Show done".into()
+            work: "Show done".into(),
+            after: vec!["S1".into()],
         }
     );
     assert_eq!(
         reopened
-            .read(|c| read::revision_by_hash(c, spec.id, "sha256:abc"))
+            .read(|c| read::revision_by_hash(c, spec.id, "sha256:abc", 2))
             .unwrap(),
         Some(spec.latest_revision_id)
     );

@@ -14,6 +14,11 @@ pub enum Rejection {
     SpecNotReady { issues: Value },
     #[error("spec is already approved")]
     SpecAlreadyApproved,
+    #[error("spec was read by an older parser")]
+    SpecReparseRequired {
+        parser_version: u32,
+        current_parser_version: u32,
+    },
     #[error("merge is not ready")]
     MergeNotReady {
         gate_outcome: Option<String>,
@@ -48,6 +53,7 @@ impl Rejection {
             Rejection::VersionStale => "version_stale",
             Rejection::SpecNotReady { .. } => "spec_not_ready",
             Rejection::SpecAlreadyApproved => "spec_already_approved",
+            Rejection::SpecReparseRequired { .. } => "spec_reparse_required",
             Rejection::MergeNotReady { .. } => "merge_not_ready",
             Rejection::PermissionAlreadyAnswered => "permission_already_answered",
             Rejection::NotFound => "not_found",
@@ -65,6 +71,13 @@ impl Rejection {
         match self {
             Rejection::InvalidState { state } => json!({ "state": state }),
             Rejection::SpecNotReady { issues } => json!({ "issues": issues }),
+            Rejection::SpecReparseRequired {
+                parser_version,
+                current_parser_version,
+            } => json!({
+                "parser_version": parser_version,
+                "current_parser_version": current_parser_version,
+            }),
             Rejection::MergeNotReady {
                 gate_outcome,
                 head_sha,

@@ -177,7 +177,7 @@ impl Engine {
         let (existing, known) = self.store.read(|c| {
             let existing = read::spec_by_path(c, project_id, path)?;
             let known = match &existing {
-                Some(s) => read::revision_by_hash(c, s.id, &hash)?,
+                Some(s) => read::revision_by_hash(c, s.id, &hash, PARSER_VERSION)?,
                 None => None,
             };
             Ok((existing, known))
@@ -196,6 +196,8 @@ impl Engine {
                 .model
                 .as_ref()
                 .map_or_else(|| stem.to_string(), |m| m.title.clone()),
+            parser_version: PARSER_VERSION,
+            priority: parsed.model.as_ref().map_or(0, |m| i64::from(m.priority)),
         };
         let slug = parsed
             .model
@@ -317,17 +319,30 @@ impl Engine {
         }
         let _guard = self.locked()?;
         let now = self.now();
-        let (spec, view) = self.store.read(|c| {
+        let (spec, view, row) = self.store.read(|c| {
             let spec = read::load_spec(c, spec_id)?;
-            let view = match &spec {
-                Some(s) => read::revision_view(c, s.latest_revision_id)?,
-                None => None,
+            let (view, row) = match &spec {
+                Some(s) => (
+                    read::revision_view(c, s.latest_revision_id)?,
+                    read::load_revision(c, s.latest_revision_id)?,
+                ),
+                None => (None, None),
             };
-            Ok((spec, view))
+            Ok((spec, view, row))
         })?;
-        let (Some(spec), Some(view)) = (spec, view) else {
+        let (Some(spec), Some(view), Some(row)) = (spec, view, row) else {
             return Err(Rejection::NotFound.into());
         };
+        let (project_specs, project_graph) = self.store.read(|c| {
+            Ok((
+                read::project_specs(c, spec.project_id)?,
+                read::spec_dependencies(c, Some(spec.project_id))?,
+            ))
+        })?;
+        let file_name = spec.path.rsplit('/').next().unwrap_or(&spec.path);
+        let depends_on_line = saka_spec::parse(file_name, &row.content)
+            .depends_on_line
+            .unwrap_or(1);
         let project = self
             .store
             .read(|c| read::load_project(c, spec.project_id))?
@@ -337,9 +352,20 @@ impl Engine {
             .ok_or_else(|| EngineError::Internal("project has no default repo".into()))?;
         let mut ids = IdsSource(&*self.ports.ids);
         let mut ctx = Ctx { now, ids: &mut ids };
-        let events = spec::approve(&spec, &view, if_match, reason, default_repo, &mut ctx)?;
+        let approval = spec::Approval {
+            if_match,
+            reason,
+            default_repo,
+            parser_version: PARSER_VERSION,
+            depends_on_line,
+            project_specs: &project_specs,
+            project_graph: &project_graph,
+        };
+        let events = spec::approve(&spec, &view, approval, &mut ctx)?;
 
         let mut batch = Batch::new(now);
+        (batch.spec_dependencies, batch.work_item_dependencies) =
+            spec::approval_graph(&spec, &view, &events);
         let mut after = Some(spec.clone());
         let mut created = Vec::new();
         for e in &events {

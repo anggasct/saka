@@ -7,7 +7,8 @@ use saka_core::ids::{
 };
 use saka_core::model::{
     Blocker, ChangeRequest, Environment, GateResult, PermissionRequest, Project, ProjectRepo, Repo,
-    RevisionView, Session, Spec, StageRun, StepPlan, Task, WorkItem,
+    RevisionView, Session, Spec, SpecDependency, StageRun, StepPlan, Task, WorkItem,
+    WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SessionState, Stage};
@@ -496,9 +497,12 @@ pub fn spec_by_path(conn: &Connection, project: ProjectId, path: &str) -> Result
     )
 }
 
-pub fn approved_specs(conn: &Connection) -> Result<Vec<Spec>> {
-    let mut stmt =
-        conn.prepare("SELECT * FROM spec WHERE state = 'approved' ORDER BY approved_at, id")?;
+pub fn reconcile_specs(conn: &Connection) -> Result<Vec<Spec>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM spec WHERE state = 'approved'
+           OR id IN (SELECT depends_on_spec_id FROM spec_dependency)
+         ORDER BY approved_at, id",
+    )?;
     let mut q = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -507,15 +511,91 @@ pub fn approved_specs(conn: &Connection) -> Result<Vec<Spec>> {
     Ok(out)
 }
 
+pub fn project_specs(conn: &Connection, project: ProjectId) -> Result<Vec<Spec>> {
+    let mut stmt = conn.prepare("SELECT * FROM spec WHERE project_id = ?1 ORDER BY slug")?;
+    let mut q = stmt.query([project.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(spec_row(row)?);
+    }
+    Ok(out)
+}
+
+pub fn spec_dependencies(
+    conn: &Connection,
+    project: Option<ProjectId>,
+) -> Result<Vec<SpecDependency>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM spec_dependency WHERE ?1 IS NULL OR project_id = ?1
+         ORDER BY spec_id, depends_on_slug",
+    )?;
+    let mut q = stmt.query([project.map(|p| p.0.to_string())])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(SpecDependency {
+            spec_id: SpecId(uuid(row, "spec_id")?),
+            depends_on_spec_id: SpecId(uuid(row, "depends_on_spec_id")?),
+            depends_on_slug: row.get("depends_on_slug")?,
+            revision_id: SpecRevisionId(uuid(row, "revision_id")?),
+            project_id: ProjectId(uuid(row, "project_id")?),
+        });
+    }
+    Ok(out)
+}
+
+pub fn queued_work_item_dependencies(conn: &Connection) -> Result<Vec<WorkItemDependency>> {
+    work_item_dependencies(
+        conn,
+        "SELECT d.* FROM work_item_dependency d JOIN work_item w ON w.id = d.work_item_id
+         WHERE w.state = 'queued' ORDER BY d.work_item_id, d.depends_on_work_item_id",
+        &[],
+    )
+}
+
+pub fn work_item_dependencies_of(
+    conn: &Connection,
+    ids: &[WorkItemId],
+) -> Result<Vec<WorkItemDependency>> {
+    let mut out = Vec::new();
+    for id in ids {
+        out.extend(work_item_dependencies(
+            conn,
+            "SELECT * FROM work_item_dependency WHERE work_item_id = ?1
+             ORDER BY depends_on_work_item_id",
+            &[&id.0.to_string()],
+        )?);
+    }
+    Ok(out)
+}
+
+fn work_item_dependencies(
+    conn: &Connection,
+    sql: &str,
+    bind: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<WorkItemDependency>> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut q = stmt.query(bind)?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(WorkItemDependency {
+            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+            depends_on_work_item_id: WorkItemId(uuid(row, "depends_on_work_item_id")?),
+            project_id: ProjectId(uuid(row, "project_id")?),
+        });
+    }
+    Ok(out)
+}
+
 pub fn revision_by_hash(
     conn: &Connection,
     spec: SpecId,
     content_hash: &str,
+    parser_version: u32,
 ) -> Result<Option<SpecRevisionId>> {
     let id: Option<String> = conn
         .query_row(
-            "SELECT id FROM spec_revision WHERE spec_id = ?1 AND content_hash = ?2",
-            params![spec.0.to_string(), content_hash],
+            "SELECT id FROM spec_revision WHERE spec_id = ?1 AND content_hash = ?2 AND parser_version = ?3",
+            params![spec.0.to_string(), content_hash, parser_version],
             |r| r.get(0),
         )
         .optional()?;
@@ -554,8 +634,18 @@ pub fn revision_view(conn: &Connection, id: SpecRevisionId) -> Result<Option<Rev
     let Some(r) = load_revision(conn, id)? else {
         return Ok(None);
     };
-    let steps: Vec<StepPlan> = match r.model.get("steps") {
+    let mut steps: Vec<StepPlan> = match r.model.get("steps") {
         Some(steps) => serde_json::from_value(steps.clone())?,
+        None => Vec::new(),
+    };
+    // Version 1 models predate the After column: their steps always ran in order.
+    if r.parser_version < 2 {
+        for step in steps.iter_mut().filter(|s| s.index > 1) {
+            step.after = vec![format!("S{}", step.index - 1)];
+        }
+    }
+    let depends_on = match r.model.get("depends_on") {
+        Some(list) => serde_json::from_value(list.clone())?,
         None => Vec::new(),
     };
     Ok(Some(RevisionView {
@@ -563,6 +653,9 @@ pub fn revision_view(conn: &Connection, id: SpecRevisionId) -> Result<Option<Rev
         lint_ok: r.lint_ok,
         issues: r.lint_issues,
         steps,
+        parser_version: r.parser_version,
+        priority: r.model.get("priority").and_then(Value::as_i64).unwrap_or(0),
+        depends_on,
     }))
 }
 

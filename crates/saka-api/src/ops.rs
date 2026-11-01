@@ -145,6 +145,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     for (state, n) in &m.work_items {
         t.sample("saka_work_items", &[("state", state)], n);
     }
+    t.family(
+        "saka_admission_waiting_tasks",
+        "gauge",
+        "Queued tasks held back by a step or spec they depend on.",
+    );
+    for (reason, n) in &m.admission_waiting {
+        t.sample("saka_admission_waiting_tasks", &[("reason", reason)], n);
+    }
 
     t.family(
         "saka_stage_duration_seconds",

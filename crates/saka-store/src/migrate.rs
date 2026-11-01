@@ -7,7 +7,10 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Result, StoreError};
 
-pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/0001_init.sql"))];
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../migrations/0001_init.sql")),
+    (2, include_str!("../migrations/0002_spec_model.sql")),
+];
 
 pub(crate) fn checksum(sql: &str) -> String {
     let digest = Sha256::digest(sql.as_bytes());
@@ -75,9 +78,32 @@ fn migrate_with(
     if !applied.is_empty() {
         report.backup = Some(backup(conn, backups_dir, now, first.0)?);
     }
+    // Table rebuilds need foreign keys off, and the pragma is ignored inside a transaction.
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let applied = apply(conn, &pending, now, &mut report);
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    applied?;
+    Ok(report)
+}
+
+fn apply(
+    conn: &mut Connection,
+    pending: &[&(i64, &str)],
+    now: Timestamp,
+    report: &mut MigrationReport,
+) -> Result<()> {
     for (version, sql) in pending {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
+        let broken: Option<String> = tx
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()?;
+        if let Some(table) = broken {
+            return Err(StoreError::MigrationForeignKeys {
+                version: *version,
+                table,
+            });
+        }
         tx.execute(
             "INSERT INTO schema_migration (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
             params![version, checksum(sql), now.0],
@@ -85,7 +111,7 @@ fn migrate_with(
         tx.commit()?;
         report.applied.push(*version);
     }
-    Ok(report)
+    Ok(())
 }
 
 fn backup(conn: &Connection, dir: &Path, now: Timestamp, version: i64) -> Result<PathBuf> {
@@ -176,6 +202,123 @@ mod tests {
                 backup: None
             }
         );
+    }
+
+    #[test]
+    fn a_migration_that_breaks_a_foreign_key_is_rolled_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        let parent = (
+            1,
+            "CREATE TABLE p (id INTEGER PRIMARY KEY) STRICT; CREATE TABLE c (p INTEGER REFERENCES p(id)) STRICT; INSERT INTO p VALUES (1); INSERT INTO c VALUES (1);",
+        );
+        migrate_with(&mut conn, &[parent], &backups, Timestamp(1)).unwrap();
+        let orphan = (2, "DELETE FROM p;");
+        assert!(matches!(
+            migrate_with(&mut conn, &[parent, orphan], &backups, Timestamp(2)),
+            Err(StoreError::MigrationForeignKeys { version: 2, .. })
+        ));
+        let parents: i64 = conn
+            .query_row("SELECT COUNT(*) FROM p", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(parents, 1);
+        assert_eq!(current_version(&conn).unwrap(), Some(1));
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+    }
+
+    const V1_DATA: &str = "
+        INSERT INTO repo VALUES ('r1', 'github', 'github', 'acme/app', 'https://github.com/acme/app', 'main', 1, 1);
+        INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, created_at, updated_at)
+          VALUES ('p1', 'app', 'r1', 'docs', 'main', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1);
+        INSERT INTO spec (id, project_id, path, slug, title, state, priority, latest_revision_id, approved_revision_id,
+            approved_at, created_at, updated_at)
+          VALUES ('s1', 'p1', 'docs/specs/t.md', 't', 'T', 'approved', 0, 'v1', 'v1', 2, 1, 2);
+        INSERT INTO spec_revision VALUES ('v1', 's1', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'sha256:h',
+          X'00', 1, '[]', '{}', 1, 1);
+        INSERT INTO work_item (id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key, work,
+            repo_id, branch, state, version, created_at, updated_at)
+          VALUES ('w1', 'p1', 'spec_step', 's1', 'v1', 'S1', 1, 't/s1', 'a', 'r1', 'saka/t/s1', 'done', 3, 2, 2),
+                 ('w2', 'p1', 'spec_step', 's1', 'v1', 'S2', 2, 't/s2', 'b', 'r1', 'saka/t/s2', 'queued', 1, 2, 2),
+                 ('w3', 'p1', 'spec_step', 's1', 'v1', 'S3', 3, 't/s3', 'c', 'r1', 'saka/t/s3', 'queued', 1, 2, 2);
+    ";
+
+    #[test]
+    fn the_spec_model_migration_keeps_rows_and_backfills_the_step_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..1], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V1_DATA).unwrap();
+
+        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(2)).unwrap();
+        assert_eq!(report.applied, vec![2]);
+        assert!(report.backup.is_some());
+
+        let rows: Vec<(String, String, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, spec_id, parser_version FROM spec_revision ORDER BY id")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(rows, vec![("v1".to_string(), "s1".to_string(), 1)]);
+        let items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM work_item WHERE spec_revision_id = 'v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(items, 3);
+
+        let chain: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT work_item_id, depends_on_work_item_id FROM work_item_dependency ORDER BY 1")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            chain,
+            vec![("w2".into(), "w1".into()), ("w3".into(), "w2".into())]
+        );
+
+        conn.execute(
+            "INSERT INTO spec_revision VALUES ('v2', 's1', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'sha256:h',
+               X'00', 1, '[]', '{}', 2, 3)",
+            [],
+        )
+        .unwrap();
+        let duplicate = conn.execute(
+            "INSERT INTO spec_revision VALUES ('v3', 's1', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'sha256:h',
+               X'00', 1, '[]', '{}', 2, 4)",
+            [],
+        );
+        assert!(duplicate.is_err());
+
+        let broken: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(broken, None);
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1);
+        let orphan = conn.execute(
+            "UPDATE work_item SET spec_revision_id = 'missing' WHERE id = 'w1'",
+            [],
+        );
+        assert!(orphan.is_err(), "work_item still references spec_revision");
     }
 
     #[test]

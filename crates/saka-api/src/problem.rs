@@ -93,6 +93,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         R::InvalidState { .. }
         | R::Unsupported
         | R::SpecAlreadyApproved
+        | R::SpecReparseRequired { .. }
         | R::MergeNotReady { .. }
         | R::PermissionAlreadyAnswered
         | R::ProjectExists { .. }
