@@ -170,11 +170,17 @@ impl Fixture {
     }
 
     async fn connect(&self, from: u64) -> (RunnerConnection, mpsc::UnboundedReceiver<RunnerEvent>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let conn = RunnerConnection::connect(&self.socket(), self.session, from, "test", tx)
-            .await
-            .unwrap();
-        (conn, rx)
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            let (tx, rx) = mpsc::unbounded_channel();
+            match RunnerConnection::connect(&self.socket(), self.session, from, "test", tx).await {
+                Ok(conn) => return (conn, rx),
+                Err(e) if e.code == "already_connected" => {
+                    assert!(tokio::time::Instant::now() < deadline, "timed out");
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => panic!("{e:?}"),
+            }
         }
     }
 
