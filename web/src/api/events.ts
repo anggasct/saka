@@ -26,6 +26,7 @@ export const EVENT_KINDS = [
   "delivery.work_item.done",
   "runtime.environment.prepared",
   "runtime.environment.torn_down",
+  "runtime.environment.teardown_failed",
   "runtime.session.started",
   "runtime.session.initialized",
   "runtime.session.state_changed",

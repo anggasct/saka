@@ -11,6 +11,10 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_spec_model.sql")),
     (3, include_str!("../migrations/0003_spec_approval.sql")),
+    (
+        4,
+        include_str!("../migrations/0004_environment_teardown_failed.sql"),
+    ),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -389,7 +393,7 @@ mod tests {
             "SELECT id || ':' || state || ':' || task_key FROM work_item ORDER BY id",
         );
 
-        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(2)).unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..3], &backups, Timestamp(2)).unwrap();
         assert_eq!(report.applied, vec![3]);
         assert_eq!(
             ids(
@@ -458,6 +462,64 @@ mod tests {
             "INSERT INTO work_item_dependency VALUES ('w1', 'missing', 'p1', 2)",
             "UPDATE environment SET work_item_id = 'missing'",
             "UPDATE change_request SET work_item_id = 'missing'",
+        ];
+        for sql in refused {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn the_teardown_failed_migration_keeps_environments_and_accepts_the_new_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V2_DATA).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..3], &backups, Timestamp(2)).unwrap();
+        conn.execute_batch(
+            "INSERT INTO environment VALUES
+               ('e2', 'p1', 'w5', 'r1', '/root2', '/root2/wt', 'saka/a/s5', NULL, 'preparing', 3, 3),
+               ('e3', 'p1', 'w7', 'r1', '/root3', '/root3/wt', 'saka/a/s7', NULL, 'failed', 3, 3),
+               ('e4', 'p1', 'w8', 'r1', '/root4', '/root4/wt', 'saka/s/s1',
+                'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'torn_down', 3, 4);",
+        )
+        .unwrap();
+        let columns = "SELECT id || ':' || work_item_id || ':' || state || ':' || root_path || ':' \
+                       || ifnull(base_sha, '-') || ':' || created_at || ':' || updated_at \
+                       FROM environment ORDER BY id";
+        let before = ids(&conn, columns);
+        assert_eq!(before.len(), 4);
+
+        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        assert_eq!(report.applied, vec![4]);
+        assert_eq!(ids(&conn, columns), before);
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'environment' AND sql IS NOT NULL"
+            ),
+            vec![
+                "CREATE UNIQUE INDEX environment_one_live ON environment (work_item_id) WHERE state IN ('preparing','ready')"
+            ]
+        );
+        let broken: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(broken, None);
+
+        conn.execute(
+            "UPDATE environment SET state = 'teardown_failed' WHERE id = 'e4'",
+            [],
+        )
+        .unwrap();
+        let refused = [
+            "UPDATE environment SET state = 'mystery' WHERE id = 'e3'",
+            "UPDATE environment SET state = 'ready' WHERE id = 'e3'",
+            "UPDATE environment SET work_item_id = 'missing' WHERE id = 'e3'",
+            "UPDATE session SET environment_id = 'missing' WHERE id = 'x1'",
+            "INSERT INTO environment VALUES ('e5', 'p1', 'w4', 'r1', '/r5', '/r5/wt', 'saka/a/s4', NULL, 'preparing', 5, 5)",
         ];
         for sql in refused {
             assert!(conn.execute(sql, []).is_err(), "{sql}");

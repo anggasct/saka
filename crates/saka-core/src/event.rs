@@ -196,6 +196,12 @@ pub enum Event {
         work_item_id: WorkItemId,
         environment_id: EnvironmentId,
     },
+    #[serde(rename = "runtime.environment.teardown_failed")]
+    EnvironmentTeardownFailed {
+        work_item_id: WorkItemId,
+        environment_id: EnvironmentId,
+        error: Coded,
+    },
     #[serde(rename = "runtime.session.started")]
     SessionStarted {
         work_item_id: WorkItemId,
@@ -430,6 +436,7 @@ impl Event {
             | E::WorkItemDone { work_item_id, .. }
             | E::EnvironmentPrepared { work_item_id, .. }
             | E::EnvironmentTornDown { work_item_id, .. }
+            | E::EnvironmentTeardownFailed { work_item_id, .. }
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }

@@ -102,6 +102,7 @@ struct State {
     script: AgentScript,
     ci: CiScript,
     lose_merges: bool,
+    refuse_teardowns: bool,
     next_sha: u64,
     parents: HashMap<String, Vec<String>>,
     remote: BTreeMap<String, String>,
@@ -136,6 +137,7 @@ impl FakeWorld {
                 script,
                 ci,
                 lose_merges: false,
+                refuse_teardowns: false,
                 next_sha: 1,
                 parents,
                 remote,
@@ -225,6 +227,10 @@ impl FakeWorld {
     pub fn merge_outside(&self, number: u64) {
         let mut s = self.state();
         s.merge(number, None);
+    }
+
+    pub fn refuse_teardowns(&self, refuse: bool) {
+        self.state().refuse_teardowns = refuse;
     }
 
     pub fn close_outside(&self, number: u64) {
@@ -493,6 +499,12 @@ impl Environments for FakeWorld {
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()> {
         let mut s = self.state();
+        if s.refuse_teardowns {
+            return Err(PortError::retryable(
+                "env_io_failed",
+                json!({ "op": "remove_env_root", "error": "Permission denied (os error 13)" }),
+            ));
+        }
         if let Some(w) = s.worktrees.get_mut(&env.environment_id)
             && !w.torn_down
         {

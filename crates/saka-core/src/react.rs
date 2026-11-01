@@ -7,6 +7,8 @@ use crate::task::LoopConfig;
 use crate::time::Timestamp;
 use crate::vocab::{EnvironmentState, PermissionState, Stage, StagePhase, WorkItemState};
 
+const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
+
 pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     use Event as E;
     let id = task.item.id;
@@ -116,18 +118,30 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
         if let Some(s) = task.live_session().filter(|_| item.state.is_terminal()) {
             jobs.push(stop(task, s.id, now));
         }
-        if item.state == WorkItemState::Cancelled
-            && let Some(env) = task
-                .environment
-                .as_ref()
-                .filter(|e| e.state != EnvironmentState::TornDown)
-        {
-            jobs.push(Job::new(
-                JobKind::EnvTeardown,
-                env.id,
-                json!({ "work_item_id": id, "environment_id": env.id }),
-                now,
-            ));
+        match task.environment.as_ref() {
+            Some(env)
+                if item.state.is_terminal() && env.state == EnvironmentState::TeardownFailed =>
+            {
+                let hour = now.0 / TEARDOWN_RETRY_INTERVAL_MS;
+                jobs.push(Job::new(
+                    JobKind::EnvTeardown,
+                    format!("{}:{hour}", env.id),
+                    json!({ "work_item_id": id, "environment_id": env.id }),
+                    now,
+                ));
+            }
+            Some(env)
+                if item.state == WorkItemState::Cancelled
+                    && env.state != EnvironmentState::TornDown =>
+            {
+                jobs.push(Job::new(
+                    JobKind::EnvTeardown,
+                    env.id,
+                    json!({ "work_item_id": id, "environment_id": env.id }),
+                    now,
+                ));
+            }
+            _ => {}
         }
         return jobs;
     }

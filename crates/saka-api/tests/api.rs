@@ -794,6 +794,7 @@ fn ops_endpoints_report_health_readiness_and_metrics() {
         "saka_job_runs_total",
         "saka_sessions_active",
         "saka_permission_requests_pending",
+        "saka_environments_teardown_failed",
         "saka_work_items",
         "saka_stage_duration_seconds",
         "saka_adapter_requests_total",
@@ -1664,5 +1665,23 @@ fn withdraw_closes_a_spec_that_has_no_active_tasks() {
     assert_eq!(
         waiting[0]["waiting_on"],
         json!([{"kind": "spec", "slug": "approval", "spec_id": spec}])
+    );
+}
+
+#[test]
+fn metrics_count_the_environments_that_wait_for_cleanup() {
+    let mut api = Api::new(SimConfig::default());
+    let before = api.get_text("/metrics");
+    assert!(
+        before.contains("\nsaka_environments_teardown_failed 0\n"),
+        "{before}"
+    );
+    api.sim.world.refuse_teardowns(true);
+    api.sim.approve();
+    assert!(api.sim.run_to_shipped(STEPS));
+    let after = api.get_text("/metrics");
+    assert!(
+        after.contains("\nsaka_environments_teardown_failed 2\n"),
+        "{after}"
     );
 }

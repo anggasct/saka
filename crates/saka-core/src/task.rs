@@ -1096,26 +1096,52 @@ impl Decider<'_> {
             work_item_id: self.item().id,
             environment_id: env.id,
         }];
-        if self.task.is_at(Stage::Sync, StagePhase::TearingDown)
-            && let (Some(run), Some(sha)) = (
-                &self.task.stage_run,
-                self.task
-                    .change_request
-                    .as_ref()
-                    .and_then(|c| c.merge_commit_sha.clone()),
+        events.extend(self.finish_sync());
+        events
+    }
+
+    fn teardown_failed(&self, error: Coded) -> Vec<Event> {
+        let Some(env) = self.task.environment.as_ref().filter(|e| {
+            !matches!(
+                e.state,
+                EnvironmentState::TeardownFailed | EnvironmentState::TornDown
             )
-        {
-            events.push(Event::StageRunSucceeded {
+        }) else {
+            return vec![];
+        };
+        let mut events = vec![Event::EnvironmentTeardownFailed {
+            work_item_id: self.item().id,
+            environment_id: env.id,
+            error,
+        }];
+        events.extend(self.finish_sync());
+        events
+    }
+
+    fn finish_sync(&self) -> Vec<Event> {
+        if !self.task.is_at(Stage::Sync, StagePhase::TearingDown) {
+            return vec![];
+        }
+        let (Some(run), Some(sha)) = (
+            &self.task.stage_run,
+            self.task
+                .change_request
+                .as_ref()
+                .and_then(|c| c.merge_commit_sha.clone()),
+        ) else {
+            return vec![];
+        };
+        vec![
+            Event::StageRunSucceeded {
                 work_item_id: self.item().id,
                 stage_run_id: run.id,
                 head_sha: None,
-            });
-            events.push(Event::WorkItemDone {
+            },
+            Event::WorkItemDone {
                 work_item_id: self.item().id,
                 merge_commit_sha: sha,
-            });
-        }
-        events
+            },
+        ]
     }
 
     fn retry(&self, reason: String, ctx: &mut Ctx<'_>) -> Result<Vec<Event>, Rejection> {
@@ -1188,6 +1214,9 @@ impl Decider<'_> {
     }
 
     fn job_exhausted(&self, kind: JobKind, error: Coded, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        if kind == JobKind::EnvTeardown {
+            return self.teardown_failed(error);
+        }
         let Some((code, mut params)) = kind.exhausted_blocker() else {
             return vec![];
         };
@@ -1523,6 +1552,12 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::EnvironmentTornDown { environment_id, .. } => {
             if let Some(env) = t.environment.as_mut().filter(|e| e.id == *environment_id) {
                 env.state = EnvironmentState::TornDown;
+                env.updated_at = now;
+            }
+        }
+        E::EnvironmentTeardownFailed { environment_id, .. } => {
+            if let Some(env) = t.environment.as_mut().filter(|e| e.id == *environment_id) {
+                env.state = EnvironmentState::TeardownFailed;
                 env.updated_at = now;
             }
         }
