@@ -429,6 +429,13 @@ pub enum WaitingOn {
     Step { step_id: String, work_item_id: Uuid },
     /// A spec that has not shipped yet.
     Spec { slug: String, spec_id: Uuid },
+    /// An agent account window at or above `agent.rate_limit_pause` that has not reset yet.
+    Quota {
+        account: String,
+        window: String,
+        utilization: f64,
+        resets_at: Option<String>,
+    },
 }
 
 impl From<&Waiting> for WaitingOn {
@@ -444,6 +451,17 @@ impl From<&Waiting> for WaitingOn {
             Waiting::Spec { slug, spec_id } => WaitingOn::Spec {
                 slug: slug.clone(),
                 spec_id: spec_id.0,
+            },
+            Waiting::Quota {
+                account,
+                window,
+                utilization,
+                resets_at,
+            } => WaitingOn::Quota {
+                account: account.clone(),
+                window: window.clone(),
+                utilization: *utilization,
+                resets_at: resets_at.map(time),
             },
         }
     }

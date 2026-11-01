@@ -140,10 +140,16 @@ fn a_cli_error_result_blocks_as_session_failed() {
 }
 
 #[test]
-fn a_runner_exit_without_a_result_blocks_as_session_lost() {
+fn a_runner_exit_without_a_result_resumes_once_then_blocks_as_session_lost() {
     let mut sim = sim_with(script(AgentOutcome::Exit), |c| c.operator.retry.clear());
     assert_eq!(run_to_block(&mut sim), BlockerCode::SessionLost);
     assert_eq!(sim.task(1).session.unwrap().state, SessionState::Lost);
+    let sessions = sim.sessions(1);
+    assert_eq!(
+        sessions.iter().map(|s| s.state).collect::<Vec<_>>(),
+        vec![SessionState::Resumed, SessionState::Lost]
+    );
+    assert_eq!(sessions[1].resumed_from_session_id, Some(sessions[0].id));
     assert!(
         sim.run_until(STEPS, |s| s.world.running_sessions().is_empty()),
         "the runner unit is stopped"
@@ -151,7 +157,7 @@ fn a_runner_exit_without_a_result_blocks_as_session_lost() {
 }
 
 #[test]
-fn running_too_long_interrupts_and_blocks_as_session_timeout_not_counting_waits() {
+fn running_past_the_budget_interrupts_and_blocks_as_budget_exhausted_not_counting_waits() {
     let ask = AgentScript {
         outcome: AgentOutcome::Hang,
         ask: Some(("Bash".into(), json!({ "command": "make deploy" }))),
@@ -173,17 +179,14 @@ fn running_too_long_interrupts_and_blocks_as_session_timeout_not_counting_waits(
         .answer_permission(pending, true, None, &engine.cause("human:operator:local"))
         .unwrap();
     let answered_at = engine.now();
-    assert_eq!(run_to_block(&mut sim), BlockerCode::SessionTimeout);
+    assert_eq!(run_to_block(&mut sim), BlockerCode::BudgetExhausted);
     let blocked_at = sim.task(1).open_blocker().unwrap().opened_at;
-    assert!(blocked_at.since(answered_at) >= 60 * 60_000);
+    assert!(blocked_at.since(answered_at) >= 59 * 60_000);
     assert_eq!(
         sim.task(1).open_blocker().unwrap().params,
-        json!({ "minutes": 60 })
+        json!({ "dimension": "running_minutes", "used": 60, "limit": 60 })
     );
-    assert_eq!(
-        sim.task(1).session.unwrap().state,
-        SessionState::Interrupted
-    );
+    assert_eq!(sim.task(1).session.unwrap().state, SessionState::Failed);
     assert!(sim.run_until(STEPS, |s| s.world.running_sessions().is_empty()));
     assert_eq!(sim.stats().interrupts, 1);
 }

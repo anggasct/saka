@@ -618,6 +618,8 @@ impl Engine {
             allow,
             message,
             actor: OPERATOR.to_string(),
+            remember: false,
+            active_rules: Vec::new(),
         };
         self.decide(
             work_item,

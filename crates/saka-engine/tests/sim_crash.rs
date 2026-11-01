@@ -4,7 +4,9 @@ use std::sync::OnceLock;
 
 use proptest::prelude::*;
 use saka_core::job::JobKind;
-use saka_core::vocab::{BlockerCode, SessionState, SpecState, Stage, StagePhase, WorkItemState};
+use saka_core::vocab::{
+    BlockerCode, ResumeCause, SessionState, SpecState, Stage, StagePhase, WorkItemState,
+};
 use saka_testkit::{AgentOutcome, AgentScript, Operator, Sim, SimConfig, SimOutcome, Step};
 use serde_json::json;
 
@@ -27,7 +29,7 @@ fn settle(sim: &mut Sim) {
 }
 
 #[test]
-fn a_restart_loses_live_sessions_and_a_retry_completes_the_task() {
+fn a_restart_loses_live_sessions_and_the_task_resumes_them_once() {
     let mut sim = Sim::new(SimConfig {
         agent: waiting_script(),
         operator: Operator {
@@ -48,25 +50,19 @@ fn a_restart_loses_live_sessions_and_a_retry_completes_the_task() {
 
     sim.restart();
     let t = sim.task(1);
-    assert_eq!(t.item.state, WorkItemState::Blocked);
-    let blocker = t.open_blocker().unwrap();
-    assert_eq!(blocker.code, BlockerCode::SessionLost);
-    assert_eq!(blocker.params, json!({ "cause": "server_restart" }));
+    assert_eq!(t.item.state, WorkItemState::InStage);
+    assert!(t.open_blocker().is_none());
     assert_eq!(t.session.unwrap().state, SessionState::Lost);
-    settle(&mut sim);
-    assert!(
-        sim.world.running_sessions().is_empty(),
-        "the runner unit is stopped"
-    );
 
-    sim.cfg.operator = Operator {
-        merge: true,
-        retry: vec![BlockerCode::SessionLost],
-        answer: Some(true),
-    };
+    sim.cfg.operator.answer = Some(true);
     assert!(sim.run_to_shipped(STEPS));
     let stats = sim.stats();
     assert_eq!((stats.prs_opened, stats.merges), (2, 2));
+    let sessions = sim.sessions(1);
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].state, SessionState::Resumed);
+    assert_eq!(sessions[1].resumed_from_session_id, Some(sessions[0].id));
+    assert_eq!(sessions[1].resume_cause, Some(ResumeCause::Lost));
 }
 
 #[test]

@@ -1,11 +1,11 @@
 use crate::admission::{self, Candidate, Waiting};
 use crate::ids::{SpecId, WorkItemId};
 use crate::job::Job;
-use crate::model::{Spec, SpecDependency, Task, WorkItemDependency};
+use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency};
 use crate::react::phase_jobs;
 use crate::task::{LoopConfig, TaskInput};
 use crate::time::Timestamp;
-use crate::vocab::{SessionState, SpecState, Stage, StagePhase, WorkItemState};
+use crate::vocab::{SpecState, WorkItemState};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -20,21 +20,28 @@ pub struct Snapshot {
     pub tasks: Vec<Task>,
     pub work_item_dependencies: Vec<WorkItemDependency>,
     pub spec_dependencies: Vec<SpecDependency>,
+    pub quotas: Vec<AccountQuota>,
 }
 
-pub fn waiting(snapshot: &Snapshot) -> Vec<(WorkItemId, Vec<Waiting>)> {
+pub fn waiting(
+    snapshot: &Snapshot,
+    cfg: &LoopConfig,
+    now: Timestamp,
+) -> Vec<(WorkItemId, Vec<Waiting>)> {
+    let quota = admission::quota_waits(&snapshot.quotas, &cfg.account, cfg.rate_limit_pause, now);
     snapshot
         .tasks
         .iter()
         .filter(|t| t.item.state == WorkItemState::Queued)
         .map(|t| {
-            let waits = admission::waiting_on(
+            let mut waits = admission::waiting_on(
                 t,
                 &snapshot.tasks,
                 &snapshot.specs,
                 &snapshot.work_item_dependencies,
                 &snapshot.spec_dependencies,
             );
+            waits.extend(quota.iter().cloned());
             (t.item.id, waits)
         })
         .filter(|(_, waits)| !waits.is_empty())
@@ -60,7 +67,7 @@ pub fn reconcile(
             )
         })
         .count();
-    let waits = waiting(snapshot);
+    let waits = waiting(snapshot, cfg, now);
     let candidates: Vec<Candidate> = tasks
         .iter()
         .filter(|t| t.item.state == WorkItemState::Queued)
@@ -92,20 +99,7 @@ pub fn reconcile(
     for task in tasks {
         actions.extend(phase_jobs(task, cfg, now).into_iter().map(Action::Enqueue));
 
-        let over_time = task.live_session().is_some_and(|s| {
-            matches!(
-                s.state,
-                SessionState::Running | SessionState::Waiting | SessionState::Idle
-            ) && s.running_ms_at(now) > cfg.max_running_ms
-        });
-        let no_checks = task.is_at(Stage::Merge, StagePhase::AwaitingCi)
-            && task.gate.as_ref().is_none_or(|g| g.checks.is_empty())
-            && task
-                .stage_run
-                .as_ref()
-                .and_then(|r| r.started_at)
-                .is_some_and(|at| now.since(at) > cfg.ci_appear_timeout_ms);
-        if over_time || no_checks {
+        if crate::task::needs_tick(task, cfg, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::Tick));
         }
     }

@@ -6,34 +6,48 @@ use crate::Ctx;
 use crate::event::{Event, Prompt};
 use crate::gate::{self, Check};
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, SessionId,
-    StageRunId,
+    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
+    SessionId, StageRunId, UsageRecordId,
 };
 use crate::job::JobKind;
 use crate::model::{
-    Blocker, ChangeRequest, Coded, Environment, GateResult, PermissionRequest, Session, StageRun,
-    Task, WorkItem,
+    AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, GateResult,
+    PermissionRequest, PermissionRule, Session, StageRun, Task, Usage, UsageRecord, WorkItem,
 };
 use crate::policy::{Decision, Effect};
 use crate::rejection::Rejection;
+use crate::resume;
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome, GateSource,
-    MergeMethod, PermissionState, SessionState, Stage, StagePhase, StageRunState, Trigger,
-    WorkItemOrigin, WorkItemState,
+    BlockerCode, BlockerResolution, BudgetDimension, ChangeState, EnvironmentState, GateOutcome,
+    GateSource, InterruptBy, MergeMethod, PermissionState, ResumeCause, SessionState, Stage,
+    StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopConfig {
     pub max_followup_turns: u32,
-    pub max_running_ms: i64,
     pub ci_appear_timeout_ms: i64,
     pub poll_interval_ms: i64,
     pub merge_method: MergeMethod,
+    pub permission_wait_ms: i64,
+    pub idle_ms: i64,
+    pub budgets: BTreeMap<Stage, Budget>,
+    pub budget_warn_percent: u32,
+    pub rate_limit_pause: f64,
+    pub account: String,
 }
 
 pub const SESSION_ENDED_SOURCE: &str = "system:session_ended";
+pub const WAIT_LIMIT_SOURCE: &str = "system:wait_limit";
 const DENIED_BY_OPERATOR: &str = "Denied by the operator.";
+const PERMISSION_EXPIRED_MESSAGE: &str = "The permission request expired.";
+const BUDGET_DIMENSIONS: [BudgetDimension; 4] = [
+    BudgetDimension::RunningMinutes,
+    BudgetDimension::Turns,
+    BudgetDimension::Tokens,
+    BudgetDimension::CostUsd,
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskInput {
@@ -74,6 +88,8 @@ pub enum TaskInput {
         allow: bool,
         message: Option<String>,
         actor: String,
+        remember: bool,
+        active_rules: Vec<PermissionRule>,
     },
     PermissionDelivered {
         permission_request_id: PermissionRequestId,
@@ -94,6 +110,30 @@ pub enum TaskInput {
     CliExited {
         code: Option<i32>,
         signal: Option<i32>,
+    },
+    SessionGone {
+        cause: String,
+    },
+    SessionReattached {
+        runner_version: String,
+        from_offset: u64,
+    },
+    Steer {
+        session_id: SessionId,
+        text: String,
+    },
+    Interrupt {
+        session_id: SessionId,
+    },
+    StopSession {
+        session_id: SessionId,
+        reason: String,
+    },
+    QuotaObserved {
+        window: String,
+        utilization: f64,
+        status: String,
+        resets_at: Option<Timestamp>,
     },
     Tick,
     ServerRestarted,
@@ -224,8 +264,17 @@ pub fn decide(
             allow,
             message,
             actor,
+            remember,
+            active_rules,
         } => {
-            return d.answer_permission(permission_request_id, allow, message, &actor);
+            return d.answer_permission(
+                permission_request_id,
+                allow,
+                message,
+                &actor,
+                remember.then_some(active_rules.as_slice()),
+                ctx,
+            );
         }
         I::PermissionDelivered {
             permission_request_id,
@@ -255,7 +304,28 @@ pub fn decide(
             json!({ "code": code, "signal": signal }),
             ctx,
         ),
+        I::SessionGone { cause } => d.session_gone(&cause, json!({}), ctx),
         I::ServerRestarted => d.session_gone("server_restart", json!({}), ctx),
+        I::SessionReattached {
+            runner_version,
+            from_offset,
+        } => d.with_live_session(|s| {
+            vec![Event::SessionReattached {
+                work_item_id: task.item.id,
+                session_id: s.id,
+                runner_version,
+                from_offset,
+            }]
+        }),
+        I::Steer { session_id, text } => return d.steer(session_id, text, ctx),
+        I::Interrupt { session_id } => return d.interrupt(session_id),
+        I::StopSession { session_id, reason } => return d.stop(session_id, reason, ctx),
+        I::QuotaObserved {
+            window,
+            utilization,
+            status,
+            resets_at,
+        } => d.quota_observed(window, utilization, status, resets_at, ctx),
         I::Tick => d.tick(ctx),
         I::BranchPushed { sha } => d.branch_pushed(sha, ctx),
         I::PushRejected {
@@ -357,6 +427,7 @@ impl Decider<'_> {
             entry_phase: entry,
             reason,
             retry_of,
+            budget: self.cfg.budgets.get(&stage).copied(),
         }
     }
 
@@ -388,6 +459,16 @@ impl Decider<'_> {
     }
 
     fn end_session(&self, state: SessionState, code: &str, params: Value) -> Vec<Event> {
+        self.end_session_except(state, code, params, None)
+    }
+
+    fn end_session_except(
+        &self,
+        state: SessionState,
+        code: &str,
+        params: Value,
+        answered: Option<PermissionRequestId>,
+    ) -> Vec<Event> {
         let Some(session) = self.task.live_session() else {
             return vec![];
         };
@@ -406,7 +487,7 @@ impl Decider<'_> {
             .task
             .permissions
             .iter()
-            .filter(|p| p.state == PermissionState::Pending)
+            .filter(|p| p.state == PermissionState::Pending && Some(p.id) != answered)
         {
             events.push(Event::PermissionAnswered {
                 work_item_id: self.item().id,
@@ -415,6 +496,226 @@ impl Decider<'_> {
                 answer_source: SESSION_ENDED_SOURCE.to_string(),
                 message: None,
             });
+        }
+        events
+    }
+
+    fn saka_stop(
+        &self,
+        session: &Session,
+        end_code: &str,
+        blocker: BlockerCode,
+        params: Value,
+        answered: Option<PermissionRequestId>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        if matches!(session.state, SessionState::Running | SessionState::Waiting) {
+            events.push(Event::SessionInterruptRequested {
+                work_item_id: self.item().id,
+                session_id: session.id,
+                actor: InterruptBy::Saka,
+                turn: session.turns,
+            });
+        }
+        events.extend(self.end_session_except(
+            SessionState::Failed,
+            end_code,
+            params.clone(),
+            answered,
+        ));
+        events.extend(self.block(blocker, params, ctx));
+        events
+    }
+
+    fn budget(&self) -> Option<(&StageRun, Budget)> {
+        let run = self.task.stage_run.as_ref()?;
+        run.budget.map(|b| (run, b))
+    }
+
+    fn exhausted(&self, usage: &Usage, dimensions: &[BudgetDimension]) -> Option<BudgetDimension> {
+        let (_, budget) = self.budget()?;
+        dimensions.iter().copied().find(|d| {
+            let limit = budget.limit(*d);
+            limit > 0 && usage.used(*d) >= limit
+        })
+    }
+
+    fn budget_stop(
+        &self,
+        session: &Session,
+        dimension: BudgetDimension,
+        usage: &Usage,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some((_, budget)) = self.budget() else {
+            return vec![];
+        };
+        let params = json!({
+            "dimension": dimension,
+            "used": budget_value(dimension, usage.used(dimension)),
+            "limit": budget_value(dimension, budget.limit(dimension)),
+        });
+        self.saka_stop(
+            session,
+            "budget_exhausted",
+            BlockerCode::BudgetExhausted,
+            params,
+            None,
+            ctx,
+        )
+    }
+
+    fn budget_warnings(&self, usage: &Usage, dimensions: &[BudgetDimension]) -> Vec<Event> {
+        let Some((run, budget)) = self.budget() else {
+            return vec![];
+        };
+        let percent = i128::from(self.cfg.budget_warn_percent);
+        dimensions
+            .iter()
+            .copied()
+            .filter(|d| !run.budget_warnings.contains(d))
+            .filter_map(|d| {
+                let (used, limit) = (usage.used(d), budget.limit(d));
+                let over = i128::from(used) * 100 >= i128::from(limit) * percent;
+                (limit > 0 && used < limit && over).then(|| Event::BudgetWarned {
+                    work_item_id: self.item().id,
+                    stage_run_id: run.id,
+                    dimension: d,
+                    used: budget_value(d, used),
+                    limit: budget_value(d, limit),
+                })
+            })
+            .collect()
+    }
+
+    fn session_for(&self, id: SessionId) -> Result<&Session, Rejection> {
+        match &self.task.session {
+            Some(s) if s.id == id && s.state.is_live() => Ok(s),
+            Some(s) if s.id == id => Err(Rejection::InvalidState {
+                state: s.state.as_str().to_string(),
+            }),
+            _ => Err(Rejection::NotFound),
+        }
+    }
+
+    fn steer(
+        &self,
+        id: SessionId,
+        text: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let session = self.session_for(id)?;
+        let steered = |turn| Event::SessionSteered {
+            work_item_id: self.item().id,
+            session_id: session.id,
+            text: text.clone(),
+            turn,
+            n: session.steers + 1,
+        };
+        match session.state {
+            SessionState::Running => Ok(vec![steered(session.turns)]),
+            SessionState::Idle => {
+                let usage = self.task.stage_usage(self.now);
+                if let Some(d) = self.exhausted(&usage, &[BudgetDimension::Turns]) {
+                    return Ok(self.budget_stop(session, d, &usage, ctx));
+                }
+                Ok(vec![
+                    steered(session.turns + 1),
+                    Event::SessionTurnRequested {
+                        work_item_id: self.item().id,
+                        session_id: session.id,
+                        turn: session.turns + 1,
+                        prompt: Prompt::Steer { text: text.clone() },
+                    },
+                ])
+            }
+            other => Err(Rejection::InvalidState {
+                state: other.as_str().to_string(),
+            }),
+        }
+    }
+
+    fn interrupt(&self, id: SessionId) -> Result<Vec<Event>, Rejection> {
+        let session = self.session_for(id)?;
+        if session.state != SessionState::Running {
+            return Err(Rejection::InvalidState {
+                state: session.state.as_str().to_string(),
+            });
+        }
+        Ok(vec![
+            Event::SessionInterruptRequested {
+                work_item_id: self.item().id,
+                session_id: session.id,
+                actor: InterruptBy::Operator,
+                turn: session.turns,
+            },
+            self.session_state(session, SessionState::Interrupted),
+        ])
+    }
+
+    fn stop(
+        &self,
+        id: SessionId,
+        reason: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let session = self.session_for(id)?;
+        let mut events = vec![Event::SessionStopRequested {
+            work_item_id: self.item().id,
+            session_id: session.id,
+            reason: reason.clone(),
+        }];
+        events.extend(self.end_session(
+            SessionState::Failed,
+            "operator_stop",
+            json!({ "reason": reason }),
+        ));
+        events.extend(self.block(
+            BlockerCode::SessionFailed,
+            json!({ "cause": "operator_stop", "reason": reason }),
+            ctx,
+        ));
+        Ok(events)
+    }
+
+    fn quota_observed(
+        &self,
+        window: String,
+        utilization: f64,
+        status: String,
+        resets_at: Option<Timestamp>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(session) = self.task.live_session() else {
+            return vec![];
+        };
+        let quota = AccountQuota {
+            account: session.qualified_account(),
+            window,
+            utilization,
+            status,
+            resets_at,
+            observed_at: self.now,
+        };
+        let mut events = vec![Event::QuotaObserved {
+            work_item_id: self.item().id,
+            session_id: session.id,
+            account: quota.account.clone(),
+            window: quota.window.clone(),
+            utilization,
+            status: quota.status.clone(),
+            resets_at,
+        }];
+        if quota.rejected() {
+            events.extend(self.saka_stop(
+                session,
+                "quota_exhausted",
+                BlockerCode::QuotaExhausted,
+                json!({ "account": quota.account, "window": quota.window, "resets_at": resets_at }),
+                None,
+                ctx,
+            ));
         }
         events
     }
@@ -507,7 +808,7 @@ impl Decider<'_> {
             return vec![];
         };
         if !self.task.is_at(Stage::Dev, StagePhase::RunningSession)
-            || self.task.live_session().is_some()
+            || !resume::wants_session(self.task)
         {
             return vec![];
         }
@@ -520,7 +821,26 @@ impl Decider<'_> {
                 code: b.code.as_str().to_string(),
                 params: b.params.clone(),
             });
-        vec![
+        let plan = resume::plan(self.task);
+        let mut events = Vec::new();
+        if let (Some(p), Some(previous)) = (&plan, &self.task.session)
+            && p.cause == ResumeCause::Lost
+        {
+            events.push(Event::SessionStateChanged {
+                work_item_id: self.item().id,
+                session_id: previous.id,
+                state: SessionState::Resumed,
+                running_ms: previous.running_ms,
+            });
+        }
+        let prompt = match &plan {
+            Some(p) if p.cli_session_id.is_some() => Prompt::Resume {
+                cause: p.reason,
+                retry_of: p.retry_of.clone(),
+            },
+            _ => Prompt::WorkPacket { retry_of },
+        };
+        events.extend([
             Event::SessionStarted {
                 work_item_id: self.item().id,
                 session_id,
@@ -533,14 +853,17 @@ impl Decider<'_> {
                 runner_unit,
                 socket_path,
                 log_path,
+                resumed_from_session_id: plan.as_ref().map(|p| p.from),
+                resume_cause: plan.as_ref().map(|p| p.cause),
             },
             Event::SessionTurnRequested {
                 work_item_id: self.item().id,
                 session_id,
                 turn: 1,
-                prompt: Prompt::WorkPacket { retry_of },
+                prompt,
             },
-        ]
+        ]);
+        events
     }
 
     fn turn_accepted(&self, turn: u32) -> Vec<Event> {
@@ -615,6 +938,8 @@ impl Decider<'_> {
         allow: bool,
         message: Option<String>,
         actor: &str,
+        remember: Option<&[PermissionRule]>,
+        ctx: &mut Ctx<'_>,
     ) -> Result<Vec<Event>, Rejection> {
         let Some(request) = self.task.permissions.iter().find(|p| p.id == id) else {
             return Err(Rejection::NotFound);
@@ -622,6 +947,33 @@ impl Decider<'_> {
         if request.state != PermissionState::Pending {
             return Err(Rejection::PermissionAlreadyAnswered);
         }
+        let rule = match remember {
+            Some(_) if !allow => {
+                return Err(Rejection::Invalid {
+                    field: "remember",
+                    code: "allow_only",
+                });
+            }
+            Some(active) => {
+                let (tool, command) = crate::rule::remembered(request)?;
+                let exists = active.iter().any(|r| {
+                    r.revoked_at.is_none()
+                        && r.project_id == self.item().project_id
+                        && r.tool == tool
+                        && r.command == command
+                });
+                (!exists).then(|| Event::PermissionRuleAdded {
+                    rule_id: PermissionRuleId::new(ctx.ids),
+                    project_id: self.item().project_id,
+                    work_item_id: self.item().id,
+                    tool,
+                    command,
+                    permission_request_id: id,
+                    created_by: format!("human:{actor}"),
+                })
+            }
+            None => None,
+        };
         let mut events = vec![Event::PermissionAnswered {
             work_item_id: self.item().id,
             permission_request_id: id,
@@ -653,6 +1005,7 @@ impl Decider<'_> {
                 running_ms: session.running_ms,
             });
         }
+        events.extend(rule);
         Ok(events)
     }
 
@@ -680,14 +1033,25 @@ impl Decider<'_> {
         output_tokens: Option<i64>,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
-        let Some(session) = self.task.live_session() else {
+        let Some(session) = self.task.session.as_ref() else {
             return vec![];
         };
+        let live = session.state.is_live();
         if session.turns != turn
-            || !matches!(session.state, SessionState::Running | SessionState::Waiting)
+            || turn <= session.recorded_turn
+            || (live
+                && !matches!(
+                    session.state,
+                    SessionState::Running | SessionState::Waiting | SessionState::Interrupted
+                ))
         {
             return vec![];
         }
+        let running = if live {
+            session.running_ms_at(self.now)
+        } else {
+            session.running_ms
+        };
         let mut events = vec![Event::SessionTurnEnded {
             work_item_id: self.item().id,
             session_id: session.id,
@@ -696,10 +1060,18 @@ impl Decider<'_> {
             cost_usd_micros,
             input_tokens,
             output_tokens,
+            running_ms: (running - session.recorded_running_ms).max(0),
+            account: session.qualified_account(),
+            usage_record_id: UsageRecordId::new(ctx.ids),
         }];
-        if status == "success" {
-            events.push(self.session_state(session, SessionState::Idle));
-        } else {
+        if !live {
+            return events;
+        }
+        let mut usage = self.task.stage_usage(self.now);
+        usage.tokens += input_tokens.unwrap_or(0) + output_tokens.unwrap_or(0);
+        usage.cost_usd_micros += cost_usd_micros.unwrap_or(0);
+        let interrupted = session.interrupt_requested == Some(InterruptBy::Operator);
+        if !interrupted && status != "success" {
             events.extend(self.end_session(
                 SessionState::Failed,
                 "session_failed",
@@ -710,7 +1082,19 @@ impl Decider<'_> {
                 json!({ "subtype": status }),
                 ctx,
             ));
+            return events;
         }
+        let spend = [BudgetDimension::Tokens, BudgetDimension::CostUsd];
+        if let Some(d) = self.exhausted(&usage, &spend) {
+            let idle = Session {
+                state: SessionState::Idle,
+                ..session.clone()
+            };
+            events.extend(self.budget_stop(&idle, d, &usage, ctx));
+            return events;
+        }
+        events.push(self.session_state(session, SessionState::Idle));
+        events.extend(self.budget_warnings(&usage, &spend));
         events
     }
 
@@ -728,6 +1112,7 @@ impl Decider<'_> {
         if !self.task.is_at(Stage::Dev, StagePhase::RunningSession)
             || session.turns != turn
             || session.state != SessionState::Idle
+            || session.interrupt_requested.is_some()
         {
             return vec![];
         }
@@ -737,6 +1122,10 @@ impl Decider<'_> {
             return events;
         }
         if session.followups < self.cfg.max_followup_turns {
+            let usage = self.task.stage_usage(self.now);
+            if let Some(d) = self.exhausted(&usage, &[BudgetDimension::Turns]) {
+                return self.budget_stop(session, d, &usage, ctx);
+            }
             return vec![Event::SessionTurnRequested {
                 work_item_id: self.item().id,
                 session_id: session.id,
@@ -769,32 +1158,24 @@ impl Decider<'_> {
         );
         // `end_session` starts with `SessionEnded`; keep it, after the loss itself.
         events.append(&mut end);
-        if self.task.is_at(Stage::Dev, StagePhase::RunningSession) {
+        let resumable = self.task.ready_environment().is_some()
+            && self
+                .task
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.id == session.stage_run_id && !r.resumed_lost);
+        if self.task.is_at(Stage::Dev, StagePhase::RunningSession) && !resumable {
             events.extend(self.block(BlockerCode::SessionLost, json!({ "cause": cause }), ctx));
         }
         events
     }
 
     fn tick(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
-        if let Some(session) = self.task.live_session()
-            && matches!(
-                session.state,
-                SessionState::Running | SessionState::Waiting | SessionState::Idle
-            )
-            && session.running_ms_at(self.now) > self.cfg.max_running_ms
-        {
-            let minutes = self.cfg.max_running_ms / 60_000;
-            let mut events = self.end_session(
-                SessionState::Interrupted,
-                "session_timeout",
-                json!({ "minutes": minutes }),
-            );
-            events.extend(self.block(
-                BlockerCode::SessionTimeout,
-                json!({ "minutes": minutes }),
-                ctx,
-            ));
-            return events;
+        if let Some(session) = self.task.live_session() {
+            let events = self.session_tick(session, ctx);
+            if !events.is_empty() {
+                return events;
+            }
         }
         if self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
             && self.task.gate.as_ref().is_none_or(|g| g.checks.is_empty())
@@ -811,6 +1192,55 @@ impl Decider<'_> {
                 json!({ "reason": "no_checks", "head_sha": head }),
                 ctx,
             );
+        }
+        vec![]
+    }
+
+    fn session_tick(&self, session: &Session, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let wait = self.cfg.permission_wait_ms;
+        if let Some(p) =
+            self.task.permissions.iter().find(|p| {
+                p.state == PermissionState::Pending && self.now.since(p.requested_at) > wait
+            })
+        {
+            let mut events = vec![Event::PermissionAnswered {
+                work_item_id: self.item().id,
+                permission_request_id: p.id,
+                state: PermissionState::Expired,
+                answer_source: WAIT_LIMIT_SOURCE.to_string(),
+                message: Some(PERMISSION_EXPIRED_MESSAGE.to_string()),
+            }];
+            events.extend(self.saka_stop(
+                session,
+                "permission_expired",
+                BlockerCode::PermissionExpired,
+                json!({ "tool": p.tool, "summary": p.summary, "hours": wait / 3_600_000 }),
+                Some(p.id),
+                ctx,
+            ));
+            return events;
+        }
+        if session.state == SessionState::Idle
+            && session
+                .idle_since
+                .is_some_and(|since| self.now.since(since) > self.cfg.idle_ms)
+        {
+            let params = json!({ "cause": "idle", "minutes": self.cfg.idle_ms / 60_000 });
+            let mut events =
+                self.end_session(SessionState::Failed, "session_timeout", params.clone());
+            events.extend(self.block(BlockerCode::SessionTimeout, params, ctx));
+            return events;
+        }
+        if matches!(
+            session.state,
+            SessionState::Running | SessionState::Waiting | SessionState::Interrupted
+        ) {
+            let usage = self.task.stage_usage(self.now);
+            let running = [BudgetDimension::RunningMinutes];
+            if let Some(d) = self.exhausted(&usage, &running) {
+                return self.budget_stop(session, d, &usage, ctx);
+            }
+            return self.budget_warnings(&usage, &running);
         }
         vec![]
     }
@@ -1217,6 +1647,9 @@ impl Decider<'_> {
         if kind == JobKind::EnvTeardown {
             return self.teardown_failed(error);
         }
+        if kind == JobKind::SessionReattach {
+            return self.session_gone("runner_silent", json!({}), ctx);
+        }
         let Some((code, mut params)) = kind.exhausted_blocker() else {
             return vec![];
         };
@@ -1232,6 +1665,7 @@ impl Decider<'_> {
             JobKind::SessionSendTurn
                 | JobKind::SessionDeliverPermissionAnswer
                 | JobKind::SessionInterrupt
+                | JobKind::SessionSteer
         ) {
             if let Some(session) = self.task.live_session() {
                 events.push(Event::SessionLost {
@@ -1259,9 +1693,14 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
     use BlockerCode as B;
     Some(match code {
         B::EnvSetupFailed => (Stage::Dev, StagePhase::PreparingEnvironment),
-        B::SessionFailed | B::SessionLost | B::SessionTimeout | B::NoChanges | B::CiRed => {
-            (Stage::Dev, StagePhase::RunningSession)
-        }
+        B::SessionFailed
+        | B::SessionLost
+        | B::SessionTimeout
+        | B::PermissionExpired
+        | B::BudgetExhausted
+        | B::QuotaExhausted
+        | B::NoChanges
+        | B::CiRed => (Stage::Dev, StagePhase::RunningSession),
         B::PushRejected => (Stage::Dev, StagePhase::Pushing),
         B::MergeConflict => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
@@ -1304,39 +1743,28 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
         priority,
     } = event
     {
-        return Some(Task {
-            item: WorkItem {
-                id: *work_item_id,
-                project_id: *project_id,
-                origin: WorkItemOrigin::SpecStep,
-                spec_id: Some(*spec_id),
-                spec_revision_id: Some(*spec_revision_id),
-                step_id: Some(step_id.clone()),
-                step_index: Some(*step_index),
-                task_key: task_key.clone(),
-                work: work.clone(),
-                repo_id: *repo_id,
-                branch: branch.clone(),
-                state: WorkItemState::Queued,
-                stage: None,
-                stage_phase: None,
-                priority: *priority,
-                version: 1,
-                admitted_at: None,
-                done_at: None,
-                created_at: now,
-                updated_at: now,
-            },
-            stage_run: None,
-            gate: None,
-            blocker: None,
-            change_request: None,
-            environment: None,
-            session: None,
-            permissions: Vec::new(),
-            attempts: BTreeMap::new(),
-            retired_runs: Vec::new(),
-        });
+        return Some(Task::new(WorkItem {
+            id: *work_item_id,
+            project_id: *project_id,
+            origin: WorkItemOrigin::SpecStep,
+            spec_id: Some(*spec_id),
+            spec_revision_id: Some(*spec_revision_id),
+            step_id: Some(step_id.clone()),
+            step_index: Some(*step_index),
+            task_key: task_key.clone(),
+            work: work.clone(),
+            repo_id: *repo_id,
+            branch: branch.clone(),
+            state: WorkItemState::Queued,
+            stage: None,
+            stage_phase: None,
+            priority: *priority,
+            version: 1,
+            admitted_at: None,
+            done_at: None,
+            created_at: now,
+            updated_at: now,
+        }));
     }
     let mut t = task?;
     if event.work_item_id() != Some(t.item.id) {
@@ -1387,11 +1815,13 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             trigger,
             entry_phase,
             reason,
+            budget,
             ..
         } => {
             if let Some(old) = t.stage_run.take() {
                 t.retired_runs.push(old);
             }
+            t.prior_usage = Usage::default();
             let waiting = *entry_phase == StagePhase::PreparingEnvironment;
             t.stage_run = Some(StageRun {
                 id: *stage_run_id,
@@ -1408,6 +1838,9 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 entry_phase: *entry_phase,
                 head_sha: None,
                 failure: None,
+                budget: *budget,
+                budget_warnings: Vec::new(),
+                resumed_lost: false,
                 started_at: if waiting { None } else { Some(now) },
                 ended_at: None,
                 created_at: now,
@@ -1572,9 +2005,22 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             runner_unit,
             socket_path,
             log_path,
+            resumed_from_session_id,
+            resume_cause,
             ..
         } => {
             t.permissions.clear();
+            if let Some(old) = t.session.take() {
+                if old.stage_run_id == *stage_run_id {
+                    t.prior_usage.add(old.usage_at(now));
+                }
+                t.retired_sessions.push(old);
+            }
+            if *resume_cause == Some(ResumeCause::Lost)
+                && let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
+            {
+                run.resumed_lost = true;
+            }
             t.session = Some(Session {
                 id: *session_id,
                 work_item_id: t.item.id,
@@ -1597,6 +2043,13 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 input_tokens: None,
                 output_tokens: None,
                 end_reason: None,
+                resumed_from_session_id: *resumed_from_session_id,
+                resume_cause: *resume_cause,
+                idle_since: None,
+                interrupt_requested: None,
+                steers: 0,
+                recorded_turn: 0,
+                recorded_running_ms: 0,
                 started_at: Some(now),
                 ended_at: None,
                 created_at: now,
@@ -1623,9 +2076,16 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             ..
         } => {
             if let Some(s) = session_mut(t, *session_id, now) {
+                s.idle_since = match (*state, s.state) {
+                    (SessionState::Idle, SessionState::Idle) => s.idle_since.or(Some(now)),
+                    (SessionState::Idle, _) => Some(now),
+                    _ => None,
+                };
                 s.state = *state;
                 s.running_ms = *running_ms;
-                s.running_since = (*state == SessionState::Running).then_some(now);
+                s.running_since =
+                    matches!(*state, SessionState::Running | SessionState::Interrupted)
+                        .then_some(now);
                 if !state.is_live() {
                     s.ended_at = Some(now);
                 }
@@ -1642,16 +2102,41 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 if matches!(prompt, Prompt::Uncommitted { .. }) {
                     s.followups += 1;
                 }
+                if s.interrupt_requested == Some(InterruptBy::Operator) {
+                    s.interrupt_requested = None;
+                }
             }
         }
         E::SessionTurnEnded {
             session_id,
+            turn,
+            status,
             cost_usd_micros,
             input_tokens,
             output_tokens,
+            running_ms,
+            account,
+            usage_record_id,
             ..
         } => {
+            let work_item_id = t.item.id;
             if let Some(s) = session_mut(t, *session_id, now) {
+                s.recorded_turn = *turn;
+                s.recorded_running_ms += running_ms;
+                let record = UsageRecord {
+                    id: *usage_record_id,
+                    work_item_id,
+                    stage_run_id: s.stage_run_id,
+                    session_id: s.id,
+                    account: account.clone(),
+                    turn: *turn,
+                    status: status.clone(),
+                    input_tokens: *input_tokens,
+                    output_tokens: *output_tokens,
+                    cost_usd_micros: *cost_usd_micros,
+                    running_ms: *running_ms,
+                    ended_at: now,
+                };
                 let add = |acc: &mut Option<i64>, v: &Option<i64>| {
                     if let Some(v) = v {
                         *acc = Some(acc.unwrap_or(0) + v);
@@ -1660,8 +2145,54 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 add(&mut s.cost_usd_micros, cost_usd_micros);
                 add(&mut s.input_tokens, input_tokens);
                 add(&mut s.output_tokens, output_tokens);
+                t.usage_records.push(record);
             }
         }
+        E::SessionSteered { session_id, n, .. } => {
+            if let Some(s) = session_mut(t, *session_id, now) {
+                s.steers = *n;
+            }
+        }
+        E::SessionInterruptRequested {
+            session_id, actor, ..
+        } => {
+            if let Some(s) = session_mut(t, *session_id, now) {
+                s.interrupt_requested = Some(*actor);
+            }
+        }
+        E::BudgetWarned {
+            stage_run_id,
+            dimension,
+            ..
+        } => {
+            if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
+                && !run.budget_warnings.contains(dimension)
+            {
+                run.budget_warnings.push(*dimension);
+                run.updated_at = now;
+            }
+        }
+        E::QuotaObserved {
+            account,
+            window,
+            utilization,
+            status,
+            resets_at,
+            ..
+        } => t.quota_observations.push(AccountQuota {
+            account: account.clone(),
+            window: window.clone(),
+            utilization: *utilization,
+            status: status.clone(),
+            resets_at: *resets_at,
+            observed_at: now,
+        }),
+        E::PermissionRuleAdded { .. } => {
+            t.added_rules.extend(crate::rule::evolve(None, event, now));
+        }
+        E::SessionReattached { .. }
+        | E::SessionStopRequested { .. }
+        | E::PermissionRuleRevoked { .. } => {}
         E::SessionEnded {
             session_id,
             end_reason,
@@ -1828,4 +2359,41 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
         actions.push("cancel");
     }
     actions
+}
+
+pub fn session_actions(session: &Session) -> Vec<&'static str> {
+    match session.state {
+        SessionState::Running => vec!["steer", "interrupt", "stop"],
+        SessionState::Idle => vec!["steer", "stop"],
+        SessionState::Starting | SessionState::Waiting | SessionState::Interrupted => vec!["stop"],
+        _ => vec![],
+    }
+}
+
+pub fn needs_tick(task: &Task, cfg: &LoopConfig, now: Timestamp) -> bool {
+    struct Probe;
+    impl crate::ids::IdSource for Probe {
+        fn next_id(&mut self) -> uuid::Uuid {
+            uuid::Uuid::nil()
+        }
+    }
+    let mut ids = Probe;
+    let mut ctx = Ctx { now, ids: &mut ids };
+    decide(task, TaskInput::Tick, cfg, &mut ctx).is_ok_and(|events| !events.is_empty())
+}
+
+pub fn budget_value(dimension: BudgetDimension, value: i64) -> Value {
+    match dimension {
+        BudgetDimension::RunningMinutes => json!(value / 60_000),
+        BudgetDimension::CostUsd => json!(format!(
+            "{}.{:06}",
+            value.div_euclid(1_000_000),
+            value.rem_euclid(1_000_000)
+        )),
+        BudgetDimension::Turns | BudgetDimension::Tokens => json!(value),
+    }
+}
+
+pub fn budget_dimensions() -> &'static [BudgetDimension] {
+    &BUDGET_DIMENSIONS
 }

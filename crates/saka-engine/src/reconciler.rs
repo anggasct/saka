@@ -20,9 +20,11 @@ impl Engine {
                 tasks: read::load_tasks(c, TaskSet::Reconcile)?,
                 work_item_dependencies: read::queued_work_item_dependencies(c)?,
                 spec_dependencies: read::spec_dependencies(c, None)?,
+                quotas: read::account_quotas(c)?,
             })
         })?;
-        self.counters.note_waiting(waiting(&snapshot));
+        self.counters
+            .note_waiting(waiting(&snapshot, &self.cfg.loop_cfg, now));
         let actions = reconcile(
             &snapshot,
             &self.cfg.loop_cfg,

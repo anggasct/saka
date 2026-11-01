@@ -123,7 +123,10 @@ impl Engine {
         let p = &job.payload;
         match job.kind {
             JobKind::EnvPrepare => self.env_prepare(&task, field(p, "stage_run_id")?).await,
-            JobKind::SessionStart => self.session_start(&task, field(p, "stage_run_id")?).await,
+            JobKind::SessionStart => {
+                self.session_start(&task, field(p, "stage_run_id")?, job.id)
+                    .await
+            }
             JobKind::SessionSendTurn => {
                 self.send_turn(
                     &task,
@@ -138,12 +141,23 @@ impl Engine {
                     .await
             }
             JobKind::SessionInterrupt => {
-                let Some(session) = self.session_ref(&task, field(p, "session_id")?) else {
+                let id: SessionId = field(p, "session_id")?;
+                let stopping = task.session.as_ref().filter(|s| {
+                    s.id == id && s.interrupt_requested == Some(saka_core::vocab::InterruptBy::Saka)
+                });
+                let Some(session) = self.session_ref(&task, id).or_else(|| {
+                    stopping.map(|s| SessionRef {
+                        session_id: s.id,
+                        runner_unit: s.runner_unit.clone(),
+                        socket_path: s.socket_path.clone(),
+                    })
+                }) else {
                     return Ok(Effect::Skipped);
                 };
                 self.ports.agents.interrupt(&session).await?;
                 Ok(Effect::Nothing)
             }
+            JobKind::SessionSteer | JobKind::SessionReattach => Ok(Effect::Skipped),
             JobKind::SessionStop => {
                 let session: SessionId = field(p, "session_id")?;
                 let unit: Option<String> = p
@@ -378,7 +392,7 @@ impl Engine {
         }))
     }
 
-    async fn session_start(&self, task: &Task, run: StageRunId) -> Execution {
+    async fn session_start(&self, task: &Task, run: StageRunId, job: uuid::Uuid) -> Execution {
         let current = task.stage_run.as_ref().is_some_and(|r| r.id == run);
         let Some(env) = task.ready_environment().filter(|_| current) else {
             return Ok(Effect::Skipped);
@@ -386,8 +400,11 @@ impl Engine {
         if !task.is_at(Stage::Dev, StagePhase::RunningSession) || task.live_session().is_some() {
             return Ok(Effect::Skipped);
         }
-        // One session per stage run: a repeated start replaces the runner it left behind.
-        let session_id = SessionId(run.0);
+        // One start job per session: a repeated start replaces the runner it left behind.
+        let session_id = match &task.session {
+            Some(previous) if previous.stage_run_id == run => SessionId(job),
+            _ => SessionId(run.0),
+        };
         let launched = self
             .ports
             .agents

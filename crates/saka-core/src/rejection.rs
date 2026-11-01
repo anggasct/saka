@@ -46,6 +46,11 @@ pub enum Rejection {
     MultiRepoUnsupported { repos: usize },
     #[error("spec file not found on the base branch")]
     SpecFileNotFound { path: String, base_branch: String },
+    #[error("invalid {field}: {code}")]
+    Invalid {
+        field: &'static str,
+        code: &'static str,
+    },
 }
 
 impl Rejection {
@@ -70,6 +75,7 @@ impl Rejection {
             Rejection::ProjectConfigInvalid { .. } => "project_config_invalid",
             Rejection::MultiRepoUnsupported { .. } => "multi_repo_unsupported",
             Rejection::SpecFileNotFound { .. } => "spec_file_not_found",
+            Rejection::Invalid { .. } => "validation_failed",
         }
     }
 
@@ -100,6 +106,9 @@ impl Rejection {
             Rejection::MultiRepoUnsupported { repos } => json!({ "repos": repos }),
             Rejection::SpecFileNotFound { path, base_branch } => {
                 json!({ "path": path, "base_branch": base_branch })
+            }
+            Rejection::Invalid { field, code } => {
+                json!({ "errors": [{ "field": field, "code": code }] })
             }
             _ => json!({}),
         }

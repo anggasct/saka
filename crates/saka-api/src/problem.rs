@@ -89,7 +89,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         R::SpecNotReady { .. }
         | R::ScmIntegrationUnknown { .. }
         | R::ProjectConfigInvalid { .. }
-        | R::MultiRepoUnsupported { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        | R::MultiRepoUnsupported { .. }
+        | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
         | R::SpecAlreadyApproved

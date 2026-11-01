@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
-use std::collections::BTreeMap;
-
 use proptest::prelude::*;
 use saka_core::Ctx;
 use saka_core::admission::waiting_on;
@@ -41,7 +39,20 @@ const APPROVED_AT: Timestamp = Timestamp(1_000);
 fn cfg() -> LoopConfig {
     LoopConfig {
         max_followup_turns: 1,
-        max_running_ms: 60 * 60_000,
+        permission_wait_ms: 24 * 3_600_000,
+        idle_ms: 30 * 60_000,
+        budgets: std::collections::BTreeMap::from([(
+            saka_core::vocab::Stage::Dev,
+            saka_core::model::Budget {
+                running_minutes: 60,
+                turns: 10,
+                tokens: 0,
+                cost_usd_micros: 0,
+            },
+        )]),
+        budget_warn_percent: 80,
+        rate_limit_pause: 0.9,
+        account: "claude:default".into(),
         ci_appear_timeout_ms: 600_000,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
@@ -124,18 +135,7 @@ fn item(n: u32, state: WorkItemState) -> WorkItem {
 }
 
 fn task_of(item: WorkItem) -> Task {
-    Task {
-        item,
-        stage_run: None,
-        gate: None,
-        blocker: None,
-        change_request: None,
-        environment: None,
-        session: None,
-        permissions: Vec::new(),
-        attempts: BTreeMap::new(),
-        retired_runs: Vec::new(),
-    }
+    Task::new(item)
 }
 
 fn actions(plan: &RevisionPlan) -> Vec<(String, PlanAction)> {
@@ -527,6 +527,7 @@ fn superseded_tasks_never_run_and_never_hold_the_spec() {
 
     let spec = approved_spec(FROM);
     let snapshot = Snapshot {
+        quotas: Vec::new(),
         specs: vec![spec.clone()],
         tasks: vec![task_of(item(1, WorkItemState::Queued)), superseded.clone()],
         work_item_dependencies: vec![],
@@ -760,6 +761,7 @@ proptest! {
             .map(|(i, s)| task_of(item(u32::try_from(i).unwrap() + 1, ALL_STATES[*s])))
             .collect();
         let snapshot = Snapshot {
+        quotas: Vec::new(),
             specs: vec![approved_spec(FROM)],
             tasks: tasks.clone(),
             work_item_dependencies: vec![],

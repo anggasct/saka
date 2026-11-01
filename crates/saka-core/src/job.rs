@@ -37,6 +37,8 @@ job_kinds! {
     SessionDeliverPermissionAnswer => "session.deliver_permission_answer", 10;
     SessionInterrupt => "session.interrupt", 5;
     SessionStop => "session.stop", 5;
+    SessionSteer => "session.steer", 5;
+    SessionReattach => "session.reattach", 3;
     ScmPushBranch => "scm.push_branch", 5;
     ScmOpenChangeRequest => "scm.open_change_request", 5;
     ScmPollChangeRequest => "scm.poll_change_request", 5;
@@ -60,7 +62,8 @@ impl JobKind {
             )),
             JobKind::SessionSendTurn
             | JobKind::SessionDeliverPermissionAnswer
-            | JobKind::SessionInterrupt => Some((
+            | JobKind::SessionInterrupt
+            | JobKind::SessionSteer => Some((
                 BlockerCode::SessionLost,
                 json!({ "cause": "runner_unreachable" }),
             )),
@@ -69,7 +72,10 @@ impl JobKind {
             JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
             JobKind::ScmMerge => scm(StagePhase::Merging),
             JobKind::EnvVerifyMerged => Some((BlockerCode::DodFailed, json!({}))),
-            JobKind::SessionStop | JobKind::ScmDeleteBranch | JobKind::EnvTeardown => None,
+            JobKind::SessionStop
+            | JobKind::SessionReattach
+            | JobKind::ScmDeleteBranch
+            | JobKind::EnvTeardown => None,
         }
     }
 }
@@ -111,6 +117,8 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::SessionDeliverPermissionAnswer => "perm.deliver",
         JobKind::SessionInterrupt => "session.interrupt",
         JobKind::SessionStop => "session.stop",
+        JobKind::SessionSteer => "session.steer",
+        JobKind::SessionReattach => "session.reattach",
         JobKind::ScmPushBranch => "scm.push",
         JobKind::ScmOpenChangeRequest => "scm.open_cr",
         JobKind::ScmPollChangeRequest => "scm.poll",

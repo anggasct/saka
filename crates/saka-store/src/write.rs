@@ -2,14 +2,15 @@ use rusqlite::{Transaction, params};
 use saka_core::ids::{ProjectId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
-    Blocker, ChangeRequest, Environment, GateResult, PermissionRequest, Project, Repo, Session,
-    Spec, SpecDependency, StageRun, Task, WorkItemDependency,
+    AccountQuota, Blocker, ChangeRequest, Environment, GateResult, PermissionRequest,
+    PermissionRule, Project, Repo, Session, Spec, SpecDependency, StageRun, Task, UsageRecord,
+    WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::codec::{i64_of, to_json, value_json};
+use crate::codec::{budget_json, i64_of, to_json, value_json};
 use crate::error::{Result, StoreError};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +102,7 @@ pub struct Batch {
     pub work_item_dependencies: Vec<WorkItemDependency>,
     pub replaced_spec_dependencies: Vec<SpecId>,
     pub replaced_work_item_dependencies: Vec<WorkItemId>,
+    pub permission_rules: Vec<PermissionRule>,
     pub jobs: Vec<NewJob>,
 }
 
@@ -216,6 +218,9 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
                 b.now.0,
             ],
         )?;
+    }
+    for r in &b.permission_rules {
+        permission_rule(tx, r)?;
     }
     for j in &b.jobs {
         enqueue(tx, j, b.now)?;
@@ -445,23 +450,97 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     if let Some(e) = &t.environment {
         environment(tx, t, e)?;
     }
-    if let Some(s) = &t.session {
+    for s in t.retired_sessions.iter().chain(t.session.iter()) {
         session(tx, t, s)?;
     }
     for p in &t.permissions {
         permission(tx, t, p)?;
     }
+    for u in &t.usage_records {
+        usage_record(tx, t, u)?;
+    }
+    for q in &t.quota_observations {
+        account_quota(tx, q)?;
+    }
+    for r in &t.added_rules {
+        permission_rule(tx, r)?;
+    }
+    Ok(())
+}
+
+fn usage_record(tx: &Transaction<'_>, t: &Task, u: &UsageRecord) -> Result<()> {
+    tx.execute(
+        "INSERT INTO usage_record (id, project_id, work_item_id, stage_run_id, session_id, account, turn, status,
+           input_tokens, output_tokens, cost_usd_micros, running_ms, ended_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         ON CONFLICT (session_id, turn) DO NOTHING",
+        params![
+            u.id.to_string(),
+            t.item.project_id.to_string(),
+            u.work_item_id.to_string(),
+            u.stage_run_id.to_string(),
+            u.session_id.to_string(),
+            u.account,
+            u.turn,
+            u.status,
+            u.input_tokens,
+            u.output_tokens,
+            u.cost_usd_micros,
+            u.running_ms,
+            u.ended_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+fn account_quota(tx: &Transaction<'_>, q: &AccountQuota) -> Result<()> {
+    tx.execute(
+        "INSERT INTO account_quota (account, window, utilization, status, resets_at, observed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (account, window) DO UPDATE SET utilization = excluded.utilization, status = excluded.status,
+           resets_at = excluded.resets_at, observed_at = excluded.observed_at
+         WHERE excluded.observed_at >= account_quota.observed_at",
+        params![
+            q.account,
+            q.window,
+            q.utilization.max(0.0),
+            q.status,
+            q.resets_at.map(|x| x.0),
+            q.observed_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+fn permission_rule(tx: &Transaction<'_>, r: &PermissionRule) -> Result<()> {
+    tx.execute(
+        "INSERT INTO permission_rule (id, project_id, effect, tool, command, permission_request_id, created_by,
+           created_at, revoked_at, revoke_reason)
+         VALUES (?1, ?2, 'allow', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (id) DO UPDATE SET revoked_at = excluded.revoked_at, revoke_reason = excluded.revoke_reason",
+        params![
+            r.id.to_string(),
+            r.project_id.to_string(),
+            r.tool,
+            r.command,
+            r.permission_request_id.to_string(),
+            r.created_by,
+            r.created_at.0,
+            r.revoked_at.map(|x| x.0),
+            r.revoke_reason,
+        ],
+    )?;
     Ok(())
 }
 
 fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
     tx.execute(
         "INSERT INTO stage_run (id, work_item_id, project_id, stage, attempt, state, trigger, reason, entry_phase,
-           head_sha, failure, started_at, ended_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+           head_sha, failure, started_at, ended_at, created_at, updated_at, budget, budget_warnings)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, head_sha = excluded.head_sha,
            failure = excluded.failure, started_at = excluded.started_at, ended_at = excluded.ended_at,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at, budget_warnings = excluded.budget_warnings",
         params![
             r.id.to_string(),
             r.work_item_id.to_string(),
@@ -478,6 +557,8 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
             r.ended_at.map(|x| x.0),
             r.created_at.0,
             r.updated_at.0,
+            budget_json(r.budget.as_ref())?,
+            to_json(&r.budget_warnings)?,
         ],
     )?;
     Ok(())
@@ -582,14 +663,16 @@ fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
     tx.execute(
         "INSERT INTO session (id, project_id, work_item_id, stage_run_id, environment_id, cli, cli_version,
            cli_session_id, model, account, state, runner_unit, socket_path, log_path, turns, followups, running_ms,
-           cost_usd_micros, input_tokens, output_tokens, end_reason, started_at, ended_at, created_at, updated_at)
+           cost_usd_micros, input_tokens, output_tokens, end_reason, started_at, ended_at, created_at, updated_at,
+           resumed_from_session_id, resume_cause, idle_since, interrupt_requested)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25)
+           ?23, ?24, ?25, ?26, ?27, ?28, ?29)
          ON CONFLICT (id) DO UPDATE SET cli_session_id = excluded.cli_session_id, model = excluded.model,
            state = excluded.state, turns = excluded.turns, followups = excluded.followups,
            running_ms = excluded.running_ms, cost_usd_micros = excluded.cost_usd_micros,
            input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
-           end_reason = excluded.end_reason, ended_at = excluded.ended_at, updated_at = excluded.updated_at",
+           end_reason = excluded.end_reason, ended_at = excluded.ended_at, updated_at = excluded.updated_at,
+           idle_since = excluded.idle_since, interrupt_requested = excluded.interrupt_requested",
         params![
             s.id.to_string(),
             t.item.project_id.to_string(),
@@ -616,6 +699,10 @@ fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
             s.ended_at.map(|x| x.0),
             s.created_at.0,
             s.updated_at.0,
+            s.resumed_from_session_id.map(|id| id.to_string()),
+            s.resume_cause.map(|c| c.as_str()),
+            s.idle_since.map(|x| x.0),
+            s.interrupt_requested.map(|i| i.as_str()),
         ],
     )?;
     Ok(())
