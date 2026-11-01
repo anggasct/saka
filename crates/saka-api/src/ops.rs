@@ -140,6 +140,16 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         &[],
         m.permission_requests_pending,
     );
+    t.family(
+        "saka_environments_teardown_failed",
+        "gauge",
+        "Environments whose teardown ran out of attempts and wait for cleanup.",
+    );
+    t.sample(
+        "saka_environments_teardown_failed",
+        &[],
+        m.environments_teardown_failed,
+    );
 
     t.family("saka_work_items", "gauge", "Work items per state.");
     for (state, n) in &m.work_items {

@@ -18,7 +18,8 @@ use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod, WorkItemState,
+    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
+    MergeMethod, SpecState, WorkItemState,
 };
 use saka_core::workspace;
 use saka_store::read::{self, TaskSet};
@@ -273,6 +274,74 @@ impl World {
 
     fn tick(&mut self, ms: i64) {
         self.now = self.now.plus_ms(ms);
+    }
+
+    fn run_to_tearing_down(&mut self, id: WorkItemId, n: u128) {
+        self.step(id, TaskInput::Admit);
+        self.step(
+            id,
+            TaskInput::EnvironmentPrepared {
+                environment_id: EnvironmentId(Uuid::from_u128(n)),
+                root_path: format!("/e{n}"),
+                worktree_path: format!("/e{n}/w"),
+                base_sha: sha('a'),
+            },
+        );
+        self.step(
+            id,
+            TaskInput::SessionLaunched {
+                session_id: SessionId(Uuid::from_u128(n + 1)),
+                cli: "claude".into(),
+                cli_version: None,
+                model: None,
+                account: "default".into(),
+                runner_unit: format!("saka-session-{n}"),
+                socket_path: format!("/run/{n}.sock"),
+                log_path: format!("/data/{n}/events.ndjson"),
+            },
+        );
+        self.step(id, TaskInput::TurnAccepted { turn: 1 });
+        self.step(
+            id,
+            TaskInput::TurnEnded {
+                turn: 1,
+                status: "success".into(),
+                cost_usd_micros: None,
+                input_tokens: None,
+                output_tokens: None,
+            },
+        );
+        self.step(
+            id,
+            TaskInput::WorktreeInspected {
+                turn: 1,
+                dirty: false,
+                commits_ahead: 1,
+                head_sha: sha('b'),
+            },
+        );
+        self.step(id, TaskInput::BranchPushed { sha: sha('b') });
+        self.step(
+            id,
+            TaskInput::ChangeOpened {
+                change_request_id: ChangeRequestId(Uuid::from_u128(n + 2)),
+                number: u64::try_from(n).unwrap(),
+                url: format!("https://github.com/acme/app/pull/{n}"),
+                head_sha: sha('b'),
+                base_branch: "main".into(),
+            },
+        );
+        self.step(
+            id,
+            TaskInput::ChangeObserved {
+                state: ChangeState::Merged,
+                head_sha: sha('b'),
+                merge_commit_sha: Some(sha('c')),
+                merged_at: None,
+                checks: vec![],
+            },
+        );
+        self.step(id, TaskInput::MergeVerified { found: true });
     }
 }
 
@@ -885,8 +954,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2, 3]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(3));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(4));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -968,4 +1037,48 @@ fn foreign_keys_are_still_enforced_at_commit() {
         Err(StoreError::Constraint(_))
     ));
     assert_eq!(count(&w.store, "event"), events_before);
+}
+
+#[test]
+fn reconcile_keeps_loading_shipped_tasks_whose_environment_still_needs_cleanup() {
+    let mut w = World::new();
+    let tasks = w.approve();
+    let (first, second) = (tasks[0].item.id, tasks[1].item.id);
+    w.run_to_tearing_down(first, 300);
+    w.step(
+        first,
+        TaskInput::JobExhausted {
+            kind: JobKind::EnvTeardown,
+            error: Coded {
+                code: "env_io_failed".into(),
+                params: json!({ "op": "remove_env_root", "error": "Permission denied (os error 13)" }),
+            },
+        },
+    );
+    w.run_to_tearing_down(second, 400);
+    w.step(second, TaskInput::EnvironmentTornDown);
+
+    let shipped = spec::ship(&w.spec, true).unwrap();
+    w.spec = spec::evolve(Some(w.spec.clone()), &shipped[0], w.now).unwrap();
+    assert_eq!(w.spec.state, SpecState::Shipped);
+    let mut batch = Batch::new(w.now);
+    batch
+        .events
+        .push(record(&shipped[0], w.project.id, &mut w.ids, w.now));
+    batch.specs.push(w.spec.clone());
+    w.store.commit(&batch).unwrap();
+
+    let set = w
+        .store
+        .read(|c| read::load_tasks(c, TaskSet::Reconcile))
+        .unwrap();
+    assert_eq!(
+        set.iter().map(|t| t.item.id).collect::<Vec<_>>(),
+        vec![first]
+    );
+    assert_eq!(set[0].item.state, WorkItemState::Done);
+    assert_eq!(
+        set[0].environment.as_ref().unwrap().state,
+        EnvironmentState::TeardownFailed
+    );
 }

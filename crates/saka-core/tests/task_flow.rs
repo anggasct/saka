@@ -20,9 +20,9 @@ use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod,
-    PermissionState, SessionState, SpecState, Stage, StagePhase, StageRunState, Trigger,
-    WorkItemState,
+    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
+    MergeMethod, PermissionState, SessionState, SpecState, Stage, StagePhase, StageRunState,
+    Trigger, WorkItemState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -230,6 +230,55 @@ impl World {
         self.decide(step, TaskInput::BranchPushed { sha: sha('b') });
         self.decide(step, opened(step));
         self.jobs.clear();
+    }
+
+    fn run_to_tearing_down(&mut self, step: u32) {
+        self.run_to_awaiting_ci(step);
+        self.decide(
+            step,
+            observed('b', vec![check("test", Some(CheckConclusion::Success))]),
+        );
+        let version = self.task(step).item.version;
+        self.decide(
+            step,
+            TaskInput::RequestMerge {
+                expected_version: version,
+                reason: None,
+            },
+        );
+        self.decide(
+            step,
+            TaskInput::MergeSucceeded {
+                merge_commit_sha: sha('c'),
+                merged_at: None,
+            },
+        );
+        self.decide(step, TaskInput::MergeVerified { found: true });
+        self.jobs.clear();
+    }
+
+    fn environment_state(&self, step: u32) -> EnvironmentState {
+        self.task(step).environment.as_ref().unwrap().state
+    }
+
+    fn teardown_jobs(&self) -> Vec<Job> {
+        self.reconcile()
+            .into_iter()
+            .filter_map(|a| match a {
+                Action::Enqueue(j) if j.kind == JobKind::EnvTeardown => Some(j),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+fn teardown_exhausted() -> TaskInput {
+    TaskInput::JobExhausted {
+        kind: JobKind::EnvTeardown,
+        error: Coded {
+            code: "env_io_failed".into(),
+            params: json!({ "op": "remove_env_root", "error": "Permission denied (os error 13)" }),
+        },
     }
 }
 
@@ -1090,4 +1139,108 @@ fn reconcile_recreates_the_job_of_the_current_phase() {
         })
         .collect();
     assert_eq!(again, polls);
+}
+
+#[test]
+fn an_exhausted_teardown_still_finishes_the_merged_task_and_the_next_step_starts() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_tearing_down(1);
+    let env = w.task(1).environment.as_ref().unwrap().id;
+
+    let events = w.decide(1, teardown_exhausted());
+    assert!(
+        matches!(
+            &events[..],
+            [
+                Event::EnvironmentTeardownFailed { environment_id, error, .. },
+                Event::StageRunSucceeded { .. },
+                Event::WorkItemDone { merge_commit_sha, .. },
+            ] if *environment_id == env
+                && error.code == "env_io_failed"
+                && error.params["op"] == json!("remove_env_root")
+                && *merge_commit_sha == sha('c')
+        ),
+        "{events:?}"
+    );
+    assert_eq!(w.place(1).0, WorkItemState::Done);
+    assert!(w.task(1).open_blocker().is_none());
+    assert_eq!(w.environment_state(1), EnvironmentState::TeardownFailed);
+    assert_eq!(w.admits(), vec![2]);
+
+    assert!(w.decide(1, teardown_exhausted()).is_empty());
+    assert_eq!(w.environment_state(1), EnvironmentState::TeardownFailed);
+}
+
+#[test]
+fn a_leftover_environment_gets_one_cleanup_job_per_hour_until_it_is_torn_down() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_tearing_down(1);
+    w.decide(1, teardown_exhausted());
+    let env = w.task(1).environment.as_ref().unwrap().id;
+    let item = w.task(1).item.id;
+
+    w.now = Timestamp(3 * 3_600_000 + 10);
+    let first = w.teardown_jobs();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].idempotency_key, format!("env.teardown:{env}:3"));
+    assert_eq!(
+        first[0].payload,
+        json!({ "work_item_id": item, "environment_id": env })
+    );
+    w.now = Timestamp(4 * 3_600_000 - 1);
+    let same_hour = w.teardown_jobs();
+    assert_eq!(same_hour.len(), 1);
+    assert_eq!(same_hour[0].idempotency_key, first[0].idempotency_key);
+    w.now = Timestamp(4 * 3_600_000);
+    let next = w.teardown_jobs();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].idempotency_key, format!("env.teardown:{env}:4"));
+
+    let events = w.decide(1, TaskInput::EnvironmentTornDown);
+    assert!(
+        matches!(&events[..], [Event::EnvironmentTornDown { environment_id, .. }] if *environment_id == env),
+        "{events:?}"
+    );
+    assert_eq!(w.place(1).0, WorkItemState::Done);
+    assert_eq!(w.environment_state(1), EnvironmentState::TornDown);
+    assert!(w.teardown_jobs().is_empty());
+}
+
+#[test]
+fn an_exhausted_teardown_of_a_cancelled_task_only_marks_the_environment() {
+    let mut w = World::new();
+    w.approve();
+    w.decide(1, TaskInput::Admit);
+    w.decide(1, prepared(1));
+    w.decide(
+        1,
+        TaskInput::Cancel {
+            reason: "not needed".into(),
+        },
+    );
+    let env = w.task(1).environment.as_ref().unwrap().id;
+    assert_eq!(w.environment_state(1), EnvironmentState::Ready);
+    let keys: Vec<String> = w
+        .teardown_jobs()
+        .into_iter()
+        .map(|j| j.idempotency_key)
+        .collect();
+    assert_eq!(keys, vec![format!("env.teardown:{env}")]);
+
+    let events = w.decide(1, teardown_exhausted());
+    assert!(
+        matches!(&events[..], [Event::EnvironmentTeardownFailed { environment_id, .. }] if *environment_id == env),
+        "{events:?}"
+    );
+    assert_eq!(w.place(1).0, WorkItemState::Cancelled);
+    assert_eq!(w.environment_state(1), EnvironmentState::TeardownFailed);
+    let hour = w.now.0 / 3_600_000;
+    let keys: Vec<String> = w
+        .teardown_jobs()
+        .into_iter()
+        .map(|j| j.idempotency_key)
+        .collect();
+    assert_eq!(keys, vec![format!("env.teardown:{env}:{hour}")]);
 }

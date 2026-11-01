@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +32,27 @@ pub struct GitRepos {
 
 fn io(op: &str, e: &std::io::Error) -> PortError {
     PortError::retryable("env_io_failed", json!({ "op": op, "error": e.to_string() }))
+}
+
+fn make_dirs_writable(root: &Path) -> std::io::Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let meta = std::fs::symlink_metadata(&dir)?;
+        if !meta.is_dir() {
+            continue;
+        }
+        let mode = meta.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode | 0o700))?;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn is_sha(s: &str) -> bool {
@@ -507,6 +529,9 @@ impl Environments for GitRepos {
         let _guard = lock.lock().await;
         let root = self.env_root(env.environment_id);
         let bare = self.mirror_path(env.repo.repo_id);
+        if root.exists() && self.inside_envs(&root) {
+            make_dirs_writable(&root).map_err(|e| io("make_writable", &e))?;
+        }
         if bare.join("HEAD").is_file() {
             self.remove_worktree(&bare, &root.join("worktree")).await?;
             let branch_ref = format!("refs/heads/{}", env.branch);

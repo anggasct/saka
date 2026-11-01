@@ -96,7 +96,8 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         }
         TaskSet::Reconcile => (
             "SELECT id FROM work_item WHERE state NOT IN ('done', 'cancelled')
-               OR spec_id IN (SELECT id FROM spec WHERE state = 'approved')",
+               OR spec_id IN (SELECT id FROM spec WHERE state = 'approved')
+               OR id IN (SELECT work_item_id FROM environment WHERE state = 'teardown_failed')",
             vec![],
         ),
         TaskSet::Spec(id) => {

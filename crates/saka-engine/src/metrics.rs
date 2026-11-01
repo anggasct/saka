@@ -114,6 +114,7 @@ pub struct MetricsSnapshot {
     pub job_runs: Vec<(String, String, u64)>,
     pub sessions_active: Vec<(String, i64)>,
     pub permission_requests_pending: i64,
+    pub environments_teardown_failed: i64,
     pub work_items: Vec<(String, i64)>,
     pub stage_durations: Vec<(String, String, i64)>,
     pub adapter_requests: Vec<(String, String, u64)>,
@@ -133,10 +134,11 @@ impl Engine {
         let now = self.now();
         let jobs = self.store.job_counts()?;
         let oldest = self.store.oldest_ready_job_age_ms(now)?;
-        let (sessions, pending, items, durations) = self.store.read(|c| {
+        let (sessions, pending, leftover, items, durations) = self.store.read(|c| {
             Ok((
                 list::live_session_counts(c)?,
                 list::pending_permission_count(c)?,
+                list::teardown_failed_environment_count(c)?,
                 list::work_item_counts(c)?,
                 list::stage_durations(c)?,
             ))
@@ -147,6 +149,7 @@ impl Engine {
             job_runs: copy(&self.counters.job_runs),
             sessions_active: sessions,
             permission_requests_pending: pending,
+            environments_teardown_failed: leftover,
             work_items: items,
             stage_durations: durations,
             adapter_requests: copy(&self.counters.adapter_requests),

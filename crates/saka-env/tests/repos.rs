@@ -465,3 +465,65 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
     }
     assert_eq!(r("out/../worktree/src"), inside("src"));
 }
+
+fn set_mode(path: &Path, mode: u32) {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn read_only_module_cache(dir: &Path) {
+    let module = dir.join("mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64");
+    let bin = module.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("go"), "binary").unwrap();
+    std::fs::write(module.join("LICENSE"), "text").unwrap();
+    set_mode(&bin.join("go"), 0o444);
+    set_mode(&module.join("LICENSE"), 0o444);
+    for d in [
+        bin.clone(),
+        module.clone(),
+        dir.join("mod/golang.org"),
+        dir.join("mod"),
+    ] {
+        set_mode(&d, 0o555);
+    }
+}
+
+#[tokio::test]
+async fn teardown_removes_read_only_trees_like_the_go_module_cache() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let root = PathBuf::from(&env.root_path);
+    read_only_module_cache(&root.join("home/go/pkg"));
+    read_only_module_cache(&PathBuf::from(&env.worktree_path).join(".cache"));
+
+    w.repos.teardown(&env).await.unwrap();
+
+    assert!(!root.exists());
+    let bare = w.repos.mirror_path(w.repo.repo_id);
+    assert_eq!(git(&bare, &["branch", "--list", BRANCH]), "");
+    assert!(!git(&bare, &["worktree", "list"]).contains("worktree"));
+}
+
+#[tokio::test]
+async fn teardown_never_follows_a_symlink_out_of_the_environment() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let root = PathBuf::from(&env.root_path);
+    let locked = w._dir.path().join("outside/locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("keep.txt"), "keep").unwrap();
+    set_mode(&locked, 0o555);
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    std::os::unix::fs::symlink(&locked, root.join("home/link")).unwrap();
+
+    w.repos.teardown(&env).await.unwrap();
+
+    assert!(!root.exists());
+    let mode = std::fs::metadata(&locked).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o555);
+    assert_eq!(
+        std::fs::read_to_string(locked.join("keep.txt")).unwrap(),
+        "keep"
+    );
+    set_mode(&locked, 0o755);
+}

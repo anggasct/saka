@@ -243,7 +243,7 @@ impl Engine {
                 )
             }
             Err(e) => {
-                tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code = %e.code, "job exhausted");
+                tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code = %e.code, params = %e.params, "job exhausted");
                 let last_error = Coded {
                     code: e.code.clone(),
                     params: e.params.clone(),

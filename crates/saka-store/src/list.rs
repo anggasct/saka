@@ -355,6 +355,14 @@ pub fn pending_permission_count(conn: &Connection) -> Result<i64> {
     )?)
 }
 
+pub fn teardown_failed_environment_count(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM environment WHERE state = 'teardown_failed'",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
 pub fn stage_durations(conn: &Connection) -> Result<Vec<(String, String, i64)>> {
     let mut stmt = conn.prepare(
         "SELECT stage, state, ended_at - started_at FROM stage_run
