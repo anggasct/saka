@@ -11,7 +11,7 @@ use crate::model::{Coded, DependsOn, ProjectRepo};
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, GateOutcome, MergeMethod, PermissionState, SessionState, Stage,
-    StagePhase, Trigger,
+    StagePhase, SupersedeReason, Trigger,
 };
 
 fn first_parser_version() -> u32 {
@@ -71,7 +71,11 @@ pub enum Event {
         priority: i64,
         #[serde(default)]
         depends_on: Vec<DependsOn>,
+        #[serde(default)]
+        previous_revision_id: Option<SpecRevisionId>,
     },
+    #[serde(rename = "spec.spec.withdrawn")]
+    SpecWithdrawn { spec_id: SpecId, reason: String },
     #[serde(rename = "spec.spec.shipped")]
     SpecShipped {
         spec_id: SpecId,
@@ -91,6 +95,21 @@ pub enum Event {
         branch: String,
         repo_id: RepoId,
         priority: i64,
+    },
+    #[serde(rename = "delivery.work_item.repinned")]
+    WorkItemRepinned {
+        work_item_id: WorkItemId,
+        spec_revision_id: SpecRevisionId,
+        step_index: u32,
+        work: String,
+        priority: i64,
+        restored: bool,
+    },
+    #[serde(rename = "delivery.work_item.superseded")]
+    WorkItemSuperseded {
+        work_item_id: WorkItemId,
+        spec_revision_id: SpecRevisionId,
+        reason: SupersedeReason,
     },
     #[serde(rename = "delivery.work_item.admitted")]
     WorkItemAdmitted { work_item_id: WorkItemId },
@@ -375,6 +394,7 @@ impl Event {
             E::SpecRegistered { spec_id, .. }
             | E::SpecRevisionRecorded { spec_id, .. }
             | E::SpecApproved { spec_id, .. }
+            | E::SpecWithdrawn { spec_id, .. }
             | E::SpecShipped { spec_id, .. } => Stream::Spec(*spec_id),
             E::SessionStarted { session_id, .. }
             | E::SessionInitialized { session_id, .. }
@@ -396,6 +416,8 @@ impl Event {
                 ..
             } => Stream::PermissionRequest(*permission_request_id),
             E::WorkItemCreated { work_item_id, .. }
+            | E::WorkItemRepinned { work_item_id, .. }
+            | E::WorkItemSuperseded { work_item_id, .. }
             | E::WorkItemAdmitted { work_item_id }
             | E::StageRunCreated { work_item_id, .. }
             | E::StagePhaseChanged { work_item_id, .. }
@@ -423,6 +445,7 @@ impl Event {
             E::SpecRegistered { .. }
             | E::SpecRevisionRecorded { .. }
             | E::SpecApproved { .. }
+            | E::SpecWithdrawn { .. }
             | E::SpecShipped { .. } => None,
             E::SessionStarted { work_item_id, .. }
             | E::SessionInitialized { work_item_id, .. }

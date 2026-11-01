@@ -1,7 +1,6 @@
 use saka_core::reconcile::{Action, Snapshot, reconcile, waiting};
 use saka_core::spec;
 use saka_core::task::TaskInput;
-use saka_core::vocab::WorkItemState;
 use saka_store::{Batch, TaskSet, read};
 
 use crate::{Engine, EngineError, Extra, Mode, Result};
@@ -83,8 +82,8 @@ impl Engine {
             .iter()
             .filter(|t| t.item.spec_id == Some(spec_id))
             .collect();
-        let all_done = !mine.is_empty() && mine.iter().all(|t| t.item.state == WorkItemState::Done);
-        let Ok(events) = spec::ship(&spec, all_done) else {
+        let ready = spec::ships(mine.iter().map(|t| t.item.state));
+        let Ok(events) = spec::ship(&spec, ready) else {
             return Ok(false);
         };
         let mut batch = Batch::new(now);

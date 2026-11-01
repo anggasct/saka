@@ -49,6 +49,8 @@ fn step(n: u32, after: &[&str]) -> StepPlan {
         id: format!("S{n}"),
         index: n,
         work: format!("work {n}"),
+        ac: vec!["AC-01".into()],
+        commands: vec![format!("make s{n}")],
         after: after.iter().map(|a| a.to_string()).collect(),
     }
 }
@@ -97,6 +99,8 @@ fn approve(
             depends_on_line: 3,
             project_specs: specs,
             project_graph: graph,
+            approved: None,
+            tasks: &[],
         },
         &mut ctx,
     )
@@ -189,7 +193,7 @@ fn approve_resolves_dependencies_and_writes_the_graphs() {
         .collect();
     assert!(tasks.iter().all(|t| t.item.priority == 10));
 
-    let (spec_rows, item_rows) = spec::approval_graph(&b, &latest, &events);
+    let (spec_rows, item_rows) = spec::approval_graph(&b, &latest, &events, &[]);
     assert_eq!(spec_rows, vec![edge(&b, &a)]);
     let ids: Vec<_> = (1..=4)
         .map(|n| {

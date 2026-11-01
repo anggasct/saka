@@ -64,6 +64,8 @@ fn approval(if_match: SpecRevisionId, repo: RepoId) -> spec::Approval<'static> {
         depends_on_line: 1,
         project_specs: &[],
         project_graph: &[],
+        approved: None,
+        tasks: &[],
     }
 }
 
@@ -114,12 +116,16 @@ impl World {
                     id: "S1".into(),
                     index: 1,
                     work: "Add done".into(),
+                    ac: vec![],
+                    commands: vec![],
                     after: vec![],
                 },
                 StepPlan {
                     id: "S2".into(),
                     index: 2,
                     work: "Show done".into(),
+                    ac: vec![],
+                    commands: vec![],
                     after: vec!["S1".into()],
                 },
             ],
@@ -138,7 +144,7 @@ impl World {
             &mut ctx,
         )
         .unwrap();
-        self.deps = spec::approval_graph(&self.spec, &latest, &events).1;
+        self.deps = spec::approval_graph(&self.spec, &latest, &events, &[]).1;
         for e in &events {
             self.spec = spec::evolve(Some(self.spec.clone()), e, self.now).unwrap();
             if let Some(t) = task::evolve(None, e, self.now) {
@@ -611,6 +617,7 @@ fn approval_checks_revision_lint_and_state() {
     ));
     let mut approved = w.spec.clone();
     approved.state = SpecState::Approved;
+    approved.approved_revision_id = Some(w.spec.latest_revision_id);
     assert_eq!(
         spec::approve(
             &approved,

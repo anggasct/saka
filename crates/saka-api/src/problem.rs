@@ -94,6 +94,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::Unsupported
         | R::SpecAlreadyApproved
         | R::SpecReparseRequired { .. }
+        | R::RevisionConflict { .. }
+        | R::SpecHasActiveTasks { .. }
         | R::MergeNotReady { .. }
         | R::PermissionAlreadyAnswered
         | R::ProjectExists { .. }

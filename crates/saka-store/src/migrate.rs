@@ -10,6 +10,7 @@ use crate::error::{Result, StoreError};
 pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_spec_model.sql")),
+    (3, include_str!("../migrations/0003_spec_approval.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -255,7 +256,7 @@ mod tests {
         migrate_with(&mut conn, &MIGRATIONS[..1], &backups, Timestamp(1)).unwrap();
         conn.execute_batch(V1_DATA).unwrap();
 
-        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(2)).unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..2], &backups, Timestamp(2)).unwrap();
         assert_eq!(report.applied, vec![2]);
         assert!(report.backup.is_some());
 
@@ -319,6 +320,148 @@ mod tests {
             [],
         );
         assert!(orphan.is_err(), "work_item still references spec_revision");
+    }
+
+    const V2_DATA: &str = "
+        INSERT INTO repo VALUES ('r1', 'github', 'github', 'acme/app', 'https://github.com/acme/app', 'main', 1, 1);
+        INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, created_at, updated_at)
+          VALUES ('p1', 'app', 'r1', 'docs', 'main', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 1);
+        INSERT INTO spec (id, project_id, path, slug, title, state, priority, latest_revision_id, approved_revision_id,
+            approved_at, shipped_at, created_at, updated_at)
+          VALUES ('s-draft', 'p1', 'docs/d.md', 'd', 'D', 'draft', 0, 'v-draft', NULL, NULL, NULL, 1, 1),
+                 ('s-ready', 'p1', 'docs/r.md', 'r', 'R', 'ready', 0, 'v-ready', NULL, NULL, NULL, 1, 1),
+                 ('s-approved', 'p1', 'docs/a.md', 'a', 'A', 'approved', 5, 'v-approved', 'v-approved', 2, NULL, 1, 2),
+                 ('s-shipped', 'p1', 'docs/s.md', 's', 'S', 'shipped', 0, 'v-shipped', 'v-shipped', 2, 3, 1, 3),
+                 ('s-withdrawn', 'p1', 'docs/w.md', 'w', 'W', 'withdrawn', 0, 'v-withdrawn', NULL, NULL, NULL, 1, 2);
+        INSERT INTO spec_revision VALUES
+          ('v-draft', 's-draft', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'h1', X'00', 0, '[]', '{}', 2, 1),
+          ('v-ready', 's-ready', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'h2', X'00', 1, '[]', '{}', 2, 1),
+          ('v-approved', 's-approved', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'h3', X'00', 1, '[]', '{}', 2, 1),
+          ('v-shipped', 's-shipped', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'h4', X'00', 1, '[]', '{}', 2, 1),
+          ('v-withdrawn', 's-withdrawn', 'p1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'h5', X'00', 1, '[]', '{}', 2, 1);
+        INSERT INTO work_item (id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key, work,
+            repo_id, branch, state, stage, stage_phase, priority, version, created_at, updated_at)
+          VALUES ('w1', 'p1', 'spec_step', 's-approved', 'v-approved', 'S1', 1, 'a/s1', 'a', 'r1', 'saka/a/s1', 'queued', NULL, NULL, 5, 1, 2, 2),
+                 ('w2', 'p1', 'spec_step', 's-approved', 'v-approved', 'S2', 2, 'a/s2', 'b', 'r1', 'saka/a/s2', 'awaiting_start', NULL, NULL, 5, 1, 2, 2),
+                 ('w3', 'p1', 'spec_step', 's-approved', 'v-approved', 'S3', 3, 'a/s3', 'c', 'r1', 'saka/a/s3', 'admitted', NULL, NULL, 5, 2, 2, 2),
+                 ('w4', 'p1', 'spec_step', 's-approved', 'v-approved', 'S4', 4, 'a/s4', 'd', 'r1', 'saka/a/s4', 'in_stage', 'dev', 'running_session', 5, 3, 2, 2),
+                 ('w5', 'p1', 'spec_step', 's-approved', 'v-approved', 'S5', 5, 'a/s5', 'e', 'r1', 'saka/a/s5', 'blocked', NULL, NULL, 5, 4, 2, 2),
+                 ('w6', 'p1', 'spec_step', 's-approved', 'v-approved', 'S6', 6, 'a/s6', 'f', 'r1', 'saka/a/s6', 'taken_over', NULL, NULL, 5, 4, 2, 2),
+                 ('w7', 'p1', 'spec_step', 's-approved', 'v-approved', 'S7', 7, 'a/s7', 'g', 'r1', 'saka/a/s7', 'cancelled', NULL, NULL, 5, 4, 2, 2),
+                 ('w8', 'p1', 'spec_step', 's-shipped', 'v-shipped', 'S1', 1, 's/s1', 'h', 'r1', 'saka/s/s1', 'done', NULL, NULL, 0, 9, 2, 3);
+        INSERT INTO work_item_dependency VALUES ('w2', 'w1', 'p1', 2);
+        INSERT INTO stage_run (id, work_item_id, project_id, stage, attempt, state, trigger, entry_phase, created_at, updated_at)
+          VALUES ('run1', 'w4', 'p1', 'dev', 1, 'running', 'auto', 'preparing_environment', 2, 2);
+        INSERT INTO environment VALUES ('e1', 'p1', 'w4', 'r1', '/root', '/root/wt', 'saka/a/s4',
+          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'ready', 2, 2);
+        INSERT INTO session (id, project_id, work_item_id, stage_run_id, environment_id, cli, account, state, runner_unit,
+            socket_path, log_path, created_at, updated_at)
+          VALUES ('x1', 'p1', 'w4', 'run1', 'e1', 'claude', 'default', 'running', 'unit', '/s', '/l', 2, 2);
+        INSERT INTO permission_request (id, project_id, work_item_id, session_id, cli_request_id, tool, input, summary,
+            state, requested_at)
+          VALUES ('q1', 'p1', 'w4', 'x1', 'c1', 'Bash', '{}', 'ls', 'pending', 2);
+        INSERT INTO change_request VALUES ('cr1', 'p1', 'w8', 'r1', 1, 'https://x/1', 'saka/s/s1', 'main',
+          'cccccccccccccccccccccccccccccccccccccccc', 'merged', 'dddddddddddddddddddddddddddddddddddddddd', 3, 3, 2, 3);
+    ";
+
+    fn ids(conn: &Connection, sql: &str) -> Vec<String> {
+        let mut stmt = conn.prepare(sql).unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_spec_approval_migration_keeps_rows_and_widens_the_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V2_DATA).unwrap();
+        let specs_before = ids(
+            &conn,
+            "SELECT id || ':' || state || ':' || ifnull(approved_revision_id, '-') FROM spec ORDER BY id",
+        );
+        let items_before = ids(
+            &conn,
+            "SELECT id || ':' || state || ':' || task_key FROM work_item ORDER BY id",
+        );
+
+        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(2)).unwrap();
+        assert_eq!(report.applied, vec![3]);
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT id || ':' || state || ':' || ifnull(approved_revision_id, '-') FROM spec ORDER BY id"
+            ),
+            specs_before
+        );
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT id || ':' || state || ':' || task_key FROM work_item ORDER BY id"
+            ),
+            items_before
+        );
+        for (table, expected) in [
+            ("stage_run", 1),
+            ("environment", 1),
+            ("session", 1),
+            ("permission_request", 1),
+            ("change_request", 1),
+            ("work_item_dependency", 1),
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, expected, "{table}");
+        }
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('spec', 'work_item') AND sql IS NOT NULL ORDER BY name"
+            ),
+            vec![
+                "spec_project_state_idx",
+                "work_item_admission_idx",
+                "work_item_project_state_idx",
+                "work_item_spec_idx"
+            ]
+        );
+        let broken: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(broken, None);
+
+        conn.execute(
+            "UPDATE work_item SET state = 'superseded' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE spec SET state = 'withdrawn', approved_revision_id = 'v-approved' WHERE id = 's-approved'",
+            [],
+        )
+        .unwrap();
+        let refused = [
+            "UPDATE work_item SET state = 'paused' WHERE id = 'w2'",
+            "UPDATE spec SET state = 'mystery' WHERE id = 's-draft'",
+            "UPDATE spec SET state = 'approved' WHERE id = 's-ready'",
+            "UPDATE spec SET approved_revision_id = 'v-ready' WHERE id = 's-ready'",
+            "UPDATE spec SET approved_revision_id = 'v-draft' WHERE id = 's-draft'",
+            "UPDATE spec SET approved_revision_id = NULL WHERE id = 's-shipped'",
+            "INSERT INTO stage_run (id, work_item_id, project_id, stage, attempt, state, trigger, entry_phase, created_at, updated_at)
+               VALUES ('run2', 'missing', 'p1', 'dev', 1, 'pending', 'auto', 'preparing_environment', 2, 2)",
+            "INSERT INTO work_item_dependency VALUES ('w1', 'missing', 'p1', 2)",
+            "UPDATE environment SET work_item_id = 'missing'",
+            "UPDATE change_request SET work_item_id = 'missing'",
+        ];
+        for sql in refused {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
     }
 
     #[test]

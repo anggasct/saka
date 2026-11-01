@@ -115,8 +115,7 @@ pub fn reconcile(
         .iter()
         .filter(|s| s.state == SpecState::Approved)
     {
-        let mut all = of_spec(spec.id).peekable();
-        if all.peek().is_some() && of_spec(spec.id).all(|t| t.item.state == WorkItemState::Done) {
+        if crate::spec::ships(of_spec(spec.id).map(|t| t.item.state)) {
             actions.push(Action::ShipSpec(spec.id));
         }
     }
