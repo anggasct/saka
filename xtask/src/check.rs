@@ -51,6 +51,19 @@ pub fn run() -> Result<()> {
             &[&["test", "--locked"], args(&selected).as_slice()].concat(),
         )
     })?;
+    step("saka-spec for wasm32", || {
+        cargo(
+            &root,
+            &[
+                "check",
+                "--locked",
+                "--target",
+                "wasm32-unknown-unknown",
+                "-p",
+                "saka-spec",
+            ],
+        )
+    })?;
     step("dependency direction", || {
         let violations = deps::check(&meta);
         for v in &violations {
