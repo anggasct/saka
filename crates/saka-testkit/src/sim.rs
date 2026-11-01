@@ -5,6 +5,7 @@ use saka_core::ids::{ProjectId, SpecId, SpecRevisionId, WorkItemId};
 use saka_core::model::{Spec, Task};
 use saka_core::policy::{Policy, RuleSpec};
 use saka_core::task::LoopConfig;
+use saka_core::vocab::SpecOrigin;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
@@ -12,7 +13,9 @@ use saka_engine::{
     Engine, EngineConfig, EngineError, Integration, JobReport, NewProject, Ports, RegisteredSpec,
 };
 use saka_ports::Clock;
-use saka_store::{Store, TaskSet, read};
+use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, read};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::clock::{FakeClock, FakeIds};
 use crate::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
@@ -254,6 +257,51 @@ impl Sim {
         let engine = self.engine();
         let cause = engine.cause("human:operator:local");
         engine.approve_spec(spec_id, revision_id, None, &cause)
+    }
+
+    pub fn old_parser_spec(&self, slug: &str, text: &str) -> (SpecId, SpecRevisionId) {
+        let digest = Sha256::digest(text.as_bytes());
+        let half = |range: std::ops::Range<usize>| {
+            uuid::Uuid::from_slice(&digest[range]).expect("16 bytes of the digest")
+        };
+        let spec_id = SpecId(half(0..16));
+        let revision_id = SpecRevisionId(half(16..32));
+        let now = self.spec().created_at;
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let mut batch = Batch::new(now);
+        batch.specs.push(Spec {
+            id: spec_id,
+            project_id: self.project_id,
+            path: format!("docs/specs/{slug}.md"),
+            slug: slug.into(),
+            title: slug.into(),
+            state: SpecState::Ready,
+            origin: SpecOrigin::Manual,
+            priority: 0,
+            latest_revision_id: revision_id,
+            approved_revision_id: None,
+            approved_at: None,
+            shipped_at: None,
+            created_at: now,
+            updated_at: now,
+        });
+        batch.revisions.push(SpecRevisionRow {
+            id: revision_id.0,
+            spec_id: spec_id.0,
+            project_id: self.project_id,
+            source_commit: self.world.base_head(),
+            content_hash: format!("sha256:{hex}"),
+            content: text.as_bytes().to_vec(),
+            lint_ok: true,
+            lint_issues: json!([]),
+            model: json!({"slug": slug, "title": slug, "acceptance_criteria": [], "steps": [
+                {"id": "S1", "index": 1, "work": slug, "ac": ["AC-01"], "commands": ["make test"], "line": 10}
+            ]}),
+            parser_version: 1,
+            created_at: now,
+        });
+        self.engine().store().commit(&batch).unwrap();
+        (spec_id, revision_id)
     }
 
     pub fn tasks(&self) -> Vec<Task> {

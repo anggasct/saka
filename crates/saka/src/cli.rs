@@ -33,6 +33,20 @@ fn err(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
+fn issue_line(issue: &Value) -> String {
+    let prefix = if issue["severity"] == "warning" {
+        "warning "
+    } else {
+        ""
+    };
+    format!(
+        "{prefix}line {}: {} {}",
+        issue["line"],
+        text(&issue["code"]),
+        issue["params"]
+    )
+}
+
 fn fail(a: &Answer) -> ExitCode {
     let code = a.body["code"].as_str().unwrap_or("error");
     err(&format!("error: {code} {}", a.body["params"]));
@@ -202,8 +216,16 @@ impl Client {
             return self.lint_failed(&approved.body["params"]["issues"], &approved.body);
         }
         self.finish(&approved, |b| {
+            let mut lines: Vec<String> = b["lint"]["issues"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|i| i["severity"] == "warning")
+                .map(issue_line)
+                .collect();
             let steps = b["steps"].as_array().map_or(0, Vec::len);
-            format!("approved {} ({steps} steps)", text(&b["slug"]))
+            lines.push(format!("approved {} ({steps} steps)", text(&b["slug"])));
+            lines.join("\n")
         })
     }
 
@@ -212,15 +234,25 @@ impl Client {
             out(&body.to_string());
         } else {
             for issue in issues.as_array().into_iter().flatten() {
-                out(&format!(
-                    "line {}: {} {}",
-                    issue["line"],
-                    text(&issue["code"]),
-                    issue["params"]
-                ));
+                out(&issue_line(issue));
             }
         }
         ExitCode::from(EXIT_LINT)
+    }
+
+    pub async fn spec_template(&self, locale: &str) -> ExitCode {
+        let a = match self
+            .get(&format!("/api/v1/spec-template?locale={locale}"))
+            .await
+        {
+            Ok(a) => a,
+            Err(code) => return code,
+        };
+        if !a.ok() || self.json {
+            return self.finish(&a, |_| String::new());
+        }
+        let _ = write!(std::io::stdout(), "{}", text(&a.body["content"]));
+        ExitCode::SUCCESS
     }
 
     pub async fn task_list(

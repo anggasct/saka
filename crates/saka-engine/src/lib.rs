@@ -35,7 +35,8 @@ pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
 pub use views::{
-    Paged, PermissionView, ProjectView, RevisionInfo, SessionView, SpecView, TaskDetail,
+    DependencyView, Paged, PermissionView, ProjectView, RevisionInfo, SessionView, SpecView,
+    TaskDetail, TaskView,
 };
 pub use worker::{JobReport, JobResult};
 

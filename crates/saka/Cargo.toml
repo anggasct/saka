@@ -41,6 +41,7 @@ embed-web = ["saka-api/embed-web"]
 
 [dev-dependencies]
 rusqlite.workspace = true
+saka-spec = { path = "../saka-spec" }
 saka-testkit = { path = "../saka-testkit" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "sync", "time"] }

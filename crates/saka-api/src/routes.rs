@@ -250,6 +250,25 @@ pub async fn get_spec(State(s): State<AppState>, Path(id): Path<String>) -> Resp
 }
 
 #[utoipa::path(
+    get, path = "/api/v1/spec-template", tag = "specs", params(dto::TemplateQuery),
+    responses((status = 200, body = dto::SpecTemplate), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn spec_template(Query(q): Query<dto::TemplateQuery>) -> Response {
+    let code = q.locale.as_deref().unwrap_or("en");
+    let Some(locale) = saka_spec::Locale::from_code(code) else {
+        return ApiError::validation("locale", "invalid").into_response();
+    };
+    ok(
+        StatusCode::OK,
+        &dto::SpecTemplate {
+            locale: locale.as_str().to_string(),
+            parser_version: saka_spec::PARSER_VERSION,
+            content: saka_spec::template(locale).to_string(),
+        },
+    )
+}
+
+#[utoipa::path(
     post, path = "/api/v1/specs/{spec_id}/approve", tag = "specs",
     params(("spec_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters"), ("If-Match" = String, Header, description = "\"<revision id>\"")),
     request_body = dto::OptionalReason,
@@ -346,7 +365,7 @@ pub async fn list_work_items(
     ok(
         StatusCode::OK,
         &dto::Page {
-            items: paged.items.iter().map(dto::WorkItem::from_task).collect(),
+            items: paged.items.iter().map(dto::WorkItem::from_view).collect(),
             next_cursor: paged.next.map(|k| encode_cursor(k, &key)),
         },
     )
@@ -405,7 +424,7 @@ async fn task_action(
     };
     let project = tri!(engine.work_item(item)).map(|d| d.task.item.project_id);
     let respond = |p: Produced<'_>| match p {
-        Produced::Task(t) => reply(StatusCode::ACCEPTED, &dto::WorkItem::from_task(t)),
+        Produced::Task(t) => reply(StatusCode::ACCEPTED, &dto::WorkItem::from_task(t, &[])),
         _ => unexpected(),
     };
     let name = match which {

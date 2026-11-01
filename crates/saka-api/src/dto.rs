@@ -1,8 +1,9 @@
+use saka_core::admission::Waiting;
 use saka_core::gate::Check;
 use saka_core::model::{StageRun, Task};
 use saka_core::task::available_actions;
 use saka_core::time::Timestamp;
-use saka_engine::{PermissionView, ProjectView, SessionView, SpecView, TaskDetail};
+use saka_engine::{PermissionView, ProjectView, SessionView, SpecView, TaskDetail, TaskView};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
@@ -106,14 +107,31 @@ pub struct Revision {
     pub id: Uuid,
     pub source_commit: String,
     pub content_hash: String,
+    /// Version of the parser that read this revision.
+    pub parser_version: u32,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LintIssue {
+    pub code: String,
+    /// `error` blocks approve; `warning` does not.
+    #[serde(default = "error_severity")]
+    pub severity: String,
+    /// 1-based line in the spec file.
+    pub line: u32,
+    pub params: Value,
+}
+
+fn error_severity() -> String {
+    "error".to_string()
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Lint {
+    /// No issue with severity `error`.
     pub ok: bool,
-    /// `{code, line, params}` per issue.
-    pub issues: Vec<Value>,
+    pub issues: Vec<LintIssue>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -129,7 +147,17 @@ pub struct Step {
     pub work: String,
     pub ac: Vec<String>,
     pub commands: Vec<String>,
+    /// Step ids this step waits for.
+    pub after: Vec<String>,
     pub work_item_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDependency {
+    pub slug: String,
+    /// Null when no spec in the project has this slug.
+    pub spec_id: Option<Uuid>,
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -143,6 +171,8 @@ pub struct Spec {
     pub state: String,
     pub origin: String,
     pub priority: i64,
+    /// Specs that must ship before this one starts, resolved in the project.
+    pub depends_on: Vec<SpecDependency>,
     pub revision: Revision,
     pub approved_revision_id: Option<Uuid>,
     pub lint: Lint,
@@ -165,18 +195,26 @@ struct ModelStep {
     ac: Vec<String>,
     #[serde(default)]
     commands: Vec<String>,
+    #[serde(default)]
+    after: Vec<String>,
 }
 
 impl Spec {
     pub fn from_view(v: &SpecView, with_criteria: bool) -> Spec {
         let s = &v.spec;
         let r = &v.revision;
-        let steps: Vec<ModelStep> = r
+        let mut steps: Vec<ModelStep> = r
             .model
             .get("steps")
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+        // Version 1 models predate the After column: their steps always ran in order.
+        if r.parser_version < 2 {
+            for step in steps.iter_mut().filter(|s| s.index > 1) {
+                step.after = vec![format!("S{}", step.index - 1)];
+            }
+        }
         let criteria: Vec<AcceptanceCriterion> = r
             .model
             .get("acceptance_criteria")
@@ -192,16 +230,32 @@ impl Spec {
             state: s.state.as_str().to_string(),
             origin: s.origin.as_str().to_string(),
             priority: s.priority,
+            depends_on: v
+                .depends_on
+                .iter()
+                .map(|d| SpecDependency {
+                    slug: d.slug.clone(),
+                    spec_id: d.spec_id.map(|id| id.0),
+                    state: d.state.map(|st| st.as_str().to_string()),
+                })
+                .collect(),
             revision: Revision {
                 id: r.id.0,
                 source_commit: r.source_commit.clone(),
                 content_hash: r.content_hash.clone(),
+                parser_version: r.parser_version,
                 created_at: time(r.created_at),
             },
             approved_revision_id: s.approved_revision_id.map(|id| id.0),
             lint: Lint {
                 ok: r.lint_ok,
-                issues: r.issues.as_array().cloned().unwrap_or_default(),
+                issues: r
+                    .issues
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|i| serde_json::from_value(i.clone()).ok())
+                    .collect(),
             },
             acceptance_criteria: with_criteria.then_some(criteria),
             steps: steps
@@ -217,6 +271,7 @@ impl Spec {
                     work: st.work,
                     ac: st.ac,
                     commands: st.commands,
+                    after: st.after,
                 })
                 .collect(),
             approved_at: opt_time(s.approved_at),
@@ -304,6 +359,8 @@ pub struct WorkItem {
     pub stage: Option<String>,
     pub stage_phase: Option<String>,
     pub priority: i64,
+    /// Steps and specs this task still waits for; empty unless the task is queued.
+    pub waiting_on: Vec<WaitingOn>,
     pub change_request: Option<ChangeRequest>,
     pub gate: Option<Gate>,
     pub blocker: Option<Blocker>,
@@ -318,8 +375,39 @@ pub struct WorkItem {
     pub done_at: Option<String>,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitingOn {
+    /// A step of the same spec that is not done yet.
+    Step { step_id: String, work_item_id: Uuid },
+    /// A spec that has not shipped yet.
+    Spec { slug: String, spec_id: Uuid },
+}
+
+impl From<&Waiting> for WaitingOn {
+    fn from(w: &Waiting) -> WaitingOn {
+        match w {
+            Waiting::Step {
+                step_id,
+                work_item_id,
+            } => WaitingOn::Step {
+                step_id: step_id.clone(),
+                work_item_id: work_item_id.0,
+            },
+            Waiting::Spec { slug, spec_id } => WaitingOn::Spec {
+                slug: slug.clone(),
+                spec_id: spec_id.0,
+            },
+        }
+    }
+}
+
 impl WorkItem {
-    pub fn from_task(t: &Task) -> WorkItem {
+    pub fn from_view(v: &TaskView) -> WorkItem {
+        WorkItem::from_task(&v.task, &v.waiting_on)
+    }
+
+    pub fn from_task(t: &Task, waiting_on: &[Waiting]) -> WorkItem {
         let i = &t.item;
         WorkItem {
             id: i.id.0,
@@ -337,6 +425,7 @@ impl WorkItem {
             stage: i.stage.map(|x| x.as_str().to_string()),
             stage_phase: i.stage_phase.map(|x| x.as_str().to_string()),
             priority: i.priority,
+            waiting_on: waiting_on.iter().map(WaitingOn::from).collect(),
             change_request: t.change_request.as_ref().map(|c| ChangeRequest {
                 id: c.id.0,
                 number: c.number,
@@ -434,7 +523,7 @@ pub struct WorkItemDetail {
 impl WorkItemDetail {
     pub fn from_detail(d: &TaskDetail) -> WorkItemDetail {
         WorkItemDetail {
-            item: WorkItem::from_task(&d.task),
+            item: WorkItem::from_task(&d.task, &d.waiting_on),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
         }
     }
@@ -648,6 +737,21 @@ mod tests {
         assert_eq!(usd(12_300), "0.012300");
         assert_eq!(usd(2_500_000), "2.500000");
     }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TemplateQuery {
+    /// `en` (default) or `id`.
+    pub locale: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecTemplate {
+    pub locale: String,
+    pub parser_version: u32,
+    /// Markdown that parses without issues as `example-spec.md`.
+    pub content: String,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

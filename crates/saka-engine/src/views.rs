@@ -1,8 +1,10 @@
+use saka_core::admission::{Waiting, waiting_on};
 use saka_core::ids::{
     PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun, Task};
 use saka_core::time::Timestamp;
+use saka_core::vocab::{SpecState, WorkItemState};
 use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
 use saka_store::{SpecRevisionRow, StoredEvent, TaskSet, read};
 use serde_json::Value;
@@ -23,6 +25,7 @@ pub struct RevisionInfo {
     pub lint_ok: bool,
     pub issues: Value,
     pub model: Value,
+    pub parser_version: u32,
     pub created_at: Timestamp,
 }
 
@@ -35,6 +38,7 @@ impl From<&SpecRevisionRow> for RevisionInfo {
             lint_ok: r.lint_ok,
             issues: r.lint_issues.clone(),
             model: r.model.clone(),
+            parser_version: r.parser_version,
             created_at: r.created_at,
         }
     }
@@ -45,6 +49,20 @@ pub struct SpecView {
     pub spec: Spec,
     pub revision: RevisionInfo,
     pub work_items: Vec<(String, WorkItemId)>,
+    pub depends_on: Vec<DependencyView>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DependencyView {
+    pub slug: String,
+    pub spec_id: Option<SpecId>,
+    pub state: Option<SpecState>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskView {
+    pub task: Task,
+    pub waiting_on: Vec<Waiting>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +75,7 @@ pub struct PermissionView {
 pub struct TaskDetail {
     pub task: Task,
     pub stage_runs: Vec<StageRun>,
+    pub waiting_on: Vec<Waiting>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,11 +150,82 @@ impl Engine {
             .iter()
             .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
             .collect();
+        self.spec_view_with(spec, revision, work_items)
+    }
+
+    pub(crate) fn spec_view_with(
+        &self,
+        spec: Spec,
+        revision: RevisionInfo,
+        work_items: Vec<(String, WorkItemId)>,
+    ) -> Result<SpecView> {
+        let declared = match spec.approved_revision_id {
+            Some(id) if id != revision.id => self
+                .store
+                .read(|c| read::load_revision(c, id))?
+                .map(|r| r.model)
+                .unwrap_or_default(),
+            _ => revision.model.clone(),
+        };
+        let slugs: Vec<String> = declared
+            .get("depends_on")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let depends_on = self.store.read(|c| {
+            slugs
+                .iter()
+                .map(|slug| {
+                    let target = list::spec_by_slug(c, spec.project_id, slug)?;
+                    Ok(DependencyView {
+                        slug: slug.clone(),
+                        spec_id: target.as_ref().map(|t| t.id),
+                        state: target.map(|t| t.state),
+                    })
+                })
+                .collect::<saka_store::Result<Vec<_>>>()
+        })?;
         Ok(SpecView {
             spec,
             revision,
             work_items,
+            depends_on,
         })
+    }
+
+    fn waiting(&self, tasks: &[Task]) -> Result<Vec<Vec<Waiting>>> {
+        let queued: Vec<WorkItemId> = tasks
+            .iter()
+            .filter(|t| t.item.state == WorkItemState::Queued)
+            .map(|t| t.item.id)
+            .collect();
+        if queued.is_empty() {
+            return Ok(vec![Vec::new(); tasks.len()]);
+        }
+        let (item_deps, spec_deps) = self.store.read(|c| {
+            Ok((
+                read::work_item_dependencies_of(c, &queued)?,
+                read::spec_dependencies(c, None)?,
+            ))
+        })?;
+        let targets: Vec<WorkItemId> = item_deps
+            .iter()
+            .map(|d| d.depends_on_work_item_id)
+            .collect();
+        let (dep_tasks, specs) = self.store.read(|c| {
+            let dep_tasks = read::load_tasks(c, TaskSet::Ids(&targets))?;
+            let mut specs = Vec::new();
+            for d in &spec_deps {
+                if let Some(s) = read::load_spec(c, d.depends_on_spec_id)? {
+                    specs.push(s);
+                }
+            }
+            Ok((dep_tasks, specs))
+        })?;
+        Ok(tasks
+            .iter()
+            .map(|t| waiting_on(t, &dep_tasks, &specs, &item_deps, &spec_deps))
+            .collect())
     }
 
     pub fn specs(
@@ -165,7 +255,7 @@ impl Engine {
         }
     }
 
-    pub fn work_items(&self, filter: &WorkItemFilter, page: &Page) -> Result<Paged<Task>> {
+    pub fn work_items(&self, filter: &WorkItemFilter, page: &Page) -> Result<Paged<TaskView>> {
         let rows = self
             .store
             .read(|c| list::work_items(c, filter, &probe(page)))?;
@@ -175,8 +265,13 @@ impl Engine {
             .store
             .read(|c| read::load_tasks(c, TaskSet::Ids(&ids)))?;
         tasks.sort_by_key(|t| ids.iter().position(|id| *id == t.item.id));
+        let waiting = self.waiting(&tasks)?;
         Ok(Paged {
-            items: tasks,
+            items: tasks
+                .into_iter()
+                .zip(waiting)
+                .map(|(task, waiting_on)| TaskView { task, waiting_on })
+                .collect(),
             next: paged.next,
         })
     }
@@ -185,7 +280,19 @@ impl Engine {
         let (task, stage_runs) = self
             .store
             .read(|c| Ok((read::load_task(c, id)?, list::stage_runs(c, id)?)))?;
-        Ok(task.map(|task| TaskDetail { task, stage_runs }))
+        let Some(task) = task else {
+            return Ok(None);
+        };
+        let waiting_on = self
+            .waiting(std::slice::from_ref(&task))?
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        Ok(Some(TaskDetail {
+            task,
+            stage_runs,
+            waiting_on,
+        }))
     }
 
     pub fn permission_requests(

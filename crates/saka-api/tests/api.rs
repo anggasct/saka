@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use saka_api::{ApiConfig, AppState, router};
 use saka_core::vocab::{Stage, StagePhase};
 use saka_testkit::fixtures::TWO_STEP_SPEC;
-use saka_testkit::{AgentOutcome, AgentScript, CiScript, Sim, SimConfig};
+use saka_testkit::{AgentOutcome, AgentScript, CiScript, Sim, SimConfig, one_step_spec};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -877,4 +877,208 @@ fn the_event_stream_resumes_after_the_last_event_id_with_keep_alives() {
         StatusCode::UNPROCESSABLE_ENTITY,
         "validation_failed",
     );
+}
+
+impl Api {
+    fn register_doc(&mut self, path: &str, text: &str) -> Reply {
+        self.sim.world.put_doc(path, text.as_bytes());
+        let project = self.sim.project_id.0.to_string();
+        let r = self.post(
+            &format!("/api/v1/projects/{project}/specs"),
+            &[],
+            json!({ "path": path }),
+        );
+        assert!(r.status.is_success(), "{}", r.body);
+        r
+    }
+
+    fn approve_reply(&mut self, spec: &Reply) -> Reply {
+        let id = spec.body["id"].as_str().unwrap().to_string();
+        let tag = format!("\"{}\"", spec.body["revision"]["id"].as_str().unwrap());
+        self.post(
+            &format!("/api/v1/specs/{id}/approve"),
+            &[("if-match", &tag)],
+            json!({}),
+        )
+    }
+}
+
+const PARALLEL_WITH_WARNINGS: &str = "---
+saka: spec
+depends_on: [base-spec, ghost]
+priority: 7
+---
+# Feature
+
+## Acceptance criteria
+
+- **AC-01**: one.
+- **AC-02**: two.
+
+## Steps
+
+| Step | Work | AC | After | Done when |
+|------|------|----|-------|-----------|
+| S1 | First | AC-01 | | `make test` |
+| S2 | Second | AC-01 | S1 | `make test` |
+| S3 | Third | AC-01 | | `make test` |
+";
+
+#[test]
+fn a_spec_shows_priority_dependencies_effective_steps_and_severities() {
+    let mut api = Api::new(SimConfig::default());
+    let base = api.register_doc("docs/specs/base-spec.md", &one_step_spec("Base", ""));
+    let r = api.register_doc("docs/specs/feature.md", PARALLEL_WITH_WARNINGS);
+    let spec = r.body["id"].as_str().unwrap().to_string();
+    let detail = api.get(&format!("/api/v1/specs/{spec}"));
+    let b = &detail.body;
+    assert_eq!(b["priority"], 7);
+    assert_eq!(
+        b["depends_on"],
+        json!([
+            {"slug": "base-spec", "spec_id": base.body["id"], "state": "ready"},
+            {"slug": "ghost", "spec_id": null, "state": null},
+        ])
+    );
+    let after: Vec<&Value> = b["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| &s["after"])
+        .collect();
+    assert_eq!(after, [&json!([]), &json!(["S1"]), &json!([])]);
+    assert_eq!(b["revision"]["parser_version"], 2);
+    assert_eq!(b["lint"]["ok"], true);
+    assert_eq!(
+        b["lint"]["issues"],
+        json!([
+            {"code": "ac_uncovered", "severity": "warning", "line": 11, "params": {"ac": "AC-02"}},
+            {"code": "step_parallel_start", "severity": "warning", "line": 19, "params": {"step": "S3"}},
+        ])
+    );
+
+    let before = api.last_seq();
+    let refused = api.approve_reply(&detail);
+    problem(&refused, StatusCode::UNPROCESSABLE_ENTITY, "spec_not_ready");
+    assert_eq!(
+        refused.body["params"]["issues"],
+        json!([{"code": "depends_on_unknown", "severity": "error", "line": 3, "params": {"slug": "ghost"}}])
+    );
+    assert_eq!(api.last_seq(), before);
+}
+
+#[test]
+fn a_warnings_only_spec_is_ready_and_approves_and_tasks_show_what_they_wait_for() {
+    let mut api = Api::new(SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    });
+    let base = api.register_doc("docs/specs/base-spec.md", &one_step_spec("Base", ""));
+    let text =
+        PARALLEL_WITH_WARNINGS.replace("depends_on: [base-spec, ghost]", "depends_on: [base-spec]");
+    let feature = api.register_doc("docs/specs/feature.md", &text);
+    assert_eq!(feature.body["state"], "ready");
+    let approved = api.approve_reply(&feature);
+    assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
+    assert_eq!(approved.body["depends_on"][0]["state"], "ready");
+    let base_id = base.body["id"].as_str().unwrap().to_string();
+    let spec = feature.body["id"].as_str().unwrap().to_string();
+
+    let items = api.get(&format!("/api/v1/work-items?spec_id={spec}"));
+    let items = items.body["items"].as_array().unwrap().clone();
+    let by_step = |id: &str| items.iter().find(|i| i["step_id"] == id).unwrap().clone();
+    let (s1, s2) = (by_step("S1"), by_step("S2"));
+    let waits_on_base = json!({"kind": "spec", "slug": "base-spec", "spec_id": base_id});
+    assert_eq!(s1["waiting_on"], json!([waits_on_base]));
+    assert_eq!(
+        s2["waiting_on"],
+        json!([
+            {"kind": "step", "step_id": "S1", "work_item_id": s1["id"]},
+            waits_on_base,
+        ])
+    );
+    let detail = api.get(&format!(
+        "/api/v1/work-items/{}",
+        s2["id"].as_str().unwrap()
+    ));
+    assert_eq!(detail.body["waiting_on"], s2["waiting_on"]);
+
+    let base_approved = api.approve_reply(&base);
+    assert_eq!(
+        base_approved.status,
+        StatusCode::OK,
+        "{}",
+        base_approved.body
+    );
+    let base_task = base_approved.body["steps"][0]["work_item_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.all_tasks().iter().any(|t| {
+            t.item.id.0.to_string() == base_task
+                && t.item.state != saka_core::vocab::WorkItemState::Queued
+        })
+    }));
+    let running = api.get(&format!("/api/v1/work-items/{base_task}"));
+    assert_ne!(running.body["state"], "queued");
+    assert_eq!(running.body["waiting_on"], json!([]));
+}
+
+#[test]
+fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
+    let mut api = Api::new(SimConfig::default());
+    let text = one_step_spec("Kept", "");
+    let (spec, old) = api.sim.old_parser_spec("kept", &text);
+    let before = api.last_seq();
+    problem(
+        &api.post(
+            &format!("/api/v1/specs/{}/approve", spec.0),
+            &[("if-match", &format!("\"{}\"", old.0))],
+            json!({}),
+        ),
+        StatusCode::CONFLICT,
+        "spec_reparse_required",
+    );
+    assert_eq!(api.last_seq(), before);
+
+    let again = api.register_doc("docs/specs/kept.md", &text);
+    assert_eq!(again.body["id"], spec.0.to_string());
+    assert_ne!(again.body["revision"]["id"], old.0.to_string());
+    assert_eq!(again.body["revision"]["parser_version"], 2);
+    let versions: Vec<i64> = api
+        .sim
+        .engine()
+        .store()
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT parser_version FROM spec_revision WHERE spec_id = ?1 ORDER BY parser_version",
+            )?;
+            let rows = stmt.query_map([spec.0.to_string()], |r| r.get(0))?;
+            Ok(rows.collect::<Result<Vec<i64>, _>>()?)
+        })
+        .unwrap();
+    assert_eq!(versions, vec![1, 2]);
+    assert_eq!(api.approve_reply(&again).status, StatusCode::OK);
+}
+
+#[test]
+fn the_spec_template_comes_in_english_and_indonesian() {
+    let api = Api::new(SimConfig::default());
+    let en = api.get("/api/v1/spec-template");
+    assert_eq!(en.status, StatusCode::OK);
+    assert_eq!(en.body["locale"], "en");
+    assert_eq!(en.body["parser_version"], 2);
+    let id = api.get("/api/v1/spec-template?locale=id");
+    assert_eq!(id.body["locale"], "id");
+    assert_ne!(id.body["content"], en.body["content"]);
+    for reply in [&en, &id] {
+        let content = reply.body["content"].as_str().unwrap();
+        let parsed = saka_spec::parse("example-spec.md", content.as_bytes());
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        assert!(parsed.is_ready());
+    }
+    let bad = api.get("/api/v1/spec-template?locale=fr");
+    problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(bad.body["params"]["errors"][0]["field"], "locale");
 }

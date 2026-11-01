@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use saka_api::{ApiConfig, AppState};
 use saka_testkit::fixtures::TWO_STEP_SPEC;
-use saka_testkit::{Sim, SimConfig};
+use saka_testkit::{Sim, SimConfig, one_step_spec};
 use serde_json::Value;
 
 const SAKA: &str = env!("CARGO_BIN_EXE_saka");
@@ -374,4 +374,61 @@ fn serve_becomes_ready_logs_json_with_correlation_ids_and_stops_on_sigterm() {
         );
     }
     assert!(lines.iter().any(|l| l["message"] == "shutting down"));
+}
+
+#[test]
+fn spec_template_prints_the_template_and_approve_reports_warnings_and_dependencies() {
+    let sim = Sim::new(SimConfig::default());
+    sim.world.put_doc(
+        "docs/specs/warned.md",
+        one_step_spec("Warned", "")
+            .replace("- `make test`\n", "- `make test`\n- `make test`\n")
+            .as_bytes(),
+    );
+    sim.world.put_doc(
+        "docs/specs/needs-ghost.md",
+        one_step_spec("Needs ghost", "depends_on: [ghost]\n").as_bytes(),
+    );
+    let server = serve(&sim);
+
+    let en = saka(&server, &["spec", "template"]);
+    assert_eq!(code(&en), 0, "{}", String::from_utf8_lossy(&en.stderr));
+    assert_eq!(stdout(&en), saka_spec::template(saka_spec::Locale::En));
+    let id = saka(&server, &["spec", "template", "--locale", "id"]);
+    assert_eq!(code(&id), 0);
+    assert_eq!(stdout(&id), saka_spec::template(saka_spec::Locale::Id));
+    let bad = saka(&server, &["spec", "template", "--locale", "fr"]);
+    assert_eq!(code(&bad), 1);
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("validation_failed"));
+
+    let warned = saka(
+        &server,
+        &["spec", "approve", "tasks", "docs/specs/warned.md"],
+    );
+    assert_eq!(
+        code(&warned),
+        0,
+        "{}",
+        String::from_utf8_lossy(&warned.stderr)
+    );
+    let out = stdout(&warned);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "warning line 10: step_command_duplicate {\"command\":\"make test\",\"step\":\"S1\"}",
+            "approved warned (1 steps)"
+        ],
+        "{out}"
+    );
+
+    let refused = saka(
+        &server,
+        &["spec", "approve", "tasks", "docs/specs/needs-ghost.md"],
+    );
+    assert_eq!(code(&refused), 3);
+    assert_eq!(
+        stdout(&refused).trim(),
+        "line 3: depends_on_unknown {\"slug\":\"ghost\"}"
+    );
 }
