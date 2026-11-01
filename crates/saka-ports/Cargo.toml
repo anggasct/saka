@@ -1,0 +1,11 @@
+[package]
+name = "saka-ports"
+description = "Port traits and data types shared by the engine and the adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

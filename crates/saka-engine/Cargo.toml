@@ -1,0 +1,11 @@
+[package]
+name = "saka-engine"
+description = "Shell around the core: loads state, calls the core, and writes events, projections, and jobs; runs workers and the reconciler."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

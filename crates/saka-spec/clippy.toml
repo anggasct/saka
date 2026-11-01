@@ -1,0 +1,46 @@
+# Shared by every pure crate (saka-core, saka-spec). `cargo xtask check` fails if the copies differ.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::time::Instant::now", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::thread::sleep", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::thread::spawn", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::env::var", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::env::var_os", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::env::vars", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::env::current_dir", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::env::temp_dir", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::read", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::read_to_string", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::write", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::read_dir", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::create_dir", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::create_dir_all", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::remove_file", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::remove_dir", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::remove_dir_all", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::rename", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::copy", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::metadata", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::symlink_metadata", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::canonicalize", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::hard_link", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::read_link", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::set_permissions", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::exists", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+]
+
+disallowed-types = [
+  { path = "std::time::SystemTime", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::time::Instant", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::File", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::OpenOptions", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::fs::DirBuilder", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::net::TcpStream", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::net::TcpListener", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::net::UdpSocket", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::process::Command", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+  { path = "std::process::Child", reason = "the pure core takes time, ids, and I/O results as inputs; see the functional core decision" },
+]

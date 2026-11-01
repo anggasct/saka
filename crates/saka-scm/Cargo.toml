@@ -1,0 +1,11 @@
+[package]
+name = "saka-scm"
+description = "Source control adapters, GitHub first."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

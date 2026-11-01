@@ -1,0 +1,11 @@
+[package]
+name = "saka-store"
+description = "SQLite storage: migrations, the event log with projections and jobs in one transaction, the job queue, and read queries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
