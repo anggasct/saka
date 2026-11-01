@@ -281,11 +281,7 @@ impl Engine {
             .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
             .collect();
         let created = existing.is_none();
-        let view = SpecView {
-            spec,
-            revision,
-            work_items,
-        };
+        let view = self.spec_view_with(spec, revision, work_items)?;
         if let Some(action) = action {
             let reply = (action.respond)(Produced::Spec(&view, created));
             batch.action =
@@ -391,14 +387,11 @@ impl Engine {
             .as_ref()
             .map(RevisionInfo::from)
             .ok_or_else(|| EngineError::Internal("revision not found".into()))?;
-        let result = SpecView {
-            spec: after,
-            revision,
-            work_items: created
-                .iter()
-                .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
-                .collect(),
-        };
+        let work_items = created
+            .iter()
+            .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
+            .collect();
+        let result = self.spec_view_with(after, revision, work_items)?;
         if let Some(action) = action {
             let reply = (action.respond)(Produced::Spec(&result, false));
             batch.action =

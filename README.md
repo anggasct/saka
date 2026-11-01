@@ -1,6 +1,6 @@
 # Saka
 
-A self-hosted delivery loop for coding agents: an approved spec becomes one task per step, each task runs an agent session in its own worktree, and Saka opens, gates, and merges the pull request before starting the next step.
+A self-hosted delivery loop for coding agents: an approved spec becomes one task per step, each task runs an agent session in its own worktree, and Saka opens, gates, and merges the pull request before starting the steps that wait for it.
 
 ## Running
 
@@ -8,6 +8,7 @@ A self-hosted delivery loop for coding agents: an approved spec becomes one task
 cargo build --release -p saka --features embed-web   # after `corepack pnpm build` in web/
 saka serve                                            # API, workers, and the web app on 127.0.0.1:7420
 saka project add https://github.com/<owner>/<repo> --path docs
+saka spec template > docs/specs/<spec>.md            # a spec that passes lint (--locale id for Indonesian)
 saka spec approve <project> docs/specs/<spec>.md
 saka task list
 ```

@@ -132,6 +132,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/spec-template": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["spec_template"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/specs/{spec_id}": {
     parameters: {
       query?: never;
@@ -357,9 +373,20 @@ export interface components {
       status: string;
     };
     Lint: {
-      /** @description `{code, line, params}` per issue. */
-      issues: unknown[];
+      issues: components["schemas"]["LintIssue"][];
+      /** @description No issue with severity `error`. */
       ok: boolean;
+    };
+    LintIssue: {
+      code: string;
+      /**
+       * Format: int32
+       * @description 1-based line in the spec file.
+       */
+      line: number;
+      params: unknown;
+      /** @description `error` blocks approve; `warning` does not. */
+      severity?: string;
     };
     Meta: {
       api_version: string;
@@ -422,6 +449,8 @@ export interface components {
         /** Format: uuid */
         approved_revision_id?: string | null;
         created_at: string;
+        /** @description Specs that must ship before this one starts, resolved in the project. */
+        depends_on: components["schemas"]["SpecDependency"][];
         /** Format: uuid */
         id: string;
         lint: components["schemas"]["Lint"];
@@ -480,6 +509,8 @@ export interface components {
         updated_at: string;
         /** Format: int64 */
         version: number;
+        /** @description Steps and specs this task still waits for; empty unless the task is queued. */
+        waiting_on: components["schemas"]["WaitingOn"][];
         work: string;
       }[];
       next_cursor?: string | null;
@@ -561,6 +592,11 @@ export interface components {
       created_at: string;
       /** Format: uuid */
       id: string;
+      /**
+       * Format: int32
+       * @description Version of the parser that read this revision.
+       */
+      parser_version: number;
       source_commit: string;
     };
     Session: {
@@ -605,6 +641,8 @@ export interface components {
       /** Format: uuid */
       approved_revision_id?: string | null;
       created_at: string;
+      /** @description Specs that must ship before this one starts, resolved in the project. */
+      depends_on: components["schemas"]["SpecDependency"][];
       /** Format: uuid */
       id: string;
       lint: components["schemas"]["Lint"];
@@ -623,6 +661,22 @@ export interface components {
       title: string;
       updated_at: string;
     };
+    SpecDependency: {
+      slug: string;
+      /**
+       * Format: uuid
+       * @description Null when no spec in the project has this slug.
+       */
+      spec_id?: string | null;
+      state?: string | null;
+    };
+    SpecTemplate: {
+      /** @description Markdown that parses without issues as `example-spec.md`. */
+      content: string;
+      locale: string;
+      /** Format: int32 */
+      parser_version: number;
+    };
     StageRunItem: {
       /** Format: int32 */
       attempt: number;
@@ -639,6 +693,8 @@ export interface components {
     };
     Step: {
       ac: string[];
+      /** @description Step ids this step waits for. */
+      after: string[];
       commands: string[];
       id: string;
       /** Format: int32 */
@@ -662,6 +718,21 @@ export interface components {
       /** Format: int32 */
       version: number;
     };
+    WaitingOn:
+      | {
+          /** @enum {string} */
+          kind: "step";
+          step_id: string;
+          /** Format: uuid */
+          work_item_id: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: "spec";
+          slug: string;
+          /** Format: uuid */
+          spec_id: string;
+        };
     WorkItem: {
       admitted_at?: string | null;
       /** @description Subset of `merge`, `retry`, `cancel`. */
@@ -698,6 +769,8 @@ export interface components {
       updated_at: string;
       /** Format: int64 */
       version: number;
+      /** @description Steps and specs this task still waits for; empty unless the task is queued. */
+      waiting_on: components["schemas"]["WaitingOn"][];
       work: string;
     };
     WorkItemDetail: components["schemas"]["WorkItem"] & {
@@ -1051,6 +1124,36 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  spec_template: {
+    parameters: {
+      query?: {
+        /** @description `en` (default) or `id`. */
+        locale?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecTemplate"];
+        };
+      };
+      422: {
         headers: {
           [name: string]: unknown;
         };

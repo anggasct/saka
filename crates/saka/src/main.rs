@@ -90,6 +90,11 @@ enum SpecCmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    #[command(about = "Prints a spec template that passes lint")]
+    Template {
+        #[arg(long, default_value = "en", help = "Template language: en or id")]
+        locale: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -204,6 +209,10 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         }) => {
             let client = Client::new(&server(cli.server)?, cli.json);
             current_thread()?.block_on(client.spec_approve(&project, &path, reason.as_deref()))
+        }
+        Command::Spec(SpecCmd::Template { locale }) => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(client.spec_template(&locale))
         }
         Command::Task(cmd) => {
             let client = Client::new(&server(cli.server)?, cli.json);

@@ -21,6 +21,7 @@ pub use state::{ApiConfig, AppState};
     paths(
         routes::add_project, routes::list_projects, routes::get_project,
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec,
+        routes::spec_template,
         routes::list_work_items, routes::get_work_item, routes::merge, routes::retry, routes::cancel,
         routes::list_permissions, routes::answer_permission, routes::get_session,
         routes::meta, routes::events,
@@ -51,6 +52,7 @@ pub fn router(state: AppState) -> Router {
             post(routes::add_spec).get(routes::list_specs),
         )
         .route("/api/v1/specs/{spec_id}", get(routes::get_spec))
+        .route("/api/v1/spec-template", get(routes::spec_template))
         .route(
             "/api/v1/specs/{spec_id}/approve",
             post(routes::approve_spec),

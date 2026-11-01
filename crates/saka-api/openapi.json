@@ -536,6 +536,45 @@
         }
       }
     },
+    "/api/v1/spec-template": {
+      "get": {
+        "tags": [
+          "specs"
+        ],
+        "operationId": "spec_template",
+        "parameters": [
+          {
+            "name": "locale",
+            "in": "query",
+            "description": "`en` (default) or `id`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecTemplate"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/specs/{spec_id}": {
       "get": {
         "tags": [
@@ -1244,11 +1283,37 @@
         "properties": {
           "issues": {
             "type": "array",
-            "items": {},
-            "description": "`{code, line, params}` per issue."
+            "items": {
+              "$ref": "#/components/schemas/LintIssue"
+            }
           },
           "ok": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "No issue with severity `error`."
+          }
+        }
+      },
+      "LintIssue": {
+        "type": "object",
+        "required": [
+          "code",
+          "line",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based line in the spec file.",
+            "minimum": 0
+          },
+          "params": {},
+          "severity": {
+            "type": "string",
+            "description": "`error` blocks approve; `warning` does not."
           }
         }
       },
@@ -1461,6 +1526,7 @@
                 "state",
                 "origin",
                 "priority",
+                "depends_on",
                 "revision",
                 "lint",
                 "steps",
@@ -1493,6 +1559,13 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "depends_on": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SpecDependency"
+                  },
+                  "description": "Specs that must ship before this one starts, resolved in the project."
                 },
                 "id": {
                   "type": "string",
@@ -1575,6 +1648,7 @@
                 "branch",
                 "state",
                 "priority",
+                "waiting_on",
                 "pending_permission_count",
                 "available_actions",
                 "version",
@@ -1724,6 +1798,13 @@
                   "type": "integer",
                   "format": "int64",
                   "minimum": 0
+                },
+                "waiting_on": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WaitingOn"
+                  },
+                  "description": "Steps and specs this task still waits for; empty unless the task is queued."
                 },
                 "work": {
                   "type": "string"
@@ -1994,6 +2075,7 @@
           "id",
           "source_commit",
           "content_hash",
+          "parser_version",
           "created_at"
         ],
         "properties": {
@@ -2006,6 +2088,12 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "parser_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Version of the parser that read this revision.",
+            "minimum": 0
           },
           "source_commit": {
             "type": "string"
@@ -2146,6 +2234,7 @@
           "state",
           "origin",
           "priority",
+          "depends_on",
           "revision",
           "lint",
           "steps",
@@ -2178,6 +2267,13 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecDependency"
+            },
+            "description": "Specs that must ship before this one starts, resolved in the project."
           },
           "id": {
             "type": "string",
@@ -2227,6 +2323,53 @@
           },
           "updated_at": {
             "type": "string"
+          }
+        }
+      },
+      "SpecDependency": {
+        "type": "object",
+        "required": [
+          "slug"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "spec_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Null when no spec in the project has this slug."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SpecTemplate": {
+        "type": "object",
+        "required": [
+          "locale",
+          "parser_version",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Markdown that parses without issues as `example-spec.md`."
+          },
+          "locale": {
+            "type": "string"
+          },
+          "parser_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -2301,7 +2444,8 @@
           "index",
           "work",
           "ac",
-          "commands"
+          "commands",
+          "after"
         ],
         "properties": {
           "ac": {
@@ -2309,6 +2453,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Step ids this step waits for."
           },
           "commands": {
             "type": "array",
@@ -2381,6 +2532,58 @@
           }
         }
       },
+      "WaitingOn": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step of the same spec that is not done yet.",
+            "required": [
+              "step_id",
+              "work_item_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step_id": {
+                "type": "string"
+              },
+              "work_item_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A spec that has not shipped yet.",
+            "required": [
+              "slug",
+              "spec_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "spec"
+                ]
+              },
+              "slug": {
+                "type": "string"
+              },
+              "spec_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
+      },
       "WorkItem": {
         "type": "object",
         "required": [
@@ -2393,6 +2596,7 @@
           "branch",
           "state",
           "priority",
+          "waiting_on",
           "pending_permission_count",
           "available_actions",
           "version",
@@ -2542,6 +2746,13 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "waiting_on": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingOn"
+            },
+            "description": "Steps and specs this task still waits for; empty unless the task is queued."
           },
           "work": {
             "type": "string"

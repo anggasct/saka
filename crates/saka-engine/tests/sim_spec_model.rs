@@ -1,15 +1,12 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use saka_core::ids::{SpecId, SpecRevisionId};
-use saka_core::model::Spec;
 use saka_core::rejection::Rejection;
-use saka_core::vocab::{SpecOrigin, SpecState, WorkItemState};
+use saka_core::vocab::{SpecState, WorkItemState};
 use saka_engine::EngineError;
-use saka_store::{Batch, SpecRevisionRow};
+use saka_store::Batch;
 use saka_testkit::{AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, Sim, SimConfig, one_step_spec};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 const STEPS: usize = 8_000;
 
@@ -205,53 +202,11 @@ fn missing_withdrawn_and_circular_dependencies_refuse_approve() {
     );
 }
 
-fn old_parser_spec(sim: &Sim, slug: &str, text: &str) -> (SpecId, SpecRevisionId) {
-    let spec_id = SpecId(Uuid::from_u128(0x0dd0_0000 + text.len() as u128));
-    let revision_id = SpecRevisionId(Uuid::from_u128(0x0dd1_0000 + text.len() as u128));
-    let now = sim.spec().created_at;
-    let digest = Sha256::digest(text.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let mut batch = Batch::new(now);
-    batch.specs.push(Spec {
-        id: spec_id,
-        project_id: sim.project_id,
-        path: format!("docs/specs/{slug}.md"),
-        slug: slug.into(),
-        title: slug.into(),
-        state: SpecState::Ready,
-        origin: SpecOrigin::Manual,
-        priority: 0,
-        latest_revision_id: revision_id,
-        approved_revision_id: None,
-        approved_at: None,
-        shipped_at: None,
-        created_at: now,
-        updated_at: now,
-    });
-    batch.revisions.push(SpecRevisionRow {
-        id: revision_id.0,
-        spec_id: spec_id.0,
-        project_id: sim.project_id,
-        source_commit: sim.world.base_head(),
-        content_hash: format!("sha256:{hex}"),
-        content: text.as_bytes().to_vec(),
-        lint_ok: true,
-        lint_issues: json!([]),
-        model: json!({"slug": slug, "title": slug, "acceptance_criteria": [], "steps": [
-            {"id": "S1", "index": 1, "work": slug, "ac": ["AC-01"], "commands": ["make test"], "line": 10}
-        ]}),
-        parser_version: 1,
-        created_at: now,
-    });
-    sim.engine().store().commit(&batch).unwrap();
-    (spec_id, revision_id)
-}
-
 #[test]
 fn a_revision_from_an_older_parser_is_read_again_and_cannot_be_approved() {
     let sim = sim(1);
     let text = one_step_spec("kept", "");
-    let (kept, old) = old_parser_spec(&sim, "kept", &text);
+    let (kept, old) = sim.old_parser_spec("kept", &text);
     let events = count(&sim, "SELECT COUNT(*) FROM event");
     match sim.approve_spec(kept, old) {
         Err(EngineError::Rejected(r)) => {
