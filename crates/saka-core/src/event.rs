@@ -10,7 +10,7 @@ use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
     RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
-use crate::model::Coded;
+use crate::model::{Coded, ProjectRepo};
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, GateOutcome, MergeMethod, PermissionState, SessionState, Stage,
@@ -20,6 +20,25 @@ use crate::vocab::{
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum Event {
+    #[serde(rename = "workspace.repo.registered")]
+    RepoRegistered {
+        repo_id: RepoId,
+        integration_id: String,
+        provider: String,
+        full_name: String,
+        url: String,
+        default_branch: String,
+    },
+    #[serde(rename = "workspace.project.registered")]
+    ProjectRegistered {
+        project_id: ProjectId,
+        name: String,
+        workspace_repo_id: RepoId,
+        project_path: String,
+        base_branch: String,
+        config_commit: String,
+        repos: Vec<ProjectRepo>,
+    },
     #[serde(rename = "spec.spec.registered")]
     SpecRegistered {
         spec_id: SpecId,
@@ -284,6 +303,8 @@ pub enum Prompt {
 /// The aggregate an event belongs to, as `(stream_type, stream_id)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stream {
+    Repo(RepoId),
+    Project(ProjectId),
     Spec(SpecId),
     WorkItem(WorkItemId),
     Session(SessionId),
@@ -293,6 +314,8 @@ pub enum Stream {
 impl Stream {
     pub fn kind(self) -> &'static str {
         match self {
+            Stream::Repo(_) => "repo",
+            Stream::Project(_) => "project",
             Stream::Spec(_) => "spec",
             Stream::WorkItem(_) => "work_item",
             Stream::Session(_) => "session",
@@ -302,6 +325,8 @@ impl Stream {
 
     pub fn id(self) -> uuid::Uuid {
         match self {
+            Stream::Repo(id) => id.0,
+            Stream::Project(id) => id.0,
             Stream::Spec(id) => id.0,
             Stream::WorkItem(id) => id.0,
             Stream::Session(id) => id.0,
@@ -336,6 +361,8 @@ impl Event {
     pub fn stream(&self) -> Stream {
         use Event as E;
         match self {
+            E::RepoRegistered { repo_id, .. } => Stream::Repo(*repo_id),
+            E::ProjectRegistered { project_id, .. } => Stream::Project(*project_id),
             E::SpecRegistered { spec_id, .. }
             | E::SpecRevisionRecorded { spec_id, .. }
             | E::SpecApproved { spec_id, .. }
