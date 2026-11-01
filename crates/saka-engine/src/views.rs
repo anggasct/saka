@@ -2,7 +2,10 @@ use saka_core::admission::{Waiting, waiting_on};
 use saka_core::ids::{
     PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
-use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun, Task};
+use saka_core::model::{
+    AccountQuota, Budget, PermissionRequest, PermissionRule, Project, Repo, Session,
+    SessionActivity, Spec, StageRun, Task, Usage, UsageRecord,
+};
 use saka_core::plan::RevisionPlan;
 use saka_core::spec as core_spec;
 use saka_core::time::Timestamp;
@@ -66,6 +69,29 @@ pub struct DependencyView {
 pub struct TaskView {
     pub task: Task,
     pub waiting_on: Vec<Waiting>,
+    pub budget: Option<BudgetView>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BudgetView {
+    pub stage_run_id: saka_core::ids::StageRunId,
+    pub warn_percent: u32,
+    pub limit: Budget,
+    pub used: Usage,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountView {
+    pub cli: String,
+    pub name: String,
+    pub paused: bool,
+    pub windows: Vec<AccountQuota>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageView {
+    pub record: UsageRecord,
+    pub project_id: ProjectId,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +105,7 @@ pub struct TaskDetail {
     pub task: Task,
     pub stage_runs: Vec<StageRun>,
     pub waiting_on: Vec<Waiting>,
+    pub budget: Option<BudgetView>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,9 +291,143 @@ impl Engine {
             }
             Ok((dep_tasks, specs))
         })?;
+        let quotas = self.store.read(read::account_quotas)?;
+        let cfg = &self.cfg.loop_cfg;
+        let quota = saka_core::admission::quota_waits(
+            &quotas,
+            &cfg.account,
+            cfg.rate_limit_pause,
+            self.now(),
+        );
         Ok(tasks
             .iter()
-            .map(|t| waiting_on(t, &dep_tasks, &specs, &item_deps, &spec_deps))
+            .map(|t| {
+                let mut waits = waiting_on(t, &dep_tasks, &specs, &item_deps, &spec_deps);
+                if t.item.state == WorkItemState::Queued {
+                    waits.extend(quota.iter().cloned());
+                }
+                waits
+            })
+            .collect())
+    }
+
+    pub(crate) fn budget_view(&self, task: &Task) -> Option<BudgetView> {
+        let run = task.stage_run.as_ref().filter(|r| {
+            matches!(
+                r.state,
+                saka_core::vocab::StageRunState::Pending | saka_core::vocab::StageRunState::Running
+            )
+        })?;
+        Some(BudgetView {
+            stage_run_id: run.id,
+            warn_percent: self.cfg.loop_cfg.budget_warn_percent,
+            limit: run.budget?,
+            used: task.stage_usage(self.now()),
+        })
+    }
+
+    pub fn sessions_of(&self, work_item: WorkItemId) -> Result<Vec<SessionView>> {
+        let (task, sessions) = self.store.read(|c| {
+            Ok((
+                read::load_task(c, work_item)?,
+                read::sessions(c, work_item)?,
+            ))
+        })?;
+        let Some(task) = task else {
+            return Ok(Vec::new());
+        };
+        Ok(sessions
+            .into_iter()
+            .map(|session| SessionView {
+                session,
+                project_id: task.item.project_id,
+            })
+            .collect())
+    }
+
+    pub fn timeline(
+        &self,
+        session: SessionId,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<Option<Vec<SessionActivity>>> {
+        if self.session(session)?.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.store
+                .read(|c| read::timeline(c, session, after, limit))?,
+        ))
+    }
+
+    pub fn activities_after(&self, seq: i64, limit: u32) -> Result<Vec<(i64, SessionActivity)>> {
+        Ok(self.store.read(|c| read::activities_after(c, seq, limit))?)
+    }
+
+    pub fn usage_records(
+        &self,
+        work_item: Option<WorkItemId>,
+        session: Option<SessionId>,
+    ) -> Result<Vec<UsageView>> {
+        Ok(self
+            .store
+            .read(|c| read::usage_records(c, work_item, session))?
+            .into_iter()
+            .map(|(record, project_id)| UsageView { record, project_id })
+            .collect())
+    }
+
+    pub fn permission_rules(&self, project: ProjectId) -> Result<Option<Vec<PermissionRule>>> {
+        if self
+            .store
+            .read(|c| read::load_project(c, project))?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.store
+                .read(|c| read::active_permission_rules(c, project))?,
+        ))
+    }
+
+    pub fn agent_accounts(&self) -> Result<Vec<AccountView>> {
+        let quotas = self.store.read(read::account_quotas)?;
+        let cfg = &self.cfg.loop_cfg;
+        let mut names: Vec<String> = vec![cfg.account.clone()];
+        for q in &quotas {
+            if !names.contains(&q.account) {
+                names.push(q.account.clone());
+            }
+        }
+        let now = self.now();
+        Ok(names
+            .into_iter()
+            .map(|account| {
+                let (cli, name) = account
+                    .split_once(':')
+                    .map_or((account.clone(), String::new()), |(c, n)| {
+                        (c.to_string(), n.to_string())
+                    });
+                let paused = saka_core::admission::paused_windows(
+                    &quotas,
+                    &account,
+                    cfg.rate_limit_pause,
+                    now,
+                )
+                .next()
+                .is_some();
+                AccountView {
+                    cli,
+                    name,
+                    paused,
+                    windows: quotas
+                        .iter()
+                        .filter(|q| q.account == account)
+                        .cloned()
+                        .collect(),
+                }
+            })
             .collect())
     }
 
@@ -312,7 +473,11 @@ impl Engine {
             items: tasks
                 .into_iter()
                 .zip(waiting)
-                .map(|(task, waiting_on)| TaskView { task, waiting_on })
+                .map(|(task, waiting_on)| TaskView {
+                    budget: self.budget_view(&task),
+                    task,
+                    waiting_on,
+                })
                 .collect(),
             next: paged.next,
         })
@@ -331,6 +496,7 @@ impl Engine {
             .next()
             .unwrap_or_default();
         Ok(Some(TaskDetail {
+            budget: self.budget_view(&task),
             task,
             stage_runs,
             waiting_on,

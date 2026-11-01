@@ -452,6 +452,9 @@ impl Sim {
             .store()
             .read(|c| read::usage_records(c, Some(id), None))
             .unwrap()
+            .into_iter()
+            .map(|(u, _)| u)
+            .collect()
     }
 
     pub fn spec(&self) -> Spec {

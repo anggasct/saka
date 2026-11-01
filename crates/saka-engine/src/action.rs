@@ -1,5 +1,5 @@
 use saka_core::ids::ProjectId;
-use saka_core::model::Task;
+use saka_core::model::{PermissionRule, Session, Task};
 use saka_store::{ActionRecord, Batch, read};
 use serde_json::Value;
 use uuid::Uuid;
@@ -19,6 +19,8 @@ pub enum Produced<'a> {
     Spec(&'a SpecView, bool),
     Task(&'a Task),
     Permission(&'a PermissionView),
+    Session(&'a Session),
+    Rule(&'a PermissionRule),
 }
 
 pub type Respond<'a> = dyn Fn(Produced<'_>) -> Reply + Send + Sync + 'a;

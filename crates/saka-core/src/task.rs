@@ -1014,10 +1014,7 @@ impl Decider<'_> {
 
     fn permission_delivered(&self, id: PermissionRequestId) -> Vec<Event> {
         match self.task.permissions.iter().find(|p| p.id == id) {
-            Some(p)
-                if p.delivered_at.is_none()
-                    && matches!(p.state, PermissionState::Allowed | PermissionState::Denied) =>
-            {
+            Some(p) if p.delivered_at.is_none() && awaits_delivery(p) => {
                 vec![Event::PermissionDelivered {
                     work_item_id: self.item().id,
                     permission_request_id: id,
@@ -2393,4 +2390,12 @@ pub fn budget_value(dimension: BudgetDimension, value: i64) -> Value {
 
 pub fn budget_dimensions() -> &'static [BudgetDimension] {
     &BUDGET_DIMENSIONS
+}
+
+pub fn awaits_delivery(p: &PermissionRequest) -> bool {
+    match p.state {
+        PermissionState::Allowed | PermissionState::Denied => true,
+        PermissionState::Expired => p.answer_source.as_deref() == Some(WAIT_LIMIT_SOURCE),
+        PermissionState::Pending => false,
+    }
 }

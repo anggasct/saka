@@ -141,17 +141,7 @@ impl Engine {
                     .await
             }
             JobKind::SessionInterrupt => {
-                let id: SessionId = field(p, "session_id")?;
-                let stopping = task.session.as_ref().filter(|s| {
-                    s.id == id && s.interrupt_requested == Some(saka_core::vocab::InterruptBy::Saka)
-                });
-                let Some(session) = self.session_ref(&task, id).or_else(|| {
-                    stopping.map(|s| SessionRef {
-                        session_id: s.id,
-                        runner_unit: s.runner_unit.clone(),
-                        socket_path: s.socket_path.clone(),
-                    })
-                }) else {
+                let Some(session) = self.stopping_ref(&task, field(p, "session_id")?) else {
                     return Ok(Effect::Skipped);
                 };
                 self.ports.agents.interrupt(&session).await?;
@@ -367,6 +357,21 @@ impl Engine {
         })
     }
 
+    fn stopping_ref(&self, task: &Task, id: SessionId) -> Option<SessionRef> {
+        self.session_ref(task, id).or_else(|| {
+            task.session
+                .as_ref()
+                .filter(|s| {
+                    s.id == id && s.interrupt_requested == Some(saka_core::vocab::InterruptBy::Saka)
+                })
+                .map(|s| SessionRef {
+                    session_id: s.id,
+                    runner_unit: s.runner_unit.clone(),
+                    socket_path: s.socket_path.clone(),
+                })
+        })
+    }
+
     fn session_ref(&self, task: &Task, id: SessionId) -> Option<SessionRef> {
         task.live_session()
             .filter(|s| s.id == id)
@@ -488,13 +493,11 @@ impl Engine {
         id: saka_core::ids::PermissionRequestId,
     ) -> Execution {
         let Some(request) = task.permissions.iter().find(|p| {
-            p.id == id
-                && p.delivered_at.is_none()
-                && matches!(p.state, PermissionState::Allowed | PermissionState::Denied)
+            p.id == id && p.delivered_at.is_none() && saka_core::task::awaits_delivery(p)
         }) else {
             return Ok(Effect::Skipped);
         };
-        let Some(session) = self.session_ref(task, request.session_id) else {
+        let Some(session) = self.stopping_ref(task, request.session_id) else {
             return Ok(Effect::Skipped);
         };
         self.ports

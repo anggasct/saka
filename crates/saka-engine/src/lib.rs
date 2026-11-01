@@ -30,14 +30,14 @@ use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
-pub use commands::{NewProject, RegisteredSpec};
+pub use commands::{NewProject, RegisteredSpec, SessionCommand};
 pub use metrics::{MetricsSnapshot, Readiness};
 pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
 pub use views::{
-    DependencyView, Paged, PermissionView, ProjectView, RevisionInfo, SessionView, SpecView,
-    TaskDetail, TaskView,
+    AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
+    SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 pub use worker::{JobReport, JobResult};
 
@@ -105,6 +105,7 @@ struct Extra<'a> {
 enum Shows {
     Task,
     Permission(saka_core::ids::PermissionRequestId),
+    Session(saka_core::ids::SessionId),
 }
 
 pub struct Engine {
@@ -229,6 +230,15 @@ impl Engine {
                     };
                     (action.respond)(Produced::Permission(&view))
                 }
+                Shows::Session(sid) => {
+                    let session = after
+                        .session
+                        .iter()
+                        .chain(after.retired_sessions.iter())
+                        .find(|s| s.id == sid)
+                        .ok_or_else(|| EngineError::Internal("session not in the task".into()))?;
+                    (action.respond)(Produced::Session(session))
+                }
             };
             batch.action = Some(action.record(self, cause, project, Some(id.0), reply));
         }
@@ -256,6 +266,7 @@ impl Engine {
             for job in react(&after, e, &self.cfg.loop_cfg, now) {
                 self.push_job(batch, job, project, cause);
             }
+            log_runtime(e, &cause.actor);
             self.push_event(batch, e, project, cause, now);
         }
         Ok(after)
@@ -349,6 +360,73 @@ impl Engine {
                 _ = shutdown.changed() => {}
             }
         }
+    }
+}
+
+fn log_runtime(e: &Event, actor: &str) {
+    use Event as E;
+    match e {
+        E::SessionStarted {
+            work_item_id,
+            session_id,
+            resumed_from_session_id: Some(from),
+            resume_cause,
+            ..
+        } => {
+            tracing::info!(%work_item_id, %session_id, resumed_from = %from, cause = ?resume_cause, "session resumed")
+        }
+        E::SessionReattached {
+            session_id,
+            runner_version,
+            from_offset,
+            ..
+        } => tracing::info!(%session_id, %runner_version, from_offset, "session reattached"),
+        E::SessionSteered {
+            session_id,
+            turn,
+            n,
+            ..
+        } => {
+            tracing::info!(%session_id, turn, n, %actor, "session steered");
+        }
+        E::SessionInterruptRequested {
+            session_id,
+            actor: by,
+            ..
+        } => tracing::info!(%session_id, by = %by, %actor, "session interrupted"),
+        E::SessionStopRequested { session_id, .. } => {
+            tracing::info!(%session_id, %actor, "session stopped");
+        }
+        E::PermissionAnswered {
+            permission_request_id,
+            state: saka_core::vocab::PermissionState::Expired,
+            answer_source,
+            ..
+        } if answer_source == task::WAIT_LIMIT_SOURCE => {
+            tracing::info!(%permission_request_id, "permission request expired");
+        }
+        E::PermissionRuleAdded { rule_id, tool, .. } => {
+            tracing::info!(%rule_id, %tool, %actor, "permission rule added");
+        }
+        E::PermissionRuleRevoked { rule_id, .. } => {
+            tracing::info!(%rule_id, %actor, "permission rule revoked");
+        }
+        E::BudgetWarned {
+            stage_run_id,
+            dimension,
+            used,
+            limit,
+            ..
+        } => tracing::info!(%stage_run_id, %dimension, %used, %limit, "budget warning"),
+        E::WorkItemBlocked {
+            work_item_id,
+            code: saka_core::vocab::BlockerCode::BudgetExhausted,
+            params,
+            ..
+        } => {
+            tracing::info!(%work_item_id, dimension = %params["dimension"], used = %params["used"], limit = %params["limit"], "budget exhausted")
+        }
+        _ => {}
     }
 }
 
