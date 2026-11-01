@@ -33,6 +33,7 @@ const WORK_ITEM_STATES: &[&str] = &[
     "taken_over",
     "done",
     "cancelled",
+    "superseded",
 ];
 const PERMISSION_STATES: &[&str] = &["pending", "allowed", "denied", "expired"];
 const EVENT_BATCH: u32 = 100;
@@ -323,6 +324,56 @@ pub async fn approve_spec(
                 })?;
             engine
                 .approve_spec_with(spec, revision, req.reason, &cause, Some(&action))
+                .map(|_| project)
+                .map_err(|e| (e, project))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/specs/{spec_id}/withdraw", tag = "specs",
+    params(("spec_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RequiredReason,
+    responses(
+        (status = 200, body = dto::Spec),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn withdraw_spec(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let spec = SpecId(tri!(path_id(&id)));
+    let req: dto::RequiredReason = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let project = tri!(engine.spec(spec)).map(|v| v.spec.project_id);
+    let respond = |p: Produced<'_>| match p {
+        Produced::Spec(v, _) => reply(StatusCode::OK, &dto::Spec::from_view(v, true)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "spec.withdraw",
+        target_type: "spec",
+        target_id: Some(spec.0),
+        reason: Some(req.reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .withdraw_spec_with(spec, &req.reason, &cause, Some(&action))
                 .map(|_| project)
                 .map_err(|e| (e, project))
         },

@@ -2,18 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use saka_core::ids::{ProjectId, SpecId, SpecRevisionId, WorkItemId};
-use saka_core::model::{Spec, Task};
+use saka_core::model::{Spec, Task, WorkItem};
 use saka_core::policy::{Policy, RuleSpec};
 use saka_core::task::LoopConfig;
-use saka_core::vocab::SpecOrigin;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
+use saka_core::vocab::{SpecOrigin, WorkItemOrigin};
 use saka_engine::{
     Engine, EngineConfig, EngineError, Integration, JobReport, NewProject, Ports, RegisteredSpec,
 };
 use saka_ports::Clock;
-use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, read};
+use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, list, read};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -302,6 +302,98 @@ impl Sim {
         });
         self.engine().store().commit(&batch).unwrap();
         (spec_id, revision_id)
+    }
+
+    pub fn old_parser_revision(&self, spec_id: SpecId, text: &str) -> SpecRevisionId {
+        let mut spec = self.spec_of(spec_id);
+        let digest = Sha256::digest(text.as_bytes());
+        let revision_id = SpecRevisionId(
+            uuid::Uuid::from_slice(&digest[16..32]).expect("16 bytes of the digest"),
+        );
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let now = self.clock.now();
+        spec.latest_revision_id = revision_id;
+        spec.updated_at = now;
+        let mut batch = Batch::new(now);
+        batch.specs.push(spec.clone());
+        batch.revisions.push(SpecRevisionRow {
+            id: revision_id.0,
+            spec_id: spec_id.0,
+            project_id: spec.project_id,
+            source_commit: self.world.base_head(),
+            content_hash: format!("sha256:{hex}"),
+            content: text.as_bytes().to_vec(),
+            lint_ok: true,
+            lint_issues: json!([]),
+            model: json!({"slug": spec.slug, "title": spec.title, "acceptance_criteria": [], "steps": [
+                {"id": "S1", "index": 1, "work": spec.slug, "ac": ["AC-01"], "commands": ["make test"], "line": 10}
+            ]}),
+            parser_version: 1,
+            created_at: now,
+        });
+        self.engine().store().commit(&batch).unwrap();
+        revision_id
+    }
+
+    pub fn occupy_branch(&self, project_id: ProjectId, branch: &str) {
+        let now = self.clock.now();
+        let repo_id = self.spec_task_repo();
+        let mut batch = Batch::new(now);
+        batch.tasks.push(Task {
+            item: WorkItem {
+                id: WorkItemId(
+                    uuid::Uuid::from_slice(&Sha256::digest(branch.as_bytes())[..16])
+                        .expect("16 bytes of the digest"),
+                ),
+                project_id,
+                origin: WorkItemOrigin::ExternalChange,
+                spec_id: None,
+                spec_revision_id: None,
+                step_id: None,
+                step_index: None,
+                task_key: format!("external/{branch}"),
+                work: "External change".into(),
+                repo_id,
+                branch: branch.into(),
+                state: WorkItemState::Queued,
+                stage: None,
+                stage_phase: None,
+                priority: 0,
+                version: 1,
+                admitted_at: None,
+                done_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+            stage_run: None,
+            gate: None,
+            blocker: None,
+            change_request: None,
+            environment: None,
+            session: None,
+            permissions: Vec::new(),
+            attempts: std::collections::BTreeMap::new(),
+            retired_runs: Vec::new(),
+        });
+        self.engine().store().commit(&batch).unwrap();
+    }
+
+    fn spec_task_repo(&self) -> saka_core::ids::RepoId {
+        self.engine()
+            .store()
+            .read(|c| read::load_project(c, self.project_id))
+            .unwrap()
+            .and_then(|p| p.default_repo())
+            .expect("project with a default repo")
+    }
+
+    pub fn spec_by_slug(&self, slug: &str) -> SpecId {
+        self.engine()
+            .store()
+            .read(|c| list::spec_by_slug(c, self.project_id, slug))
+            .unwrap()
+            .expect("spec with this slug")
+            .id
     }
 
     pub fn tasks(&self) -> Vec<Task> {

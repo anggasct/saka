@@ -30,6 +30,7 @@
   "task.state.taken_over": "Taken over",
   "task.state.done": "Done",
   "task.state.cancelled": "Cancelled",
+  "task.state.superseded": "Superseded",
   "stage.dev": "Development",
   "stage.review": "Review",
   "stage.fix": "Fix",

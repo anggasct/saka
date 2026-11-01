@@ -9,6 +9,7 @@ import {
   PROJECT_ID,
   queuedTask,
   spec,
+  supersededTask,
 } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 
@@ -108,6 +109,19 @@ describe("DeliveryPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Terhenti")).toBeInTheDocument();
     expect(screen.getByText("2 permintaan izin menunggu")).toBeInTheDocument();
+  });
+
+  it("labels a superseded task from the catalog", async () => {
+    fakeApi({
+      ...readyRoutes(),
+      [WORK_ITEMS]: { body: page([supersededTask]) },
+    });
+    const { unmount } = renderWithProviders(<DeliveryPage />);
+    expect(await screen.findByText("Superseded")).toBeInTheDocument();
+    expect(screen.queryByText("superseded")).not.toBeInTheDocument();
+    unmount();
+    renderWithProviders(<DeliveryPage />, "id");
+    expect(await screen.findByText("Digantikan")).toBeInTheDocument();
   });
 
   it("renders a blocker code it does not know with the code", async () => {

@@ -432,3 +432,110 @@ fn spec_template_prints_the_template_and_approve_reports_warnings_and_dependenci
         "line 3: depends_on_unknown {\"slug\":\"ghost\"}"
     );
 }
+
+#[test]
+fn spec_approve_summarizes_a_re_approval_and_spec_withdraw_closes_a_spec() {
+    use saka_core::vocab::WorkItemState;
+    use saka_testkit::{APPROVAL_PATH, approval_spec};
+
+    let mut sim = Sim::new(SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    });
+    let server = serve(&sim);
+    let put = |sim: &Sim, steps: &[(&str, &str)]| {
+        sim.world
+            .put_doc(APPROVAL_PATH, approval_spec("", steps).as_bytes());
+    };
+    put(
+        &sim,
+        &[("One", "AC-01"), ("Two", "AC-02"), ("Three", "AC-02")],
+    );
+    let first = saka(&server, &["spec", "approve", "tasks", APPROVAL_PATH]);
+    assert_eq!(
+        code(&first),
+        0,
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(stdout(&first).trim(), "approved approval (3 steps)");
+    let spec = sim.spec_by_slug("approval");
+    assert!(sim.run_until(5_000, |s| s.tasks_of(spec)[0].item.state
+        == WorkItemState::Done));
+
+    put(
+        &sim,
+        &[
+            ("One", "AC-01"),
+            ("Two, again", "AC-02"),
+            ("Three, again", "AC-02"),
+            ("Four", "AC-02"),
+        ],
+    );
+    let again = saka(&server, &["spec", "approve", "tasks", APPROVAL_PATH]);
+    assert_eq!(
+        code(&again),
+        0,
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert_eq!(
+        stdout(&again).trim(),
+        "approved approval (4 steps: 1 kept, 2 repinned, 1 added, 0 superseded)"
+    );
+
+    put(
+        &sim,
+        &[
+            ("One, rewritten", "AC-01"),
+            ("Two, again", "AC-02"),
+            ("Three, again", "AC-02"),
+            ("Four", "AC-02"),
+        ],
+    );
+    let conflict = saka(&server, &["spec", "approve", "tasks", APPROVAL_PATH]);
+    assert_eq!(code(&conflict), 4);
+    assert_eq!(stdout(&conflict).trim(), "conflict S1: changed work");
+
+    assert!(sim.run_until(5_000, |s| s.tasks_of(spec)[1].item.state
+        == WorkItemState::InStage));
+    let busy = saka(
+        &server,
+        &[
+            "spec",
+            "withdraw",
+            "tasks",
+            APPROVAL_PATH,
+            "--reason",
+            "not needed",
+        ],
+    );
+    assert_eq!(code(&busy), 4);
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("spec_has_active_tasks"));
+
+    let missing = saka(&server, &["spec", "withdraw", "tasks", APPROVAL_PATH]);
+    assert_eq!(code(&missing), 2);
+
+    sim.world
+        .put_doc("docs/specs/solo.md", one_step_spec("Solo", "").as_bytes());
+    let solo = saka(&server, &["spec", "approve", "tasks", "docs/specs/solo.md"]);
+    assert_eq!(code(&solo), 0, "{}", String::from_utf8_lossy(&solo.stderr));
+    let withdrawn = saka(
+        &server,
+        &[
+            "spec",
+            "withdraw",
+            "tasks",
+            "docs/specs/solo.md",
+            "--reason",
+            "not needed",
+        ],
+    );
+    assert_eq!(
+        code(&withdrawn),
+        0,
+        "{}",
+        String::from_utf8_lossy(&withdrawn.stderr)
+    );
+    assert_eq!(stdout(&withdrawn).trim(), "withdrawn solo");
+}

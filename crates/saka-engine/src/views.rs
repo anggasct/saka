@@ -3,6 +3,8 @@ use saka_core::ids::{
     PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun, Task};
+use saka_core::plan::RevisionPlan;
+use saka_core::spec as core_spec;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SpecState, WorkItemState};
 use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
@@ -50,6 +52,7 @@ pub struct SpecView {
     pub revision: RevisionInfo,
     pub work_items: Vec<(String, WorkItemId)>,
     pub depends_on: Vec<DependencyView>,
+    pub revision_plan: Option<RevisionPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +91,14 @@ pub struct SessionView {
 pub struct Paged<T> {
     pub items: Vec<T>,
     pub next: Option<Key>,
+}
+
+pub(crate) fn step_items(tasks: &[Task]) -> Vec<(String, WorkItemId)> {
+    tasks
+        .iter()
+        .filter(|t| t.item.state != WorkItemState::Superseded)
+        .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
+        .collect()
 }
 
 fn paged<T>(mut rows: Vec<T>, page: &Page, key: impl Fn(&T) -> Key) -> Paged<T> {
@@ -146,11 +157,7 @@ impl Engine {
             .as_ref()
             .map(RevisionInfo::from)
             .ok_or_else(|| crate::EngineError::Internal("spec without its revision".into()))?;
-        let work_items = tasks
-            .iter()
-            .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
-            .collect();
-        self.spec_view_with(spec, revision, work_items)
+        self.spec_view_with(spec, revision, step_items(&tasks))
     }
 
     pub(crate) fn spec_view_with(
@@ -185,12 +192,47 @@ impl Engine {
                 })
                 .collect::<saka_store::Result<Vec<_>>>()
         })?;
+        let revision_plan = self.revision_plan(&spec, &revision)?;
         Ok(SpecView {
             spec,
             revision,
             work_items,
             depends_on,
+            revision_plan,
         })
+    }
+
+    fn revision_plan(&self, spec: &Spec, latest: &RevisionInfo) -> Result<Option<RevisionPlan>> {
+        let Some(approved_id) = spec
+            .approved_revision_id
+            .filter(|id| spec.state == SpecState::Approved && *id != latest.id)
+        else {
+            return Ok(None);
+        };
+        let (approved, tasks) = self.store.read(|c| {
+            Ok((
+                read::revision_view(c, approved_id)?,
+                read::load_tasks(c, TaskSet::Spec(spec.id))?,
+            ))
+        })?;
+        let Some(approved) = approved else {
+            return Ok(None);
+        };
+        let latest = read::revision_view_of(
+            latest.id,
+            latest.lint_ok,
+            &latest.issues,
+            &latest.model,
+            latest.parser_version,
+        )?;
+        let items: Vec<_> = tasks.into_iter().map(|t| t.item).collect();
+        Ok(core_spec::revision_plan(
+            spec,
+            &approved,
+            &latest,
+            &items,
+            saka_spec::PARSER_VERSION,
+        ))
     }
 
     fn waiting(&self, tasks: &[Task]) -> Result<Vec<Vec<Waiting>>> {

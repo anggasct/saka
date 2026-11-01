@@ -47,6 +47,23 @@ fn issue_line(issue: &Value) -> String {
     )
 }
 
+fn conflict_line(step: &Value) -> String {
+    let fields: Vec<String> = step["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(text)
+        .collect();
+    format!(
+        "conflict {}: {} {}",
+        text(&step["step_id"]),
+        text(&step["reason"]),
+        fields.join(",")
+    )
+    .trim_end()
+    .to_string()
+}
+
 fn fail(a: &Answer) -> ExitCode {
     let code = a.body["code"].as_str().unwrap_or("error");
     err(&format!("error: {code} {}", a.body["params"]));
@@ -215,6 +232,21 @@ impl Client {
         if approved.body["code"] == "spec_not_ready" {
             return self.lint_failed(&approved.body["params"]["issues"], &approved.body);
         }
+        if approved.body["code"] == "revision_conflict" {
+            if self.json {
+                out(&approved.body.to_string());
+            } else {
+                for step in approved.body["params"]["steps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    out(&conflict_line(step));
+                }
+            }
+            return ExitCode::from(EXIT_CONFLICT);
+        }
+        let plan = registered.body["revision_plan"].clone();
         self.finish(&approved, |b| {
             let mut lines: Vec<String> = b["lint"]["issues"]
                 .as_array()
@@ -224,9 +256,77 @@ impl Client {
                 .map(issue_line)
                 .collect();
             let steps = b["steps"].as_array().map_or(0, Vec::len);
-            lines.push(format!("approved {} ({steps} steps)", text(&b["slug"])));
+            if plan.is_null() {
+                lines.push(format!("approved {} ({steps} steps)", text(&b["slug"])));
+            } else {
+                let count = |actions: &[&str]| {
+                    plan["steps"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|s| actions.iter().any(|a| s["action"] == *a))
+                        .count()
+                };
+                lines.push(format!(
+                    "approved {} ({steps} steps: {} kept, {} repinned, {} added, {} superseded)",
+                    text(&b["slug"]),
+                    count(&["keep"]),
+                    count(&["repin", "restore"]),
+                    count(&["add"]),
+                    count(&["supersede"]),
+                ));
+            }
             lines.join("\n")
         })
+    }
+
+    async fn spec_id(&self, project: &str, path: &str) -> Result<String, ExitCode> {
+        let id = self.project_id(project).await?;
+        let mut cursor = String::new();
+        loop {
+            let a = self
+                .get(&format!(
+                    "/api/v1/projects/{id}/specs?limit=200&cursor={cursor}"
+                ))
+                .await?;
+            if !a.ok() {
+                return Err(fail(&a));
+            }
+            if let Some(spec) = a.body["items"]
+                .as_array()
+                .and_then(|items| items.iter().find(|s| s["path"] == path))
+            {
+                return Ok(text(&spec["id"]));
+            }
+            match a.body["next_cursor"].as_str() {
+                Some(next) => cursor = next.to_string(),
+                None => {
+                    err(&format!(
+                        "error: not_found {}",
+                        json!({ "project": project, "path": path })
+                    ));
+                    return Err(ExitCode::FAILURE);
+                }
+            }
+        }
+    }
+
+    pub async fn spec_withdraw(&self, project: &str, path: &str, reason: &str) -> ExitCode {
+        let spec = match self.spec_id(project, path).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self
+            .post(
+                &format!("/api/v1/specs/{spec}/withdraw"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("withdrawn {}", text(&b["slug"]))),
+            Err(code) => code,
+        }
     }
 
     fn lint_failed(&self, issues: &Value, body: &Value) -> ExitCode {

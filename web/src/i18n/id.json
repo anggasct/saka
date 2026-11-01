@@ -30,6 +30,7 @@
   "task.state.taken_over": "Diambil alih",
   "task.state.done": "Selesai",
   "task.state.cancelled": "Dibatalkan",
+  "task.state.superseded": "Digantikan",
   "stage.dev": "Pengembangan",
   "stage.review": "Review",
   "stage.fix": "Perbaikan",

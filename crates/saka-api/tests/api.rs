@@ -11,9 +11,11 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use saka_api::{ApiConfig, AppState, router};
-use saka_core::vocab::{Stage, StagePhase};
+use saka_core::vocab::{Stage, StagePhase, WorkItemState};
 use saka_testkit::fixtures::TWO_STEP_SPEC;
-use saka_testkit::{AgentOutcome, AgentScript, CiScript, Sim, SimConfig, one_step_spec};
+use saka_testkit::{
+    AgentOutcome, AgentScript, CiScript, Sim, SimConfig, approval_spec, one_step_spec,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -1081,4 +1083,586 @@ fn the_spec_template_comes_in_english_and_indonesian() {
     let bad = api.get("/api/v1/spec-template?locale=fr");
     problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
     assert_eq!(bad.body["params"]["errors"][0]["field"], "locale");
+}
+
+const APPROVAL: &str = "docs/specs/approval.md";
+
+fn rows(api: &Api, sql: &str) -> Vec<String> {
+    api.sim
+        .engine()
+        .store()
+        .read(|c| {
+            let mut stmt = c.prepare(sql)?;
+            let out = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(out)
+        })
+        .unwrap()
+}
+
+impl Api {
+    fn spec_id(r: &Reply) -> saka_core::ids::SpecId {
+        saka_core::ids::SpecId(r.body["id"].as_str().unwrap().parse().unwrap())
+    }
+
+    fn run_to(&mut self, spec: saka_core::ids::SpecId, step: usize, state: WorkItemState) {
+        assert!(
+            self.sim
+                .run_until(STEPS, |s| s.tasks_of(spec)[step - 1].item.state == state),
+            "S{step} never reached {state}"
+        );
+    }
+
+    fn items(&self, spec: &str) -> Vec<Value> {
+        let r = self.get(&format!("/api/v1/work-items?spec_id={spec}&limit=200"));
+        let mut items = r.body["items"].as_array().unwrap().clone();
+        items.sort_by_key(|i| i["step_index"].as_u64());
+        items
+    }
+
+    fn approve_tag(&mut self, spec: &str, revision: &str) -> Reply {
+        let tag = format!("\"{revision}\"");
+        self.post(
+            &format!("/api/v1/specs/{spec}/approve"),
+            &[("if-match", &tag)],
+            json!({}),
+        )
+    }
+
+    fn get_text(&self, path: &str) -> String {
+        self.sim.block_on(async {
+            let r = self
+                .app
+                .clone()
+                .oneshot(
+                    Request::get(path)
+                        .header("host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8(r.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+        })
+    }
+
+    fn withdraw(&mut self, spec: &str, reason: &str) -> Reply {
+        self.post(
+            &format!("/api/v1/specs/{spec}/withdraw"),
+            &[],
+            json!({ "reason": reason }),
+        )
+    }
+}
+
+fn kinds(events: &[saka_engine::StoredEvent]) -> Vec<&str> {
+    events.iter().map(|e| e.kind.as_str()).collect()
+}
+
+#[test]
+fn re_approval_repins_supersedes_restores_and_adds_as_the_plan_said() {
+    let mut api = Api::new(SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    });
+    let base = api.register_doc("docs/specs/base-spec.md", &one_step_spec("Base", ""));
+    let base_id = base.body["id"].as_str().unwrap().to_string();
+    let v1 = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "",
+            &[("One", "AC-01"), ("Two", "AC-02"), ("Three", "AC-02")],
+        ),
+    );
+    let spec = v1.body["id"].as_str().unwrap().to_string();
+    let first = api.approve_reply(&v1);
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    assert_eq!(first.body["revision_plan"], Value::Null);
+    let approved_at = first.body["approved_at"].clone();
+    api.run_to(Api::spec_id(&v1), 1, WorkItemState::Done);
+    let items = api.items(&spec);
+    let ids: Vec<String> = items
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(items[1]["state"], "queued");
+    assert_eq!(items[2]["state"], "queued");
+
+    let v2 = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "depends_on: [base-spec]\npriority: 5\n",
+            &[("One", "AC-01"), ("Two, rewritten", "AC-01, AC-02")],
+        ),
+    );
+    let v1_rev = v1.body["revision"]["id"].as_str().unwrap().to_string();
+    let v2_rev = v2.body["revision"]["id"].as_str().unwrap().to_string();
+    assert_eq!(v2.body["state"], "approved");
+    let plan = api.get(&format!("/api/v1/specs/{spec}")).body["revision_plan"].clone();
+    assert_eq!(
+        plan,
+        json!({
+            "from_revision_id": v1_rev,
+            "to_revision_id": v2_rev,
+            "ready": true,
+            "steps": [
+                {"step_id": "S1", "action": "keep", "work_item_id": ids[0], "reason": null, "fields": []},
+                {"step_id": "S2", "action": "repin", "work_item_id": ids[1], "reason": null, "fields": []},
+                {"step_id": "S3", "action": "supersede", "work_item_id": ids[2], "reason": null, "fields": []},
+            ]
+        })
+    );
+
+    let before = api.last_seq();
+    let r = api.approve_tag(&spec, &v2_rev);
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["approved_revision_id"], v2_rev.as_str());
+    assert_eq!(r.body["approved_at"], approved_at);
+    assert_eq!(r.body["priority"], 5);
+    assert_eq!(r.body["revision_plan"], Value::Null);
+    let events = api.sim.engine().events_after(before, 100).unwrap();
+    let mine: Vec<_> = events
+        .iter()
+        .filter(|e| e.correlation_id == events[0].correlation_id)
+        .cloned()
+        .collect();
+    assert_eq!(
+        kinds(&mine),
+        [
+            "spec.spec.approved",
+            "delivery.work_item.repinned",
+            "delivery.work_item.superseded"
+        ]
+    );
+    assert_eq!(mine[0].payload["previous_revision_id"], v1_rev.as_str());
+    let planned: Vec<(&str, &Value)> = plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["action"] != "keep")
+        .map(|s| (s["action"].as_str().unwrap(), &s["work_item_id"]))
+        .collect();
+    let happened: Vec<(&str, &Value)> = mine[1..]
+        .iter()
+        .map(|e| {
+            let action = match e.kind.as_str() {
+                "delivery.work_item.repinned" => "repin",
+                "delivery.work_item.superseded" => "supersede",
+                other => other,
+            };
+            (action, &e.payload["work_item_id"])
+        })
+        .collect();
+    assert_eq!(planned, happened);
+
+    let items = api.items(&spec);
+    assert_eq!(items[0]["spec_revision_id"], v1_rev.as_str());
+    assert_eq!(items[1]["spec_revision_id"], v2_rev.as_str());
+    assert_eq!(items[1]["work"], "Two, rewritten");
+    assert_eq!(items[1]["priority"], 5);
+    assert_eq!(items[2]["state"], "superseded");
+    assert_eq!(items[2]["available_actions"], json!([]));
+    assert_eq!(items[2]["waiting_on"], json!([]));
+    assert_eq!(
+        items[1]["waiting_on"],
+        json!([{"kind": "spec", "slug": "base-spec", "spec_id": base_id}])
+    );
+    assert_eq!(
+        rows(&api, "SELECT depends_on_slug FROM spec_dependency"),
+        vec!["base-spec"]
+    );
+    assert_eq!(
+        rows(
+            &api,
+            "SELECT w.step_id || '>' || p.step_id FROM work_item_dependency d
+               JOIN work_item w ON w.id = d.work_item_id JOIN work_item p ON p.id = d.depends_on_work_item_id
+             WHERE w.spec_id = (SELECT id FROM spec WHERE slug = 'approval') ORDER BY 1"
+        ),
+        vec!["S2>S1", "S3>S2"]
+    );
+    problem(
+        &api.post(
+            &format!("/api/v1/work-items/{}/actions/cancel", ids[2]),
+            &[],
+            json!({ "reason": "stop" }),
+        ),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+    let metrics = api.get_text("/metrics");
+    assert!(
+        metrics.contains("saka_work_items{state=\"superseded\"} 1"),
+        "{metrics}"
+    );
+    problem(
+        &api.approve_tag(&spec, &v2_rev),
+        StatusCode::CONFLICT,
+        "spec_already_approved",
+    );
+
+    let v3 = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "",
+            &[
+                ("One", "AC-01"),
+                ("Two, rewritten", "AC-01, AC-02"),
+                ("Three, back", "AC-02"),
+                ("Four", "AC-02"),
+            ],
+        ),
+    );
+    let v3_rev = v3.body["revision"]["id"].as_str().unwrap().to_string();
+    let before = api.last_seq();
+    let r = api.approve_tag(&spec, &v3_rev);
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["approved_at"], approved_at);
+    let events = api.sim.engine().events_after(before, 100).unwrap();
+    let mine: Vec<_> = events
+        .iter()
+        .filter(|e| e.correlation_id == events[0].correlation_id)
+        .cloned()
+        .collect();
+    assert_eq!(
+        kinds(&mine),
+        [
+            "spec.spec.approved",
+            "delivery.work_item.repinned",
+            "delivery.work_item.repinned",
+            "delivery.work_item.created"
+        ]
+    );
+    assert_eq!(mine[1].payload["restored"], false);
+    assert_eq!(mine[2].payload["work_item_id"], ids[2].as_str());
+    assert_eq!(mine[2].payload["restored"], true);
+    let items = api.items(&spec);
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[2]["state"], "queued");
+    assert_eq!(items[2]["task_key"], "approval/s3");
+    assert_eq!(items[2]["branch"], "saka/approval/s3");
+    assert_eq!(items[2]["spec_revision_id"], v3_rev.as_str());
+    assert_eq!(items[3]["task_key"], "approval/s4");
+    assert_eq!(
+        rows(&api, "SELECT depends_on_slug FROM spec_dependency"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        rows(
+            &api,
+            "SELECT w.step_id || '>' || p.step_id FROM work_item_dependency d
+               JOIN work_item w ON w.id = d.work_item_id JOIN work_item p ON p.id = d.depends_on_work_item_id
+             WHERE w.spec_id = (SELECT id FROM spec WHERE slug = 'approval') ORDER BY 1"
+        ),
+        vec!["S2>S1", "S3>S2", "S4>S3"]
+    );
+}
+
+#[test]
+fn re_approval_refuses_changes_to_started_steps_without_writing() {
+    let mut api = Api::new(SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    });
+    let v1 = api.register_doc(
+        APPROVAL,
+        "---\nsaka: spec\n---\n# Approval\n\n## Acceptance criteria\n\n- **AC-01**: one.\n- **AC-02**: two.\n\n## Steps\n\n| Step | Work | AC | After | Done when |\n|------|------|----|-------|-----------|\n| S1 | One | AC-01 | | `make test` |\n| S2 | Two | AC-02 | S1 | `make test` |\n| S3 | Three | AC-02 | S2 | `make test` |\n",
+    );
+    let spec = v1.body["id"].as_str().unwrap().to_string();
+    assert_eq!(api.approve_reply(&v1).status, StatusCode::OK);
+    api.run_to(Api::spec_id(&v1), 1, WorkItemState::Done);
+    let s1 = api.items(&spec)[0]["id"].as_str().unwrap().to_string();
+    let table = |s1_row: &str| {
+        format!(
+            "---\nsaka: spec\n---\n# Approval\n\n## Acceptance criteria\n\n- **AC-01**: one.\n- **AC-02**: two.\n\n## Steps\n\n| Step | Work | AC | After | Done when |\n|------|------|----|-------|-----------|\n{s1_row}\n| S2 | Two | AC-01, AC-02 | | `make test` |\n| S3 | Three | AC-02 | S2 | `make test` |\n"
+        )
+    };
+    let snapshot = |api: &Api| {
+        (
+            rows(
+                api,
+                "SELECT id || state || spec_revision_id || work || version FROM work_item ORDER BY id",
+            ),
+            rows(
+                api,
+                "SELECT state || approved_revision_id || approved_at FROM spec WHERE slug = 'approval'",
+            ),
+            api.last_seq(),
+        )
+    };
+    let cases = [
+        ("| S1 | One, changed | AC-01 | | `make test` |", "work"),
+        ("| S1 | One | AC-01, AC-02 | | `make test` |", "ac"),
+        ("| S1 | One | AC-01 | | `make check` |", "commands"),
+        ("| S1 | One | AC-01 | S2 | `make test` |", "after"),
+    ];
+    for (row, field) in cases {
+        let r = api.register_doc(APPROVAL, &table(row));
+        let revision = r.body["revision"]["id"].as_str().unwrap().to_string();
+        let before = snapshot(&api);
+        let refused = api.approve_tag(&spec, &revision);
+        problem(&refused, StatusCode::CONFLICT, "revision_conflict");
+        assert_eq!(
+            refused.body["params"]["steps"],
+            json!([{"step_id": "S1", "reason": "changed", "fields": [field], "work_item_id": s1, "state": "done"}]),
+            "{field}"
+        );
+        assert_eq!(snapshot(&api), before, "{field}");
+        let plan = api.get(&format!("/api/v1/specs/{spec}")).body["revision_plan"].clone();
+        assert_eq!(plan["ready"], false);
+        assert_eq!(plan["steps"][0]["action"], "conflict");
+    }
+
+    let mut api = Api::new(SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    });
+    let v1 = api.register_doc(
+        APPROVAL,
+        &approval_spec("", &[("One", "AC-01"), ("Two", "AC-02")]),
+    );
+    let spec = v1.body["id"].as_str().unwrap().to_string();
+    assert_eq!(api.approve_reply(&v1).status, StatusCode::OK);
+    api.run_to(Api::spec_id(&v1), 2, WorkItemState::Admitted);
+    let s2 = api.items(&spec)[1]["id"].as_str().unwrap().to_string();
+    let shorter = api.register_doc(APPROVAL, &approval_spec("", &[("One", "AC-01")]));
+    let revision = shorter.body["revision"]["id"].as_str().unwrap().to_string();
+    let before = snapshot(&api);
+    let refused = api.approve_tag(&spec, &revision);
+    problem(&refused, StatusCode::CONFLICT, "revision_conflict");
+    assert_eq!(
+        refused.body["params"]["steps"],
+        json!([{"step_id": "S2", "reason": "removed", "fields": [], "work_item_id": s2, "state": "admitted"}])
+    );
+    assert_eq!(snapshot(&api), before);
+}
+
+#[test]
+fn re_approval_runs_the_checks_of_the_first_approval() {
+    let mut api = Api::new(SimConfig {
+        max_active_tasks: 0,
+        ..SimConfig::default()
+    });
+    let v1 = api.register_doc(
+        APPROVAL,
+        &approval_spec("", &[("One", "AC-01"), ("Two", "AC-02")]),
+    );
+    let spec = v1.body["id"].as_str().unwrap().to_string();
+    let v1_rev = v1.body["revision"]["id"].as_str().unwrap().to_string();
+    assert_eq!(api.approve_reply(&v1).status, StatusCode::OK);
+    let unchanged = |api: &Api| {
+        (
+            rows(
+                api,
+                "SELECT state || approved_revision_id FROM spec WHERE slug = 'approval'",
+            ),
+            api.last_seq(),
+        )
+    };
+
+    let bad = api.register_doc(
+        APPROVAL,
+        &approval_spec("", &[("One", "AC-01"), ("Two", "AC-09")]),
+    );
+    assert_eq!(bad.body["state"], "approved");
+    assert_eq!(bad.body["lint"]["ok"], false);
+    let before = unchanged(&api);
+    problem(
+        &api.approve_reply(&bad),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "spec_not_ready",
+    );
+    problem(
+        &api.approve_tag(&spec, &v1_rev),
+        StatusCode::PRECONDITION_FAILED,
+        "revision_stale",
+    );
+    assert_eq!(unchanged(&api), before);
+
+    let ghost = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "depends_on: [ghost]\n",
+            &[("One", "AC-01"), ("Two", "AC-02"), ("Three", "AC-02")],
+        ),
+    );
+    let before = unchanged(&api);
+    let refused = api.approve_reply(&ghost);
+    problem(&refused, StatusCode::UNPROCESSABLE_ENTITY, "spec_not_ready");
+    assert_eq!(
+        refused.body["params"]["issues"][0]["code"],
+        "depends_on_unknown"
+    );
+    assert_eq!(unchanged(&api), before);
+
+    let old = api
+        .sim
+        .old_parser_revision(Api::spec_id(&v1), "an old reading");
+    let before = unchanged(&api);
+    problem(
+        &api.approve_tag(&spec, &old.0.to_string()),
+        StatusCode::CONFLICT,
+        "spec_reparse_required",
+    );
+    assert_eq!(unchanged(&api), before);
+
+    let other = api.add_other_project("unused.md", &one_step_spec("Unused", ""));
+    let other = saka_core::ids::ProjectId(other.parse().unwrap());
+    api.sim.occupy_branch(other, "saka/approval/s3");
+    let longer = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "",
+            &[("One", "AC-01"), ("Two", "AC-02"), ("Three", "AC-02")],
+        ),
+    );
+    let before = unchanged(&api);
+    let refused = api.approve_reply(&longer);
+    problem(&refused, StatusCode::CONFLICT, "task_branch_conflict");
+    assert_eq!(
+        refused.body["params"]["branches"],
+        json!(["saka/approval/s3"])
+    );
+    assert_eq!(unchanged(&api), before);
+
+    let mut api = Api::new(SimConfig::default());
+    let solo = api.register_doc("docs/specs/solo.md", &one_step_spec("Solo", ""));
+    let solo_id = solo.body["id"].as_str().unwrap().to_string();
+    assert_eq!(api.approve_reply(&solo).status, StatusCode::OK);
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.spec_of(Api::spec_id(&solo)).state == saka_core::vocab::SpecState::Shipped
+    }));
+    let later = api.register_doc("docs/specs/solo.md", &one_step_spec("Solo again", ""));
+    assert_eq!(later.body["state"], "shipped");
+    assert_eq!(later.body["revision_plan"], Value::Null);
+    let refused = api.approve_reply(&later);
+    problem(&refused, StatusCode::CONFLICT, "invalid_state");
+    assert_eq!(refused.body["params"]["state"], "shipped");
+    problem(
+        &api.withdraw(&solo_id, "late"),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+}
+
+#[test]
+fn withdraw_closes_a_spec_that_has_no_active_tasks() {
+    let mut api = Api::new(SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    });
+    let draft = api.register_doc(
+        "docs/specs/draft.md",
+        &approval_spec("", &[("One", "AC-09")]),
+    );
+    assert_eq!(draft.body["state"], "draft");
+    let r = api.withdraw(draft.body["id"].as_str().unwrap(), "not now");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["state"], "withdrawn");
+    let ready = api.register_doc("docs/specs/ready.md", &one_step_spec("Ready", ""));
+    let r = api.withdraw(ready.body["id"].as_str().unwrap(), "not now");
+    assert_eq!(r.body["state"], "withdrawn");
+    assert_eq!(r.body["approved_revision_id"], Value::Null);
+
+    let target = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "",
+            &[("One", "AC-01"), ("Two", "AC-02"), ("Three", "AC-02")],
+        ),
+    );
+    let spec = target.body["id"].as_str().unwrap().to_string();
+    let later = api.register_doc(
+        "docs/specs/later.md",
+        &one_step_spec("Later", "depends_on: [approval]\n"),
+    );
+    assert_eq!(api.approve_reply(&target).status, StatusCode::OK);
+    assert_eq!(api.approve_reply(&later).status, StatusCode::OK);
+    for reason in [String::new(), "x".repeat(501)] {
+        problem(
+            &api.withdraw(&spec, &reason),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        );
+    }
+
+    api.run_to(Api::spec_id(&target), 1, WorkItemState::InStage);
+    let items = api.items(&spec);
+    let before = api.last_seq();
+    let busy = api.withdraw(&spec, "not needed");
+    problem(&busy, StatusCode::CONFLICT, "spec_has_active_tasks");
+    assert_eq!(
+        busy.body["params"]["tasks"],
+        json!([{"work_item_id": items[0]["id"], "step_id": "S1", "state": "in_stage"}])
+    );
+    assert_eq!(api.last_seq(), before);
+
+    api.run_to(Api::spec_id(&target), 1, WorkItemState::Done);
+    let cancelled = api.post(
+        &format!(
+            "/api/v1/work-items/{}/actions/cancel",
+            items[1]["id"].as_str().unwrap()
+        ),
+        &[],
+        json!({ "reason": "not this one" }),
+    );
+    assert_eq!(cancelled.status, StatusCode::ACCEPTED, "{}", cancelled.body);
+
+    let path = format!("/api/v1/specs/{spec}/withdraw");
+    let body = json!({ "reason": "not needed" });
+    let before = api.last_seq();
+    let r = api.post_with(&path, Some("withdraw-once"), &[], &body);
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["state"], "withdrawn");
+    assert_eq!(
+        r.body["approved_revision_id"],
+        target.body["revision"]["id"]
+    );
+    let events = api.sim.engine().events_after(before, 100).unwrap();
+    assert_eq!(
+        kinds(&events),
+        ["spec.spec.withdrawn", "delivery.work_item.superseded"]
+    );
+    assert_eq!(events[0].payload["reason"], "not needed");
+    assert_eq!(events[1].payload["reason"], "spec_withdrawn");
+    let states: Vec<Value> = api
+        .items(&spec)
+        .iter()
+        .map(|i| i["state"].clone())
+        .collect();
+    assert_eq!(states, ["done", "cancelled", "superseded"]);
+    let replay = api.post_with(&path, Some("withdraw-once"), &[], &body);
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(replay.body, r.body);
+    problem(
+        &api.withdraw(&spec, "again"),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+
+    let again = api.register_doc(
+        APPROVAL,
+        &approval_spec(
+            "",
+            &[
+                ("One", "AC-01"),
+                ("Two", "AC-02"),
+                ("Three, changed", "AC-02"),
+            ],
+        ),
+    );
+    assert_eq!(again.body["state"], "withdrawn");
+    problem(
+        &api.approve_reply(&again),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+
+    let waiting = api.items(later.body["id"].as_str().unwrap());
+    assert_eq!(waiting[0]["state"], "queued");
+    assert_eq!(
+        waiting[0]["waiting_on"],
+        json!([{"kind": "spec", "slug": "approval", "spec_id": spec}])
+    );
 }

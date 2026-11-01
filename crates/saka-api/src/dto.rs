@@ -153,6 +153,49 @@ pub struct Step {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct PlanStep {
+    pub step_id: String,
+    /// `keep | repin | restore | add | supersede | conflict`
+    pub action: String,
+    pub work_item_id: Option<Uuid>,
+    /// `changed | removed`, only for `conflict`.
+    pub reason: Option<String>,
+    /// Changed fields in the order `work`, `ac`, `commands`, `after`; only for `changed`.
+    pub fields: Vec<String>,
+}
+
+/// What approving the latest revision again would do to each step.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RevisionPlan {
+    pub from_revision_id: Uuid,
+    pub to_revision_id: Uuid,
+    /// No conflict, clean lint, and the current parser.
+    pub ready: bool,
+    pub steps: Vec<PlanStep>,
+}
+
+impl RevisionPlan {
+    fn from_plan(p: &saka_core::plan::RevisionPlan) -> RevisionPlan {
+        RevisionPlan {
+            from_revision_id: p.from_revision_id.0,
+            to_revision_id: p.to_revision_id.0,
+            ready: p.ready,
+            steps: p
+                .steps
+                .iter()
+                .map(|st| PlanStep {
+                    step_id: st.step_id.clone(),
+                    action: st.action.as_str().to_string(),
+                    work_item_id: st.work_item_id.map(|id| id.0),
+                    reason: st.reason.map(|r| r.as_str().to_string()),
+                    fields: st.fields.iter().map(|f| f.as_str().to_string()).collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SpecDependency {
     pub slug: String,
     /// Null when no spec in the project has this slug.
@@ -175,6 +218,8 @@ pub struct Spec {
     pub depends_on: Vec<SpecDependency>,
     pub revision: Revision,
     pub approved_revision_id: Option<Uuid>,
+    /// Null unless the spec is approved and a newer revision is recorded.
+    pub revision_plan: Option<RevisionPlan>,
     pub lint: Lint,
     /// Left out of list items.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,6 +292,7 @@ impl Spec {
                 created_at: time(r.created_at),
             },
             approved_revision_id: s.approved_revision_id.map(|id| id.0),
+            revision_plan: v.revision_plan.as_ref().map(RevisionPlan::from_plan),
             lint: Lint {
                 ok: r.lint_ok,
                 issues: r
@@ -355,6 +401,7 @@ pub struct WorkItem {
     pub work: String,
     pub repo_id: Uuid,
     pub branch: String,
+    /// `queued | awaiting_start | admitted | in_stage | blocked | taken_over | done | cancelled | superseded`
     pub state: String,
     pub stage: Option<String>,
     pub stage_phase: Option<String>,

@@ -42,6 +42,7 @@ export const spec: SpecItem = {
     created_at: "2026-10-31T10:00:00.000Z",
   },
   approved_revision_id: "0193f0c4-1b2a-7c3d-9e8f-001122334477",
+  revision_plan: null,
   lint: { ok: true, issues: [] },
   steps: [],
   approved_at: "2026-10-31T10:01:00.000Z",
@@ -105,3 +106,8 @@ export const blockedTask = task(1, {
 });
 
 export const queuedTask = task(2, {});
+
+export const supersededTask = task(3, {
+  state: "superseded",
+  available_actions: [],
+});
