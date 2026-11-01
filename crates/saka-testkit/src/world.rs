@@ -10,10 +10,10 @@ use saka_core::policy::RequestPath;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
 use saka_ports::{
-    Agents, ChangeSnapshot, Clock, EnvRef, Environments, LaunchedSession, MergeOutcome,
-    MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult, PrepareRequest,
-    PreparedEnvironment, PushOutcome, PushRequest, RepoRef, RunnerEvent, RunnerEventKind, Scm,
-    SessionLaunch, SessionRef, WorktreeState,
+    Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession,
+    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, RepoInfo, RepoRef, RunnerEvent,
+    RunnerEventKind, Scm, SessionLaunch, SessionRef, WorktreeState,
 };
 use serde_json::{Value, json};
 
@@ -132,6 +132,10 @@ struct State {
     events: VecDeque<RunnerEvent>,
     stats: Stats,
     next_request: u32,
+    /// Files on the base branch, by path.
+    docs: BTreeMap<String, Vec<u8>>,
+    /// Repositories the integration cannot reach.
+    inaccessible: BTreeSet<String>,
 }
 
 pub struct FakeWorld {
@@ -163,6 +167,8 @@ impl FakeWorld {
                 events: VecDeque::new(),
                 stats: Stats::default(),
                 next_request: 0,
+                docs: BTreeMap::new(),
+                inaccessible: BTreeSet::new(),
             }),
         }
     }
@@ -220,6 +226,21 @@ impl FakeWorld {
             .filter(|(_, s)| s.running)
             .map(|(id, _)| *id)
             .collect()
+    }
+
+    /// Someone commits `bytes` at `path` on the base branch.
+    pub fn put_doc(&self, path: &str, bytes: &[u8]) -> String {
+        let mut s = self.state();
+        let base = s.remote[BASE_BRANCH].clone();
+        let commit = s.new_commit(vec![base]);
+        s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
+        s.docs.insert(path.to_string(), bytes.to_vec());
+        commit
+    }
+
+    /// The integration loses access to this repository.
+    pub fn make_inaccessible(&self, full_name: &str) {
+        self.state().inaccessible.insert(full_name.to_string());
     }
 
     /// Someone merges the change on the host, outside Saka.
@@ -541,7 +562,41 @@ impl Environments for FakeWorld {
 }
 
 #[async_trait]
+impl DocSource for FakeWorld {
+    async fn read_at_tip(
+        &self,
+        _repo: &RepoRef,
+        branch: &str,
+        path: &str,
+    ) -> PortResult<Option<DocFile>> {
+        let s = self.state();
+        let commit = s.remote.get(branch).cloned().ok_or_else(|| {
+            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+        })?;
+        Ok(s.docs.get(path).map(|bytes| DocFile {
+            path: path.to_string(),
+            commit,
+            bytes: bytes.clone(),
+        }))
+    }
+}
+
+#[async_trait]
 impl Scm for FakeWorld {
+    async fn repository(&self, _integration_id: &str, full_name: &str) -> PortResult<RepoInfo> {
+        if self.state().inaccessible.contains(full_name) {
+            return Err(PortError::permanent(
+                "scm_repo_inaccessible",
+                json!({ "repo": full_name, "status": 404 }),
+            ));
+        }
+        Ok(RepoInfo {
+            full_name: full_name.to_string(),
+            url: format!("https://github.com/{full_name}"),
+            default_branch: BASE_BRANCH.to_string(),
+        })
+    }
+
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {
         let mut s = self.state();
         let local = request.local_sha.clone();

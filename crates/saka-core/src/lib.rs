@@ -12,6 +12,7 @@ pub mod gate;
 pub mod ids;
 pub mod job;
 pub mod model;
+pub mod paths;
 pub mod policy;
 pub mod react;
 pub mod reconcile;

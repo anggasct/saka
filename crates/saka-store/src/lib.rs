@@ -8,6 +8,7 @@ mod codec;
 mod conn;
 mod error;
 mod jobs;
+pub mod list;
 mod migrate;
 pub mod read;
 mod write;

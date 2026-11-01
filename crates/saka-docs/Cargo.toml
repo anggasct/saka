@@ -11,11 +11,11 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 saka-ports = { path = "../saka-ports" }
 serde_json.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 saka-core = { path = "../saka-core" }
 tokio = { workspace = true, features = ["macros", "rt"] }
 uuid.workspace = true

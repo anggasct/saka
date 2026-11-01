@@ -35,11 +35,11 @@ pub enum TaskSet<'a> {
 const WORK_ITEM_COLUMNS: &str = "id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key,
     work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at";
 
-fn ts(row: &Row<'_>, col: &str) -> Result<Timestamp> {
+pub(crate) fn ts(row: &Row<'_>, col: &str) -> Result<Timestamp> {
     Ok(Timestamp(row.get(col)?))
 }
 
-fn opt_ts(row: &Row<'_>, col: &str) -> Result<Option<Timestamp>> {
+pub(crate) fn opt_ts(row: &Row<'_>, col: &str) -> Result<Option<Timestamp>> {
     let v: Option<i64> = row.get(col)?;
     Ok(v.map(Timestamp))
 }
@@ -329,7 +329,7 @@ fn running_since(
     Ok(out)
 }
 
-fn stage_run(row: &Row<'_>) -> Result<StageRun> {
+pub(crate) fn stage_run(row: &Row<'_>) -> Result<StageRun> {
     Ok(StageRun {
         id: StageRunId(uuid(row, "id")?),
         work_item_id: WorkItemId(uuid(row, "work_item_id")?),
@@ -408,7 +408,7 @@ fn environment(row: &Row<'_>) -> Result<Environment> {
     })
 }
 
-fn session(row: &Row<'_>) -> Result<Session> {
+pub(crate) fn session(row: &Row<'_>) -> Result<Session> {
     Ok(Session {
         id: SessionId(uuid(row, "id")?),
         work_item_id: WorkItemId(uuid(row, "work_item_id")?),
@@ -438,7 +438,7 @@ fn session(row: &Row<'_>) -> Result<Session> {
     })
 }
 
-fn permission(row: &Row<'_>) -> Result<PermissionRequest> {
+pub(crate) fn permission(row: &Row<'_>) -> Result<PermissionRequest> {
     Ok(PermissionRequest {
         id: PermissionRequestId(uuid(row, "id")?),
         work_item_id: WorkItemId(uuid(row, "work_item_id")?),
@@ -456,7 +456,7 @@ fn permission(row: &Row<'_>) -> Result<PermissionRequest> {
     })
 }
 
-fn spec_row(row: &Row<'_>) -> Result<Spec> {
+pub(crate) fn spec_row(row: &Row<'_>) -> Result<Spec> {
     Ok(Spec {
         id: SpecId(uuid(row, "id")?),
         project_id: ProjectId(uuid(row, "project_id")?),
@@ -475,7 +475,7 @@ fn spec_row(row: &Row<'_>) -> Result<Spec> {
     })
 }
 
-fn one<T>(
+pub(crate) fn one<T>(
     conn: &Connection,
     sql: &str,
     bind: &[&dyn rusqlite::ToSql],
@@ -601,7 +601,7 @@ pub fn repo_by_name(
     )
 }
 
-fn repo_row(row: &Row<'_>) -> Result<Repo> {
+pub(crate) fn repo_row(row: &Row<'_>) -> Result<Repo> {
     Ok(Repo {
         id: RepoId(uuid(row, "id")?),
         integration_id: row.get("integration_id")?,
@@ -639,7 +639,7 @@ pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>>
     Ok(Some(project))
 }
 
-fn project_row(row: &Row<'_>) -> Result<Project> {
+pub(crate) fn project_row(row: &Row<'_>) -> Result<Project> {
     Ok(Project {
         id: ProjectId(uuid(row, "id")?),
         name: row.get("name")?,
