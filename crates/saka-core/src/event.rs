@@ -7,12 +7,16 @@ use crate::ids::{
     RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use crate::job::JobKind;
-use crate::model::{Coded, ProjectRepo};
+use crate::model::{Coded, DependsOn, ProjectRepo};
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, GateOutcome, MergeMethod, PermissionState, SessionState, Stage,
     StagePhase, Trigger,
 };
+
+fn first_parser_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
@@ -53,12 +57,20 @@ pub enum Event {
         issue_codes: Vec<String>,
         title: String,
         reused: bool,
+        #[serde(default = "first_parser_version")]
+        parser_version: u32,
+        #[serde(default)]
+        priority: i64,
     },
     #[serde(rename = "spec.spec.approved")]
     SpecApproved {
         spec_id: SpecId,
         revision_id: SpecRevisionId,
         reason: Option<String>,
+        #[serde(default)]
+        priority: i64,
+        #[serde(default)]
+        depends_on: Vec<DependsOn>,
     },
     #[serde(rename = "spec.spec.shipped")]
     SpecShipped {

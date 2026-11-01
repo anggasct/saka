@@ -3,7 +3,7 @@ use saka_core::ids::ProjectId;
 use saka_core::job::Job;
 use saka_core::model::{
     Blocker, ChangeRequest, Environment, GateResult, PermissionRequest, Project, Repo, Session,
-    Spec, StageRun, Task,
+    Spec, SpecDependency, StageRun, Task, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use serde_json::Value;
@@ -97,6 +97,8 @@ pub struct Batch {
     pub specs: Vec<Spec>,
     pub revisions: Vec<SpecRevisionRow>,
     pub tasks: Vec<Task>,
+    pub spec_dependencies: Vec<SpecDependency>,
+    pub work_item_dependencies: Vec<WorkItemDependency>,
     pub jobs: Vec<NewJob>,
 }
 
@@ -172,6 +174,34 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for t in &b.tasks {
         task(tx, t)?;
+    }
+    for d in &b.spec_dependencies {
+        tx.execute(
+            "INSERT INTO spec_dependency (spec_id, depends_on_spec_id, depends_on_slug, revision_id, project_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (spec_id, depends_on_spec_id) DO NOTHING",
+            params![
+                d.spec_id.to_string(),
+                d.depends_on_spec_id.to_string(),
+                d.depends_on_slug,
+                d.revision_id.to_string(),
+                d.project_id.to_string(),
+                b.now.0,
+            ],
+        )?;
+    }
+    for d in &b.work_item_dependencies {
+        tx.execute(
+            "INSERT INTO work_item_dependency (work_item_id, depends_on_work_item_id, project_id, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (work_item_id, depends_on_work_item_id) DO NOTHING",
+            params![
+                d.work_item_id.to_string(),
+                d.depends_on_work_item_id.to_string(),
+                d.project_id.to_string(),
+                b.now.0,
+            ],
+        )?;
     }
     for j in &b.jobs {
         enqueue(tx, j, b.now)?;

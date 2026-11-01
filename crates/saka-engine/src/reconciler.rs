@@ -1,4 +1,4 @@
-use saka_core::reconcile::{Action, Snapshot, reconcile};
+use saka_core::reconcile::{Action, Snapshot, reconcile, waiting};
 use saka_core::spec;
 use saka_core::task::TaskInput;
 use saka_core::vocab::WorkItemState;
@@ -17,10 +17,13 @@ impl Engine {
         let now = self.now();
         let snapshot = self.store.read(|c| {
             Ok(Snapshot {
-                specs: read::approved_specs(c)?,
+                specs: read::reconcile_specs(c)?,
                 tasks: read::load_tasks(c, TaskSet::Reconcile)?,
+                work_item_dependencies: read::queued_work_item_dependencies(c)?,
+                spec_dependencies: read::spec_dependencies(c, None)?,
             })
         })?;
+        self.counters.note_waiting(waiting(&snapshot));
         let actions = reconcile(
             &snapshot,
             &self.cfg.loop_cfg,

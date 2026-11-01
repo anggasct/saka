@@ -12,6 +12,7 @@ pub(crate) struct Frontmatter {
     pub body_offset: usize,
     pub priority: i32,
     pub depends_on: Vec<String>,
+    pub depends_on_line: Option<u32>,
     pub issues: Vec<LintIssue>,
 }
 
@@ -82,6 +83,7 @@ pub(crate) fn read(text: &str, slug: &str) -> Option<Frontmatter> {
         body_offset,
         priority: 0,
         depends_on: Vec::new(),
+        depends_on_line: None,
         issues,
     };
     let mut seen = HashSet::new();
@@ -164,6 +166,7 @@ fn read_priority(entry: &Entry<'_>, front: &mut Frontmatter) {
 }
 
 fn read_depends_on(entry: &Entry<'_>, slug: &str, front: &mut Frontmatter) {
+    front.depends_on_line = Some(entry.line);
     let invalid = |line: u32, value: &str| {
         LintIssue::new(LintCode::DependsOnInvalid, line).with("value", value)
     };

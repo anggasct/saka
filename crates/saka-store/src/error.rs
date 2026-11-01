@@ -2,6 +2,8 @@
 pub enum StoreError {
     #[error("migration {version} was changed after it was applied")]
     MigrationChecksumMismatch { version: i64 },
+    #[error("migration {version} leaves rows in {table} that break a foreign key")]
+    MigrationForeignKeys { version: i64, table: String },
     #[error("database is at migration {database}, this binary knows up to {binary}")]
     MigrationVersionAhead { database: i64, binary: i64 },
     #[error("job {job} is no longer leased by this worker")]
@@ -30,6 +32,7 @@ impl StoreError {
     pub fn code(&self) -> &'static str {
         match self {
             StoreError::MigrationChecksumMismatch { .. } => "migration_checksum_mismatch",
+            StoreError::MigrationForeignKeys { .. } => "migration_foreign_keys",
             StoreError::MigrationVersionAhead { .. } => "migration_version_ahead",
             StoreError::LeaseLost { .. } => "lease_lost",
             StoreError::Constraint(_) => "constraint_violation",

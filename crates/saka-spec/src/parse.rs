@@ -20,6 +20,7 @@ const AFTER_COLUMN: &str = "after";
 pub struct Parsed {
     pub model: Option<SpecModel>,
     pub issues: Vec<LintIssue>,
+    pub depends_on_line: Option<u32>,
 }
 
 impl Parsed {
@@ -32,6 +33,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
     let fail = |issue: LintIssue| Parsed {
         model: None,
         issues: vec![issue],
+        depends_on_line: None,
     };
     if bytes.len() > MAX_SPEC_BYTES {
         return fail(
@@ -54,6 +56,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
         return fail(LintIssue::new(LintCode::NotASpec, 1));
     };
 
+    let depends_on_line = front.depends_on_line;
     let mut issues = front.issues;
     if !valid_slug(&slug) {
         issues.push(LintIssue::new(LintCode::SlugInvalid, 1).with("slug", slug.clone()));
@@ -153,6 +156,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             steps,
         }),
         issues,
+        depends_on_line,
     }
 }
 

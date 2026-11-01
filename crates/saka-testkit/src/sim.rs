@@ -8,7 +8,9 @@ use saka_core::task::LoopConfig;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
-use saka_engine::{Engine, EngineConfig, Integration, JobReport, NewProject, Ports};
+use saka_engine::{
+    Engine, EngineConfig, EngineError, Integration, JobReport, NewProject, Ports, RegisteredSpec,
+};
 use saka_ports::Clock;
 use saka_store::{Store, TaskSet, read};
 
@@ -230,14 +232,50 @@ impl Sim {
             .unwrap()
     }
 
+    pub fn register(&self, path: &str, text: &str) -> RegisteredSpec {
+        let engine = self.engine();
+        let cause = engine.cause("human:operator:local");
+        engine
+            .register_spec(
+                self.project_id,
+                path,
+                &self.world.base_head(),
+                text.as_bytes(),
+                &cause,
+            )
+            .unwrap()
+    }
+
+    pub fn approve_spec(
+        &self,
+        spec_id: SpecId,
+        revision_id: SpecRevisionId,
+    ) -> Result<Vec<WorkItemId>, EngineError> {
+        let engine = self.engine();
+        let cause = engine.cause("human:operator:local");
+        engine.approve_spec(spec_id, revision_id, None, &cause)
+    }
+
     pub fn tasks(&self) -> Vec<Task> {
+        self.tasks_of(self.spec_id)
+    }
+
+    pub fn tasks_of(&self, spec_id: SpecId) -> Vec<Task> {
         let engine = self.engine();
         let mut tasks: Vec<Task> = engine
             .store()
-            .read(|c| read::load_tasks(c, TaskSet::Spec(self.spec_id)))
+            .read(|c| read::load_tasks(c, TaskSet::Spec(spec_id)))
             .unwrap();
         tasks.sort_by_key(|t| t.item.step_index);
         tasks
+    }
+
+    pub fn all_tasks(&self) -> Vec<Task> {
+        let engine = self.engine();
+        engine
+            .store()
+            .read(|c| read::load_tasks(c, TaskSet::Reconcile))
+            .unwrap()
     }
 
     pub fn task(&self, step: u32) -> Task {
@@ -248,10 +286,14 @@ impl Sim {
     }
 
     pub fn spec(&self) -> Spec {
+        self.spec_of(self.spec_id)
+    }
+
+    pub fn spec_of(&self, spec_id: SpecId) -> Spec {
         let engine = self.engine();
         engine
             .store()
-            .read(|c| read::load_spec(c, self.spec_id))
+            .read(|c| read::load_spec(c, spec_id))
             .unwrap()
             .unwrap()
     }
@@ -289,7 +331,7 @@ impl Sim {
     pub fn operate(&mut self) {
         let engine = self.engine();
         let cause = engine.cause("human:operator:local");
-        for task in self.tasks() {
+        for task in self.all_tasks() {
             let id = task.item.id;
             if self.cfg.operator.merge && task.is_at(Stage::Merge, StagePhase::AwaitingMerge) {
                 let _ = engine.request_merge(id, task.item.version, None, &cause);

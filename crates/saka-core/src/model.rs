@@ -85,6 +85,8 @@ pub struct StepPlan {
     pub id: String,
     pub index: u32,
     pub work: String,
+    #[serde(default)]
+    pub after: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,6 +95,31 @@ pub struct RevisionView {
     pub lint_ok: bool,
     pub issues: Value,
     pub steps: Vec<StepPlan>,
+    pub parser_version: u32,
+    pub priority: i64,
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependsOn {
+    pub slug: String,
+    pub spec_id: SpecId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecDependency {
+    pub spec_id: SpecId,
+    pub depends_on_spec_id: SpecId,
+    pub depends_on_slug: String,
+    pub revision_id: SpecRevisionId,
+    pub project_id: ProjectId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkItemDependency {
+    pub work_item_id: WorkItemId,
+    pub depends_on_work_item_id: WorkItemId,
+    pub project_id: ProjectId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

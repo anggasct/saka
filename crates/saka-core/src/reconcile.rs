@@ -1,7 +1,7 @@
-use crate::admission::{self, Candidate};
+use crate::admission::{self, Candidate, Waiting};
 use crate::ids::{SpecId, WorkItemId};
 use crate::job::Job;
-use crate::model::{Spec, Task};
+use crate::model::{Spec, SpecDependency, Task, WorkItemDependency};
 use crate::react::phase_jobs;
 use crate::task::{LoopConfig, TaskInput};
 use crate::time::Timestamp;
@@ -18,6 +18,27 @@ pub enum Action {
 pub struct Snapshot {
     pub specs: Vec<Spec>,
     pub tasks: Vec<Task>,
+    pub work_item_dependencies: Vec<WorkItemDependency>,
+    pub spec_dependencies: Vec<SpecDependency>,
+}
+
+pub fn waiting(snapshot: &Snapshot) -> Vec<(WorkItemId, Vec<Waiting>)> {
+    snapshot
+        .tasks
+        .iter()
+        .filter(|t| t.item.state == WorkItemState::Queued)
+        .map(|t| {
+            let waits = admission::waiting_on(
+                t,
+                &snapshot.tasks,
+                &snapshot.specs,
+                &snapshot.work_item_dependencies,
+                &snapshot.spec_dependencies,
+            );
+            (t.item.id, waits)
+        })
+        .filter(|(_, waits)| !waits.is_empty())
+        .collect()
 }
 
 pub fn reconcile(
@@ -39,6 +60,7 @@ pub fn reconcile(
             )
         })
         .count();
+    let waits = waiting(snapshot);
     let candidates: Vec<Candidate> = tasks
         .iter()
         .filter(|t| t.item.state == WorkItemState::Queued)
@@ -48,23 +70,16 @@ pub fn reconcile(
                 .specs
                 .iter()
                 .find(|s| s.id == spec_id && s.state == SpecState::Approved)?;
-            let index = t.item.step_index?;
             Some(Candidate {
                 work_item_id: t.item.id,
-                spec_id,
                 priority: t.item.priority,
                 spec_approved_at: spec.approved_at.unwrap_or(spec.created_at),
-                step_index: index,
-                previous_step_done: index == 1
-                    || of_spec(spec_id).any(|o| {
-                        o.item.step_index == Some(index - 1) && o.item.state == WorkItemState::Done
-                    }),
-                spec_has_active_task: of_spec(spec_id).any(|o| {
-                    matches!(
-                        o.item.state,
-                        WorkItemState::Admitted | WorkItemState::InStage | WorkItemState::Blocked
-                    )
-                }),
+                step_index: t.item.step_index?,
+                waiting_on: waits
+                    .iter()
+                    .find(|(id, _)| *id == t.item.id)
+                    .map(|(_, w)| w.clone())
+                    .unwrap_or_default(),
                 spec_has_cancelled_task: of_spec(spec_id)
                     .any(|o| o.item.state == WorkItemState::Cancelled),
             })

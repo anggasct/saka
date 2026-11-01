@@ -11,7 +11,7 @@ use saka_core::ids::{
     SpecRevisionId,
 };
 use saka_core::job::{Job, JobKind};
-use saka_core::model::{Coded, RevisionView, Spec, StepPlan, Task};
+use saka_core::model::{Coded, RevisionView, Spec, StepPlan, Task, WorkItemDependency};
 use saka_core::policy::{Decision, DecisionSource, Effect};
 use saka_core::react::react;
 use saka_core::reconcile::{Action, Snapshot, reconcile};
@@ -51,7 +51,20 @@ struct World {
     now: Timestamp,
     spec: Spec,
     tasks: Vec<Task>,
+    deps: Vec<WorkItemDependency>,
     jobs: Vec<Job>,
+}
+
+fn approval(if_match: SpecRevisionId, repo: RepoId) -> spec::Approval<'static> {
+    spec::Approval {
+        if_match,
+        reason: None,
+        default_repo: repo,
+        parser_version: 2,
+        depends_on_line: 1,
+        project_specs: &[],
+        project_graph: &[],
+    }
 }
 
 impl World {
@@ -65,6 +78,8 @@ impl World {
             lint_ok: true,
             issue_codes: vec![],
             title: "Mark tasks as done".into(),
+            parser_version: 2,
+            priority: 0,
         };
         let events = spec::record_revision(
             None,
@@ -84,6 +99,7 @@ impl World {
             now,
             spec,
             tasks: vec![],
+            deps: vec![],
             jobs: vec![],
         }
     }
@@ -98,13 +114,18 @@ impl World {
                     id: "S1".into(),
                     index: 1,
                     work: "Add done".into(),
+                    after: vec![],
                 },
                 StepPlan {
                     id: "S2".into(),
                     index: 2,
                     work: "Show done".into(),
+                    after: vec!["S1".into()],
                 },
             ],
+            parser_version: 2,
+            priority: 0,
+            depends_on: vec![],
         };
         let mut ctx = Ctx {
             now: self.now,
@@ -113,12 +134,11 @@ impl World {
         let events = spec::approve(
             &self.spec,
             &latest,
-            self.spec.latest_revision_id,
-            None,
-            RepoId(Uuid::from_u128(901)),
+            approval(self.spec.latest_revision_id, RepoId(Uuid::from_u128(901))),
             &mut ctx,
         )
         .unwrap();
+        self.deps = spec::approval_graph(&self.spec, &latest, &events).1;
         for e in &events {
             self.spec = spec::evolve(Some(self.spec.clone()), e, self.now).unwrap();
             if let Some(t) = task::evolve(None, e, self.now) {
@@ -168,6 +188,8 @@ impl World {
             &Snapshot {
                 specs: vec![self.spec.clone()],
                 tasks: self.tasks.clone(),
+                work_item_dependencies: self.deps.clone(),
+                spec_dependencies: vec![],
             },
             &cfg(),
             2,
@@ -539,6 +561,9 @@ fn approval_checks_revision_lint_and_state() {
         lint_ok: true,
         issues: json!([]),
         steps: vec![],
+        parser_version: 2,
+        priority: 0,
+        depends_on: vec![],
     };
     let mut ctx = Ctx {
         now: w.now,
@@ -549,12 +574,26 @@ fn approval_checks_revision_lint_and_state() {
         spec::approve(
             &w.spec,
             &latest,
-            SpecRevisionId(Uuid::nil()),
-            None,
-            repo,
+            approval(SpecRevisionId(Uuid::nil()), repo),
             &mut ctx
         ),
         Err(Rejection::RevisionStale)
+    );
+    let old_parser = RevisionView {
+        parser_version: 1,
+        ..latest.clone()
+    };
+    assert_eq!(
+        spec::approve(
+            &w.spec,
+            &old_parser,
+            approval(w.spec.latest_revision_id, repo),
+            &mut ctx
+        ),
+        Err(Rejection::SpecReparseRequired {
+            parser_version: 1,
+            current_parser_version: 2
+        })
     );
     let failing = RevisionView {
         lint_ok: false,
@@ -565,9 +604,7 @@ fn approval_checks_revision_lint_and_state() {
         spec::approve(
             &w.spec,
             &failing,
-            w.spec.latest_revision_id,
-            None,
-            repo,
+            approval(w.spec.latest_revision_id, repo),
             &mut ctx
         ),
         Err(Rejection::SpecNotReady { .. })
@@ -578,9 +615,7 @@ fn approval_checks_revision_lint_and_state() {
         spec::approve(
             &approved,
             &latest,
-            w.spec.latest_revision_id,
-            None,
-            repo,
+            approval(w.spec.latest_revision_id, repo),
             &mut ctx
         ),
         Err(Rejection::SpecAlreadyApproved)
@@ -601,6 +636,8 @@ fn same_content_records_nothing_and_old_content_reuses_its_revision() {
         lint_ok: false,
         issue_codes: vec!["steps_missing".into()],
         title: "T".into(),
+        parser_version: 2,
+        priority: 0,
     };
     let unchanged = spec::record_revision(
         Some(&w.spec),

@@ -387,11 +387,13 @@ fn frontmatter_reads_dependencies_and_priority() {
 
     let full = parse("x.md", fixture!("frontmatter-full"));
     assert!(full.issues.is_empty(), "{:?}", full.issues);
-    let model = full.model.unwrap();
+    let model = full.model.clone().unwrap();
     assert_eq!(model.priority, 10);
     assert_eq!(model.depends_on, vec!["auth-model", "billing"]);
     assert_eq!(model.title, "Full frontmatter");
     assert_eq!(model.steps[0].line, 26);
+    assert_eq!(full.depends_on_line, Some(10));
+    assert_eq!(parse("x.md", fixture!("two-step")).depends_on_line, None);
 }
 
 #[test]
