@@ -261,12 +261,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         permission,
     )? {
         let wanted = p.state == saka_core::vocab::PermissionState::Pending
-            || (p.delivered_at.is_none()
-                && matches!(
-                    p.state,
-                    saka_core::vocab::PermissionState::Allowed
-                        | saka_core::vocab::PermissionState::Denied
-                ));
+            || (p.delivered_at.is_none() && saka_core::task::awaits_delivery(&p));
         if wanted
             && latest_sessions.get(&p.session_id) == Some(&p.work_item_id)
             && let Some(t) = tasks.get_mut(&p.work_item_id)
@@ -525,7 +520,7 @@ pub fn usage_records(
     conn: &Connection,
     work_item: Option<WorkItemId>,
     session: Option<SessionId>,
-) -> Result<Vec<saka_core::model::UsageRecord>> {
+) -> Result<Vec<(saka_core::model::UsageRecord, ProjectId)>> {
     let mut stmt = conn.prepare(
         "SELECT * FROM usage_record WHERE (?1 IS NULL OR work_item_id = ?1) AND (?2 IS NULL OR session_id = ?2)
          ORDER BY ended_at, id",
@@ -536,20 +531,24 @@ pub fn usage_records(
     ])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
-        out.push(saka_core::model::UsageRecord {
-            id: saka_core::ids::UsageRecordId(uuid(row, "id")?),
-            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
-            stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
-            session_id: SessionId(uuid(row, "session_id")?),
-            account: row.get("account")?,
-            turn: u32_col(row, "turn")?,
-            status: row.get("status")?,
-            input_tokens: row.get("input_tokens")?,
-            output_tokens: row.get("output_tokens")?,
-            cost_usd_micros: row.get("cost_usd_micros")?,
-            running_ms: row.get("running_ms")?,
-            ended_at: ts(row, "ended_at")?,
-        });
+        let project = ProjectId(uuid(row, "project_id")?);
+        out.push((
+            saka_core::model::UsageRecord {
+                id: saka_core::ids::UsageRecordId(uuid(row, "id")?),
+                work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+                stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
+                session_id: SessionId(uuid(row, "session_id")?),
+                account: row.get("account")?,
+                turn: u32_col(row, "turn")?,
+                status: row.get("status")?,
+                input_tokens: row.get("input_tokens")?,
+                output_tokens: row.get("output_tokens")?,
+                cost_usd_micros: row.get("cost_usd_micros")?,
+                running_ms: row.get("running_ms")?,
+                ended_at: ts(row, "ended_at")?,
+            },
+            project,
+        ));
     }
     Ok(out)
 }

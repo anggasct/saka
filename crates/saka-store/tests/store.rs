@@ -283,7 +283,7 @@ impl World {
         expected.added_rules.clear();
         expected.permissions.retain(|p| {
             p.state == saka_core::vocab::PermissionState::Pending
-                || p.delivered_at.is_none() && p.state != saka_core::vocab::PermissionState::Expired
+                || p.delivered_at.is_none() && task::awaits_delivery(p)
         });
         assert_eq!(stored, expected, "stored task differs after {events:?}");
         events

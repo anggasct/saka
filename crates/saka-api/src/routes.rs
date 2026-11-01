@@ -652,6 +652,7 @@ pub async fn answer_permission(
                     request,
                     req.decision == dto::Decision::Allow,
                     req.message,
+                    false,
                     &cause,
                     Some(&action),
                 )

@@ -1,7 +1,10 @@
 use saka_core::Ctx;
 use saka_core::event::Event;
-use saka_core::ids::{PermissionRequestId, ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
-use saka_core::model::ProjectRepo;
+use saka_core::ids::{
+    PermissionRequestId, PermissionRuleId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId,
+    WorkItemId,
+};
+use saka_core::model::{PermissionRule, ProjectRepo};
 use saka_core::rejection::Rejection;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
@@ -17,6 +20,14 @@ use crate::views::{ProjectView, RevisionInfo, SpecView, step_items};
 use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
 
 const REASON_MAX: usize = 500;
+const STEER_MAX: usize = 4000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionCommand {
+    Steer { text: String },
+    Interrupt,
+    Stop { reason: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewProject {
@@ -585,6 +596,93 @@ impl Engine {
         )
     }
 
+    pub fn session_command(
+        &self,
+        session: SessionId,
+        command: SessionCommand,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let work_item = self
+            .store
+            .read(|c| read::session_work_item(c, session))?
+            .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let steering = matches!(command, SessionCommand::Steer { .. });
+        let input = match command {
+            SessionCommand::Steer { text } => {
+                let len = text.trim().chars().count();
+                if len == 0 || len > STEER_MAX {
+                    return Err(EngineError::Invalid {
+                        field: "text",
+                        code: "length".into(),
+                    });
+                }
+                TaskInput::Steer {
+                    session_id: session,
+                    text,
+                }
+            }
+            SessionCommand::Interrupt => TaskInput::Interrupt {
+                session_id: session,
+            },
+            SessionCommand::Stop { reason: why } => TaskInput::StopSession {
+                session_id: session,
+                reason: reason(&why)?,
+            },
+        };
+        let events = self.decide(
+            work_item,
+            Some(input),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Session(session))),
+                ..Extra::default()
+            },
+        )?;
+        let steered = events
+            .iter()
+            .any(|e| matches!(e, Event::SessionSteered { .. }));
+        if steering && !steered {
+            // The turn budget ran out: the task is now blocked and the steer was not sent.
+            return Err(EngineError::Rejected(Rejection::InvalidState {
+                state: "idle".into(),
+            }));
+        }
+        Ok(events)
+    }
+
+    pub fn revoke_rule(
+        &self,
+        id: PermissionRuleId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<PermissionRule> {
+        let why = reason(why)?;
+        let _guard = self.locked()?;
+        let now = self.now();
+        let rule = self
+            .store
+            .read(|c| read::load_permission_rule(c, id))?
+            .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let events = saka_core::rule::revoke(&rule, why)?;
+        let mut batch = Batch::new(now);
+        let mut after = Some(rule.clone());
+        for e in &events {
+            after = saka_core::rule::evolve(after, e, now);
+            self.push_event(&mut batch, e, Some(rule.project_id), cause, now);
+        }
+        let after = after.ok_or_else(|| EngineError::Internal("revoke dropped the rule".into()))?;
+        if let Some(a) = action {
+            let reply = (a.respond)(Produced::Rule(&after));
+            batch.action = Some(a.record(self, cause, Some(rule.project_id), Some(id.0), reply));
+        }
+        batch.permission_rules.push(after.clone());
+        self.commit(&batch)?;
+        Ok(after)
+    }
+
     pub fn answer_permission(
         &self,
         request: PermissionRequestId,
@@ -592,7 +690,7 @@ impl Engine {
         message: Option<String>,
         cause: &Cause,
     ) -> Result<Vec<Event>> {
-        self.answer_permission_with(request, allow, message, cause, None)
+        self.answer_permission_with(request, allow, message, false, cause, None)
     }
 
     pub fn answer_permission_with(
@@ -600,6 +698,7 @@ impl Engine {
         request: PermissionRequestId,
         allow: bool,
         message: Option<String>,
+        remember: bool,
         cause: &Cause,
         action: Option<&Action<'_>>,
     ) -> Result<Vec<Event>> {
@@ -613,13 +712,20 @@ impl Engine {
             .store
             .read(|c| read::permission_work_item(c, request))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let active_rules = if remember {
+            let task = self.load_task(work_item)?;
+            self.store
+                .read(|c| read::active_permission_rules(c, task.item.project_id))?
+        } else {
+            Vec::new()
+        };
         let input = TaskInput::AnswerPermission {
             permission_request_id: request,
             allow,
             message,
             actor: OPERATOR.to_string(),
-            remember: false,
-            active_rules: Vec::new(),
+            remember,
+            active_rules,
         };
         self.decide(
             work_item,
