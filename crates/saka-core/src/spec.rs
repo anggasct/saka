@@ -6,10 +6,13 @@ use uuid::Uuid;
 use crate::Ctx;
 use crate::event::Event;
 use crate::ids::{ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
-use crate::model::{DependsOn, RevisionView, Spec, SpecDependency, WorkItemDependency};
+use crate::model::{
+    DependsOn, RevisionView, Spec, SpecDependency, StepPlan, WorkItem, WorkItemDependency,
+};
+use crate::plan::{RevisionPlan, plan_revision};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
-use crate::vocab::{SpecOrigin, SpecState};
+use crate::vocab::{PlanAction, SpecOrigin, SpecState, SupersedeReason, WorkItemState};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRevision {
@@ -73,6 +76,8 @@ pub struct Approval<'a> {
     pub depends_on_line: u32,
     pub project_specs: &'a [Spec],
     pub project_graph: &'a [SpecDependency],
+    pub approved: Option<&'a RevisionView>,
+    pub tasks: &'a [WorkItem],
 }
 
 pub fn approve(
@@ -95,15 +100,32 @@ pub fn approve(
             issues: latest.issues.clone(),
         });
     }
-    match spec.state {
-        SpecState::Ready => {}
-        SpecState::Approved => return Err(Rejection::SpecAlreadyApproved),
+    let plan = match spec.state {
+        SpecState::Ready => None,
+        SpecState::Approved if spec.approved_revision_id == Some(latest.id) => {
+            return Err(Rejection::SpecAlreadyApproved);
+        }
+        SpecState::Approved => {
+            let from = approval
+                .approved
+                .filter(|r| Some(r.id) == spec.approved_revision_id)
+                .ok_or_else(|| Rejection::InvalidState {
+                    state: spec.state.as_str().to_string(),
+                })?;
+            let plan = plan_revision(from, latest, approval.tasks, approval.parser_version);
+            if !plan.conflicts().is_empty() {
+                return Err(Rejection::RevisionConflict {
+                    steps: plan.conflict_params(),
+                });
+            }
+            Some(plan)
+        }
         other => {
             return Err(Rejection::InvalidState {
                 state: other.as_str().to_string(),
             });
         }
-    }
+    };
     let (depends_on, issues) = resolve_dependencies(spec, latest, &approval);
     if !issues.is_empty() {
         return Err(Rejection::SpecNotReady {
@@ -116,10 +138,11 @@ pub fn approve(
         reason: approval.reason,
         priority: latest.priority,
         depends_on,
+        previous_revision_id: plan.as_ref().map(|p| p.from_revision_id),
     }];
-    for step in &latest.steps {
+    let created = |step: &StepPlan, ctx: &mut Ctx<'_>| {
         let key = format!("{}/s{}", spec.slug, step.index);
-        events.push(Event::WorkItemCreated {
+        Event::WorkItemCreated {
             work_item_id: WorkItemId::new(ctx.ids),
             project_id: spec.project_id,
             spec_id: spec.id,
@@ -131,8 +154,101 @@ pub fn approve(
             work: step.work.clone(),
             repo_id: approval.default_repo,
             priority: latest.priority,
+        }
+    };
+    let Some(plan) = plan else {
+        for step in &latest.steps {
+            events.push(created(step, ctx));
+        }
+        return Ok(events);
+    };
+    for planned in &plan.steps {
+        let step = latest.steps.iter().find(|s| s.id == planned.step_id);
+        match (planned.action, step, planned.work_item_id) {
+            (PlanAction::Add, Some(step), _) => events.push(created(step, ctx)),
+            (PlanAction::Repin | PlanAction::Restore, Some(step), Some(work_item_id)) => {
+                events.push(Event::WorkItemRepinned {
+                    work_item_id,
+                    spec_revision_id: latest.id,
+                    step_index: step.index,
+                    work: step.work.clone(),
+                    priority: latest.priority,
+                    restored: planned.action == PlanAction::Restore,
+                });
+            }
+            (PlanAction::Supersede, _, Some(work_item_id)) => {
+                events.push(Event::WorkItemSuperseded {
+                    work_item_id,
+                    spec_revision_id: latest.id,
+                    reason: SupersedeReason::StepRemoved,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(events)
+}
+
+pub fn revision_plan(
+    spec: &Spec,
+    approved: &RevisionView,
+    latest: &RevisionView,
+    tasks: &[WorkItem],
+    parser_version: u32,
+) -> Option<RevisionPlan> {
+    let pending = spec.state == SpecState::Approved
+        && spec.approved_revision_id == Some(approved.id)
+        && latest.id == spec.latest_revision_id
+        && latest.id != approved.id;
+    pending.then(|| plan_revision(approved, latest, tasks, parser_version))
+}
+
+pub fn withdraw(spec: &Spec, tasks: &[WorkItem], reason: String) -> Result<Vec<Event>, Rejection> {
+    if !matches!(
+        spec.state,
+        SpecState::Draft | SpecState::Ready | SpecState::Approved
+    ) {
+        return Err(Rejection::InvalidState {
+            state: spec.state.as_str().to_string(),
         });
     }
+    let mut mine: Vec<&WorkItem> = tasks
+        .iter()
+        .filter(|t| t.spec_id == Some(spec.id))
+        .collect();
+    mine.sort_by_key(|t| (t.step_index, t.id));
+    let active: Vec<Value> = mine
+        .iter()
+        .filter(|t| {
+            matches!(
+                t.state,
+                WorkItemState::Admitted
+                    | WorkItemState::InStage
+                    | WorkItemState::Blocked
+                    | WorkItemState::TakenOver
+            )
+        })
+        .map(|t| json!({ "work_item_id": t.id, "step_id": t.step_id, "state": t.state }))
+        .collect();
+    if !active.is_empty() {
+        return Err(Rejection::SpecHasActiveTasks {
+            tasks: Value::Array(active),
+        });
+    }
+    let revision = spec.approved_revision_id.unwrap_or(spec.latest_revision_id);
+    let mut events = vec![Event::SpecWithdrawn {
+        spec_id: spec.id,
+        reason,
+    }];
+    events.extend(
+        mine.iter()
+            .filter(|t| !t.state.has_started() && t.state != WorkItemState::Superseded)
+            .map(|t| Event::WorkItemSuperseded {
+                work_item_id: t.id,
+                spec_revision_id: revision,
+                reason: SupersedeReason::SpecWithdrawn,
+            }),
+    );
     Ok(events)
 }
 
@@ -221,9 +337,15 @@ pub fn approval_graph(
     spec: &Spec,
     latest: &RevisionView,
     events: &[Event],
+    tasks: &[WorkItem],
 ) -> (Vec<SpecDependency>, Vec<WorkItemDependency>) {
     let mut specs = Vec::new();
-    let mut items: BTreeMap<&str, WorkItemId> = BTreeMap::new();
+    let mut items: BTreeMap<&str, WorkItemId> = tasks
+        .iter()
+        .filter(|t| t.spec_id == Some(spec.id) && t.state != WorkItemState::Superseded)
+        .filter_map(|t| Some((t.step_id.as_deref()?, t.id)))
+        .collect();
+    let mut rewritten = Vec::new();
     for event in events {
         match event {
             Event::SpecApproved {
@@ -238,6 +360,17 @@ pub fn approval_graph(
                 ..
             } => {
                 items.insert(step_id.as_str(), *work_item_id);
+                rewritten.push(*work_item_id);
+            }
+            Event::WorkItemRepinned { work_item_id, .. } => {
+                if let Some(step_id) = tasks
+                    .iter()
+                    .find(|t| t.id == *work_item_id)
+                    .and_then(|t| t.step_id.as_deref())
+                {
+                    items.insert(step_id, *work_item_id);
+                }
+                rewritten.push(*work_item_id);
             }
             _ => {}
         }
@@ -257,6 +390,9 @@ pub fn approval_graph(
         let Some(work_item_id) = items.get(step.id.as_str()) else {
             continue;
         };
+        if !rewritten.contains(work_item_id) {
+            continue;
+        }
         for after in &step.after {
             if let Some(depends_on) = items.get(after.as_str()) {
                 item_rows.push(WorkItemDependency {
@@ -268,6 +404,18 @@ pub fn approval_graph(
         }
     }
     (spec_rows, item_rows)
+}
+
+pub fn ships(states: impl IntoIterator<Item = WorkItemState>) -> bool {
+    let mut done = false;
+    for state in states {
+        match state {
+            WorkItemState::Done => done = true,
+            WorkItemState::Superseded => {}
+            _ => return false,
+        }
+    }
+    done
 }
 
 pub fn ship(spec: &Spec, all_tasks_done: bool) -> Result<Vec<Event>, Rejection> {
@@ -344,7 +492,12 @@ pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec>
             s.state = SpecState::Approved;
             s.priority = *priority;
             s.approved_revision_id = Some(*revision_id);
-            s.approved_at = Some(now);
+            s.approved_at = s.approved_at.or(Some(now));
+            s.updated_at = now;
+            Some(s)
+        }
+        (Some(mut s), Event::SpecWithdrawn { .. }) => {
+            s.state = SpecState::Withdrawn;
             s.updated_at = now;
             Some(s)
         }

@@ -19,6 +19,10 @@ pub enum Rejection {
         parser_version: u32,
         current_parser_version: u32,
     },
+    #[error("revision changes steps that already started")]
+    RevisionConflict { steps: Value },
+    #[error("spec has active tasks")]
+    SpecHasActiveTasks { tasks: Value },
     #[error("merge is not ready")]
     MergeNotReady {
         gate_outcome: Option<String>,
@@ -54,6 +58,8 @@ impl Rejection {
             Rejection::SpecNotReady { .. } => "spec_not_ready",
             Rejection::SpecAlreadyApproved => "spec_already_approved",
             Rejection::SpecReparseRequired { .. } => "spec_reparse_required",
+            Rejection::RevisionConflict { .. } => "revision_conflict",
+            Rejection::SpecHasActiveTasks { .. } => "spec_has_active_tasks",
             Rejection::MergeNotReady { .. } => "merge_not_ready",
             Rejection::PermissionAlreadyAnswered => "permission_already_answered",
             Rejection::NotFound => "not_found",
@@ -78,6 +84,8 @@ impl Rejection {
                 "parser_version": parser_version,
                 "current_parser_version": current_parser_version,
             }),
+            Rejection::RevisionConflict { steps } => json!({ "steps": steps }),
+            Rejection::SpecHasActiveTasks { tasks } => json!({ "tasks": tasks }),
             Rejection::MergeNotReady {
                 gate_outcome,
                 head_sha,

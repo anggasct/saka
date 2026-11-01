@@ -154,6 +154,11 @@ pub fn decide(
     if task.item.origin != WorkItemOrigin::SpecStep {
         return Err(Rejection::Unsupported);
     }
+    if task.item.state == WorkItemState::Superseded {
+        return Err(Rejection::InvalidState {
+            state: task.item.state.as_str().to_string(),
+        });
+    }
     let d = Decider {
         task,
         cfg,
@@ -1323,6 +1328,25 @@ fn set_place(item: &mut WorkItem, state: WorkItemState, place: Option<(Stage, St
 fn apply(t: &mut Task, event: &Event, now: Timestamp) {
     use Event as E;
     match event {
+        E::WorkItemRepinned {
+            spec_revision_id,
+            step_index,
+            work,
+            priority,
+            restored,
+            ..
+        } => {
+            t.item.spec_revision_id = Some(*spec_revision_id);
+            t.item.step_index = Some(*step_index);
+            t.item.work.clone_from(work);
+            t.item.priority = *priority;
+            if *restored {
+                set_place(&mut t.item, WorkItemState::Queued, None);
+            }
+        }
+        E::WorkItemSuperseded { .. } => {
+            set_place(&mut t.item, WorkItemState::Superseded, None);
+        }
         E::WorkItemAdmitted { .. } => {
             t.item.state = WorkItemState::Admitted;
             t.item.admitted_at = Some(now);
@@ -1727,6 +1751,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SpecRegistered { .. }
         | E::SpecRevisionRecorded { .. }
         | E::SpecApproved { .. }
+        | E::SpecWithdrawn { .. }
         | E::SpecShipped { .. }
         | E::JobExhausted { .. } => {}
     }

@@ -86,6 +86,10 @@ pub struct StepPlan {
     pub index: u32,
     pub work: String,
     #[serde(default)]
+    pub ac: Vec<String>,
+    #[serde(default)]
+    pub commands: Vec<String>,
+    #[serde(default)]
     pub after: Vec<String>,
 }
 

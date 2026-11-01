@@ -8,7 +8,7 @@ use saka_core::event::Event;
 use saka_core::gate::Check;
 use saka_core::ids::{
     ChangeRequestId, EnvironmentId, IdSource, PermissionRequestId, ProjectId, RepoId, SessionId,
-    WorkItemId,
+    SpecRevisionId, WorkItemId,
 };
 use saka_core::job::{Job, JobKind};
 use saka_core::model::{Coded, Project, ProjectRepo, Repo, RevisionView, Spec, StepPlan, Task};
@@ -197,11 +197,13 @@ impl World {
                 depends_on_line: 1,
                 project_specs: &[],
                 project_graph: &[],
+                approved: None,
+                tasks: &[],
             },
             &mut ctx,
         )
         .unwrap();
-        let (spec_rows, item_rows) = spec::approval_graph(&self.spec, &view, &events);
+        let (spec_rows, item_rows) = spec::approval_graph(&self.spec, &view, &events, &[]);
         let mut tasks = Vec::new();
         for e in &events {
             self.spec = spec::evolve(Some(self.spec.clone()), e, self.now).unwrap();
@@ -476,6 +478,123 @@ fn approve_writes_the_step_graph_with_the_work_items() {
         1
     );
     assert_eq!(count(&w.store, "spec_dependency"), 0);
+}
+
+#[test]
+fn re_approval_repins_the_row_and_replaces_its_dependencies() {
+    let mut w = World::new();
+    let tasks = w.approve();
+    let first = w.spec.clone();
+    let v2 = SpecRevisionId(w.ids.next_id());
+    let recorded = Event::SpecRevisionRecorded {
+        spec_id: w.spec.id,
+        revision_id: v2,
+        source_commit: "b".repeat(40),
+        content_hash: "sha256:def".into(),
+        lint_ok: true,
+        issue_codes: vec![],
+        title: "Mark tasks as done".into(),
+        reused: false,
+        parser_version: 2,
+        priority: 4,
+    };
+    w.spec = spec::evolve(Some(w.spec.clone()), &recorded, w.now).unwrap();
+    let mut batch = Batch::new(w.now);
+    batch
+        .events
+        .push(record(&recorded, w.project.id, &mut w.ids, w.now));
+    batch.specs.push(w.spec.clone());
+    batch.revisions.push(SpecRevisionRow {
+        id: v2.0,
+        spec_id: w.spec.id.0,
+        project_id: w.project.id,
+        source_commit: "b".repeat(40),
+        content_hash: "sha256:def".into(),
+        content: b"---\nsaka: spec\n---\n".to_vec(),
+        lint_ok: true,
+        lint_issues: json!([]),
+        model: json!({ "priority": 4, "steps": [
+            { "id": "S1", "index": 1, "work": "Add done", "ac": ["AC-01"], "commands": ["go test ./..."], "after": [], "line": 3 },
+            { "id": "S2", "index": 2, "work": "Show done twice", "ac": ["AC-01"], "commands": ["npm test"], "after": [], "line": 4 },
+        ]}),
+        parser_version: 2,
+        created_at: w.now,
+    });
+    w.store.commit(&batch).unwrap();
+
+    let (from, to) = w
+        .store
+        .read(|c| {
+            Ok((
+                read::revision_view(c, first.latest_revision_id)?.unwrap(),
+                read::revision_view(c, v2)?.unwrap(),
+            ))
+        })
+        .unwrap();
+    let items: Vec<_> = tasks.iter().map(|t| t.item.clone()).collect();
+    let mut ctx = Ctx {
+        now: w.now,
+        ids: &mut w.ids,
+    };
+    let events = spec::approve(
+        &w.spec,
+        &to,
+        spec::Approval {
+            if_match: v2,
+            reason: None,
+            default_repo: w.project.default_repo().unwrap(),
+            parser_version: 2,
+            depends_on_line: 1,
+            project_specs: &[],
+            project_graph: &[],
+            approved: Some(&from),
+            tasks: &items,
+        },
+        &mut ctx,
+    )
+    .unwrap();
+    let (spec_rows, item_rows) = spec::approval_graph(&w.spec, &to, &events, &items);
+    let mut batch = Batch::new(w.now);
+    batch.spec_dependencies = spec_rows;
+    batch.work_item_dependencies = item_rows;
+    batch.replaced_spec_dependencies.push(w.spec.id);
+    for e in &events {
+        w.spec = spec::evolve(Some(w.spec.clone()), e, w.now).unwrap();
+        if let Event::WorkItemRepinned { work_item_id, .. } = e {
+            batch.replaced_work_item_dependencies.push(*work_item_id);
+            let before = tasks.iter().find(|t| t.item.id == *work_item_id).cloned();
+            batch.tasks.extend(task::evolve(before, e, w.now));
+        }
+        batch
+            .events
+            .push(record(e, w.project.id, &mut w.ids, w.now));
+    }
+    batch.specs.push(w.spec.clone());
+    w.store.commit(&batch).unwrap();
+
+    let s2 = tasks.iter().find(|t| t.item.step_index == Some(2)).unwrap();
+    let stored = w
+        .store
+        .read(|c| read::load_task(c, s2.item.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.item.spec_revision_id, Some(v2));
+    assert_eq!(stored.item.work, "Show done twice");
+    assert_eq!(stored.item.priority, 4);
+    assert_eq!(
+        w.store
+            .read(|c| read::work_item_dependencies_of(c, &[s2.item.id]))
+            .unwrap(),
+        vec![]
+    );
+    let spec_row = w
+        .store
+        .read(|c| read::load_spec(c, w.spec.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(spec_row.approved_revision_id, Some(v2));
+    assert_eq!(spec_row.approved_at, first.approved_at);
+    assert_eq!(spec_row.priority, 4);
 }
 
 #[test]
@@ -766,8 +885,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(2));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(3));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -792,6 +911,8 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
             id: "S2".into(),
             index: 2,
             work: "Show done".into(),
+            ac: vec!["AC-01".into()],
+            commands: vec!["npm test".into()],
             after: vec!["S1".into()],
         }
     );

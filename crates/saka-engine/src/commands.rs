@@ -329,12 +329,19 @@ impl Engine {
         let (Some(spec), Some(view), Some(row)) = (spec, view, row) else {
             return Err(Rejection::NotFound.into());
         };
-        let (project_specs, project_graph) = self.store.read(|c| {
+        let (project_specs, project_graph, approved, tasks) = self.store.read(|c| {
+            let approved = match spec.approved_revision_id {
+                Some(id) => read::revision_view(c, id)?,
+                None => None,
+            };
             Ok((
                 read::project_specs(c, spec.project_id)?,
                 read::spec_dependencies(c, Some(spec.project_id))?,
+                approved,
+                read::load_tasks(c, TaskSet::Spec(spec.id))?,
             ))
         })?;
+        let items: Vec<_> = tasks.iter().map(|t| t.item.clone()).collect();
         let file_name = spec.path.rsplit('/').next().unwrap_or(&spec.path);
         let depends_on_line = saka_spec::parse(file_name, &row.content)
             .depends_on_line
@@ -356,19 +363,35 @@ impl Engine {
             depends_on_line,
             project_specs: &project_specs,
             project_graph: &project_graph,
+            approved: approved.as_ref(),
+            tasks: &items,
         };
         let events = spec::approve(&spec, &view, approval, &mut ctx)?;
 
         let mut batch = Batch::new(now);
         (batch.spec_dependencies, batch.work_item_dependencies) =
-            spec::approval_graph(&spec, &view, &events);
+            spec::approval_graph(&spec, &view, &events, &items);
+        batch.replaced_spec_dependencies.push(spec.id);
         let mut after = Some(spec.clone());
         let mut created = Vec::new();
         for e in &events {
             after = spec::evolve(after, e, now);
-            if let Some(t) = task::evolve(None, e, now) {
-                created.push(t.clone());
-                batch.tasks.push(t);
+            match e {
+                Event::WorkItemCreated { .. } => {
+                    if let Some(t) = task::evolve(None, e, now) {
+                        created.push(t.clone());
+                        batch.tasks.push(t);
+                    }
+                }
+                Event::WorkItemRepinned { work_item_id, .. }
+                | Event::WorkItemSuperseded { work_item_id, .. } => {
+                    if matches!(e, Event::WorkItemRepinned { .. }) {
+                        batch.replaced_work_item_dependencies.push(*work_item_id);
+                    }
+                    let current = tasks.iter().find(|t| t.item.id == *work_item_id).cloned();
+                    batch.tasks.extend(task::evolve(current, e, now));
+                }
+                _ => {}
             }
             self.push_event(&mut batch, e, Some(spec.project_id), cause, now);
         }

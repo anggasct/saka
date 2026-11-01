@@ -1,5 +1,5 @@
 use rusqlite::{Transaction, params};
-use saka_core::ids::ProjectId;
+use saka_core::ids::{ProjectId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
     Blocker, ChangeRequest, Environment, GateResult, PermissionRequest, Project, Repo, Session,
@@ -99,6 +99,8 @@ pub struct Batch {
     pub tasks: Vec<Task>,
     pub spec_dependencies: Vec<SpecDependency>,
     pub work_item_dependencies: Vec<WorkItemDependency>,
+    pub replaced_spec_dependencies: Vec<SpecId>,
+    pub replaced_work_item_dependencies: Vec<WorkItemId>,
     pub jobs: Vec<NewJob>,
 }
 
@@ -174,6 +176,18 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for t in &b.tasks {
         task(tx, t)?;
+    }
+    for id in &b.replaced_spec_dependencies {
+        tx.execute(
+            "DELETE FROM spec_dependency WHERE spec_id = ?1",
+            [id.to_string()],
+        )?;
+    }
+    for id in &b.replaced_work_item_dependencies {
+        tx.execute(
+            "DELETE FROM work_item_dependency WHERE work_item_id = ?1",
+            [id.to_string()],
+        )?;
     }
     for d in &b.spec_dependencies {
         tx.execute(
@@ -369,7 +383,8 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
         "INSERT INTO work_item (id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key, work,
            repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
-         ON CONFLICT (id) DO UPDATE SET state = excluded.state, stage = excluded.stage,
+         ON CONFLICT (id) DO UPDATE SET spec_revision_id = excluded.spec_revision_id,
+           step_index = excluded.step_index, work = excluded.work, state = excluded.state, stage = excluded.stage,
            stage_phase = excluded.stage_phase, priority = excluded.priority, version = excluded.version,
            admitted_at = excluded.admitted_at, done_at = excluded.done_at, updated_at = excluded.updated_at",
         params![

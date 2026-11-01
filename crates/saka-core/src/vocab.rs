@@ -58,7 +58,12 @@ vocab!(WorkItemState {
     TakenOver => "taken_over",
     Done => "done",
     Cancelled => "cancelled",
+    Superseded => "superseded",
 });
+vocab!(SupersedeReason { StepRemoved => "step_removed", SpecWithdrawn => "spec_withdrawn" });
+vocab!(PlanAction { Keep => "keep", Repin => "repin", Restore => "restore", Add => "add", Supersede => "supersede", Conflict => "conflict" });
+vocab!(ConflictReason { Changed => "changed", Removed => "removed" });
+vocab!(StepField { Work => "work", Ac => "ac", Commands => "commands", After => "after" });
 vocab!(Stage { Dev => "dev", Review => "review", Fix => "fix", Merge => "merge", Sync => "sync" });
 vocab!(
     StagePhase {
@@ -151,7 +156,17 @@ impl SessionState {
 
 impl WorkItemState {
     pub fn is_terminal(self) -> bool {
-        matches!(self, WorkItemState::Done | WorkItemState::Cancelled)
+        matches!(
+            self,
+            WorkItemState::Done | WorkItemState::Cancelled | WorkItemState::Superseded
+        )
+    }
+
+    pub fn has_started(self) -> bool {
+        !matches!(
+            self,
+            WorkItemState::Queued | WorkItemState::AwaitingStart | WorkItemState::Superseded
+        )
     }
 }
 
