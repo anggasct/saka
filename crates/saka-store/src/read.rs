@@ -28,6 +28,8 @@ pub enum TaskSet<'a> {
     /// Everything the reconciler looks at: tasks not done or cancelled, plus every task of
     /// an approved spec (admission needs to know which earlier steps are done).
     Reconcile,
+    /// Every task of one spec.
+    Spec(SpecId),
 }
 
 const WORK_ITEM_COLUMNS: &str = "id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key,
@@ -92,6 +94,7 @@ fn rows<T>(
 
 pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     let ids_json;
+    let spec_id;
     let (selection, bind): (&str, Vec<&dyn rusqlite::ToSql>) = match set {
         TaskSet::Ids(ids) => {
             ids_json =
@@ -103,6 +106,13 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
                OR spec_id IN (SELECT id FROM spec WHERE state = 'approved')",
             vec![],
         ),
+        TaskSet::Spec(id) => {
+            spec_id = id.0.to_string();
+            (
+                "SELECT id FROM work_item WHERE spec_id = ?1",
+                vec![&spec_id],
+            )
+        }
     };
 
     let items: Vec<WorkItem> = {
@@ -265,6 +275,36 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
 
 pub fn load_task(conn: &Connection, id: WorkItemId) -> Result<Option<Task>> {
     Ok(load_tasks(conn, TaskSet::Ids(&[id]))?.into_iter().next())
+}
+
+/// The task a session belongs to.
+pub fn session_work_item(conn: &Connection, session: SessionId) -> Result<Option<WorkItemId>> {
+    owner(conn, "session", session.0)
+}
+
+/// The task a permission request belongs to.
+pub fn permission_work_item(
+    conn: &Connection,
+    request: PermissionRequestId,
+) -> Result<Option<WorkItemId>> {
+    owner(conn, "permission_request", request.0)
+}
+
+fn owner(conn: &Connection, table: &'static str, id: Uuid) -> Result<Option<WorkItemId>> {
+    let found: Option<String> = conn
+        .query_row(
+            &format!("SELECT work_item_id FROM {table} WHERE id = ?1"),
+            [id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    found
+        .map(|s| {
+            Uuid::parse_str(&s)
+                .map(WorkItemId)
+                .map_err(|_| StoreError::Corrupt(format!("{table}.work_item_id")))
+        })
+        .transpose()
 }
 
 /// When each running session last entered `running`, from the event log.
