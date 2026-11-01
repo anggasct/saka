@@ -79,8 +79,31 @@ pub fn run() -> Result<()> {
                 "--",
                 "--check",
             ],
+        )?;
+        pnpm(&root, &["install", "--frozen-lockfile"])?;
+        pnpm(&root, &["api:check"])
+    })?;
+    step("pnpm lint", || pnpm(&root, &["lint"]))?;
+    step("pnpm typecheck", || pnpm(&root, &["typecheck"]))?;
+    step("pnpm test", || pnpm(&root, &["test"]))?;
+    step("pnpm build", || pnpm(&root, &["build"]))?;
+    step("i18n catalog parity", || pnpm(&root, &["i18n:check"]))?;
+    step("web app embedded in the binary", || {
+        cargo(
+            &root,
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "saka-api",
+                "--features",
+                "embed-web",
+                "--test",
+                "spa",
+            ],
         )
     })?;
+    step("web e2e (Playwright)", || pnpm(&root, &["e2e"]))?;
     step("pure crates share one clippy config", || {
         same_files(&root, PURE_CLIPPY_CONFIGS)
     })?;
@@ -107,6 +130,25 @@ fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     if !status.success() {
         bail!(
             "cargo {} exited with {status}",
+            args.first().copied().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+/// `pnpm` at the version `web/package.json` pins, through corepack.
+fn pnpm(root: &Path, args: &[&str]) -> Result<()> {
+    // Run from `web/`: corepack picks the pnpm version from the nearest package.json.
+    let status = Command::new("corepack")
+        .arg("pnpm")
+        .args(args)
+        .current_dir(root.join("web"))
+        .env("CI", "true")
+        .status()
+        .context("run corepack pnpm (is corepack installed?)")?;
+    if !status.success() {
+        bail!(
+            "pnpm {} exited with {status}",
             args.first().copied().unwrap_or_default()
         );
     }

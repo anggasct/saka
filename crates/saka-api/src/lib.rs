@@ -9,6 +9,7 @@ mod http;
 mod ops;
 pub mod problem;
 mod routes;
+pub mod spa;
 mod state;
 
 use axum::Router;
@@ -93,7 +94,7 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(ops::readyz))
         .route("/metrics", get(ops::metrics))
         .route_layer(from_fn(guard::label));
-    api.fallback(routes::api_not_found)
+    api.fallback(spa::serve)
         .layer(from_fn_with_state(state.clone(), guard::guard))
         .with_state(state)
 }

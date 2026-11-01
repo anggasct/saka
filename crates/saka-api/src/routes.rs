@@ -66,6 +66,7 @@ macro_rules! tri {
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
@@ -218,6 +219,7 @@ pub async fn add_spec(
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct SpecListQuery {
     /// One or more of `draft, ready, approved, shipped, withdrawn`, comma-separated.
     pub state: Option<String>,
@@ -336,6 +338,7 @@ pub async fn approve_spec(
 // Work items.
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct WorkItemQuery {
     pub project_id: Option<String>,
     pub spec_id: Option<String>,
@@ -542,6 +545,7 @@ pub async fn cancel(
 // Runtime.
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PermissionQuery {
     /// One or more of `pending, allowed, denied, expired`, comma-separated.
     pub state: Option<String>,
@@ -671,6 +675,7 @@ pub async fn meta(State(s): State<AppState>) -> Response {
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct EventsQuery {
     /// Start after this `seq` (`Last-Event-ID` wins when both are given).
     pub after: Option<String>,
