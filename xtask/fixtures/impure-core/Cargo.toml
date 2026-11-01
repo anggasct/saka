@@ -1,0 +1,9 @@
+# Not a workspace member. `cargo xtask check` lints this crate with the pure-crate
+# clippy config and expects every function below to be rejected.
+[package]
+name = "impure-core"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]

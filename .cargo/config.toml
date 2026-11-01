@@ -1,3 +1,6 @@
 [build]
 # The VPS is shared with other projects; leave half the CPUs free.
 jobs = 4
+
+[alias]
+xtask = "run --quiet --package xtask --"

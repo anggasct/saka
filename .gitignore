@@ -9,3 +9,6 @@ node_modules/
 project-docs
 AGENTS.md
 .worktree/
+
+# Product docs live in docs/; keep them even when a global ignore excludes docs
+!docs/

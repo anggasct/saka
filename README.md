@@ -1,4 +1,22 @@
-# Saka (spikes)
+# Saka
+
+A self-hosted delivery loop for coding agents: an approved spec becomes one task per step, each task runs an agent session in its own worktree, and Saka opens, gates, and merges the pull request before starting the next step.
+
+## Development
+
+| Path | Contents |
+|---|---|
+| `crates/` | The product crates; the allowed dependencies between them are checked by `cargo xtask deps` |
+| `xtask/` | Repository tasks (`cargo xtask check`, `cargo xtask deps`) |
+| `spikes/` | Research experiments, excluded from every check |
+
+```sh
+make check   # format, lint, tests, dependency direction, and the pure-crate rules
+```
+
+The Rust toolchain is pinned in `rust-toolchain.toml`. On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.
+
+## Spikes
 
 Throwaway experiments from the research phase. Each folder answers one question; the measured results are recorded in the research notes, not here.
 

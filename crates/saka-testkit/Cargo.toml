@@ -1,0 +1,11 @@
+[package]
+name = "saka-testkit"
+description = "Fake ports, a virtual clock, and the loop simulation harness for tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
