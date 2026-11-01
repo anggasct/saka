@@ -95,6 +95,9 @@ fn is_executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
+// Claude Code's default commit trailer carries `<email>`, which no allow rule can match.
+const NO_ATTRIBUTION: &str = r#"{"attribution":{"commit":"","pr":""}}"#;
+
 pub fn claude(
     settings: &ClaudeSettings,
     program: &Path,
@@ -117,6 +120,8 @@ pub fn claude(
         "--setting-sources",
         "project",
         "--strict-mcp-config",
+        "--settings",
+        NO_ATTRIBUTION,
     ]
     .map(String::from)
     .to_vec();
@@ -204,7 +209,9 @@ mod tests {
                 "program": "/home/u/.local/bin/claude",
                 "args": ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--permission-mode", "manual", "--permission-prompt-tool", "stdio",
-                         "--setting-sources", "project", "--strict-mcp-config", "--model", "haiku"],
+                         "--setting-sources", "project", "--strict-mcp-config",
+                         "--settings", "{\"attribution\":{\"commit\":\"\",\"pr\":\"\"}}",
+                         "--model", "haiku"],
                 "env": {
                     "CLAUDE_CONFIG_DIR": "/data/agents/claude/default",
                     "GIT_AUTHOR_EMAIL": "agent@saka.invalid",
