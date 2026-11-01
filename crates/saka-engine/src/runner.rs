@@ -1,12 +1,12 @@
 use saka_core::ids::PermissionRequestId;
 use saka_core::model::Task;
-use saka_core::policy::ToolRequest;
+use saka_core::policy::{Effect, ToolRequest};
 use saka_core::task::TaskInput;
 use saka_ports::{EnvRef, RunnerEvent, RunnerEventKind};
 use saka_store::read;
 use serde_json::Value;
 
-use crate::{Engine, Extra, Mode, Result};
+use crate::{Engine, Extra, Mode, Result, timeline};
 
 const FILE_TOOLS: &[(&str, &str)] = &[
     ("Read", "file_path"),
@@ -29,29 +29,74 @@ impl Engine {
             return Ok(());
         };
         let task = self.load_task(work_item)?;
-        if task.live_session().map(|s| s.id) != Some(event.session_id) {
+        let Some(session) = task.session.as_ref().filter(|s| s.id == event.session_id) else {
+            return Ok(());
+        };
+        let replayed =
+            event.offset <= session.last_offset && !(event.offset == 0 && session.last_offset == 0);
+        if replayed {
             return Ok(());
         }
-        let input = match event.kind {
+        let live = session.state.is_live();
+        let mut permission = None;
+        let mut inputs: Vec<TaskInput> = match &event.kind {
             RunnerEventKind::SessionInit {
                 cli_session_id,
                 model,
-            } => Some(TaskInput::SessionInitialized {
-                cli_session_id,
-                model,
-            }),
+            } => vec![TaskInput::SessionInitialized {
+                cli_session_id: cli_session_id.clone(),
+                model: model.clone(),
+            }],
             RunnerEventKind::PermissionRequest {
                 request_id,
                 tool,
                 input,
-            } => Some(self.permission_request(&task, request_id, tool, input)),
-            RunnerEventKind::PermissionDelivered { request_id, .. } => task
-                .permissions
-                .iter()
-                .find(|p| p.cli_request_id == request_id)
-                .map(|p| TaskInput::PermissionDelivered {
-                    permission_request_id: p.id,
-                }),
+            } if live => {
+                let next = self.permission_request(
+                    &task,
+                    request_id.clone(),
+                    tool.clone(),
+                    input.clone(),
+                )?;
+                if let TaskInput::PermissionRequested {
+                    permission_request_id,
+                    summary,
+                    decision,
+                    ..
+                } = &next
+                {
+                    let state = match decision.effect {
+                        Effect::Allow => "allowed",
+                        Effect::Deny => "denied",
+                        Effect::Ask => "pending",
+                    };
+                    permission = Some((*permission_request_id, summary.clone(), state));
+                }
+                vec![next]
+            }
+            RunnerEventKind::PermissionDelivered {
+                request_id,
+                behavior,
+            } => {
+                let found = task
+                    .permissions
+                    .iter()
+                    .find(|p| &p.cli_request_id == request_id);
+                if let Some(p) = found {
+                    let state = if behavior == "allow" {
+                        "allowed"
+                    } else {
+                        "denied"
+                    };
+                    permission = Some((p.id, p.summary.clone(), state));
+                }
+                found
+                    .map(|p| TaskInput::PermissionDelivered {
+                        permission_request_id: p.id,
+                    })
+                    .into_iter()
+                    .collect()
+            }
             RunnerEventKind::TurnEnded {
                 turn,
                 status,
@@ -59,26 +104,52 @@ impl Engine {
                 input_tokens,
                 output_tokens,
                 ..
-            } => Some(TaskInput::TurnEnded {
-                turn,
-                status,
-                cost_usd_micros,
-                input_tokens,
-                output_tokens,
-            }),
-            RunnerEventKind::CliExited { code, signal } => {
-                Some(TaskInput::CliExited { code, signal })
-            }
+            } => vec![TaskInput::TurnEnded {
+                turn: *turn,
+                status: status.clone(),
+                cost_usd_micros: *cost_usd_micros,
+                input_tokens: *input_tokens,
+                output_tokens: *output_tokens,
+            }],
+            RunnerEventKind::CliExited { code, signal } => vec![TaskInput::CliExited {
+                code: *code,
+                signal: *signal,
+            }],
+            RunnerEventKind::RateLimit { info } => timeline::quota_windows(info),
             RunnerEventKind::RunnerError { code, .. } => {
                 tracing::warn!(session_id = %event.session_id, code = %code, "runner error");
-                None
+                vec![]
             }
-            RunnerEventKind::CliStarted { .. }
+            RunnerEventKind::PermissionRequest { .. }
+            | RunnerEventKind::CliStarted { .. }
             | RunnerEventKind::Activity { .. }
-            | RunnerEventKind::RateLimit { .. } => None,
+            | RunnerEventKind::Steer { .. } => vec![],
         };
-        if let Some(input) = input {
-            let cause = self.cause("system:runner");
+        let row = timeline::activity(
+            &event,
+            work_item,
+            permission
+                .as_ref()
+                .map(|(id, summary, state)| (*id, summary.as_str(), *state)),
+        );
+        let cause = self.cause("system:runner");
+        let first = if inputs.is_empty() {
+            None
+        } else {
+            Some(inputs.remove(0))
+        };
+        self.decide(
+            work_item,
+            first,
+            Mode::Fact,
+            &cause,
+            Extra {
+                activity: row,
+                offset: Some((event.session_id, event.offset)),
+                ..Extra::default()
+            },
+        )?;
+        for input in inputs {
             self.decide(work_item, Some(input), Mode::Fact, &cause, Extra::default())?;
         }
         Ok(())
@@ -90,17 +161,20 @@ impl Engine {
         request_id: String,
         tool: String,
         input: Value,
-    ) -> TaskInput {
+    ) -> Result<TaskInput> {
         let request = self.tool_request(task, &tool, &input);
-        let decision = self.cfg.policy.evaluate(&request);
-        TaskInput::PermissionRequested {
+        let rules = self
+            .store
+            .read(|c| read::active_permission_rules(c, task.item.project_id))?;
+        let decision = self.cfg.policy.evaluate_with(&request, &rules);
+        Ok(TaskInput::PermissionRequested {
             permission_request_id: PermissionRequestId(self.new_id()),
             cli_request_id: request_id,
             summary: summary(&tool, &input),
             tool,
             input,
             decision,
-        }
+        })
     }
 
     fn tool_request(&self, task: &Task, tool: &str, input: &Value) -> ToolRequest {

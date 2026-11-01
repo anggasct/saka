@@ -225,6 +225,7 @@ impl Sim {
 
     pub fn restart(&mut self) {
         self.engine = None;
+        self.world.disconnect_all();
         self.restarts += 1;
         self.start_engine();
     }
@@ -432,6 +433,24 @@ impl Sim {
         self.engine()
             .store()
             .read(|c| read::sessions(c, id))
+            .unwrap()
+    }
+
+    pub fn timeline(
+        &self,
+        session: saka_core::ids::SessionId,
+    ) -> Vec<saka_core::model::SessionActivity> {
+        self.engine()
+            .store()
+            .read(|c| read::timeline(c, session, None, 10_000))
+            .unwrap()
+    }
+
+    pub fn usage(&self, step: u32) -> Vec<saka_core::model::UsageRecord> {
+        let id = self.task(step).item.id;
+        self.engine()
+            .store()
+            .read(|c| read::usage_records(c, Some(id), None))
             .unwrap()
     }
 

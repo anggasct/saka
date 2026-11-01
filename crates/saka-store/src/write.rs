@@ -3,8 +3,8 @@ use saka_core::ids::{ProjectId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, Environment, GateResult, PermissionRequest,
-    PermissionRule, Project, Repo, Session, Spec, SpecDependency, StageRun, Task, UsageRecord,
-    WorkItemDependency,
+    PermissionRule, Project, Repo, Session, SessionActivity, Spec, SpecDependency, StageRun, Task,
+    UsageRecord, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use serde_json::Value;
@@ -103,6 +103,8 @@ pub struct Batch {
     pub replaced_spec_dependencies: Vec<SpecId>,
     pub replaced_work_item_dependencies: Vec<WorkItemId>,
     pub permission_rules: Vec<PermissionRule>,
+    pub activities: Vec<(ProjectId, SessionActivity)>,
+    pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
     pub jobs: Vec<NewJob>,
 }
 
@@ -221,6 +223,29 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for r in &b.permission_rules {
         permission_rule(tx, r)?;
+    }
+    for (project, a) in &b.activities {
+        tx.execute(
+            "INSERT INTO session_activity (session_id, \"offset\", work_item_id, project_id, at, kind, summary, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT (session_id, \"offset\") DO NOTHING",
+            params![
+                a.session_id.to_string(),
+                i64_of(a.offset)?,
+                a.work_item_id.to_string(),
+                project.to_string(),
+                a.at.0,
+                a.kind,
+                a.summary,
+                value_json(&a.data)?,
+            ],
+        )?;
+    }
+    for (session, offset) in &b.session_offsets {
+        tx.execute(
+            "UPDATE session SET last_offset = max(last_offset, ?2) WHERE id = ?1",
+            params![session.to_string(), i64_of(*offset)?],
+        )?;
     }
     for j in &b.jobs {
         enqueue(tx, j, b.now)?;

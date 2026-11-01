@@ -234,6 +234,17 @@ pub struct UsageRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionActivity {
+    pub session_id: SessionId,
+    pub offset: u64,
+    pub work_item_id: WorkItemId,
+    pub at: Timestamp,
+    pub kind: String,
+    pub summary: String,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountQuota {
     pub account: String,
     pub window: String,
@@ -346,6 +357,7 @@ pub struct Session {
     pub idle_since: Option<Timestamp>,
     pub interrupt_requested: Option<InterruptBy>,
     pub steers: u32,
+    pub last_offset: u64,
     pub recorded_turn: u32,
     pub recorded_running_ms: i64,
     pub started_at: Option<Timestamp>,

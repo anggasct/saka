@@ -6,6 +6,7 @@ mod reconciler;
 mod register;
 mod runner;
 mod text;
+mod timeline;
 mod views;
 mod worker;
 
@@ -96,6 +97,8 @@ struct Extra<'a> {
     events: Vec<Event>,
     jobs: Vec<Job>,
     action: Option<(&'a Action<'a>, Shows)>,
+    activity: Option<saka_core::model::SessionActivity>,
+    offset: Option<(saka_core::ids::SessionId, u64)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,11 +114,14 @@ pub struct Engine {
     lock: Mutex<()>,
     changed: Notify,
     counters: metrics::Counters,
+    boot: Uuid,
 }
 
 impl Engine {
     pub fn new(store: Arc<Store>, ports: Ports, cfg: EngineConfig) -> Engine {
+        let boot = ports.ids.new_id();
         Engine {
+            boot,
             store,
             ports,
             cfg,
@@ -193,6 +199,10 @@ impl Engine {
         };
         let mut batch = Batch::new(now);
         batch.job_outcome = extra.outcome;
+        batch
+            .activities
+            .extend(extra.activity.map(|a| (task.item.project_id, a)));
+        batch.session_offsets.extend(extra.offset);
         let project = Some(task.item.project_id);
         let after = self.apply(&mut batch, task, &events, project, cause, now)?;
         for e in &extra.events {
@@ -287,7 +297,11 @@ impl Engine {
 
     fn commit(&self, batch: &Batch) -> Result<Vec<i64>> {
         let seqs = self.store.commit(batch)?;
-        if !batch.events.is_empty() || !batch.jobs.is_empty() || batch.action.is_some() {
+        if !batch.events.is_empty()
+            || !batch.jobs.is_empty()
+            || batch.action.is_some()
+            || !batch.activities.is_empty()
+        {
             self.changed.notify_waiters();
         }
         Ok(seqs)

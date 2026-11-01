@@ -15,4 +15,6 @@ pub use fixtures::{
     AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec,
 };
 pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step};
-pub use world::{AgentOutcome, AgentScript, CiScript, FakeWorld, Stats};
+pub use world::{
+    AgentOutcome, AgentScript, CiScript, FakeWorld, SIM_RUNNER_VERSION, Stats, TurnUsage,
+};

@@ -13,9 +13,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use saka_agents::launch::{ClaudeSettings, LaunchSpec, Redaction};
-use saka_agents::protocol::{LogEvent, PROTOCOL_VERSION, ServerFrame};
+use saka_agents::protocol::{LogEvent, RunnerFrame, ServerFrame};
 use saka_agents::redact;
-use saka_agents::runner::{EXIT_OK, EXIT_PROTOCOL_UNSUPPORTED};
+use saka_agents::runner::{EXIT_OK, EXIT_VERSION_MISMATCH, runner_version};
 use saka_agents::{AgentsConfig, ClaudeAgents, client::RunnerConnection};
 use saka_core::ids::{EnvironmentId, RepoId, SessionId, WorkItemId};
 use saka_env::{DirectSupervisor, SystemdSupervisor};
@@ -47,8 +47,24 @@ fn main() -> ExitCode {
             events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server,
         ),
         (
-            "an_unsupported_protocol_version_ends_the_runner_with_code_3",
-            an_unsupported_protocol_version_ends_the_runner_with_code_3,
+            "a_server_of_another_version_ends_the_runner_with_code_3",
+            a_server_of_another_version_ends_the_runner_with_code_3,
+        ),
+        (
+            "the_runner_sends_heartbeats_that_never_reach_the_file",
+            the_runner_sends_heartbeats_that_never_reach_the_file,
+        ),
+        (
+            "a_steer_reaches_the_cli_once_and_is_logged",
+            a_steer_reaches_the_cli_once_and_is_logged,
+        ),
+        (
+            "tool_results_are_summarized_redacted_and_cut",
+            tool_results_are_summarized_redacted_and_cut,
+        ),
+        (
+            "a_resumed_cli_empty_first_result_is_dropped",
+            a_resumed_cli_empty_first_result_is_dropped,
         ),
         (
             "a_second_connection_is_refused",
@@ -121,6 +137,16 @@ impl Fixture {
     }
 
     fn launch(&self, script: &str, secrets: &[String]) -> PathBuf {
+        self.launch_with(script, secrets, false, 10_000)
+    }
+
+    fn launch_with(
+        &self,
+        script: &str,
+        secrets: &[String],
+        resumed: bool,
+        heartbeat_ms: u64,
+    ) -> PathBuf {
         let worktree = self.path("env/worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         let mut env = BTreeMap::new();
@@ -132,7 +158,6 @@ impl Fixture {
         env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
         let spec = LaunchSpec {
             session_id: self.session.to_string(),
-            protocol_version: PROTOCOL_VERSION,
             socket_path: self.socket().to_string_lossy().into_owned(),
             log_path: self.log().to_string_lossy().into_owned(),
             stderr_path: self
@@ -144,11 +169,17 @@ impl Fixture {
                 .unwrap()
                 .to_string_lossy()
                 .into_owned(),
-            args: vec![],
+            args: if resumed {
+                vec!["--resume".into(), "fake-session".into()]
+            } else {
+                vec![]
+            },
             env,
             redaction: Redaction {
                 known_values: vec![KNOWN.to_string()],
             },
+            resumed,
+            heartbeat_ms,
         };
         std::fs::create_dir_all(self.path("session")).unwrap();
         let file = self.path("session/launch.json");
@@ -173,7 +204,15 @@ impl Fixture {
         let deadline = tokio::time::Instant::now() + WAIT;
         loop {
             let (tx, rx) = mpsc::unbounded_channel();
-            match RunnerConnection::connect(&self.socket(), self.session, from, "test", tx).await {
+            match RunnerConnection::connect(
+                &self.socket(),
+                self.session,
+                from,
+                &runner_version(),
+                tx,
+            )
+            .await
+            {
                 Ok(conn) => return (conn, rx),
                 Err(e) if e.code == "already_connected" => {
                     assert!(tokio::time::Instant::now() < deadline, "timed out");
@@ -327,23 +366,178 @@ fn events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server()
     });
 }
 
-fn an_unsupported_protocol_version_ends_the_runner_with_code_3() {
+fn a_server_of_another_version_ends_the_runner_with_code_3() {
     block_on(async {
         let fx = Fixture::new();
         let launch = fx.launch("", &[]);
         let mut runner = fx.spawn_runner(&launch).await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let refused =
-            RunnerConnection::connect_with(&fx.socket(), fx.session, 2, 0, "test", tx).await;
+            RunnerConnection::connect(&fx.socket(), fx.session, 0, "0.0.0-other", tx).await;
         assert_eq!(
             refused.err().map(|e| e.code),
-            Some("protocol_unsupported".to_string())
+            Some("version_mismatch".to_string())
         );
         let status = tokio::time::timeout(WAIT, runner.wait())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(status.code(), Some(EXIT_PROTOCOL_UNSUPPORTED));
+        assert_eq!(status.code(), Some(EXIT_VERSION_MISMATCH));
+    });
+}
+
+fn the_runner_sends_heartbeats_that_never_reach_the_file() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    block_on(async {
+        let fx = Fixture::new();
+        let launch = fx.launch_with("hang", &[], false, 100);
+        let _runner = fx.spawn_runner(&launch).await;
+        let stream = tokio::net::UnixStream::connect(fx.socket()).await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let hello = ServerFrame::Hello {
+            server_version: runner_version(),
+            from_offset: 0,
+        };
+        write
+            .write_all(saka_agents::protocol::encode(&hello).as_bytes())
+            .await
+            .unwrap();
+        let mut lines = BufReader::new(read).lines();
+        let mut beats = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(1_000);
+        while tokio::time::Instant::now() < deadline {
+            let Ok(Ok(Some(line))) = tokio::time::timeout_at(deadline, lines.next_line()).await
+            else {
+                break;
+            };
+            if let Ok(RunnerFrame::Heartbeat { at }) = saka_agents::protocol::decode(&line) {
+                beats.push(at);
+            }
+        }
+        assert!(beats.len() >= 5, "{beats:?}");
+        assert!(beats.windows(2).all(|w| w[1] >= w[0]));
+        assert!(
+            fx.file_events().iter().all(|e| e.kind != "heartbeat"),
+            "heartbeats are not events"
+        );
+    });
+}
+
+fn a_steer_reaches_the_cli_once_and_is_logged() {
+    block_on(async {
+        let fx = Fixture::new();
+        let launch = fx.launch("hang", &[]);
+        let _runner = fx.spawn_runner(&launch).await;
+        let (conn, mut rx) = fx.connect(0).await;
+        conn.send(
+            fx.session,
+            &ServerFrame::Turn {
+                turn: 1,
+                text: "work".into(),
+            },
+        )
+        .await
+        .unwrap();
+        next_event(&fx, &mut rx, |k| {
+            matches!(k, RunnerEventKind::SessionInit { .. })
+        })
+        .await;
+        let steer = ServerFrame::Steer {
+            n: 1,
+            text: format!("use {KNOWN} instead"),
+        };
+        conn.send(fx.session, &steer).await.unwrap();
+        conn.send(fx.session, &steer).await.unwrap();
+        let ev = next_event(&fx, &mut rx, |k| matches!(k, RunnerEventKind::Steer { .. })).await;
+        let RunnerEventKind::Steer { n, turn, text } = ev.kind else {
+            unreachable!()
+        };
+        assert_eq!((n, turn), (1, 1));
+        assert_eq!(text, "use «secret:known_value» instead");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let steers: Vec<LogEvent> = fx
+            .file_events()
+            .into_iter()
+            .filter(|e| e.kind == "steer")
+            .collect();
+        assert_eq!(steers.len(), 1, "a repeated steer is sent once");
+        assert!(!std::fs::read_to_string(fx.log()).unwrap().contains(KNOWN));
+    });
+}
+
+fn tool_results_are_summarized_redacted_and_cut() {
+    block_on(async {
+        let fx = Fixture::new();
+        let launch = fx.launch("tools", &[]);
+        let _runner = fx.spawn_runner(&launch).await;
+        let (conn, mut rx) = fx.connect(0).await;
+        conn.send(
+            fx.session,
+            &ServerFrame::Turn {
+                turn: 1,
+                text: "work".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let ev = next_event(&fx, &mut rx, |k| {
+            matches!(k, RunnerEventKind::Activity { category, .. } if category == "tool_result")
+        })
+        .await;
+        let RunnerEventKind::Activity {
+            summary, is_error, ..
+        } = ev.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(is_error, Some(true));
+        assert!(
+            summary.starts_with("token «secret:github_token» xxx"),
+            "{summary}"
+        );
+        assert_eq!(summary.chars().count(), 500);
+        let file = std::fs::read_to_string(fx.log()).unwrap();
+        assert!(!file.contains(fake_claude::TOOL_OUTPUT_SECRET));
+        let used = next_event(&fx, &mut rx, |k| {
+            matches!(k, RunnerEventKind::Activity { category, .. } if category == "tool_use")
+                || matches!(k, RunnerEventKind::TurnEnded { .. })
+        });
+        drop(used);
+        assert!(
+            fx.file_events()
+                .iter()
+                .any(|e| e.kind == "activity" && e.data["tool"] == "Bash")
+        );
+    });
+}
+
+fn a_resumed_cli_empty_first_result_is_dropped() {
+    block_on(async {
+        let fx = Fixture::new();
+        let launch = fx.launch_with("resume-empty", &[], true, 10_000);
+        let _runner = fx.spawn_runner(&launch).await;
+        let (conn, mut rx) = fx.connect(0).await;
+        conn.send(
+            fx.session,
+            &ServerFrame::Turn {
+                turn: 1,
+                text: "continue".into(),
+            },
+        )
+        .await
+        .unwrap();
+        next_event(&fx, &mut rx, |k| {
+            matches!(k, RunnerEventKind::TurnEnded { .. })
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let ended: Vec<LogEvent> = fx
+            .file_events()
+            .into_iter()
+            .filter(|e| e.kind == "turn_ended")
+            .collect();
+        assert_eq!(ended.len(), 1, "{ended:?}");
+        assert_eq!(ended[0].data["result_summary"], "done");
     });
 }
 
@@ -433,6 +627,7 @@ fn settings() -> ClaudeSettings {
             .unwrap()
             .to_string_lossy()
             .into_owned(),
+        account: "default".into(),
         account_dir: "/nonexistent/claude".into(),
         model: None,
         path: vec!["/usr/bin".into(), "/bin".into()],
@@ -458,7 +653,7 @@ fn adapter(
             tasks_max: 64,
         },
         known_values: vec![],
-        server_version: "test".into(),
+        server_version: runner_version(),
         extra_env: vec![(fake_claude::SCRIPT_VAR.into(), script.into())],
     };
     (ClaudeAgents::new(cfg, supervisor, tx), rx)
@@ -482,6 +677,7 @@ fn launch_for(fx: &Fixture) -> SessionLaunch {
             root_path: root.to_string_lossy().into_owned(),
             worktree_path: root.join("worktree").to_string_lossy().into_owned(),
         },
+        resume_cli_session_id: None,
     }
 }
 

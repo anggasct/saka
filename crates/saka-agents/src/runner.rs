@@ -13,13 +13,13 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 
-use crate::claude::{self, Output};
+use crate::claude::{self, Output, RESULT_SUMMARY_MAX, SUMMARY_MAX};
 use crate::launch::LaunchSpec;
-use crate::protocol::{self, LogEvent, Malformed, PROTOCOL_VERSION, RunnerFrame, ServerFrame};
+use crate::protocol::{self, LogEvent, Malformed, RunnerFrame, ServerFrame};
 use crate::redact::Redactor;
 
 pub const EXIT_OK: i32 = 0;
-pub const EXIT_PROTOCOL_UNSUPPORTED: i32 = 3;
+pub const EXIT_VERSION_MISMATCH: i32 = 3;
 pub const EXIT_LAUNCH_INVALID: i32 = 4;
 pub const EXIT_CLI_FAILED: i32 = 5;
 
@@ -41,11 +41,11 @@ fn now_ms() -> i64 {
 
 pub async fn run(session_id: &str, launch_path: &Path) -> i32 {
     let launch = match read_launch(launch_path) {
-        Ok(l) if l.session_id == session_id && l.protocol_version == PROTOCOL_VERSION => l,
+        Ok(l) if l.session_id == session_id => l,
         Ok(_) => {
             tracing::error!(
                 code = "launch_invalid",
-                "launch.json is for another session or protocol"
+                "launch.json is for another session"
             );
             return EXIT_LAUNCH_INVALID;
         }
@@ -151,6 +151,8 @@ struct Runner {
     next_conn: u64,
     turn: u32,
     turns: BTreeSet<u32>,
+    steers: BTreeSet<u32>,
+    activity_seen: bool,
     cli_session: Option<String>,
     pending: HashMap<String, Value>,
     answered: HashMap<String, String>,
@@ -222,6 +224,8 @@ impl Runner {
             next_conn: 0,
             turn: 0,
             turns: BTreeSet::new(),
+            steers: BTreeSet::new(),
+            activity_seen: false,
             cli_session: None,
             pending: HashMap::new(),
             answered: HashMap::new(),
@@ -239,6 +243,9 @@ impl Runner {
         let mut stdout_open = true;
         let mut exited = false;
         let mut orphan_deadline = tokio::time::Instant::now() + ORPHAN_TIMEOUT;
+        let mut heartbeat =
+            tokio::time::interval(Duration::from_millis(self.launch.heartbeat_ms.max(1)));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let flow = tokio::select! {
                 biased;
@@ -271,6 +278,10 @@ impl Runner {
                 },
                 Some((id, incoming)) = self.frames.recv() => self.on_frame(id, incoming).await,
                 _ = tokio::time::sleep_until(orphan_deadline), if exited && self.conn.is_none() => Flow::Shutdown,
+                _ = heartbeat.tick(), if self.conn.is_some() => {
+                    self.send(&RunnerFrame::Heartbeat { at: now_ms() }).await;
+                    Flow::Continue
+                }
             };
             match flow {
                 Flow::Continue => {}
@@ -290,6 +301,16 @@ impl Runner {
 
     async fn emit(&mut self, kind: &str, mut data: Value) {
         self.redactor.value(&mut data);
+        // Cut only after redaction, so a cut never leaves a partial secret the patterns miss.
+        for (key, max) in [
+            ("summary", SUMMARY_MAX),
+            ("result_summary", RESULT_SUMMARY_MAX),
+        ] {
+            if let Some(text) = data.get(key).and_then(Value::as_str) {
+                let cut = claude::cut(text, max);
+                data[key] = Value::String(cut);
+            }
+        }
         match self.log.append(kind, data) {
             Ok(event) => self.send(&RunnerFrame::Event(event)).await,
             Err(e) => {
@@ -330,8 +351,17 @@ impl Runner {
                 if kind == "session_init" {
                     self.cli_session = data["cli_session_id"].as_str().map(String::from);
                 }
+                if kind == "activity" {
+                    self.activity_seen = true;
+                }
                 self.emit(kind, data).await;
             }
+            // A resumed CLI can answer the first message with an empty result before doing
+            // anything; that is not the end of the turn the server asked for.
+            Output::TurnEnded {
+                num_turns: Some(0), ..
+            } if self.launch.resumed && self.turn == 1 && !self.activity_seen => {}
+            Output::TurnEnded { data, .. } => self.emit("turn_ended", data).await,
             Output::Permission {
                 request_id,
                 tool,
@@ -371,23 +401,21 @@ impl Runner {
         };
         let from_offset = match protocol::decode::<ServerFrame>(&first) {
             Ok(ServerFrame::Hello {
-                protocol_version: PROTOCOL_VERSION,
+                server_version,
                 from_offset,
-                ..
-            }) => from_offset,
-            Ok(ServerFrame::Hello {
-                protocol_version, ..
-            }) => {
+            }) if server_version == runner_version() => from_offset,
+            Ok(ServerFrame::Hello { server_version, .. }) => {
                 tracing::error!(
-                    code = "protocol_unsupported",
-                    protocol_version,
-                    "server speaks another protocol"
+                    code = "version_mismatch",
+                    server_version = %server_version,
+                    runner_version = %runner_version(),
+                    "the server runs another binary"
                 );
                 let frame = RunnerFrame::Error {
-                    code: "protocol_unsupported".into(),
+                    code: "version_mismatch".into(),
                 };
                 let _ = writer.write_all(protocol::encode(&frame).as_bytes()).await;
-                return Flow::Exit(EXIT_PROTOCOL_UNSUPPORTED);
+                return Flow::Exit(EXIT_VERSION_MISMATCH);
             }
             _ => {
                 let frame = RunnerFrame::Error {
@@ -401,7 +429,6 @@ impl Runner {
         let id = self.next_conn;
         self.conn = Some(Conn { id, writer });
         let hello = RunnerFrame::Hello {
-            protocol_version: PROTOCOL_VERSION,
             runner_version: runner_version(),
             session_id: self.launch.session_id.clone(),
             next_offset: self.log.next,
@@ -453,6 +480,7 @@ impl Runner {
             Incoming::Frame(ServerFrame::Turn { turn, text }) => {
                 if self.turns.insert(turn) {
                     self.turn = turn;
+                    self.activity_seen = false;
                     let message = claude::user_message(&text, self.cli_session.as_deref());
                     self.write_cli(&message).await;
                 }
@@ -484,6 +512,15 @@ impl Runner {
                         code: "request_unknown".into(),
                     })
                     .await;
+                }
+            }
+            Incoming::Frame(ServerFrame::Steer { n, text }) => {
+                if self.steers.insert(n) {
+                    let turn = self.turn;
+                    self.emit("steer", json!({ "n": n, "turn": turn, "text": text }))
+                        .await;
+                    let message = claude::user_message(&text, self.cli_session.as_deref());
+                    self.write_cli(&message).await;
                 }
             }
             Incoming::Frame(ServerFrame::Interrupt) => {

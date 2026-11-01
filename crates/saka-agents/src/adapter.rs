@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use saka_core::ids::SessionId;
 use saka_ports::{
-    Agents, LaunchedSession, PortError, PortResult, RunnerEvent, RunnerUnit, SessionLaunch,
-    SessionRef, Supervisor, UnitLimits,
+    Agents, LaunchedSession, Link, PortError, PortResult, Reattached, RunnerEvent, RunnerUnit,
+    SessionLaunch, SessionRef, Supervisor, UnitLimits,
 };
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -38,6 +38,19 @@ pub struct ClaudeAgents {
     supervisor: Arc<dyn Supervisor>,
     sink: mpsc::UnboundedSender<RunnerEvent>,
     conns: Mutex<HashMap<SessionId, Arc<RunnerConnection>>>,
+    generations: Mutex<HashMap<SessionId, u32>>,
+}
+
+impl ClaudeAgents {
+    fn closed(&self, session: SessionId) -> Link {
+        let generation = self
+            .generations
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&session).copied())
+            .unwrap_or(0);
+        Link::Closed { generation }
+    }
 }
 
 pub fn unit_name(session: SessionId) -> String {
@@ -59,6 +72,19 @@ impl ClaudeAgents {
             supervisor,
             sink,
             conns: Mutex::new(HashMap::new()),
+            generations: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn drop_conn(&self, session: SessionId) {
+        let removed = self
+            .conns
+            .lock()
+            .ok()
+            .and_then(|mut c| c.remove(&session))
+            .is_some();
+        if removed && let Ok(mut g) = self.generations.lock() {
+            *g.entry(session).or_insert(0) += 1;
         }
     }
 
@@ -79,10 +105,8 @@ impl ClaudeAgents {
     async fn send(&self, session: &SessionRef, frame: ServerFrame) -> PortResult<()> {
         let conn = self.conn(session)?;
         let result = conn.send(session.session_id, &frame).await;
-        if result.is_err()
-            && let Ok(mut conns) = self.conns.lock()
-        {
-            conns.remove(&session.session_id);
+        if result.is_err() {
+            self.drop_conn(session.session_id);
         }
         result
     }
@@ -106,6 +130,7 @@ impl ClaudeAgents {
             &id,
             &paths,
             self.cfg.known_values.clone(),
+            launch.resume_cli_session_id.as_deref(),
         );
         for (k, v) in &self.cfg.extra_env {
             spec.env.insert(k.clone(), v.clone());
@@ -158,9 +183,7 @@ impl Agents for ClaudeAgents {
         })?;
         let version = cli_version(&program).await;
         let (spec, paths) = self.launch_spec(&program, launch);
-        if let Ok(mut conns) = self.conns.lock() {
-            conns.remove(&launch.session_id);
-        }
+        self.drop_conn(launch.session_id);
         // A socket left by an earlier attempt must not answer for the new runner.
         let _ = std::fs::remove_file(&paths.socket_path);
         write_launch(&paths, &spec).map_err(|e| io_error("launch_write_failed", &e))?;
@@ -205,7 +228,7 @@ impl Agents for ClaudeAgents {
             cli: "claude".into(),
             cli_version: version,
             model: self.cfg.claude.model.clone().filter(|m| !m.is_empty()),
-            account: self.cfg.claude.account_dir.clone(),
+            account: self.cfg.claude.account.clone(),
             runner_unit: name,
             socket_path: spec.socket_path,
             log_path: spec.log_path,
@@ -245,12 +268,70 @@ impl Agents for ClaudeAgents {
         self.send(session, ServerFrame::Interrupt).await
     }
 
+    async fn steer(&self, session: &SessionRef, n: u32, text: &str) -> PortResult<()> {
+        self.send(
+            session,
+            ServerFrame::Steer {
+                n,
+                text: text.to_string(),
+            },
+        )
+        .await
+    }
+
+    async fn reattach(&self, session: &SessionRef, from_offset: u64) -> PortResult<Reattached> {
+        self.drop_conn(session.session_id);
+        let conn = RunnerConnection::connect(
+            Path::new(&session.socket_path),
+            session.session_id,
+            from_offset,
+            &self.cfg.server_version,
+            self.sink.clone(),
+        )
+        .await?;
+        let reattached = Reattached {
+            runner_version: conn.runner_version.clone(),
+            next_offset: conn.next_offset,
+        };
+        if let Ok(mut conns) = self.conns.lock() {
+            conns.insert(session.session_id, Arc::new(conn));
+        }
+        Ok(reattached)
+    }
+
+    async fn unit_active(&self, session: &SessionRef) -> PortResult<bool> {
+        self.supervisor.is_active(&session.runner_unit).await
+    }
+
+    fn link(&self, session: SessionId) -> Link {
+        let conn = self
+            .conns
+            .lock()
+            .ok()
+            .and_then(|c| c.get(&session).cloned());
+        match conn {
+            Some(c) if !c.is_closed() => Link::Open {
+                silent_ms: c.silent_ms(),
+            },
+            Some(_) => {
+                self.drop_conn(session);
+                self.closed(session)
+            }
+            None => self.closed(session),
+        }
+    }
+
+    fn disconnect(&self, session: SessionId) {
+        self.drop_conn(session);
+    }
+
     async fn stop(&self, session_id: SessionId, runner_unit: Option<&str>) -> PortResult<()> {
         let conn = self
             .conns
             .lock()
             .ok()
-            .and_then(|mut c| c.remove(&session_id));
+            .and_then(|c| c.get(&session_id).cloned());
+        self.drop_conn(session_id);
         if let Some(conn) = conn {
             let _ = conn.send(session_id, &ServerFrame::Shutdown).await;
         }

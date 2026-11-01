@@ -1242,3 +1242,22 @@ fn session_actions_follow_the_state() {
     r.stop("done").unwrap();
     assert!(task::session_actions(r.session()).is_empty());
 }
+
+#[test]
+fn a_turn_that_ends_before_its_send_is_recorded_still_ends_once() {
+    let mut r = Run::new(unlimited());
+    r.decide(task::TaskInput::Admit);
+    r.prepare(500);
+    r.launch();
+    r.initialize();
+    r.end_turn(1, "success");
+    assert_eq!(r.session().state, SessionState::Idle);
+    assert_eq!(r.session().recorded_turn, 1);
+    assert_eq!(r.decide(task::TaskInput::TurnAccepted { turn: 1 }), vec![]);
+    assert_eq!(r.session().state, SessionState::Idle);
+    assert_eq!(
+        r.end_turn(1, "success"),
+        vec![],
+        "a replayed end is ignored"
+    );
+}

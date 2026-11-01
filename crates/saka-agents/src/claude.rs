@@ -6,6 +6,10 @@ pub const RESULT_SUMMARY_MAX: usize = 2000;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     Event(&'static str, Value),
+    TurnEnded {
+        data: Value,
+        num_turns: Option<i64>,
+    },
     Permission {
         request_id: String,
         tool: String,
@@ -24,10 +28,7 @@ pub fn cut(text: &str, max: usize) -> String {
 
 pub fn parse(line: &str, turn: u32) -> Output {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
-        return Output::Event(
-            "activity",
-            json!({ "category": "other", "summary": cut(line, SUMMARY_MAX) }),
-        );
+        return Output::Event("activity", json!({ "category": "other", "summary": line }));
     };
     let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
     match v["type"].as_str().unwrap_or_default() {
@@ -40,47 +41,60 @@ pub fn parse(line: &str, turn: u32) -> Output {
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            let (category, summary) = blocks
-                .iter()
-                .find_map(|b| match b["type"].as_str() {
-                    Some("tool_use") => {
-                        let input = &b["input"];
-                        let detail = input["command"]
-                            .as_str()
-                            .or(input["file_path"].as_str())
-                            .unwrap_or_default();
-                        Some(("tool_use", format!("{}: {detail}", text(&b["name"]))))
-                    }
-                    Some("thinking") => Some(("thinking", text(&b["thinking"]))),
-                    Some("text") => Some(("text", text(&b["text"]))),
-                    _ => None,
-                })
-                .unwrap_or(("other", String::new()));
+            let found = blocks.iter().find_map(|b| match b["type"].as_str() {
+                Some("tool_use") => {
+                    let input = &b["input"];
+                    let detail = input["command"]
+                        .as_str()
+                        .or(input["file_path"].as_str())
+                        .or(input["path"].as_str())
+                        .or(input["pattern"].as_str())
+                        .unwrap_or_default();
+                    let tool = text(&b["name"]);
+                    Some(json!({ "category": "tool_use", "summary": format!("{tool}: {detail}"), "tool": tool }))
+                }
+                Some("thinking") => {
+                    Some(json!({ "category": "thinking", "summary": text(&b["thinking"]) }))
+                }
+                Some("text") => Some(json!({ "category": "text", "summary": text(&b["text"]) })),
+                _ => None,
+            });
             Output::Event(
                 "activity",
-                json!({ "category": category, "summary": cut(&summary, SUMMARY_MAX) }),
+                found.unwrap_or_else(|| json!({ "category": "other", "summary": "" })),
             )
         }
-        "user" => Output::Event(
-            "activity",
-            json!({ "category": "tool_result", "summary": "" }),
-        ),
+        "user" => {
+            let blocks = v["message"]["content"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let result = blocks.iter().find(|b| b["type"] == "tool_result");
+            Output::Event(
+                "activity",
+                json!({
+                    "category": "tool_result",
+                    "summary": result.map(|b| first_text(&b["content"])).unwrap_or_default(),
+                    "is_error": result.is_some_and(|b| b["is_error"].as_bool() == Some(true)),
+                }),
+            )
+        }
         "rate_limit_event" => Output::Event("rate_limit", json!({ "info": v["rate_limit_info"] })),
         "result" => {
             let micros = v["total_cost_usd"]
                 .as_f64()
                 .map(|usd| (usd * 1_000_000.0).round() as i64);
-            Output::Event(
-                "turn_ended",
-                json!({
+            Output::TurnEnded {
+                data: json!({
                     "turn": turn,
                     "status": text(&v["subtype"]),
                     "cost_usd_micros": micros,
                     "input_tokens": v["usage"]["input_tokens"].as_i64(),
                     "output_tokens": v["usage"]["output_tokens"].as_i64(),
-                    "result_summary": cut(v["result"].as_str().unwrap_or_default(), RESULT_SUMMARY_MAX),
+                    "result_summary": v["result"].as_str().unwrap_or_default(),
                 }),
-            )
+                num_turns: v["num_turns"].as_i64(),
+            }
         }
         "control_request" if v["request"]["subtype"] == "can_use_tool" => Output::Permission {
             request_id: text(&v["request_id"]),
@@ -89,6 +103,17 @@ pub fn parse(line: &str, turn: u32) -> Output {
         },
         "stream_event" | "control_response" | "control_cancel_request" => Output::Nothing,
         _ => Output::Event("activity", json!({ "category": "other", "summary": "" })),
+    }
+}
+
+fn first_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .find_map(|i| (i["type"] == "text").then(|| i["text"].as_str().map(String::from))?)
+            .unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -149,17 +174,37 @@ mod tests {
             ),
             Output::Event(
                 "activity",
-                json!({ "category": "tool_use", "summary": "Bash: go test ./..." })
+                json!({ "category": "tool_use", "summary": "Bash: go test ./...", "tool": "Bash" })
             )
         );
         assert_eq!(
             parse(
-                r#"{"type":"result","subtype":"success","total_cost_usd":0.0123,"usage":{"input_tokens":10,"output_tokens":5},"result":"done"}"#,
+                r#"{"type":"result","subtype":"success","num_turns":3,"total_cost_usd":0.0123,"usage":{"input_tokens":10,"output_tokens":5},"result":"done"}"#,
                 2
             ),
+            Output::TurnEnded {
+                data: json!({ "turn": 2, "status": "success", "cost_usd_micros": 12300, "input_tokens": 10, "output_tokens": 5, "result_summary": "done" }),
+                num_turns: Some(3),
+            }
+        );
+        assert_eq!(
+            parse(
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"FAIL: TestDone"}]}]}}"#,
+                1
+            ),
             Output::Event(
-                "turn_ended",
-                json!({ "turn": 2, "status": "success", "cost_usd_micros": 12300, "input_tokens": 10, "output_tokens": 5, "result_summary": "done" })
+                "activity",
+                json!({ "category": "tool_result", "summary": "FAIL: TestDone", "is_error": true })
+            )
+        );
+        assert_eq!(
+            parse(
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok  ./..."}]}}"#,
+                1
+            ),
+            Output::Event(
+                "activity",
+                json!({ "category": "tool_result", "summary": "ok  ./...", "is_error": false })
             )
         );
         assert_eq!(

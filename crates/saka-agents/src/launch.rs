@@ -3,12 +3,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::PROTOCOL_VERSION;
+pub const HEARTBEAT_MS: u64 = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchSpec {
     pub session_id: String,
-    pub protocol_version: u32,
     pub socket_path: String,
     pub log_path: String,
     pub stderr_path: String,
@@ -17,6 +16,8 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub redaction: Redaction,
+    pub resumed: bool,
+    pub heartbeat_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +72,7 @@ fn s(p: &Path) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeSettings {
     pub command: String,
+    pub account: String,
     pub account_dir: String,
     pub model: Option<String>,
     pub path: Vec<String>,
@@ -104,6 +106,7 @@ pub fn claude(
     session_id: &str,
     paths: &SessionPaths,
     known_values: Vec<String>,
+    resume: Option<&str>,
 ) -> LaunchSpec {
     let mut args: Vec<String> = [
         "-p",
@@ -128,6 +131,9 @@ pub fn claude(
     if let Some(model) = settings.model.as_ref().filter(|m| !m.is_empty()) {
         args.extend(["--model".to_string(), model.clone()]);
     }
+    if let Some(cli_session_id) = resume {
+        args.extend(["--resume".to_string(), cli_session_id.to_string()]);
+    }
     let env: BTreeMap<String, String> = [
         ("PATH", settings.path.join(":")),
         ("HOME", s(&paths.home())),
@@ -145,7 +151,6 @@ pub fn claude(
     .collect();
     LaunchSpec {
         session_id: session_id.to_string(),
-        protocol_version: PROTOCOL_VERSION,
         socket_path: s(&paths.socket_path),
         log_path: s(&paths.session_dir.join("events.ndjson")),
         stderr_path: s(&paths.session_dir.join("cli.stderr")),
@@ -154,6 +159,8 @@ pub fn claude(
         args,
         env,
         redaction: Redaction { known_values },
+        resumed: resume.is_some(),
+        heartbeat_ms: HEARTBEAT_MS,
     }
 }
 
@@ -166,6 +173,7 @@ mod tests {
     fn settings(model: Option<&str>) -> ClaudeSettings {
         ClaudeSettings {
             command: "claude".into(),
+            account: "default".into(),
             account_dir: "/data/agents/claude/default".into(),
             model: model.map(String::from),
             path: vec![
@@ -196,12 +204,12 @@ mod tests {
             "s-1",
             &paths(),
             vec![],
+            None,
         );
         assert_eq!(
             serde_json::to_value(&spec).unwrap(),
             json!({
                 "session_id": "s-1",
-                "protocol_version": 1,
                 "socket_path": "/run/user/1000/saka/runners/s-1.sock",
                 "log_path": "/data/sessions/s-1/events.ndjson",
                 "stderr_path": "/data/sessions/s-1/cli.stderr",
@@ -225,8 +233,27 @@ mod tests {
                     "TMPDIR": "/data/envs/e-1/tmp",
                 },
                 "redaction": { "known_values": [] },
+                "resumed": false,
+                "heartbeat_ms": 10000,
             })
         );
+    }
+
+    #[test]
+    fn a_resumed_session_continues_the_cli_session() {
+        let spec = claude(
+            &settings(None),
+            Path::new("/usr/bin/claude"),
+            "s-2",
+            &paths(),
+            vec![],
+            Some("cli-abc"),
+        );
+        assert_eq!(
+            spec.args[spec.args.len() - 2..],
+            ["--resume".to_string(), "cli-abc".to_string()]
+        );
+        assert!(spec.resumed);
     }
 
     #[test]
@@ -238,6 +265,7 @@ mod tests {
                 "s-1",
                 &paths(),
                 vec![],
+                None,
             );
             let keys: Vec<&str> = spec.env.keys().map(String::as_str).collect();
             assert_eq!(
