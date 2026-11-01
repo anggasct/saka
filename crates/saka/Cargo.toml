@@ -35,6 +35,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid = { workspace = true, features = ["v7"] }
 
+[features]
+# Serves the web app from the binary (run `pnpm --dir web build` first).
+embed-web = ["saka-api/embed-web"]
+
 [dev-dependencies]
 rusqlite.workspace = true
 saka-testkit = { path = "../saka-testkit" }

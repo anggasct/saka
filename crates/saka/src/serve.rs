@@ -234,6 +234,9 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
     let mut api_cfg = ApiConfig::new(VERSION);
     api_cfg.allowed_origins = cfg.server.allowed_origins.clone();
     let state = AppState::new(api_cfg);
+    if let Some(assets) = saka_api::spa::embedded() {
+        state.set_assets(assets);
+    }
     let (stop, stopped) = watch::channel(false);
     let mut http_stop = stopped.clone();
     let http = tokio::spawn(

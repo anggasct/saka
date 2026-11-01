@@ -9,6 +9,7 @@ use saka_engine::Engine;
 use serde_json::json;
 
 use crate::problem::ApiError;
+use crate::spa::Assets;
 
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
@@ -32,6 +33,7 @@ impl ApiConfig {
 struct Inner {
     cfg: ApiConfig,
     engine: OnceLock<Arc<Engine>>,
+    assets: OnceLock<Arc<dyn Assets>>,
     http: Mutex<BTreeMap<(String, u16), u64>>,
     keys: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -44,6 +46,7 @@ impl AppState {
         AppState(Arc::new(Inner {
             cfg,
             engine: OnceLock::new(),
+            assets: OnceLock::new(),
             http: Mutex::new(BTreeMap::new()),
             keys: Mutex::new(HashMap::new()),
         }))
@@ -52,6 +55,15 @@ impl AppState {
     /// Serves requests from now on (before this, they get `503 not_ready`).
     pub fn set_engine(&self, engine: Arc<Engine>) {
         let _ = self.0.engine.set(engine);
+    }
+
+    /// Serves the web app from `assets` for every path that is not the API.
+    pub fn set_assets(&self, assets: Arc<dyn Assets>) {
+        let _ = self.0.assets.set(assets);
+    }
+
+    pub(crate) fn assets(&self) -> Option<&Arc<dyn Assets>> {
+        self.0.assets.get()
     }
 
     pub fn config(&self) -> &ApiConfig {

@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Design tokens. Contrast pairs meet WCAG AA in both schemes. */
+:root {
+  --background: #ffffff;
+  --foreground: #111827;
+  --card: #ffffff;
+  --card-foreground: #111827;
+  --muted: #f3f4f6;
+  --muted-foreground: #4b5563;
+  --border: #d1d5db;
+  --primary: #1d4ed8;
+  --primary-foreground: #ffffff;
+  --ring: #1d4ed8;
+  --info: #dbeafe;
+  --info-foreground: #1e3a8a;
+  --success: #dcfce7;
+  --success-foreground: #14532d;
+  --danger: #fee2e2;
+  --danger-foreground: #7f1d1d;
+  --attention: #fef3c7;
+  --attention-foreground: #78350f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0f17;
+    --foreground: #e5e7eb;
+    --card: #111827;
+    --card-foreground: #e5e7eb;
+    --muted: #1f2937;
+    --muted-foreground: #9ca3af;
+    --border: #374151;
+    --primary: #60a5fa;
+    --primary-foreground: #0b0f17;
+    --ring: #93c5fd;
+    --info: #1e3a8a;
+    --info-foreground: #dbeafe;
+    --success: #14532d;
+    --success-foreground: #dcfce7;
+    --danger: #7f1d1d;
+    --danger-foreground: #fee2e2;
+    --attention: #78350f;
+    --attention-foreground: #fef3c7;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
