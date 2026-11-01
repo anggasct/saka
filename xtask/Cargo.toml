@@ -9,9 +9,14 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
+jiff.workspace = true
+jsonwebtoken.workspace = true
 ra-ap-rustc_lexer.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [lints.rust]
 unsafe_code = "forbid"
