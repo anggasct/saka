@@ -360,6 +360,10 @@ impl Engine {
         ))
     }
 
+    pub fn last_activity_seq(&self) -> Result<i64> {
+        Ok(self.store.read(read::last_activity_seq)?)
+    }
+
     pub fn activities_after(&self, seq: i64, limit: u32) -> Result<Vec<(i64, SessionActivity)>> {
         Ok(self.store.read(|c| read::activities_after(c, seq, limit))?)
     }

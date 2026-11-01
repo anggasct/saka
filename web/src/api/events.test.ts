@@ -37,6 +37,15 @@ describe("startEventStream", () => {
       "spec.spec.withdrawn",
       "delivery.work_item.repinned",
       "delivery.work_item.superseded",
+      "runtime.session.reattached",
+      "runtime.session.steered",
+      "runtime.session.interrupt_requested",
+      "runtime.session.stop_requested",
+      "runtime.session.activity",
+      "runtime.permission_rule.added",
+      "runtime.permission_rule.revoked",
+      "runtime.budget.warned",
+      "runtime.quota.observed",
     ]) {
       expect(fake.listeners.has(`${kind}.v1`)).toBe(true);
     }

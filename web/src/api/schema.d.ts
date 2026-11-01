@@ -4,6 +4,22 @@
  */
 
 export interface paths {
+  "/api/v1/agent-accounts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_agent_accounts"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/events": {
     parameters: {
       query?: never;
@@ -68,6 +84,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/permission-rules/{rule_id}/revoke": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["revoke_rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects": {
     parameters: {
       query?: never;
@@ -100,6 +132,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/permission-rules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_permission_rules"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/specs": {
     parameters: {
       query?: never;
@@ -116,6 +164,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/sessions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_sessions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/sessions/{session_id}": {
     parameters: {
       query?: never;
@@ -124,6 +188,70 @@ export interface paths {
       cookie?: never;
     };
     get: operations["get_session"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sessions/{session_id}/interrupt": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["interrupt"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sessions/{session_id}/steer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["steer"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sessions/{session_id}/stop": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["stop"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/sessions/{session_id}/timeline": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_timeline"];
     put?: never;
     post?: never;
     delete?: never;
@@ -190,6 +318,22 @@ export interface paths {
     get?: never;
     put?: never;
     post: operations["withdraw_spec"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/usage-records": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_usage_records"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -332,6 +476,16 @@ export interface components {
       id: string;
       text: string;
     };
+    /** @description The `data` of a `runtime.session.activity.v1` SSE message: a new timeline row to read with the timeline cursor. */
+    ActivityNotice: {
+      kind: string;
+      /** Format: int64 */
+      offset: number;
+      /** Format: uuid */
+      session_id: string;
+      /** Format: uuid */
+      work_item_id: string;
+    };
     AddProjectBody: {
       base_branch?: string | null;
       project_path: string;
@@ -340,10 +494,22 @@ export interface components {
     AddSpecBody: {
       path: string;
     };
+    AgentAccount: {
+      cli: string;
+      name: string;
+      /** @description A window is at or above `agent.rate_limit_pause` and has not reset; new tasks wait. */
+      paused: boolean;
+      windows: components["schemas"]["QuotaWindow"][];
+    };
+    AgentAccountList: {
+      items: components["schemas"]["AgentAccount"][];
+    };
     AnswerBody: {
       /** @description `allow | deny` */
       decision: components["schemas"]["Decision"];
       message?: string | null;
+      /** @description With `allow` only: also allow the same tool (and, for Bash, the same whole command) in this project from now on. */
+      remember?: boolean;
     };
     Blocker: {
       code: string;
@@ -366,6 +532,7 @@ export interface components {
     };
     /** @enum {string} */
     Decision: "allow" | "deny";
+    EmptyBody: Record<string, never>;
     Failure: {
       code: string;
       params: unknown;
@@ -403,6 +570,11 @@ export interface components {
       params: unknown;
       /** @description `error` blocks approve; `warning` does not. */
       severity?: string;
+    };
+    Measure: {
+      /** @description `0` means no limit. */
+      limit: unknown;
+      used: unknown;
     };
     Meta: {
       api_version: string;
@@ -489,6 +661,37 @@ export interface components {
       next_cursor?: string | null;
     };
     /** @description A list page. */
+    Page_UsageRecord: {
+      items: {
+        /** @description `<cli>:<account name>` */
+        account: string;
+        /** @description Decimal string in dollars, or `null` when the CLI did not report it. */
+        cost_usd?: string | null;
+        ended_at: string;
+        /** Format: uuid */
+        id: string;
+        /** Format: int64 */
+        input_tokens?: number | null;
+        /** Format: int64 */
+        output_tokens?: number | null;
+        /** Format: uuid */
+        project_id: string;
+        /** Format: int64 */
+        running_ms: number;
+        /** Format: uuid */
+        session_id: string;
+        /** Format: uuid */
+        stage_run_id: string;
+        /** @description The CLI result subtype, e.g. `success`. */
+        status: string;
+        /** Format: int32 */
+        turn: number;
+        /** Format: uuid */
+        work_item_id: string;
+      }[];
+      next_cursor?: string | null;
+    };
+    /** @description A list page. */
     Page_WorkItem: {
       items: {
         admitted_at?: string | null;
@@ -496,6 +699,7 @@ export interface components {
         available_actions: string[];
         blocker?: components["schemas"]["Blocker"] | null;
         branch: string;
+        budget?: components["schemas"]["WorkItemBudget"] | null;
         change_request?: components["schemas"]["ChangeRequest"] | null;
         created_at: string;
         done_at?: string | null;
@@ -553,6 +757,26 @@ export interface components {
       /** Format: uuid */
       work_item_id: string;
     };
+    PermissionRule: {
+      /** @description The whole Bash command; `null` for other tools. */
+      command?: string | null;
+      created_at: string;
+      created_by: string;
+      /** @description `allow` */
+      effect: string;
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      permission_request_id: string;
+      /** Format: uuid */
+      project_id: string;
+      revoke_reason?: string | null;
+      revoked_at?: string | null;
+      tool: string;
+    };
+    PermissionRuleList: {
+      items: components["schemas"]["PermissionRule"][];
+    };
     PlanStep: {
       /** @description `keep | repin | restore | add | supersede | conflict` */
       action: string;
@@ -602,6 +826,18 @@ export interface components {
       repo_id: string;
       url: string;
     };
+    QuotaWindow: {
+      observed_at: string;
+      resets_at?: string | null;
+      /** @description As the CLI reports it, e.g. `allowed`, `allowed_warning`, `rejected`. */
+      status: string;
+      /**
+       * Format: double
+       * @description 0..1
+       */
+      utilization: number;
+      window: string;
+    };
     Ready: {
       checks: components["schemas"]["ReadyChecks"];
       /** @description `ready | not_ready` */
@@ -639,10 +875,13 @@ export interface components {
       to_revision_id: string;
     };
     Session: {
+      /** @description Subset of `steer`, `interrupt`, `stop`. */
+      available_actions: string[];
       cli: string;
       cli_version?: string | null;
       /** @description Decimal string, from micro-dollars. */
       cost_usd?: string | null;
+      end_reason?: components["schemas"]["Failure"] | null;
       ended_at?: string | null;
       /** Format: uuid */
       id: string;
@@ -653,6 +892,13 @@ export interface components {
       output_tokens?: number | null;
       /** Format: uuid */
       project_id: string;
+      /** @description `lost | retry | null` */
+      resume_cause?: string | null;
+      /**
+       * Format: uuid
+       * @description The session this one continues.
+       */
+      resumed_from_session_id?: string | null;
       /** Format: int64 */
       running_ms: number;
       /** Format: uuid */
@@ -664,6 +910,19 @@ export interface components {
       /** Format: uuid */
       work_item_id: string;
     };
+    SessionActivity: {
+      at: string;
+      data: unknown;
+      /** @description `system | thought | message | action | output | permission | result | steer` */
+      kind: string;
+      /**
+       * Format: int64
+       * @description Offset of the runner event.
+       */
+      offset: number;
+      /** @description Redacted, at most 500 characters. */
+      summary: string;
+    };
     SessionBrief: {
       cli: string;
       ended_at?: string | null;
@@ -671,6 +930,9 @@ export interface components {
       id: string;
       started_at?: string | null;
       state: string;
+    };
+    SessionList: {
+      items: components["schemas"]["Session"][];
     };
     Spec: {
       /** @description Left out of list items. */
@@ -731,6 +993,10 @@ export interface components {
       state: string;
       trigger: string;
     };
+    SteerBody: {
+      /** @description 1 to 4000 characters, sent to the agent as a user message. */
+      text: string;
+    };
     Step: {
       ac: string[];
       /** @description Step ids this step waits for. */
@@ -757,6 +1023,41 @@ export interface components {
       stream_type: string;
       /** Format: int32 */
       version: number;
+    };
+    Timeline: {
+      items: components["schemas"]["SessionActivity"][];
+      /**
+       * Format: int64
+       * @description Pass as `after` for the next page; `null` when this page is the end.
+       */
+      next_after?: number | null;
+    };
+    UsageRecord: {
+      /** @description `<cli>:<account name>` */
+      account: string;
+      /** @description Decimal string in dollars, or `null` when the CLI did not report it. */
+      cost_usd?: string | null;
+      ended_at: string;
+      /** Format: uuid */
+      id: string;
+      /** Format: int64 */
+      input_tokens?: number | null;
+      /** Format: int64 */
+      output_tokens?: number | null;
+      /** Format: uuid */
+      project_id: string;
+      /** Format: int64 */
+      running_ms: number;
+      /** Format: uuid */
+      session_id: string;
+      /** Format: uuid */
+      stage_run_id: string;
+      /** @description The CLI result subtype, e.g. `success`. */
+      status: string;
+      /** Format: int32 */
+      turn: number;
+      /** Format: uuid */
+      work_item_id: string;
     };
     WaitingOn:
       | {
@@ -788,6 +1089,7 @@ export interface components {
       available_actions: string[];
       blocker?: components["schemas"]["Blocker"] | null;
       branch: string;
+      budget?: components["schemas"]["WorkItemBudget"] | null;
       change_request?: components["schemas"]["ChangeRequest"] | null;
       created_at: string;
       done_at?: string | null;
@@ -823,6 +1125,18 @@ export interface components {
       waiting_on: components["schemas"]["WaitingOn"][];
       work: string;
     };
+    WorkItemBudget: {
+      /** @description Decimal strings in dollars. */
+      cost_usd: components["schemas"]["Measure"];
+      /** @description Minutes; `used` is a decimal number. */
+      running_minutes: components["schemas"]["Measure"];
+      /** Format: uuid */
+      stage_run_id: string;
+      tokens: components["schemas"]["Measure"];
+      turns: components["schemas"]["Measure"];
+      /** Format: int32 */
+      warn_percent: number;
+    };
     WorkItemDetail: components["schemas"]["WorkItem"] & {
       stage_runs: components["schemas"]["StageRunItem"][];
     };
@@ -842,6 +1156,25 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  list_agent_accounts: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentAccountList"];
+        };
+      };
+    };
+  };
   events: {
     parameters: {
       query?: {
@@ -857,7 +1190,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description One `data` per event, `id` = seq */
+      /** @description One `data` per event, `id` = seq. `runtime.session.activity.v1` messages carry an ActivityNotice and no `id`. */
       200: {
         headers: {
           [name: string]: unknown;
@@ -953,6 +1286,42 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["PermissionRequest"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  revoke_rule: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        rule_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PermissionRule"];
         };
       };
       "4XX": {
@@ -1066,6 +1435,35 @@ export interface operations {
       };
     };
   };
+  list_permission_rules: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PermissionRuleList"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   list_specs: {
     parameters: {
       query?: {
@@ -1154,6 +1552,35 @@ export interface operations {
       };
     };
   };
+  list_sessions: {
+    parameters: {
+      query?: {
+        work_item_id?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SessionList"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   get_session: {
     parameters: {
       query?: never;
@@ -1174,6 +1601,156 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  interrupt: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EmptyBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Session"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  steer: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SteerBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Session"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  stop: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Session"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_timeline: {
+    parameters: {
+      query?: {
+        /** @description Return activities with a larger offset. */
+        after?: number;
+        /** @description 1 to 500, default 200. */
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Timeline"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      422: {
         headers: {
           [name: string]: unknown;
         };
@@ -1307,6 +1884,39 @@ export interface operations {
         };
       };
       "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_usage_records: {
+    parameters: {
+      query?: {
+        /** @description One of `work_item_id` and `session_id` is required. */
+        work_item_id?: string;
+        session_id?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_UsageRecord"];
+        };
+      };
+      422: {
         headers: {
           [name: string]: unknown;
         };

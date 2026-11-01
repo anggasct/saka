@@ -672,6 +672,7 @@ impl Engine {
         for e in &events {
             after = saka_core::rule::evolve(after, e, now);
             self.push_event(&mut batch, e, Some(rule.project_id), cause, now);
+            crate::log_runtime(e, &cause.actor);
         }
         let after = after.ok_or_else(|| EngineError::Internal("revoke dropped the rule".into()))?;
         if let Some(a) = action {

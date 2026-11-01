@@ -19,8 +19,9 @@ const RUN_LIMIT: Duration = Duration::from_secs(30 * 60);
 const READY_LIMIT: Duration = Duration::from_secs(60);
 const CLEANUP_LIMIT: Duration = Duration::from_secs(3 * 60);
 const STOP_LIMIT: Duration = Duration::from_secs(30);
-const POLL: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_secs(1);
 const DEFAULT_MODEL: &str = "haiku";
+const SLOW_COMMAND: &str = "sleep 30";
 const DENY_MESSAGE: &str = "Not allowed in this run. Use one command per call, without &&, ;, |, or redirects. The Done when commands are allowed exactly as written in the spec.";
 
 struct Settings {
@@ -311,16 +312,127 @@ fn progress(task: &Value) -> String {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Scenario {
+    SteerRunning,
+    Interrupt,
+    SteerIdle,
+    KillRunner,
+    RestartServer,
+    Done,
+}
+
+fn session_state(task: &Value) -> &str {
+    text(&task["session"]["state"])
+}
+
+fn exercise(
+    stage: &mut Scenario,
+    task: &Value,
+    cli: &Cli<'_>,
+    api: &Api,
+    restart: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
+    let id = text(&task["id"]);
+    let state = session_state(task);
+    let resumed = || -> Result<bool> {
+        let sessions = api.get(&format!("/api/v1/sessions?work_item_id={id}"))?;
+        Ok(sessions["items"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|x| text(&x["resume_cause"]) == "lost")))
+    };
+    let next = match (*stage, state) {
+        (Scenario::SteerRunning, "running") => {
+            println!("  steer   {} while its turn runs", text(&task["task_key"]));
+            cli.run(&["task", "steer", id, "Keep every file you write short."])?;
+            Scenario::Interrupt
+        }
+        (Scenario::Interrupt, "running") => {
+            println!("  interrupt {}", text(&task["task_key"]));
+            cli.run(&["task", "interrupt", id])?;
+            Scenario::SteerIdle
+        }
+        (Scenario::Interrupt, "idle") => Scenario::SteerIdle,
+        (Scenario::SteerIdle, "idle") => {
+            println!("  steer   {} from idle", text(&task["task_key"]));
+            cli.run(&[
+                "task",
+                "steer",
+                id,
+                "First run `sleep 30` once, then continue the step from where you stopped and commit.",
+            ])?;
+            Scenario::KillRunner
+        }
+        (Scenario::KillRunner, "running" | "waiting") => {
+            let session = api.get(&format!("/api/v1/sessions?work_item_id={id}"))?;
+            let unit = session["items"]
+                .as_array()
+                .and_then(|s| s.last())
+                .map(|s| format!("saka-session-{}", text(&s["id"])))
+                .unwrap_or_default();
+            println!("  kill    {unit}");
+            Command::new("systemctl")
+                .args(["--user", "kill", "--signal=SIGKILL", &unit])
+                .status()
+                .context("kill the runner unit")?;
+            Scenario::RestartServer
+        }
+        (Scenario::RestartServer, "running" | "waiting") if resumed()? => {
+            println!("  restart saka serve while the resumed session runs");
+            restart()?;
+            Scenario::Done
+        }
+        (current, _) => current,
+    };
+    *stage = next;
+    Ok(())
+}
+
+fn check_runtime(api: &Api, task: &str) -> Result<()> {
+    let sessions = api.get(&format!("/api/v1/sessions?work_item_id={task}"))?;
+    let items = sessions["items"].as_array().cloned().unwrap_or_default();
+    let linked = items.windows(2).any(|w| {
+        text(&w[1]["resumed_from_session_id"]) == text(&w[0]["id"])
+            && text(&w[1]["resume_cause"]) == "lost"
+    });
+    if !linked {
+        bail!("S1 has no session resumed after the runner was killed: {sessions}");
+    }
+    let mut kinds = BTreeSet::new();
+    for s in &items {
+        let timeline = api.get(&format!(
+            "/api/v1/sessions/{}/timeline?limit=500",
+            text(&s["id"])
+        ))?;
+        for row in timeline["items"].as_array().into_iter().flatten() {
+            kinds.insert(text(&row["kind"]).to_string());
+        }
+    }
+    for kind in ["steer", "result"] {
+        if !kinds.contains(kind) {
+            bail!("the S1 timeline has no {kind} activity: {kinds:?}");
+        }
+    }
+    println!(
+        "  S1 ran {} sessions; timeline kinds {kinds:?}",
+        items.len()
+    );
+    Ok(())
+}
+
 fn deliver(
     api: &Api,
     cli: &Cli<'_>,
     project: &str,
     spec: &str,
     allowed: &BTreeSet<String>,
+    restart: &mut dyn FnMut() -> Result<()>,
 ) -> Result<()> {
     let started = Instant::now();
     let mut merged = BTreeSet::new();
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    let mut stage = Scenario::SteerRunning;
+    let mut first: Option<String> = None;
     loop {
         if started.elapsed() > RUN_LIMIT {
             bail!(
@@ -336,6 +448,12 @@ fn deliver(
             if seen.get(&id) != Some(&line) {
                 println!("  {line}");
                 seen.insert(id.clone(), line);
+            }
+            if task["step_id"] == "S1" {
+                first.get_or_insert_with(|| id.clone());
+                if stage != Scenario::Done && text(&task["stage_phase"]) == "running_session" {
+                    exercise(&mut stage, task, cli, api, restart)?;
+                }
             }
             if text(&task["state"]) == "blocked" {
                 bail!(
@@ -353,7 +471,10 @@ fn deliver(
             }
         }
         if text(&api.get(&format!("/api/v1/specs/{spec}"))?["state"]) == "shipped" {
-            return Ok(());
+            if stage != Scenario::Done {
+                bail!("S1 finished before the runtime scenario did ({stage:?})");
+            }
+            return check_runtime(api, first.as_deref().unwrap_or_default());
         }
         std::thread::sleep(POLL);
     }
@@ -413,9 +534,21 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
         config(run.settings, &listen, &run.dir.join("data")),
     )
     .context("write the config")?;
-    let _server = Server::start(&run.saka, &config_path, &run.dir.join("serve.log"))?;
+    let log = run.dir.join("serve.log");
+    let mut server = Some(Server::start(&run.saka, &config_path, &log)?);
     let api = Api::new(&listen)?;
     wait_ready(&api)?;
+    let mut restart = || -> Result<()> {
+        if let Some(mut old) = server.take() {
+            old.stop();
+        }
+        server = Some(Server::start(
+            &run.saka,
+            &config_path,
+            &run.dir.join("serve-2.log"),
+        )?);
+        wait_ready(&api)
+    };
     let cli = Cli {
         saka: &run.saka,
         config: &config_path,
@@ -450,7 +583,11 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
         &cli,
         &project_id,
         &spec_id,
-        &done_when_commands(&run.spec),
+        &done_when_commands(&run.spec)
+            .into_iter()
+            .chain([SLOW_COMMAND.to_string()])
+            .collect(),
+        &mut restart,
     )?;
     println!("  spec shipped");
     verify(github, &run.base)

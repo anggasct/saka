@@ -9,10 +9,11 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use saka_core::ids::{
-    PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
+    PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_engine::{
-    AddProject, EngineError, PermissionFilter, Produced, Reply, StoredEvent, WorkItemFilter,
+    AddProject, EngineError, PermissionFilter, Produced, Reply, SessionCommand, SessionView,
+    StoredEvent, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -475,7 +476,10 @@ async fn task_action(
     };
     let project = tri!(engine.work_item(item)).map(|d| d.task.item.project_id);
     let respond = |p: Produced<'_>| match p {
-        Produced::Task(t) => reply(StatusCode::ACCEPTED, &dto::WorkItem::from_task(t, &[])),
+        Produced::Task(t) => reply(
+            StatusCode::ACCEPTED,
+            &dto::WorkItem::from_task(t, &[], None),
+        ),
         _ => unexpected(),
     };
     let name = match which {
@@ -652,7 +656,7 @@ pub async fn answer_permission(
                     request,
                     req.decision == dto::Decision::Allow,
                     req.message,
-                    false,
+                    req.remember,
                     &cause,
                     Some(&action),
                 )
@@ -675,6 +679,307 @@ pub async fn get_session(State(s): State<AppState>, Path(id): Path<String>) -> R
         Some(v) => ok(StatusCode::OK, &dto::Session::from_view(&v)),
         None => ApiError::not_found().into_response(),
     }
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/sessions", tag = "runtime", params(dto::SessionsQuery),
+    responses((status = 200, body = dto::SessionList), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_sessions(
+    State(s): State<AppState>,
+    Query(q): Query<dto::SessionsQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let Some(item) = tri!(opt_id(q.work_item_id.as_deref(), "work_item_id")) else {
+        return ApiError::validation("work_item_id", "required").into_response();
+    };
+    let sessions = tri!(engine.sessions_of(WorkItemId(item)));
+    ok(
+        StatusCode::OK,
+        &dto::SessionList {
+            items: sessions.iter().map(dto::Session::from_view).collect(),
+        },
+    )
+}
+
+const TIMELINE_DEFAULT: u32 = 200;
+const TIMELINE_MAX: u32 = 500;
+
+#[utoipa::path(
+    get, path = "/api/v1/sessions/{session_id}/timeline", tag = "runtime",
+    params(("session_id" = uuid::Uuid, Path), dto::TimelineQuery),
+    responses((status = 200, body = dto::Timeline), (status = 404, body = dto::Problem, content_type = "application/problem+json"), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn get_timeline(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<dto::TimelineQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let id = SessionId(tri!(path_id(&id)));
+    let limit = q.limit.unwrap_or(TIMELINE_DEFAULT);
+    if !(1..=TIMELINE_MAX).contains(&limit) {
+        return ApiError::validation("limit", "out_of_range").into_response();
+    }
+    let Some(mut rows) = tri!(engine.timeline(id, q.after, limit + 1)) else {
+        return ApiError::not_found().into_response();
+    };
+    let more = rows.len() > limit as usize;
+    rows.truncate(limit as usize);
+    ok(
+        StatusCode::OK,
+        &dto::Timeline {
+            next_after: if more {
+                rows.last().map(|r| r.offset)
+            } else {
+                None
+            },
+            items: rows.iter().map(dto::SessionActivity::from).collect(),
+        },
+    )
+}
+
+enum SessionAction {
+    Steer,
+    Interrupt,
+    Stop,
+}
+
+async fn session_action(
+    s: AppState,
+    id: String,
+    request: (Method, Uri, HeaderMap, Bytes),
+    which: SessionAction,
+) -> Response {
+    let (method, uri, headers, raw) = request;
+    let key = tri!(require_key(&headers));
+    let session = SessionId(tri!(path_id(&id)));
+    let engine = tri!(s.engine().cloned());
+    let (command, reason) = match which {
+        SessionAction::Steer => {
+            let req: dto::SteerBody = tri!(body(&raw));
+            (SessionCommand::Steer { text: req.text }, None)
+        }
+        SessionAction::Interrupt => {
+            let _: dto::EmptyBody = tri!(body(&raw));
+            (SessionCommand::Interrupt, None)
+        }
+        SessionAction::Stop => {
+            let req: dto::RequiredReason = tri!(body(&raw));
+            (
+                SessionCommand::Stop {
+                    reason: req.reason.clone(),
+                },
+                Some(req.reason),
+            )
+        }
+    };
+    let project = tri!(engine.session(session)).map(|v| v.project_id);
+    let respond = |p: Produced<'_>| match (p, project) {
+        (Produced::Session(session), Some(project_id)) => reply(
+            StatusCode::ACCEPTED,
+            &dto::Session::from_view(&SessionView {
+                session: session.clone(),
+                project_id,
+            }),
+        ),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: match which {
+            SessionAction::Steer => "session.steer",
+            SessionAction::Interrupt => "session.interrupt",
+            SessionAction::Stop => "session.stop",
+        },
+        target_type: "session",
+        target_id: Some(session.0),
+        reason,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .session_command(session, command, &cause, Some(&action))
+                .map(|_| project)
+                .map_err(|e| (e, project))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/sessions/{session_id}/steer", tag = "runtime",
+    params(("session_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::SteerBody,
+    responses((status = 202, body = dto::Session), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn steer(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    session_action(s, id, (method, uri, headers, raw), SessionAction::Steer).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/sessions/{session_id}/interrupt", tag = "runtime",
+    params(("session_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::EmptyBody,
+    responses((status = 202, body = dto::Session), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn interrupt(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    session_action(s, id, (method, uri, headers, raw), SessionAction::Interrupt).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/sessions/{session_id}/stop", tag = "runtime",
+    params(("session_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::Session), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn stop(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    session_action(s, id, (method, uri, headers, raw), SessionAction::Stop).await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/permission-rules", tag = "runtime",
+    params(("project_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::PermissionRuleList), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_permission_rules(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = ProjectId(tri!(path_id(&id)));
+    match tri!(engine.permission_rules(id)) {
+        Some(rules) => ok(
+            StatusCode::OK,
+            &dto::PermissionRuleList {
+                items: rules.iter().map(dto::PermissionRule::from).collect(),
+            },
+        ),
+        None => ApiError::not_found().into_response(),
+    }
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/permission-rules/{rule_id}/revoke", tag = "runtime",
+    params(("rule_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::RequiredReason,
+    responses((status = 200, body = dto::PermissionRule), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn revoke_rule(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let rule = PermissionRuleId(tri!(path_id(&id)));
+    let req: dto::RequiredReason = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Rule(r) => reply(StatusCode::OK, &dto::PermissionRule::from(r)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "permission_rule.revoke",
+        target_type: "permission_rule",
+        target_id: Some(rule.0),
+        reason: Some(req.reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .revoke_rule(rule, &req.reason, &cause, Some(&action))
+                .map(|r| Some(r.project_id))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/agent-accounts", tag = "runtime",
+    responses((status = 200, body = dto::AgentAccountList))
+)]
+pub async fn list_agent_accounts(State(s): State<AppState>) -> Response {
+    let engine = tri!(s.engine());
+    let accounts = tri!(engine.agent_accounts());
+    ok(
+        StatusCode::OK,
+        &dto::AgentAccountList {
+            items: accounts.iter().map(dto::AgentAccount::from).collect(),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/usage-records", tag = "runtime", params(dto::UsageQuery),
+    responses((status = 200, body = dto::Page<dto::UsageRecord>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_usage_records(
+    State(s): State<AppState>,
+    Query(q): Query<dto::UsageQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let work_item = tri!(opt_id(q.work_item_id.as_deref(), "work_item_id")).map(WorkItemId);
+    let session = tri!(opt_id(q.session_id.as_deref(), "session_id")).map(SessionId);
+    if work_item.is_none() && session.is_none() {
+        return ApiError::validation("work_item_id", "required").into_response();
+    }
+    let key = format!("usage:{work_item:?}:{session:?}");
+    let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
+    let rows = tri!(engine.usage_records(work_item, session));
+    let mut items: Vec<_> = rows
+        .iter()
+        .filter(|u| {
+            p.after
+                .is_none_or(|a| (u.record.ended_at.0, u.record.id.0) > a)
+        })
+        .collect();
+    let limit = usize::try_from(p.limit).unwrap_or(usize::MAX);
+    let more = items.len() > limit;
+    items.truncate(limit);
+    ok(
+        StatusCode::OK,
+        &dto::Page {
+            next_cursor: if more {
+                items
+                    .last()
+                    .map(|u| encode_cursor((u.record.ended_at.0, u.record.id.0), &key))
+            } else {
+                None
+            },
+            items: items.into_iter().map(dto::UsageRecord::from).collect(),
+        },
+    )
 }
 
 #[utoipa::path(
@@ -710,11 +1015,23 @@ fn sse_event(e: &StoredEvent) -> Event {
         .data(serde_json::to_string(&data).unwrap_or_default())
 }
 
+fn activity_event(a: &saka_core::model::SessionActivity) -> Event {
+    let data = dto::ActivityNotice {
+        session_id: a.session_id.0,
+        work_item_id: a.work_item_id.0,
+        offset: a.offset,
+        kind: a.kind.clone(),
+    };
+    Event::default()
+        .event("runtime.session.activity.v1")
+        .data(serde_json::to_string(&data).unwrap_or_default())
+}
+
 #[utoipa::path(
     get, path = "/api/v1/events", tag = "system",
     params(dto::EventsQuery, ("Last-Event-ID" = Option<String>, Header, description = "Resume after this seq")),
     responses(
-        (status = 200, content_type = "text/event-stream", body = dto::StreamEvent, description = "One `data` per event, `id` = seq"),
+        (status = 200, content_type = "text/event-stream", body = dto::StreamEvent, description = "One `data` per event, `id` = seq. `runtime.session.activity.v1` messages carry an ActivityNotice and no `id`."),
         (status = 422, body = dto::Problem, content_type = "application/problem+json"),
     )
 )]
@@ -736,22 +1053,35 @@ pub async fn events(
         ),
         None => tri!(engine.last_seq()),
     };
+    let activity_cursor = tri!(engine.last_activity_seq());
     let stream = stream::unfold(
-        (engine, after, VecDeque::<StoredEvent>::new()),
-        |(engine, mut cursor, mut buffer)| async move {
+        (engine, (after, activity_cursor), VecDeque::<Event>::new()),
+        |(engine, (mut cursor, mut activity_cursor), mut buffer)| async move {
             loop {
-                if let Some(e) = buffer.pop_front() {
-                    let event = sse_event(&e);
-                    return Some((Ok::<Event, Infallible>(event), (engine, cursor, buffer)));
+                if let Some(event) = buffer.pop_front() {
+                    return Some((
+                        Ok::<Event, Infallible>(event),
+                        (engine, (cursor, activity_cursor), buffer),
+                    ));
                 }
                 match engine.events_after(cursor, EVENT_BATCH) {
                     Ok(list) if !list.is_empty() => {
                         cursor = list.last().map_or(cursor, |e| e.seq);
-                        buffer.extend(list);
-                        continue;
+                        buffer.extend(list.iter().map(sse_event));
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "reading events failed"),
+                }
+                match engine.activities_after(activity_cursor, EVENT_BATCH) {
+                    Ok(list) if !list.is_empty() => {
+                        activity_cursor = list.last().map_or(activity_cursor, |(seq, _)| *seq);
+                        buffer.extend(list.iter().map(|(_, a)| activity_event(a)));
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "reading session activity failed"),
+                }
+                if !buffer.is_empty() {
+                    continue;
                 }
                 tokio::select! {
                     () = engine.changed() => {}

@@ -30,10 +30,20 @@ export function blockerText(
   if (!known(key)) {
     return t("blocker.unknown", { code });
   }
+  const number = (value: unknown) => (typeof value === "number" ? value : 0);
   const values: Record<string, string | number> = {
     reason: text(params.reason) || "failed",
     checks: text(params.checks),
-    minutes: typeof params.minutes === "number" ? params.minutes : 0,
+    minutes: number(params.minutes),
+    hours: number(params.hours),
+    cause: text(params.cause) || "other",
+    dimension: text(params.dimension) || "other",
+    used: text(params.used),
+    limit: text(params.limit),
+    tool: text(params.tool),
+    summary: text(params.summary),
+    account: text(params.account),
+    window: text(params.window),
   };
   return t(key, values);
 }

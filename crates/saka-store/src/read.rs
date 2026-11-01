@@ -504,6 +504,14 @@ pub fn activities_after(
     Ok(out)
 }
 
+pub fn last_activity_seq(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT ifnull(MAX(seq), 0) FROM session_activity",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
 fn activity(row: &Row<'_>) -> Result<saka_core::model::SessionActivity> {
     Ok(saka_core::model::SessionActivity {
         session_id: SessionId(uuid(row, "session_id")?),

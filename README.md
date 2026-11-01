@@ -12,6 +12,8 @@ saka spec template > docs/specs/<spec>.md            # a spec that passes lint (
 saka spec approve <project> docs/specs/<spec>.md       # again after an edit: repins steps that have not started
 saka spec withdraw <project> docs/specs/<spec>.md --reason "<why>"
 saka task list
+saka task steer <task> "<message>"                     # also: interrupt, stop --reason, timeline
+saka permission answer <request> allow --remember      # allow the same request in this project from now on
 ```
 
 Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
@@ -50,7 +52,7 @@ The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/pac
 | `SAKA_E2E_CLAUDE_CONFIG_DIR` | The logged-in Claude Code account directory |
 | `SAKA_E2E_MODEL` | Optional; default `haiku` |
 
-The run creates base branch `e2e/<run-id>` from the default branch and commits a two-step spec to it (`xtask/src/e2e/fixture-spec.md.tmpl`). It then starts `saka serve` with a config of its own, registers the project, approves the spec, and merges each step through the CLI once CI passes. A permission request whose command is one of the spec's Done when commands is allowed; any other request is denied with a hint. The run must finish within 30 minutes with the spec shipped, two merged pull requests, and their task branches deleted. After that the base branch is deleted. When a run fails, the base branch is kept for inspection, and the server log is in `target/e2e/<run-id>/serve.log`.
+The run creates base branch `e2e/<run-id>` from the default branch and commits a two-step spec to it (`xtask/src/e2e/fixture-spec.md.tmpl`). It then starts `saka serve` with a config of its own, registers the project, approves the spec, and merges each step through the CLI once CI passes. While S1 runs, the run steers its session, interrupts it and steers it again, kills the runner unit so the session resumes on its own, and restarts `saka serve` while the resumed session runs; at the end it checks that S1 has a resumed session and a timeline with the steer and the result. A permission request whose command is one of the spec's Done when commands, or `sleep 30` (asked for by the scenario), is allowed; any other request is denied with a hint. The run must finish within 30 minutes with the spec shipped, two merged pull requests, and their task branches deleted. After that the base branch is deleted. When a run fails, the base branch is kept for inspection, and the server log is in `target/e2e/<run-id>/serve.log`.
 
 ## Spikes
 

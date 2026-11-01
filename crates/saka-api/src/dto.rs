@@ -1,9 +1,14 @@
 use saka_core::admission::Waiting;
 use saka_core::gate::Check;
-use saka_core::model::{StageRun, Task};
-use saka_core::task::available_actions;
+use saka_core::model::{
+    PermissionRule as CoreRule, SessionActivity as CoreActivity, StageRun, Task,
+};
+use saka_core::task::{available_actions, session_actions};
 use saka_core::time::Timestamp;
-use saka_engine::{PermissionView, ProjectView, SessionView, SpecView, TaskDetail, TaskView};
+use saka_engine::{
+    AccountView, BudgetView, PermissionView, ProjectView, SessionView, SpecView, TaskDetail,
+    TaskView, UsageView,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
@@ -415,6 +420,8 @@ pub struct WorkItem {
     pub pending_permission_count: u32,
     /// Subset of `merge`, `retry`, `cancel`.
     pub available_actions: Vec<String>,
+    /// Use and limits of the running stage run; `null` when no stage run with a session runs.
+    pub budget: Option<WorkItemBudget>,
     pub version: u64,
     pub created_at: String,
     pub updated_at: String,
@@ -467,12 +474,57 @@ impl From<&Waiting> for WaitingOn {
     }
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Measure {
+    pub used: Value,
+    /// `0` means no limit.
+    pub limit: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkItemBudget {
+    pub stage_run_id: Uuid,
+    pub warn_percent: u32,
+    /// Minutes; `used` is a decimal number.
+    pub running_minutes: Measure,
+    pub turns: Measure,
+    pub tokens: Measure,
+    /// Decimal strings in dollars.
+    pub cost_usd: Measure,
+}
+
+impl WorkItemBudget {
+    pub fn from_view(v: &BudgetView) -> WorkItemBudget {
+        let minutes = (v.used.running_ms as f64 / 60_000.0 * 10.0).round() / 10.0;
+        WorkItemBudget {
+            stage_run_id: v.stage_run_id.0,
+            warn_percent: v.warn_percent,
+            running_minutes: Measure {
+                used: Value::from(minutes),
+                limit: Value::from(v.limit.running_minutes),
+            },
+            turns: Measure {
+                used: Value::from(v.used.turns),
+                limit: Value::from(v.limit.turns),
+            },
+            tokens: Measure {
+                used: Value::from(v.used.tokens),
+                limit: Value::from(v.limit.tokens),
+            },
+            cost_usd: Measure {
+                used: Value::from(usd(v.used.cost_usd_micros)),
+                limit: Value::from(usd(v.limit.cost_usd_micros)),
+            },
+        }
+    }
+}
+
 impl WorkItem {
     pub fn from_view(v: &TaskView) -> WorkItem {
-        WorkItem::from_task(&v.task, &v.waiting_on)
+        WorkItem::from_task(&v.task, &v.waiting_on, v.budget.as_ref())
     }
 
-    pub fn from_task(t: &Task, waiting_on: &[Waiting]) -> WorkItem {
+    pub fn from_task(t: &Task, waiting_on: &[Waiting], budget: Option<&BudgetView>) -> WorkItem {
         let i = &t.item;
         WorkItem {
             id: i.id.0,
@@ -529,6 +581,7 @@ impl WorkItem {
             )
             .unwrap_or(u32::MAX),
             available_actions: available_actions(t).into_iter().map(String::from).collect(),
+            budget: budget.map(WorkItemBudget::from_view),
             version: i.version,
             created_at: time(i.created_at),
             updated_at: time(i.updated_at),
@@ -588,7 +641,7 @@ pub struct WorkItemDetail {
 impl WorkItemDetail {
     pub fn from_detail(d: &TaskDetail) -> WorkItemDetail {
         WorkItemDetail {
-            item: WorkItem::from_task(&d.task, &d.waiting_on),
+            item: WorkItem::from_task(&d.task, &d.waiting_on, d.budget.as_ref()),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
         }
     }
@@ -648,8 +701,176 @@ pub struct Session {
     pub cost_usd: Option<String>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
+    /// The session this one continues.
+    pub resumed_from_session_id: Option<Uuid>,
+    /// `lost | retry | null`
+    pub resume_cause: Option<String>,
+    pub end_reason: Option<Failure>,
+    /// Subset of `steer`, `interrupt`, `stop`.
+    pub available_actions: Vec<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionList {
+    pub items: Vec<Session>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionActivity {
+    /// Offset of the runner event.
+    pub offset: u64,
+    pub at: String,
+    /// `system | thought | message | action | output | permission | result | steer`
+    pub kind: String,
+    /// Redacted, at most 500 characters.
+    pub summary: String,
+    pub data: Value,
+}
+
+impl From<&CoreActivity> for SessionActivity {
+    fn from(a: &CoreActivity) -> SessionActivity {
+        SessionActivity {
+            offset: a.offset,
+            at: time(a.at),
+            kind: a.kind.clone(),
+            summary: a.summary.clone(),
+            data: a.data.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Timeline {
+    pub items: Vec<SessionActivity>,
+    /// Pass as `after` for the next page; `null` when this page is the end.
+    pub next_after: Option<u64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PermissionRule {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    /// `allow`
+    pub effect: String,
+    pub tool: String,
+    /// The whole Bash command; `null` for other tools.
+    pub command: Option<String>,
+    pub permission_request_id: Uuid,
+    pub created_by: String,
+    pub created_at: String,
+    pub revoked_at: Option<String>,
+    pub revoke_reason: Option<String>,
+}
+
+impl From<&CoreRule> for PermissionRule {
+    fn from(r: &CoreRule) -> PermissionRule {
+        PermissionRule {
+            id: r.id.0,
+            project_id: r.project_id.0,
+            effect: "allow".into(),
+            tool: r.tool.clone(),
+            command: r.command.clone(),
+            permission_request_id: r.permission_request_id.0,
+            created_by: r.created_by.clone(),
+            created_at: time(r.created_at),
+            revoked_at: opt_time(r.revoked_at),
+            revoke_reason: r.revoke_reason.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PermissionRuleList {
+    pub items: Vec<PermissionRule>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QuotaWindow {
+    pub window: String,
+    /// 0..1
+    pub utilization: f64,
+    /// As the CLI reports it, e.g. `allowed`, `allowed_warning`, `rejected`.
+    pub status: String,
+    pub resets_at: Option<String>,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentAccount {
+    pub cli: String,
+    pub name: String,
+    /// A window is at or above `agent.rate_limit_pause` and has not reset; new tasks wait.
+    pub paused: bool,
+    pub windows: Vec<QuotaWindow>,
+}
+
+impl From<&AccountView> for AgentAccount {
+    fn from(a: &AccountView) -> AgentAccount {
+        AgentAccount {
+            cli: a.cli.clone(),
+            name: a.name.clone(),
+            paused: a.paused,
+            windows: a
+                .windows
+                .iter()
+                .map(|w| QuotaWindow {
+                    window: w.window.clone(),
+                    utilization: w.utilization,
+                    status: w.status.clone(),
+                    resets_at: opt_time(w.resets_at),
+                    observed_at: time(w.observed_at),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentAccountList {
+    pub items: Vec<AgentAccount>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UsageRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub work_item_id: Uuid,
+    pub stage_run_id: Uuid,
+    pub session_id: Uuid,
+    /// `<cli>:<account name>`
+    pub account: String,
+    pub turn: u32,
+    /// The CLI result subtype, e.g. `success`.
+    pub status: String,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    /// Decimal string in dollars, or `null` when the CLI did not report it.
+    pub cost_usd: Option<String>,
+    pub running_ms: i64,
+    pub ended_at: String,
+}
+
+impl From<&UsageView> for UsageRecord {
+    fn from(v: &UsageView) -> UsageRecord {
+        let u = &v.record;
+        UsageRecord {
+            id: u.id.0,
+            project_id: v.project_id.0,
+            work_item_id: u.work_item_id.0,
+            stage_run_id: u.stage_run_id.0,
+            session_id: u.session_id.0,
+            account: u.account.clone(),
+            turn: u.turn,
+            status: u.status.clone(),
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cost_usd: u.cost_usd_micros.map(usd),
+            running_ms: u.running_ms,
+            ended_at: time(u.ended_at),
+        }
+    }
 }
 
 pub fn usd(micros: i64) -> String {
@@ -675,6 +896,13 @@ impl Session {
             cost_usd: s.cost_usd_micros.map(usd),
             input_tokens: s.input_tokens,
             output_tokens: s.output_tokens,
+            resumed_from_session_id: s.resumed_from_session_id.map(|x| x.0),
+            resume_cause: s.resume_cause.map(|c| c.as_str().to_string()),
+            end_reason: s.end_reason.as_ref().map(|e| Failure {
+                code: e.code.clone(),
+                params: e.params.clone(),
+            }),
+            available_actions: session_actions(s).into_iter().map(String::from).collect(),
             started_at: opt_time(s.started_at),
             ended_at: opt_time(s.ended_at),
         }
@@ -732,6 +960,15 @@ pub struct Problem {
     pub correlation_id: Option<Uuid>,
 }
 
+/// The `data` of a `runtime.session.activity.v1` SSE message: a new timeline row to read with the timeline cursor.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ActivityNotice {
+    pub session_id: Uuid,
+    pub work_item_id: Uuid,
+    pub offset: u64,
+    pub kind: String,
+}
+
 /// One event of `GET /api/v1/events` (the `data` of an SSE message).
 #[derive(Debug, Serialize, ToSchema)]
 pub struct StreamEvent {
@@ -780,7 +1017,21 @@ pub struct AnswerBody {
     pub decision: Decision,
     #[serde(default)]
     pub message: Option<String>,
+    /// With `allow` only: also allow the same tool (and, for Bash, the same whole command) in this project from now on.
+    #[serde(default)]
+    pub remember: bool,
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SteerBody {
+    /// 1 to 4000 characters, sent to the agent as a user message.
+    pub text: String,
+}
+
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyBody {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -853,6 +1104,31 @@ pub struct PermissionQuery {
     pub state: Option<String>,
     pub project_id: Option<String>,
     pub work_item_id: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SessionsQuery {
+    pub work_item_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TimelineQuery {
+    /// Return activities with a larger offset.
+    pub after: Option<u64>,
+    /// 1 to 500, default 200.
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct UsageQuery {
+    /// One of `work_item_id` and `session_id` is required.
+    pub work_item_id: Option<String>,
+    pub session_id: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }

@@ -33,6 +33,7 @@ pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewProject, RegisteredSpec, SessionCommand};
 pub use metrics::{MetricsSnapshot, Readiness};
 pub use register::{AddProject, Integration, parse_repo_url};
+pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
 pub use views::{
@@ -363,7 +364,7 @@ impl Engine {
     }
 }
 
-fn log_runtime(e: &Event, actor: &str) {
+pub(crate) fn log_runtime(e: &Event, actor: &str) {
     use Event as E;
     match e {
         E::SessionStarted {
@@ -424,7 +425,13 @@ fn log_runtime(e: &Event, actor: &str) {
             params,
             ..
         } => {
-            tracing::info!(%work_item_id, dimension = %params["dimension"], used = %params["used"], limit = %params["limit"], "budget exhausted")
+            tracing::info!(
+                %work_item_id,
+                dimension = params["dimension"].as_str().unwrap_or_default(),
+                used = %params["used"],
+                limit = %params["limit"],
+                "budget exhausted"
+            )
         }
         _ => {}
     }

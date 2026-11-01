@@ -31,9 +31,10 @@ pub async fn readyz(State(s): State<AppState>) -> Response {
         db: word(r.is_some_and(|r| r.db)),
         migrations: word(r.is_some_and(|r| r.migrations)),
         worker: word(r.is_some_and(|r| r.worker)),
-        reconciler: word(r.is_some_and(|r| r.reconciler)),
+        reconciler: word(r.is_some_and(|r| r.reconciler && r.sessions_reattached)),
     };
-    let ready = r.is_some_and(|r| r.db && r.migrations && r.worker && r.reconciler);
+    let ready = r
+        .is_some_and(|r| r.db && r.migrations && r.worker && r.reconciler && r.sessions_reattached);
     ok(
         if ready {
             StatusCode::OK
@@ -150,6 +151,59 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         &[],
         m.environments_teardown_failed,
     );
+
+    t.family(
+        "saka_sessions_resumed_total",
+        "counter",
+        "Sessions that continue an earlier one, by cause.",
+    );
+    for (cause, n) in &m.sessions_resumed {
+        t.sample("saka_sessions_resumed_total", &[("cause", cause)], n);
+    }
+    t.family(
+        "saka_budget_exhausted_total",
+        "counter",
+        "Stage runs stopped by a budget, by dimension.",
+    );
+    for (dimension, n) in &m.budget_exhausted {
+        t.sample(
+            "saka_budget_exhausted_total",
+            &[("dimension", dimension)],
+            n,
+        );
+    }
+    t.family(
+        "saka_usage_tokens_total",
+        "counter",
+        "Input and output tokens reported by the agent CLI.",
+    );
+    for (account, tokens, _) in &m.usage {
+        t.sample("saka_usage_tokens_total", &[("account", account)], tokens);
+    }
+    t.family(
+        "saka_usage_cost_usd_micros_total",
+        "counter",
+        "API-equivalent cost reported by the agent CLI, in micro-dollars.",
+    );
+    for (account, _, micros) in &m.usage {
+        t.sample(
+            "saka_usage_cost_usd_micros_total",
+            &[("account", account)],
+            micros,
+        );
+    }
+    t.family(
+        "saka_account_utilization",
+        "gauge",
+        "Last observed utilization of an agent account rate limit window.",
+    );
+    for (account, window, utilization) in &m.account_utilization {
+        t.sample(
+            "saka_account_utilization",
+            &[("account", account), ("window", window)],
+            utilization,
+        );
+    }
 
     t.family("saka_work_items", "gauge", "Work items per state.");
     for (state, n) in &m.work_items {

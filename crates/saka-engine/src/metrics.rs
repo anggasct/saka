@@ -122,6 +122,10 @@ pub struct MetricsSnapshot {
     pub stage_durations: Vec<(String, String, i64)>,
     pub adapter_requests: Vec<(String, String, u64)>,
     pub admission_waiting: Vec<(String, i64)>,
+    pub sessions_resumed: Vec<(String, i64)>,
+    pub budget_exhausted: Vec<(String, i64)>,
+    pub usage: Vec<(String, i64, i64)>,
+    pub account_utilization: Vec<(String, String, f64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +151,22 @@ impl Engine {
                 list::stage_durations(c)?,
             ))
         })?;
+        let (resumed, exhausted, usage, quotas) = self.store.read(|c| {
+            Ok((
+                list::resumed_session_counts(c)?,
+                list::budget_exhausted_counts(c)?,
+                list::usage_totals(c)?,
+                saka_store::read::account_quotas(c)?,
+            ))
+        })?;
         Ok(MetricsSnapshot {
+            sessions_resumed: resumed,
+            budget_exhausted: exhausted,
+            usage,
+            account_utilization: quotas
+                .into_iter()
+                .map(|q| (q.account, q.window, q.utilization))
+                .collect(),
             jobs,
             oldest_ready_job_age_ms: oldest,
             job_runs: copy(&self.counters.job_runs),

@@ -24,9 +24,13 @@ pub use state::{ApiConfig, AppState};
         routes::spec_template,
         routes::list_work_items, routes::get_work_item, routes::merge, routes::retry, routes::cancel,
         routes::list_permissions, routes::answer_permission, routes::get_session,
+        routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
+        routes::list_permission_rules, routes::revoke_rule, routes::list_agent_accounts,
+        routes::list_usage_records,
         routes::meta, routes::events,
         ops::healthz, ops::readyz, ops::metrics,
     ),
+    components(schemas(dto::ActivityNotice)),
     tags(
         (name = "projects"), (name = "specs"), (name = "delivery"), (name = "runtime"),
         (name = "system"), (name = "ops"),
@@ -83,7 +87,28 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/permission-requests/{permission_request_id}/answer",
             post(routes::answer_permission),
         )
+        .route("/api/v1/sessions", get(routes::list_sessions))
         .route("/api/v1/sessions/{session_id}", get(routes::get_session))
+        .route(
+            "/api/v1/sessions/{session_id}/timeline",
+            get(routes::get_timeline),
+        )
+        .route("/api/v1/sessions/{session_id}/steer", post(routes::steer))
+        .route(
+            "/api/v1/sessions/{session_id}/interrupt",
+            post(routes::interrupt),
+        )
+        .route("/api/v1/sessions/{session_id}/stop", post(routes::stop))
+        .route(
+            "/api/v1/projects/{project_id}/permission-rules",
+            get(routes::list_permission_rules),
+        )
+        .route(
+            "/api/v1/permission-rules/{rule_id}/revoke",
+            post(routes::revoke_rule),
+        )
+        .route("/api/v1/agent-accounts", get(routes::list_agent_accounts))
+        .route("/api/v1/usage-records", get(routes::list_usage_records))
         .route("/api/v1/meta", get(routes::meta))
         .route("/api/v1/events", get(routes::events))
         .route(

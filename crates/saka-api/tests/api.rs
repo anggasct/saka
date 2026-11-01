@@ -800,6 +800,11 @@ fn ops_endpoints_report_health_readiness_and_metrics() {
         "saka_stage_duration_seconds",
         "saka_adapter_requests_total",
         "saka_http_requests_total",
+        "saka_sessions_resumed_total",
+        "saka_budget_exhausted_total",
+        "saka_usage_tokens_total",
+        "saka_usage_cost_usd_micros_total",
+        "saka_account_utilization",
     ] {
         assert!(
             text.contains(&format!("# TYPE {family} ")),
@@ -1684,5 +1689,406 @@ fn metrics_count_the_environments_that_wait_for_cleanup() {
     assert!(
         after.contains("\nsaka_environments_teardown_failed 2\n"),
         "{after}"
+    );
+}
+
+fn hang_script() -> AgentScript {
+    AgentScript {
+        outcome: AgentOutcome::Hang,
+        ..AgentScript::default()
+    }
+}
+
+fn running_session(api: &mut Api) -> (String, String) {
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).session.is_some_and(|x| {
+            x.state == saka_core::vocab::SessionState::Running && x.cli_session_id.is_some()
+        })
+    }));
+    let t = api.sim.task(1);
+    (t.item.id.to_string(), t.session.unwrap().id.to_string())
+}
+
+#[test]
+fn operators_steer_interrupt_and_stop_a_session_over_the_api() {
+    let mut api = Api::new(SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    });
+    let (item, sid) = running_session(&mut api);
+    let list = api.get(&format!("/api/v1/sessions?work_item_id={item}"));
+    assert_eq!(list.status, StatusCode::OK);
+    let items = list.body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0]["available_actions"],
+        json!(["steer", "interrupt", "stop"])
+    );
+    assert_eq!(items[0]["resumed_from_session_id"], Value::Null);
+    problem(
+        &api.get("/api/v1/sessions"),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+
+    let steer = format!("/api/v1/sessions/{sid}/steer");
+    let r = api.post_with(
+        &steer,
+        Some("steer-1"),
+        &[],
+        &json!({ "text": "use the helper" }),
+    );
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["state"], "running");
+    let again = api.post_with(
+        &steer,
+        Some("steer-1"),
+        &[],
+        &json!({ "text": "use the helper" }),
+    );
+    assert_eq!((again.status, &again.body), (r.status, &r.body), "replayed");
+    for bad in [
+        json!({ "text": "" }),
+        json!({ "text": "x".repeat(4001) }),
+        json!({}),
+    ] {
+        problem(
+            &api.post(&steer, &[], bad),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        );
+    }
+    assert!(api.sim.run_until(STEPS, |s| s.stats().steers_to_cli == 1));
+    assert_eq!(
+        rows(
+            &api,
+            "SELECT action || ':' || actor FROM action_request WHERE action = 'session.steer' AND response_status = 202"
+        ),
+        vec!["session.steer:operator:local"]
+    );
+
+    let interrupt = format!("/api/v1/sessions/{sid}/interrupt");
+    let r = api.post(&interrupt, &[], json!({}));
+    assert_eq!(
+        (r.status, &r.body["state"]),
+        (StatusCode::ACCEPTED, &json!("interrupted"))
+    );
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1)
+            .session
+            .is_some_and(|x| x.state == saka_core::vocab::SessionState::Idle)
+    }));
+    assert_eq!(api.sim.task(1).open_blocker(), None);
+    problem(
+        &api.post(&interrupt, &[], json!({})),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+    let r = api.post(&steer, &[], json!({ "text": "try the other way" }));
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+
+    let stop = format!("/api/v1/sessions/{sid}/stop");
+    problem(
+        &api.post(&stop, &[], json!({ "reason": "" })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let r = api.post(&stop, &[], json!({ "reason": "wrong approach" }));
+    assert_eq!(
+        (r.status, &r.body["state"]),
+        (StatusCode::ACCEPTED, &json!("failed"))
+    );
+    assert_eq!(
+        r.body["end_reason"],
+        json!({ "code": "operator_stop", "params": { "reason": "wrong approach" } })
+    );
+    let work = api.get(&format!("/api/v1/work-items/{item}"));
+    assert_eq!(
+        (
+            &work.body["blocker"]["code"],
+            &work.body["blocker"]["params"]
+        ),
+        (
+            &json!("session_failed"),
+            &json!({ "cause": "operator_stop", "reason": "wrong approach" })
+        )
+    );
+    problem(
+        &api.post(&stop, &[], json!({ "reason": "again" })),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+    let missing = format!("/api/v1/sessions/{}/steer", uuid::Uuid::nil());
+    problem(
+        &api.post(&missing, &[], json!({ "text": "x" })),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+
+    let timeline = api.get(&format!("/api/v1/sessions/{sid}/timeline"));
+    assert_eq!(timeline.status, StatusCode::OK);
+    let items = timeline.body["items"].as_array().unwrap();
+    let offsets: Vec<u64> = items
+        .iter()
+        .map(|i| i["offset"].as_u64().unwrap())
+        .collect();
+    assert!(offsets.windows(2).all(|w| w[0] < w[1]), "{offsets:?}");
+    let kinds: Vec<&str> = items.iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    for kind in ["system", "steer", "result"] {
+        assert!(kinds.contains(&kind), "{kinds:?}");
+    }
+    let page = api.get(&format!("/api/v1/sessions/{sid}/timeline?limit=1"));
+    assert_eq!(page.body["items"].as_array().unwrap().len(), 1);
+    let next = page.body["next_after"].as_u64().unwrap();
+    let rest = api.get(&format!("/api/v1/sessions/{sid}/timeline?after={next}"));
+    assert_eq!(
+        rest.body["items"].as_array().unwrap().len(),
+        items.len() - 1
+    );
+    problem(
+        &api.get(&format!("/api/v1/sessions/{sid}/timeline?limit=501")),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.get(&format!("/api/v1/sessions/{}/timeline", uuid::Uuid::nil())),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+}
+
+#[test]
+fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
+    let mut api = Api::new(SimConfig {
+        agent: ask_script(),
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| !s.task(1).permissions.is_empty())
+    );
+    let id = api.sim.task(1).permissions[0].id.to_string();
+    let answer = format!("/api/v1/permission-requests/{id}/answer");
+    let r = api.post(
+        &answer,
+        &[],
+        json!({ "decision": "allow", "remember": true }),
+    );
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let project = api.sim.project_id.to_string();
+    let rules = api.get(&format!("/api/v1/projects/{project}/permission-rules"));
+    let items = rules.body["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (
+            &items[0]["tool"],
+            &items[0]["command"],
+            &items[0]["created_by"]
+        ),
+        (
+            &json!("Bash"),
+            &json!("make deploy && echo ok"),
+            &json!("human:operator:local")
+        )
+    );
+    let rule = items[0]["id"].as_str().unwrap().to_string();
+    let revoke = format!("/api/v1/permission-rules/{rule}/revoke");
+    problem(
+        &api.post(&revoke, &[], json!({ "reason": "" })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let r = api.post(&revoke, &[], json!({ "reason": "too broad" }));
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(r.body["revoked_at"].is_string());
+    problem(
+        &api.post(&revoke, &[], json!({ "reason": "again" })),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+    assert!(
+        api.get(&format!("/api/v1/projects/{project}/permission-rules"))
+            .body["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    problem(
+        &api.get(&format!(
+            "/api/v1/projects/{}/permission-rules",
+            uuid::Uuid::nil()
+        )),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+
+    let mut deny = Api::new(SimConfig {
+        agent: ask_script(),
+        ..SimConfig::default()
+    });
+    deny.sim.approve();
+    assert!(
+        deny.sim
+            .run_until(STEPS, |s| !s.task(1).permissions.is_empty())
+    );
+    let id = deny.sim.task(1).permissions[0].id.to_string();
+    let r = deny.post(
+        &format!("/api/v1/permission-requests/{id}/answer"),
+        &[],
+        json!({ "decision": "deny", "remember": true }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(
+        r.body["params"]["errors"],
+        json!([{ "field": "remember", "code": "allow_only" }])
+    );
+}
+
+#[test]
+fn accounts_usage_records_and_budgets_are_readable() {
+    let mut api = Api::new(SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    });
+    let (item, sid) = running_session(&mut api);
+    let work = api.get(&format!("/api/v1/work-items/{item}"));
+    let budget = &work.body["budget"];
+    assert_eq!(budget["warn_percent"], 80);
+    assert_eq!(budget["turns"], json!({ "used": 1, "limit": 10 }));
+    assert_eq!(budget["running_minutes"]["limit"], 60);
+    assert_eq!(budget["cost_usd"]["limit"], "0.000000");
+
+    let now = api.sim.engine().now().0;
+    api.sim.world.set_script(AgentScript {
+        rate_limit: Some(json!({ "unifiedWindows": {
+            "seven_day": { "utilization": 0.95, "status": "allowed_warning", "resets_at": now + 7_200_000 },
+        }})),
+        ..AgentScript::default()
+    });
+    api.post(&format!("/api/v1/sessions/{sid}/interrupt"), &[], json!({}));
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1)
+            .session
+            .is_some_and(|x| x.state == saka_core::vocab::SessionState::Idle)
+    }));
+    api.post(
+        &format!("/api/v1/sessions/{sid}/steer"),
+        &[],
+        json!({ "text": "commit now" }),
+    );
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Done)
+    );
+
+    let accounts = api.get("/api/v1/agent-accounts");
+    assert_eq!(accounts.status, StatusCode::OK);
+    let a = &accounts.body["items"][0];
+    assert_eq!(
+        (&a["cli"], &a["name"], &a["paused"]),
+        (&json!("claude"), &json!("default"), &json!(true))
+    );
+    assert_eq!(a["windows"][0]["window"], "seven_day");
+    assert_eq!(a["windows"][0]["utilization"], 0.95);
+
+    let usage = api.get(&format!("/api/v1/usage-records?work_item_id={item}"));
+    let records = usage.body["items"].as_array().unwrap();
+    assert_eq!(records.len(), 2, "{}", usage.body);
+    assert_eq!(records[0]["account"], "claude:default");
+    assert_eq!(records[1]["cost_usd"], "0.001000");
+    let first = api.get(&format!("/api/v1/usage-records?session_id={sid}&limit=1"));
+    let cursor = first.body["next_cursor"].as_str().unwrap().to_string();
+    let second = api.get(&format!(
+        "/api/v1/usage-records?session_id={sid}&limit=1&cursor={cursor}"
+    ));
+    assert_eq!(second.body["items"][0]["turn"], 2);
+    problem(
+        &api.get("/api/v1/usage-records"),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+
+    let s2 = api.sim.task(2).item.id.to_string();
+    let waiting = api.get(&format!("/api/v1/work-items/{s2}"));
+    assert_eq!(
+        waiting.body["waiting_on"][0]["kind"], "quota",
+        "{}",
+        waiting.body
+    );
+    assert_eq!(waiting.body["waiting_on"][0]["window"], "seven_day");
+    assert_eq!(
+        api.get(&format!("/api/v1/work-items/{item}")).body["budget"],
+        Value::Null
+    );
+}
+
+#[test]
+fn new_timeline_rows_are_announced_on_the_event_stream() {
+    let mut api = Api::new(SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    });
+    let (_, sid) = running_session(&mut api);
+    let session = saka_core::ids::SessionId(sid.parse().unwrap());
+    let engine = api.sim.engine();
+    let offset = api.sim.world.session_log(session).len() as u64;
+    let text = api.sim.block_on(async {
+        let req = Request::get("/api/v1/events")
+            .header("host", "127.0.0.1")
+            .body(Body::empty())
+            .unwrap();
+        let r = api.app.clone().oneshot(req).await.unwrap();
+        let mut body = r.into_body();
+        engine
+            .on_runner_event(saka_engine::RunnerEvent {
+                session_id: session,
+                offset,
+                at: engine.now(),
+                kind: saka_engine::RunnerEventKind::Activity {
+                    category: "text".into(),
+                    summary: "working on it".into(),
+                    tool: None,
+                    is_error: None,
+                },
+            })
+            .unwrap();
+        let mut text = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !text.contains("runtime.session.activity.v1") {
+            let frame = tokio::time::timeout_at(deadline, body.frame()).await;
+            let Ok(Some(Ok(frame))) = frame else { break };
+            if let Some(data) = frame.data_ref() {
+                text.push_str(std::str::from_utf8(data).unwrap());
+            }
+        }
+        while !text.ends_with("\n\n") {
+            let frame = tokio::time::timeout_at(deadline, body.frame()).await;
+            let Ok(Some(Ok(frame))) = frame else { break };
+            if let Some(data) = frame.data_ref() {
+                text.push_str(std::str::from_utf8(data).unwrap());
+            }
+        }
+        text
+    });
+    let block = text
+        .split("\n\n")
+        .find(|b| b.contains("event: runtime.session.activity.v1"))
+        .unwrap();
+    assert!(
+        !block.contains("\nid: ") && !block.starts_with("id: "),
+        "{block}"
+    );
+    let data: Value = serde_json::from_str(
+        block
+            .lines()
+            .find_map(|l| l.strip_prefix("data: "))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        data,
+        json!({ "session_id": sid, "work_item_id": api.sim.task(1).item.id, "offset": offset, "kind": "message" })
     );
 }
