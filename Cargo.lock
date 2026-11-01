@@ -2361,6 +2361,7 @@ name = "saka-spec"
 version = "0.1.0"
 dependencies = [
  "comrak",
+ "proptest",
  "serde",
  "serde_json",
 ]

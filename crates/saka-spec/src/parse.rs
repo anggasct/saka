@@ -1,17 +1,20 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, parse_document};
 
+use crate::frontmatter;
+use crate::graph::cycles;
 use crate::lint::{LintCode, LintIssue};
 use crate::model::{AcceptanceCriterion, SpecModel, Step};
 
-pub const PARSER_VERSION: u32 = 1;
+pub const PARSER_VERSION: u32 = 2;
 pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 pub const MAX_STEPS: usize = 50;
 
 const REQUIRED_COLUMNS: [&str; 4] = ["step", "work", "ac", "done when"];
-const UNSUPPORTED_COLUMNS: [&str; 2] = ["repo", "after"];
+const UNSUPPORTED_COLUMNS: [&str; 1] = ["repo"];
+const AFTER_COLUMN: &str = "after";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parsed {
@@ -21,7 +24,7 @@ pub struct Parsed {
 
 impl Parsed {
     pub fn is_ready(&self) -> bool {
-        self.model.is_some() && self.issues.is_empty()
+        self.model.is_some() && !self.issues.iter().any(LintIssue::is_error)
     }
 }
 
@@ -46,21 +49,23 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             ));
         }
     };
-    if !has_spec_marker(text) {
-        return fail(LintIssue::new(LintCode::NotASpec, 1));
-    }
-
-    let mut issues = Vec::new();
     let slug = slug_of(file_name);
+    let Some(front) = frontmatter::read(text, &slug).filter(|f| f.is_spec) else {
+        return fail(LintIssue::new(LintCode::NotASpec, 1));
+    };
+
+    let mut issues = front.issues;
     if !valid_slug(&slug) {
         issues.push(LintIssue::new(LintCode::SlugInvalid, 1).with("slug", slug.clone()));
     }
 
+    // Blank lines stand in for the frontmatter so source positions stay file lines.
+    let blank = usize::try_from(front.end_line).unwrap_or_default();
+    let body = format!("{}{}", "\n".repeat(blank), &text[front.body_offset..]);
     let arena = Arena::new();
     let mut options = Options::default();
     options.extension.table = true;
-    options.extension.front_matter_delimiter = Some("---".to_string());
-    let root = parse_document(&arena, text, &options);
+    let root = parse_document(&arena, &body, &options);
 
     let mut doc = Document::default();
     let mut section = Section::Other;
@@ -85,6 +90,10 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
                         doc.steps_heading.get_or_insert(line);
                         Section::Steps
                     }
+                    "done when" if doc.done_when.is_none() => {
+                        doc.done_when = Some(DoneWhen { line, items: None });
+                        Section::DoneWhen
+                    }
                     _ => Section::Other,
                 };
             }
@@ -95,33 +104,51 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
         match section {
             Section::Ac if is_list => collect_acs(node, &mut doc, &mut issues),
             Section::Steps if is_table && doc.table.is_none() => doc.table = Some(read_table(node)),
+            Section::DoneWhen if is_list => {
+                if let Some(done_when) = doc.done_when.as_mut().filter(|d| d.items.is_none()) {
+                    done_when.items = Some(read_done_when(node));
+                }
+            }
             _ => {}
         }
     }
 
-    if doc.title.as_deref().is_none_or(str::is_empty) {
+    let title = doc.title.clone().unwrap_or_default();
+    if title.is_empty() {
         issues.push(LintIssue::new(LintCode::TitleMissing, 1));
     }
     if !doc.ac_section {
         issues.push(LintIssue::new(LintCode::AcSectionMissing, 1));
     }
-    let steps = match &doc.table {
-        None => {
+    let steps = match (&doc.table, &doc.done_when) {
+        (Some(table), done_when) => {
+            if let Some(done_when) = done_when {
+                issues.push(LintIssue::new(LintCode::DoneWhenWithSteps, done_when.line));
+            }
+            // Without a criteria section every reference would be unknown; report the section once.
+            steps_from_table(table, doc.ac_section.then_some(&doc.ac_ids), &mut issues)
+        }
+        (None, Some(done_when)) => one_step(done_when, &title, &doc, &mut issues),
+        (None, None) => {
             issues.push(LintIssue::new(
                 LintCode::StepsMissing,
                 doc.steps_heading.unwrap_or(1),
             ));
             Vec::new()
         }
-        // Without a criteria section every reference would be unknown; report the section once.
-        Some(table) => steps_from_table(table, doc.ac_section.then_some(&doc.ac_ids), &mut issues),
     };
+    check_commands(&steps, &mut issues);
+    if !steps.is_empty() {
+        check_coverage(&doc.acs, &steps, &mut issues);
+    }
 
     issues.sort_by_key(|i| i.line);
     Parsed {
         model: Some(SpecModel {
             slug,
-            title: doc.title.unwrap_or_default(),
+            title,
+            priority: front.priority,
+            depends_on: front.depends_on,
             acceptance_criteria: doc.acs,
             steps,
         }),
@@ -133,6 +160,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
 enum Section {
     Ac,
     Steps,
+    DoneWhen,
     Other,
 }
 
@@ -144,6 +172,17 @@ struct Document {
     ac_ids: HashSet<String>,
     steps_heading: Option<u32>,
     table: Option<Table>,
+    done_when: Option<DoneWhen>,
+}
+
+struct DoneWhen {
+    line: u32,
+    items: Option<Vec<DoneWhenItem>>,
+}
+
+struct DoneWhenItem {
+    line: u32,
+    code: Vec<String>,
 }
 
 struct Table {
@@ -171,30 +210,12 @@ fn start_line<'a>(node: &'a AstNode<'a>) -> u32 {
     u32::try_from(node.data.borrow().sourcepos.start.line).unwrap_or(u32::MAX)
 }
 
-fn has_spec_marker(text: &str) -> bool {
-    let mut lines = text.lines();
-    if lines.next().map(str::trim_end) != Some("---") {
-        return false;
-    }
-    for line in lines {
-        let line = line.trim_end();
-        if line == "---" || line == "..." {
-            return false;
-        }
-        if let Some(value) = line.strip_prefix("saka:") {
-            let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
-            return value == "spec";
-        }
-    }
-    false
-}
-
 fn slug_of(file_name: &str) -> String {
     let name = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name);
     name.strip_suffix(".md").unwrap_or(name).to_string()
 }
 
-fn valid_slug(slug: &str) -> bool {
+pub(crate) fn valid_slug(slug: &str) -> bool {
     let mut chars = slug.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -228,6 +249,15 @@ fn push_text<'a>(node: &'a AstNode<'a>, out: &mut String) {
             _ => push_text(child, out),
         }
     }
+}
+
+fn code_spans<'a>(node: &'a AstNode<'a>) -> Vec<String> {
+    node.descendants()
+        .filter_map(|n| match &n.data.borrow().value {
+            NodeValue::Code(c) => Some(c.literal.trim().to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn collect_acs<'a>(list: &'a AstNode<'a>, doc: &mut Document, issues: &mut Vec<LintIssue>) {
@@ -275,6 +305,53 @@ fn collect_acs<'a>(list: &'a AstNode<'a>, doc: &mut Document, issues: &mut Vec<L
     }
 }
 
+fn read_done_when<'a>(list: &'a AstNode<'a>) -> Vec<DoneWhenItem> {
+    list.children()
+        .map(|item| DoneWhenItem {
+            line: start_line(item),
+            code: item
+                .children()
+                .filter(|c| matches!(c.data.borrow().value, NodeValue::Paragraph))
+                .flat_map(code_spans)
+                .collect(),
+        })
+        .collect()
+}
+
+fn one_step(
+    done_when: &DoneWhen,
+    title: &str,
+    doc: &Document,
+    issues: &mut Vec<LintIssue>,
+) -> Vec<Step> {
+    let items = done_when.items.as_deref().unwrap_or_default();
+    let mut commands = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        match item.code.as_slice() {
+            [command] if !command.is_empty() => commands.push(command.clone()),
+            _ => issues
+                .push(LintIssue::new(LintCode::DoneWhenItemInvalid, item.line).with("item", n + 1)),
+        }
+    }
+    if items.is_empty() {
+        issues
+            .push(LintIssue::new(LintCode::StepCommandMissing, done_when.line).with("step", "S1"));
+    }
+    let ac: Vec<String> = doc.acs.iter().map(|a| a.id.clone()).collect();
+    if ac.is_empty() && doc.ac_section {
+        issues.push(LintIssue::new(LintCode::StepAcEmpty, done_when.line).with("step", "S1"));
+    }
+    vec![Step {
+        id: "S1".to_string(),
+        index: 1,
+        work: title.to_string(),
+        ac,
+        commands,
+        after: Vec::new(),
+        line: done_when.line,
+    }]
+}
+
 fn read_table<'a>(table: &'a AstNode<'a>) -> Table {
     let mut header_line = start_line(table);
     let mut columns = Vec::new();
@@ -283,17 +360,9 @@ fn read_table<'a>(table: &'a AstNode<'a>) -> Table {
         let is_header = matches!(row.data.borrow().value, NodeValue::TableRow(true));
         let cells: Vec<Cell> = row
             .children()
-            .map(|cell| {
-                let mut code = Vec::new();
-                for node in cell.descendants() {
-                    if let NodeValue::Code(c) = &node.data.borrow().value {
-                        code.push(c.literal.trim().to_string());
-                    }
-                }
-                Cell {
-                    text: inline_text(cell).trim().to_string(),
-                    code,
-                }
+            .map(|cell| Cell {
+                text: inline_text(cell).trim().to_string(),
+                code: code_spans(cell),
             })
             .collect();
         if is_header {
@@ -350,11 +419,13 @@ fn steps_from_table(
         return Vec::new();
     }
     let [step_col, work_col, ac_col, done_col] = index;
+    let after_col = column(AFTER_COLUMN);
     let empty = Cell {
         text: String::new(),
         code: Vec::new(),
     };
     let mut steps = Vec::new();
+    let mut written_after = Vec::new();
     for (i, row) in table.rows.iter().enumerate() {
         let position = i + 1;
         if position > MAX_STEPS {
@@ -373,12 +444,13 @@ fn steps_from_table(
                     .with("found", found),
             );
         }
-        let ac: Vec<String> = cell(ac_col)
-            .text
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let work = cell(work_col).text.clone();
+        if work.is_empty() {
+            issues.push(
+                LintIssue::new(LintCode::StepWorkEmpty, row.line).with("step", expected.clone()),
+            );
+        }
+        let ac = split_ids(&cell(ac_col).text);
         if ac.is_empty() {
             issues.push(
                 LintIssue::new(LintCode::StepAcEmpty, row.line).with("step", expected.clone()),
@@ -406,14 +478,99 @@ fn steps_from_table(
                     .with("step", expected.clone()),
             );
         }
+        written_after.push(after_col.map(|c| split_ids(&cell(c).text)));
+        let after = match position {
+            1 => Vec::new(),
+            n => vec![format!("S{}", n - 1)],
+        };
         steps.push(Step {
             id: expected,
             index: u32::try_from(position).unwrap_or(u32::MAX),
-            work: cell(work_col).text.clone(),
+            work,
             ac,
             commands,
+            after,
             line: row.line,
         });
     }
+    if after_col.is_some() {
+        apply_after(&mut steps, &written_after, issues);
+    }
     steps
+}
+
+fn split_ids(text: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for id in text.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if !ids.iter().any(|known| known == id) {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+fn apply_after(steps: &mut [Step], written: &[Option<Vec<String>>], issues: &mut Vec<LintIssue>) {
+    let position: HashMap<String, usize> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id.clone(), i))
+        .collect();
+    for (step, written) in steps.iter_mut().zip(written) {
+        let written = written.as_deref().unwrap_or_default();
+        if written.is_empty() && step.index > 1 {
+            issues.push(
+                LintIssue::new(LintCode::StepParallelStart, step.line)
+                    .with("step", step.id.clone()),
+            );
+        }
+        step.after.clear();
+        for id in written {
+            if position.contains_key(id) {
+                step.after.push(id.clone());
+            } else {
+                issues.push(
+                    LintIssue::new(LintCode::StepAfterUnknown, step.line)
+                        .with("step", step.id.clone())
+                        .with("after", id.clone()),
+                );
+            }
+        }
+    }
+    let edges: Vec<Vec<usize>> = steps
+        .iter()
+        .map(|s| {
+            s.after
+                .iter()
+                .filter_map(|id| position.get(id).copied())
+                .collect()
+        })
+        .collect();
+    for cycle in cycles(&edges) {
+        let first = cycle.first().copied().unwrap_or_default();
+        let ids: Vec<String> = cycle.iter().map(|&i| steps[i].id.clone()).collect();
+        issues.push(LintIssue::new(LintCode::StepAfterCycle, steps[first].line).with("steps", ids));
+    }
+}
+
+fn check_commands(steps: &[Step], issues: &mut Vec<LintIssue>) {
+    for step in steps {
+        let mut seen = HashSet::new();
+        let mut reported = HashSet::new();
+        for command in &step.commands {
+            if !seen.insert(command) && reported.insert(command) {
+                issues.push(
+                    LintIssue::new(LintCode::StepCommandDuplicate, step.line)
+                        .with("step", step.id.clone())
+                        .with("command", command.clone()),
+                );
+            }
+        }
+    }
+}
+
+fn check_coverage(acs: &[AcceptanceCriterion], steps: &[Step], issues: &mut Vec<LintIssue>) {
+    let covered: HashSet<&String> = steps.iter().flat_map(|s| &s.ac).collect();
+    for ac in acs.iter().filter(|a| !covered.contains(&a.id)) {
+        issues.push(LintIssue::new(LintCode::AcUncovered, ac.line).with("ac", ac.id.clone()));
+    }
 }
