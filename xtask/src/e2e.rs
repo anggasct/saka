@@ -170,6 +170,9 @@ impl Server {
     }
 
     fn stop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
         let _ = Command::new("kill")
             .args(["-TERM", &self.child.id().to_string()])
             .status();
