@@ -361,10 +361,17 @@ impl Runner {
     async fn on_connect(&mut self, stream: UnixStream) -> Flow {
         let (read, mut writer) = stream.into_split();
         if self.conn.is_some() {
-            let frame = RunnerFrame::Error {
-                code: "already_connected".into(),
-            };
-            let _ = writer.write_all(protocol::encode(&frame).as_bytes()).await;
+            // Read the hello first: closing with unread data resets the connection, and
+            // the other side would never see why.
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(read).lines();
+                let _ = tokio::time::timeout(HELLO_TIMEOUT, lines.next_line()).await;
+                let frame = RunnerFrame::Error {
+                    code: "already_connected".into(),
+                };
+                let _ = writer.write_all(protocol::encode(&frame).as_bytes()).await;
+                let _ = writer.shutdown().await;
+            });
             return Flow::Continue;
         }
         let mut lines = BufReader::new(read).lines();
