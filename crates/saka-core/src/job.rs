@@ -44,7 +44,7 @@ job_kinds! {
     ScmOpenChangeRequest => "scm.open_change_request", 5;
     ScmPollChangeRequest => "scm.poll_change_request", 5;
     ScmMerge => "scm.merge", 5;
-    EnvVerifyMerged => "env.verify_merged", 1;
+    EnvVerifyMerged => "env.verify_merged", 3;
     ScmDeleteBranch => "scm.delete_branch", 5;
     EnvTeardown => "env.teardown", 5;
 }
