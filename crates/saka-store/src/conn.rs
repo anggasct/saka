@@ -1,6 +1,3 @@
-//! Connections: one writer, a small pool of read-only readers. Settings are applied and
-//! verified on every connection.
-
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -54,7 +51,6 @@ fn expect(setting: &'static str, expected: &str, actual: &str) -> Result<()> {
     }
 }
 
-/// Read-only connections, opened on demand and kept for reuse.
 pub(crate) struct Readers {
     path: PathBuf,
     idle: Mutex<Vec<Connection>>,

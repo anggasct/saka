@@ -1,6 +1,3 @@
-//! Every request: a correlation id and a span, the loopback `Host` check, the `Origin`
-//! check for mutations, and the request counter.
-
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
@@ -12,7 +9,6 @@ use uuid::Uuid;
 use crate::problem::{ApiError, CORRELATION};
 use crate::state::AppState;
 
-/// The host part of a `Host` header (`[::1]:7420` → `[::1]`).
 fn host_name(host: &str) -> &str {
     if host.starts_with('[') {
         return host.split_inclusive(']').next().unwrap_or(host);
@@ -43,11 +39,9 @@ fn origin_allowed(headers: &HeaderMap, state: &AppState) -> bool {
             .any(|o| o.trim_end_matches('/') == origin)
 }
 
-/// The route template of a matched request, carried on the response to [`guard`].
 #[derive(Debug, Clone)]
 struct Route(String);
 
-/// Inner layer (runs after routing): tells the outer guard which route matched.
 pub async fn label(req: Request, next: Next) -> Response {
     let route = req
         .extensions()

@@ -1,6 +1,3 @@
-//! Commands from the operator (through the API) and the registration steps that put a
-//! project and its specs into the store.
-
 use saka_core::Ctx;
 use saka_core::event::Event;
 use saka_core::ids::{PermissionRequestId, ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
@@ -21,7 +18,6 @@ use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
 
 const REASON_MAX: usize = 500;
 
-/// A project with its one repo, as read from its `saka.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewProject {
     pub name: String,
@@ -36,7 +32,6 @@ pub struct NewProject {
     pub repo_name: String,
 }
 
-/// The result of reading a spec file into a revision.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegisteredSpec {
     pub spec_id: SpecId,
@@ -69,8 +64,6 @@ impl Engine {
         Ok((view.project.id, view.project.workspace_repo_id))
     }
 
-    /// Registers the project; a new repo gets `repo_id` when given (the id its mirror was
-    /// fetched under).
     pub(crate) fn register_project_with(
         &self,
         p: &NewProject,
@@ -147,8 +140,6 @@ impl Engine {
         Ok(view)
     }
 
-    /// Records the spec file read at `source_commit` as a revision (or finds the revision
-    /// with the same content).
     pub fn register_spec(
         &self,
         project_id: ProjectId,
@@ -168,7 +159,6 @@ impl Engine {
         })
     }
 
-    /// Records the revision; returns the spec and whether it is new.
     pub(crate) fn register_spec_with(
         &self,
         project_id: ProjectId,
@@ -303,7 +293,6 @@ impl Engine {
         Ok((view, created))
     }
 
-    /// Approves the latest revision: one task per step, in one transaction.
     pub fn approve_spec(
         &self,
         spec_id: SpecId,

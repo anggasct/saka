@@ -1,6 +1,3 @@
-// Server state of the Delivery page. Keys start with the roots the event stream
-// invalidates (see `@/api/events`).
-
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { api, unwrap } from "@/api/client";
@@ -11,7 +8,6 @@ export type ProjectItem = components["schemas"]["Project"];
 export type SpecItem = components["schemas"]["Spec"];
 export type WorkItem = components["schemas"]["WorkItem"];
 
-/** Lists show at most this many rows (the API maximum). */
 const LIMIT = 200;
 
 export const deliveryKeys = {
@@ -34,7 +30,6 @@ export function useProjects() {
   });
 }
 
-/** Approved and shipped specs of every project, one query each. */
 export function useSpecsOf(projectIds: readonly string[]) {
   return useQueries({
     queries: projectIds.map((projectId) => ({

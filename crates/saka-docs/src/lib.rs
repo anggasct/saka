@@ -1,6 +1,3 @@
-//! The workspace docs source over git: files read byte-exact at the tip of the base
-//! branch, as just fetched, so a revision can be pinned to the commit it came from.
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,7 +13,6 @@ impl GitDocs {
         GitDocs { repos }
     }
 
-    /// Reads `path` at `commit` from the mirror, without fetching.
     pub async fn read_at(
         &self,
         repo: &RepoRef,

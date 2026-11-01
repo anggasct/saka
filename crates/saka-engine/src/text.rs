@@ -1,6 +1,3 @@
-//! Text Saka writes for the agent (turns) and for reviewers (change requests). The core
-//! decides what to say; this renders it from the pinned spec revision.
-
 use saka_core::event::Prompt;
 use saka_core::model::{Coded, Task};
 use saka_spec::{SpecModel, Step};
@@ -11,7 +8,6 @@ use crate::{Engine, EngineError, Result};
 
 const TITLE_MAX: usize = 72;
 
-/// The change request title: the step's work, cut to 72 characters.
 pub(crate) fn change_title(work: &str) -> String {
     let work = work.trim();
     if work.chars().count() <= TITLE_MAX {
@@ -21,7 +17,6 @@ pub(crate) fn change_title(work: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// The task marker in the change request body.
 pub fn task_marker(task_key: &str) -> String {
     format!("<!-- saka-task: {task_key} -->")
 }
@@ -81,7 +76,6 @@ impl Engine {
         }
     }
 
-    /// Title and body of the task's change request.
     pub(crate) fn change_text(&self, task: &Task) -> Result<(String, String)> {
         let pinned = self.pinned(task)?;
         let step = pinned.step(task);
@@ -137,7 +131,6 @@ fn work_packet(task: &Task, pinned: &Pinned) -> String {
     )
 }
 
-/// The follow-up for a retry after red CI.
 fn ci_failure(retry_of: &Coded) -> Option<String> {
     if retry_of.code != "ci_red" {
         return None;

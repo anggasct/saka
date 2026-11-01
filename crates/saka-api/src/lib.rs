@@ -1,8 +1,3 @@
-//! Control API over HTTP: JSON endpoints, server-sent events, OpenAPI, and ops endpoints.
-//!
-//! Every request passes the loopback `Host` guard; mutations also pass the `Origin` guard
-//! and run once per `Idempotency-Key`. Errors are problem details with a stable `code`.
-
 pub mod dto;
 mod guard;
 mod http;
@@ -38,7 +33,6 @@ pub use state::{ApiConfig, AppState};
 )]
 pub struct ApiDoc;
 
-/// The OpenAPI document, as committed in `crates/saka-api/openapi.json`.
 pub fn openapi_json() -> String {
     let mut text = ApiDoc::openapi().to_pretty_json().unwrap_or_default();
     text.push('\n');

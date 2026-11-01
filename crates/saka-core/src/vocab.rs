@@ -1,13 +1,8 @@
-//! Fixed vocabularies. Each value has one wire name, used in the database, the API, and
-//! events. The lists hold the whole target vocabulary; values a version does not use yet
-//! are rejected by the decisions, not by the type.
-
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Error for a wire name that is not part of a vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unknown {vocabulary} value: {value}")]
 pub struct UnknownValue {
@@ -66,7 +61,6 @@ vocab!(WorkItemState {
 });
 vocab!(Stage { Dev => "dev", Review => "review", Fix => "fix", Merge => "merge", Sync => "sync" });
 vocab!(
-    /// Where a task is inside its stage.
     StagePhase {
         PreparingEnvironment => "preparing_environment",
         RunningSession => "running_session",
@@ -89,7 +83,6 @@ vocab!(StageRunState {
 });
 vocab!(Trigger { Auto => "auto", Manual => "manual" });
 vocab!(
-    /// Why a task stopped. Each code has one sentence template and one main action.
     BlockerCode {
         EnvSetupFailed => "env_setup_failed",
         SessionFailed => "session_failed",
@@ -144,7 +137,6 @@ vocab!(CheckConclusion {
 vocab!(MergeMethod { Merge => "merge", Squash => "squash", Rebase => "rebase" });
 
 impl SessionState {
-    /// A session in one of these states still owns a runner.
     pub fn is_live(self) -> bool {
         matches!(
             self,

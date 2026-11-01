@@ -1,8 +1,3 @@
-//! `saka runner`: one process per session. It holds the CLI's stdio, redacts everything
-//! the CLI prints, appends each event to `events.ndjson` before sending it, and talks to
-//! the server over a unix socket (protocol v1). It keeps running when the server goes
-//! away; permission requests wait for an answer.
-
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -31,7 +26,6 @@ pub const EXIT_CLI_FAILED: i32 = 5;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const STDIN_CLOSE_WAIT: Duration = Duration::from_secs(10);
 const TERM_WAIT: Duration = Duration::from_secs(5);
-/// A runner whose CLI has exited stops after this long without a server connection.
 const ORPHAN_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub fn runner_version() -> String {
@@ -45,7 +39,6 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// Runs the session described by `launch_path`; returns the process exit code.
 pub async fn run(session_id: &str, launch_path: &Path) -> i32 {
     let launch = match read_launch(launch_path) {
         Ok(l) if l.session_id == session_id && l.protocol_version == PROTOCOL_VERSION => l,
@@ -72,7 +65,6 @@ fn read_launch(path: &Path) -> std::io::Result<LaunchSpec> {
     serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 }
 
-/// The append-only event file.
 struct EventLog {
     file: std::fs::File,
     path: PathBuf,
@@ -160,7 +152,6 @@ struct Runner {
     turn: u32,
     turns: BTreeSet<u32>,
     cli_session: Option<String>,
-    /// Original tool input per request, kept only in memory for `updatedInput`.
     pending: HashMap<String, Value>,
     answered: HashMap<String, String>,
     control_seq: u64,
@@ -297,7 +288,6 @@ impl Runner {
         format!("saka-{}", self.control_seq)
     }
 
-    /// Redacts, appends to the log, then sends.
     async fn emit(&mut self, kind: &str, mut data: Value) {
         self.redactor.value(&mut data);
         match self.log.append(kind, data) {
@@ -505,7 +495,6 @@ impl Runner {
         Flow::Continue
     }
 
-    /// Closes the CLI's stdin, then SIGTERM, then SIGKILL.
     async fn shutdown(mut self, exited: bool) -> i32 {
         self.stdin = None;
         if !exited

@@ -1,5 +1,3 @@
-//! Markdown → [`SpecModel`] plus lint issues.
-
 use std::collections::HashSet;
 
 use comrak::nodes::{AstNode, NodeValue};
@@ -8,7 +6,6 @@ use comrak::{Arena, Options, parse_document};
 use crate::lint::{LintCode, LintIssue};
 use crate::model::{AcceptanceCriterion, SpecModel, Step};
 
-/// Bumped whenever the stored model or the lint rules change meaning.
 pub const PARSER_VERSION: u32 = 1;
 pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 pub const MAX_STEPS: usize = 50;
@@ -18,19 +15,16 @@ const UNSUPPORTED_COLUMNS: [&str; 2] = ["repo", "after"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parsed {
-    /// `None` when the file is not a spec at all (wrong marker, size, or encoding).
     pub model: Option<SpecModel>,
     pub issues: Vec<LintIssue>,
 }
 
 impl Parsed {
-    /// A spec is ready for approval when it parses without any lint issue.
     pub fn is_ready(&self) -> bool {
         self.model.is_some() && self.issues.is_empty()
     }
 }
 
-/// Parses a spec file. `file_name` is the path or name of the file; its stem is the slug.
 pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
     let fail = |issue: LintIssue| Parsed {
         model: None,
@@ -177,7 +171,6 @@ fn start_line<'a>(node: &'a AstNode<'a>) -> u32 {
     u32::try_from(node.data.borrow().sourcepos.start.line).unwrap_or(u32::MAX)
 }
 
-/// Front matter opens on the first line and contains `saka: spec` at the top level.
 fn has_spec_marker(text: &str) -> bool {
     let mut lines = text.lines();
     if lines.next().map(str::trim_end) != Some("---") {
@@ -216,7 +209,6 @@ fn valid_ac_id(id: &str) -> bool {
         .is_some_and(|n| (2..=3).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// Plain text of a node's inlines; code spans keep their backticks.
 fn inline_text<'a>(node: &'a AstNode<'a>) -> String {
     let mut out = String::new();
     push_text(node, &mut out);

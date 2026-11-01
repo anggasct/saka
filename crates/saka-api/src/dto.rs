@@ -1,6 +1,3 @@
-//! Resources as the API sends them, built from the engine's read models. The same types
-//! describe the responses in the OpenAPI document.
-
 use saka_core::gate::Check;
 use saka_core::model::{StageRun, Task};
 use saka_core::task::available_actions;
@@ -8,10 +5,9 @@ use saka_core::time::Timestamp;
 use saka_engine::{PermissionView, ProjectView, SessionView, SpecView, TaskDetail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-/// RFC 3339 UTC with milliseconds.
 pub fn time(t: Timestamp) -> String {
     jiff::Timestamp::from_millisecond(t.0)
         .map(|ts| ts.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
@@ -502,7 +498,6 @@ pub struct Session {
     pub ended_at: Option<String>,
 }
 
-/// `12_300` micro-dollars → `"0.012300"`.
 pub fn usd(micros: i64) -> String {
     let sign = if micros < 0 { "-" } else { "" };
     let m = micros.unsigned_abs();
@@ -596,8 +591,6 @@ pub struct StreamEvent {
     pub payload: Value,
 }
 
-// Request bodies. Unknown fields are refused.
-
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddProjectBody {
@@ -655,4 +648,49 @@ mod tests {
         assert_eq!(usd(12_300), "0.012300");
         assert_eq!(usd(2_500_000), "2.500000");
     }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ListQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SpecListQuery {
+    /// One or more of `draft, ready, approved, shipped, withdrawn`, comma-separated.
+    pub state: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct WorkItemQuery {
+    pub project_id: Option<String>,
+    pub spec_id: Option<String>,
+    /// One or more states, comma-separated.
+    pub state: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PermissionQuery {
+    /// One or more of `pending, allowed, denied, expired`, comma-separated.
+    pub state: Option<String>,
+    pub project_id: Option<String>,
+    pub work_item_id: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct EventsQuery {
+    /// Start after this `seq` (`Last-Event-ID` wins when both are given).
+    pub after: Option<String>,
 }

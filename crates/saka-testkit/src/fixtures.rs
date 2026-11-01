@@ -1,9 +1,5 @@
-//! Shared fixtures.
-
-/// Path of [`TWO_STEP_SPEC`] in the project repo.
 pub const TWO_STEP_PATH: &str = "docs/specs/tasks-done.md";
 
-/// A valid spec with two steps.
 pub const TWO_STEP_SPEC: &str = "---
 saka: spec
 ---

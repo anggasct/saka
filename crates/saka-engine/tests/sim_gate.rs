@@ -1,6 +1,3 @@
-//! The merge gate in the simulation: merge only at a head whose CI passed, red CI and
-//! missing CI block, and a change merged or closed on the host is followed.
-
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use saka_core::rejection::Rejection;
@@ -118,7 +115,6 @@ fn a_change_merged_on_the_host_goes_on_to_sync() {
         cr.merge_commit_sha.as_ref().unwrap(),
         &sim.world.base_head()
     ));
-    // The one merge was the host's.
     assert_eq!(sim.stats().merges, 1);
 }
 

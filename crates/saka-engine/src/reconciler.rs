@@ -1,6 +1,3 @@
-//! The reconciler derives, from the projections alone, the work that should exist; it runs
-//! after every commit and on an interval. Recovery runs once when the server starts.
-
 use saka_core::reconcile::{Action, Snapshot, reconcile};
 use saka_core::spec;
 use saka_core::task::TaskInput;
@@ -9,16 +6,13 @@ use saka_store::{Batch, TaskSet, read};
 
 use crate::{Engine, EngineError, Extra, Mode, Result};
 
-/// What one reconciler pass did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
-    /// Decisions that wrote events (admissions, timers).
     pub decisions: usize,
     pub shipped: usize,
 }
 
 impl Engine {
-    /// One reconciler pass.
     pub fn reconcile(&self) -> Result<ReconcileReport> {
         let now = self.now();
         let snapshot = self.store.read(|c| {
@@ -70,7 +64,6 @@ impl Engine {
         Ok(report)
     }
 
-    /// Ships the spec if every task is done, as read now.
     fn ship(&self, spec_id: saka_core::ids::SpecId, cause: &crate::Cause) -> Result<bool> {
         let _guard = self.locked()?;
         let now = self.now();
@@ -102,9 +95,6 @@ impl Engine {
         Ok(true)
     }
 
-    /// Startup recovery: every session that was live when the previous process stopped is
-    /// lost (its runner unit is stopped by the job this records). Jobs leased by the
-    /// previous process are claimed again once their lease runs out.
     pub fn recover(&self) -> Result<usize> {
         let tasks = self
             .store

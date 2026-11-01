@@ -1,6 +1,3 @@
-//! Request and response plumbing shared by the handlers: JSON bodies, `If-Match`,
-//! cursors, and idempotent mutations.
-
 use std::future::Future;
 
 use axum::body::Bytes;
@@ -22,7 +19,6 @@ pub const REPLAYED: HeaderName = HeaderName::from_static("idempotent-replayed");
 pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 200;
 
-/// A JSON response with optional `ETag` and `Location`.
 pub fn json_response(status: StatusCode, body: &Value) -> Response {
     let mut response = (status, body.to_string()).into_response();
     let headers = response.headers_mut();
@@ -43,8 +39,6 @@ pub fn ok<T: Serialize>(status: StatusCode, value: &T) -> Response {
     }
 }
 
-/// The `ETag` of a single resource: the latest revision id of a spec, `W/"<version>"` of
-/// a work item.
 fn etag(body: &Value) -> Option<HeaderValue> {
     if let Some(id) = body.pointer("/revision/id").and_then(Value::as_str) {
         return HeaderValue::from_str(&format!("\"{id}\"")).ok();
@@ -57,7 +51,6 @@ fn etag(body: &Value) -> Option<HeaderValue> {
     None
 }
 
-/// A stored or fresh reply as a response.
 pub fn reply_response(reply: &Reply, replayed: bool) -> Response {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut response = if status.is_client_error() || status.is_server_error() {
@@ -80,7 +73,6 @@ pub fn reply_response(reply: &Reply, replayed: bool) -> Response {
     response
 }
 
-/// Parses a JSON body; an empty body counts as `{}`.
 pub fn body<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, ApiError> {
     let raw: &[u8] = if bytes.iter().all(u8::is_ascii_whitespace) {
         b"{}"
@@ -112,7 +104,6 @@ pub fn body<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, ApiError> {
     })
 }
 
-/// `If-Match` is required: missing → 428.
 pub fn if_match(headers: &HeaderMap) -> Result<String, ApiError> {
     headers
         .get(header::IF_MATCH)
@@ -127,7 +118,6 @@ pub fn if_match(headers: &HeaderMap) -> Result<String, ApiError> {
         })
 }
 
-/// A list cursor: base64url of `<sort key>:<id>:<filter digest>`.
 pub fn encode_cursor(key: Key, filter: &str) -> String {
     let text = format!("{}:{}:{}", key.0, key.1, digest(filter));
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(text)
@@ -138,7 +128,6 @@ fn digest(filter: &str) -> String {
     d.iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-/// The page asked for. A cursor made for other filters is refused.
 pub fn page(cursor: Option<&str>, limit: Option<u32>, filter: &str) -> Result<Page, ApiError> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     if !(1..=MAX_LIMIT).contains(&limit) {
@@ -176,7 +165,6 @@ pub fn page(cursor: Option<&str>, limit: Option<u32>, filter: &str) -> Result<Pa
     Ok(Page { after, limit })
 }
 
-/// Comma-separated states, each one of `allowed`.
 pub fn states(raw: Option<&str>, allowed: &[&str]) -> Result<Vec<String>, ApiError> {
     let Some(raw) = raw.filter(|r| !r.is_empty()) else {
         return Ok(Vec::new());
@@ -197,7 +185,6 @@ pub fn path_id(raw: &str) -> Result<Uuid, ApiError> {
     raw.parse().map_err(|_| ApiError::not_found())
 }
 
-/// What an idempotent mutation needs before it runs.
 pub struct Mutation<'a> {
     pub name: &'a str,
     pub target_type: &'a str,
@@ -221,7 +208,6 @@ fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(key.to_string())
 }
 
-/// `SHA-256(method ‖ path ‖ body)`, hex.
 pub fn request_hash(method: &Method, path: &str, body: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(method.as_str().as_bytes());
@@ -230,18 +216,10 @@ pub fn request_hash(method: &Method, path: &str, body: &[u8]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The key, checked first (a missing key is refused before anything else).
 pub fn require_key(headers: &HeaderMap) -> Result<String, ApiError> {
     idempotency_key(headers)
 }
 
-/// Runs a mutation once per idempotency key.
-///
-/// - Same key and body as before: the stored response, with `Idempotent-Replayed: true`.
-/// - Same key, different body: `422 idempotency_key_reused`.
-/// - Otherwise `run` gets the action to hand to the engine, which stores the response in
-///   the same transaction as the events. A refusal (4xx) is stored too; 5xx is not, so the
-///   request can be repeated.
 #[allow(
     clippy::too_many_arguments,
     reason = "the request parts a mutation is keyed by"

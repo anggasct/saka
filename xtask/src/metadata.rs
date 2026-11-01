@@ -1,12 +1,9 @@
-//! Workspace layout read from `cargo metadata`.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-/// Path to the cargo binary that started this task.
 pub fn cargo() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string())
 }
@@ -34,8 +31,6 @@ pub fn load() -> Result<Value> {
     serde_json::from_slice(&out.stdout).context("parse cargo metadata")
 }
 
-/// Product packages: workspace members under `crates/`, plus `xtask`.
-/// Research spikes are left out of every check.
 pub fn product_packages(meta: &Value) -> Result<Vec<String>> {
     let root = meta["workspace_root"]
         .as_str()

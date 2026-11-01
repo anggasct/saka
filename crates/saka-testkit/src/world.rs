@@ -1,5 +1,3 @@
-//! One in-memory world behind the environment, SCM, and agent ports.
-
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -19,29 +17,20 @@ use serde_json::{Value, json};
 
 use crate::clock::FakeClock;
 
-/// What the fake agent does with a turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentOutcome {
-    /// Commits once (unless the branch already has a commit), then ends the turn.
     Commit,
-    /// Leaves changes uncommitted on the first turn and commits on a follow-up.
     CommitOnFollowup,
-    /// Leaves changes uncommitted on every turn.
     LeaveDirty,
-    /// Ends every turn without any change.
     NoCommit,
-    /// Ends the turn with this error subtype.
     Fail(String),
-    /// The CLI exits without a result.
     Exit,
-    /// Never ends the turn.
     Hang,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentScript {
     pub outcome: AgentOutcome,
-    /// A tool request the agent makes before working on the first turn: `(tool, input)`.
     pub ask: Option<(String, Value)>,
 }
 
@@ -54,34 +43,26 @@ impl Default for AgentScript {
     }
 }
 
-/// What CI reports for every head.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiScript {
     Pass,
-    /// These checks fail.
     Fail(Vec<String>),
-    /// No check ever appears.
     Silent,
 }
 
-/// Every effect the world saw.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stats {
     pub prepares: u32,
     pub teardowns: u32,
-    /// Remote branch updates (a push to the same sha is not one).
     pub pushes: u32,
     pub prs_opened: u32,
     pub merges: u32,
     pub branches_deleted: u32,
     pub session_starts: u32,
-    /// Runners left over from an attempt that never got recorded.
     pub stale_runners_stopped: u32,
     pub sessions_stopped: u32,
     pub interrupts: u32,
-    /// Permission answers that reached the CLI (one per request at most).
     pub answers_to_cli: u32,
-    /// Every answer frame the runner received, including repeats.
     pub answer_frames: u32,
 }
 
@@ -113,7 +94,6 @@ struct FakeSession {
     next_offset: u64,
     turns: BTreeSet<u32>,
     asked: bool,
-    /// The turn waiting for a permission answer.
     waiting_turn: Option<u32>,
     answered: BTreeSet<String>,
 }
@@ -121,7 +101,6 @@ struct FakeSession {
 struct State {
     script: AgentScript,
     ci: CiScript,
-    /// Merges do not reach the base branch (to exercise sync verification).
     lose_merges: bool,
     next_sha: u64,
     parents: HashMap<String, Vec<String>>,
@@ -132,9 +111,7 @@ struct State {
     events: VecDeque<RunnerEvent>,
     stats: Stats,
     next_request: u32,
-    /// Files on the base branch, by path.
     docs: BTreeMap<String, Vec<u8>>,
-    /// Repositories the integration cannot reach.
     inaccessible: BTreeSet<String>,
 }
 
@@ -193,7 +170,6 @@ impl FakeWorld {
         self.state().lose_merges = lose;
     }
 
-    /// The next runner event, in the order runners wrote them.
     pub fn pop_event(&self) -> Option<RunnerEvent> {
         self.state().events.pop_front()
     }
@@ -214,7 +190,6 @@ impl FakeWorld {
         self.state().remote[BASE_BRANCH].clone()
     }
 
-    /// `ancestor` is reachable from `descendant`.
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
         self.state().is_ancestor(ancestor, descendant)
     }
@@ -228,7 +203,6 @@ impl FakeWorld {
             .collect()
     }
 
-    /// Someone commits `bytes` at `path` on the base branch.
     pub fn put_doc(&self, path: &str, bytes: &[u8]) -> String {
         let mut s = self.state();
         let base = s.remote[BASE_BRANCH].clone();
@@ -238,18 +212,15 @@ impl FakeWorld {
         commit
     }
 
-    /// The integration loses access to this repository.
     pub fn make_inaccessible(&self, full_name: &str) {
         self.state().inaccessible.insert(full_name.to_string());
     }
 
-    /// Someone merges the change on the host, outside Saka.
     pub fn merge_outside(&self, number: u64) {
         let mut s = self.state();
         s.merge(number, None);
     }
 
-    /// Someone closes the change without merging.
     pub fn close_outside(&self, number: u64) {
         let mut s = self.state();
         if let Some(pr) = s.prs.iter_mut().find(|p| p.number == number) {
@@ -284,7 +255,6 @@ impl State {
         false
     }
 
-    /// Commits on `head` that are not on `base`, following first parents.
     fn commits_ahead(&self, base: &str, head: &str) -> u32 {
         let mut n = 0;
         let mut at = head.to_string();
@@ -368,7 +338,6 @@ impl State {
         });
     }
 
-    /// The agent works on `turn` after any permission answer.
     fn work(&mut self, session: SessionId, turn: u32, at: Timestamp) {
         let Some(env) = self.sessions.get(&session).map(|s| s.env) else {
             return;

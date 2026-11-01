@@ -1,6 +1,3 @@
-//! From the projections, derive the work that should exist. Pure and safe to run as often
-//! as wanted: commands are re-checked by the decisions and jobs carry fixed keys.
-
 use crate::admission::{self, Candidate};
 use crate::ids::{SpecId, WorkItemId};
 use crate::job::Job;
@@ -17,7 +14,6 @@ pub enum Action {
     Enqueue(Job),
 }
 
-/// Specs that are approved and every non-terminal task of those specs.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub specs: Vec<Spec>,
@@ -34,7 +30,6 @@ pub fn reconcile(
     let tasks = &snapshot.tasks;
     let of_spec = |spec: SpecId| tasks.iter().filter(move |t| t.item.spec_id == Some(spec));
 
-    // Admission.
     let active = tasks
         .iter()
         .filter(|t| {
@@ -80,10 +75,8 @@ pub fn reconcile(
     }
 
     for task in tasks {
-        // Jobs the current place needs.
         actions.extend(phase_jobs(task, cfg, now).into_iter().map(Action::Enqueue));
 
-        // Timers.
         let over_time = task.live_session().is_some_and(|s| {
             matches!(
                 s.state,
@@ -102,7 +95,6 @@ pub fn reconcile(
         }
     }
 
-    // Shipping.
     for spec in snapshot
         .specs
         .iter()

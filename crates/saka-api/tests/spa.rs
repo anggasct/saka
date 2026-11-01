@@ -1,6 +1,3 @@
-//! The web app is served for client routes, its hashed assets are cached for good, and an
-//! unknown `/api/*` path is a problem, never the app.
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -113,12 +110,10 @@ fn client_routes_get_the_app_and_api_paths_never_do() {
     ]))));
     check(&state, "/assets/index-1a2b.js");
 
-    // Without a web build, nothing but the API is served.
     let bare = AppState::new(ApiConfig::new("0.1.0-test"));
     assert_eq!(get(&bare, "/delivery").status, StatusCode::NOT_FOUND);
 }
 
-/// The real build embedded in the binary.
 #[cfg(feature = "embed-web")]
 #[test]
 fn the_embedded_build_is_served() {

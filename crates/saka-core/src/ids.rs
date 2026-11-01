@@ -1,11 +1,8 @@
-//! Typed ids. New ids come from an [`IdSource`] given by the caller, never from the core.
-
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Supplies new ids (UUIDv7 in production, a counter in tests).
 pub trait IdSource {
     fn next_id(&mut self) -> Uuid;
 }

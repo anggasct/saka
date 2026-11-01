@@ -59,7 +59,6 @@ describe("startEventStream", () => {
     fake.emit("engine.job.exhausted.v1", { seq: 9, stream_type: "job" });
     expect(invalidate).not.toHaveBeenCalled();
 
-    // A refetch follows for an active query.
     const queryFn = vi.fn(() => Promise.resolve([]));
     await client.query({ queryKey: ["work-items", "p"], queryFn });
     const observer = client

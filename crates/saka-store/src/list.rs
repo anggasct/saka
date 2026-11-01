@@ -1,6 +1,3 @@
-//! Paged lists for the control API (keyset pagination on `(sort key, id)`), single rows
-//! the task loader does not keep, and the counts behind the metrics.
-
 use rusqlite::{Connection, Row, ToSql};
 use saka_core::ids::{PermissionRequestId, ProjectId, RepoId, SessionId, SpecId, WorkItemId};
 use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun};
@@ -12,14 +9,12 @@ use crate::read::{
     load_project, permission, project_row, repo_row, session, spec_row, stage_run, ts,
 };
 
-/// A page request: rows after the cursor `(sort key, id)` in the list's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Page {
     pub after: Option<(i64, Uuid)>,
     pub limit: u32,
 }
 
-/// The cursor of a row: its sort key and id.
 pub type Key = (i64, Uuid);
 
 struct Query {
@@ -55,7 +50,6 @@ impl Query {
             .push(format!("{column} IN (SELECT value FROM json_each({p}))"));
     }
 
-    /// Rows after the cursor, for `ORDER BY sort desc|asc, id desc|asc`.
     fn after(&mut self, sort: &str, page: &Page, descending: bool) {
         if let Some((key, id)) = page.after {
             let k = self.bind(key);
@@ -93,7 +87,6 @@ impl Query {
     }
 }
 
-/// Projects, newest first.
 pub fn projects(conn: &Connection, page: &Page) -> Result<Vec<Project>> {
     let mut q = Query::new();
     q.after("created_at", page, true);
@@ -133,7 +126,6 @@ pub fn repos(conn: &Connection, ids: &[RepoId]) -> Result<Vec<Repo>> {
     )
 }
 
-/// The project registered for this folder of this repo, if any.
 pub fn project_at(
     conn: &Connection,
     repo: RepoId,
@@ -154,7 +146,6 @@ pub fn project_at(
     .map(ProjectId))
 }
 
-/// Specs of a project, most recently updated first.
 pub fn specs(
     conn: &Connection,
     project: ProjectId,
@@ -174,7 +165,6 @@ pub fn specs(
     )
 }
 
-/// A spec of the project with this slug, if any.
 pub fn spec_by_slug(conn: &Connection, project: ProjectId, slug: &str) -> Result<Option<Spec>> {
     let mut q = Query::new();
     q.eq("project_id", project.0.to_string());
@@ -188,7 +178,6 @@ pub fn spec_by_slug(conn: &Connection, project: ProjectId, slug: &str) -> Result
         .next())
 }
 
-/// Branches of `repo` already used by work items of other projects.
 pub fn branches_in_use(
     conn: &Connection,
     repo: RepoId,
@@ -216,7 +205,6 @@ pub struct WorkItemFilter {
     pub states: Vec<String>,
 }
 
-/// Work items, newest first: `(id, created_at)`.
 pub fn work_items(
     conn: &Connection,
     filter: &WorkItemFilter,
@@ -250,14 +238,12 @@ pub struct PermissionFilter {
     pub work_item: Option<WorkItemId>,
 }
 
-/// A permission request with the project it belongs to.
 pub type PermissionRow = (PermissionRequest, ProjectId);
 
 fn permission_row(row: &Row<'_>) -> Result<PermissionRow> {
     Ok((permission(row)?, ProjectId(uuid(row, "project_id")?)))
 }
 
-/// Permission requests, longest waiting first.
 pub fn permissions(
     conn: &Connection,
     filter: &PermissionFilter,
@@ -302,7 +288,6 @@ pub fn load_permission(
     .next())
 }
 
-/// A session with the project it belongs to.
 pub fn load_session(conn: &Connection, id: SessionId) -> Result<Option<(Session, ProjectId)>> {
     let mut q = Query::new();
     q.eq("s.id", id.0.to_string());
@@ -322,7 +307,6 @@ pub fn load_session(conn: &Connection, id: SessionId) -> Result<Option<(Session,
         .next())
 }
 
-/// Every stage run of a task, oldest first.
 pub fn stage_runs(conn: &Connection, id: WorkItemId) -> Result<Vec<StageRun>> {
     let mut q = Query::new();
     q.eq("work_item_id", id.0.to_string());
@@ -339,7 +323,6 @@ pub fn stage_runs(conn: &Connection, id: WorkItemId) -> Result<Vec<StageRun>> {
     )
 }
 
-/// `(label, count)` for one column of one table, optionally filtered.
 fn counts(conn: &Connection, sql: &str) -> Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare(sql)?;
     let mut q = stmt.query([])?;
@@ -357,7 +340,6 @@ pub fn work_item_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
     )
 }
 
-/// Sessions not in a terminal state, per state.
 pub fn live_session_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
     counts(
         conn,
@@ -373,7 +355,6 @@ pub fn pending_permission_count(conn: &Connection) -> Result<i64> {
     )?)
 }
 
-/// Finished stage runs: `(stage, state, milliseconds)`.
 pub fn stage_durations(conn: &Connection) -> Result<Vec<(String, String, i64)>> {
     let mut stmt = conn.prepare(
         "SELECT stage, state, ended_at - started_at FROM stage_run
@@ -387,7 +368,6 @@ pub fn stage_durations(conn: &Connection) -> Result<Vec<(String, String, i64)>> 
     Ok(out)
 }
 
-/// The highest event `seq`, 0 for an empty log.
 pub fn last_seq(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM event", [], |r| r.get(0))?)
 }

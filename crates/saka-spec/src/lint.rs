@@ -1,5 +1,3 @@
-//! Lint issues: a stable code, a 1-based line, and parameters for the message template.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

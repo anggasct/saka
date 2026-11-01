@@ -1,7 +1,3 @@
-//! Domain events. The serialized form is `{"kind": "<context>.<entity>.<action>", "payload": {…}}`;
-//! every kind here is version 1. Payloads carry ids and the data needed to rebuild the
-//! projections, never secrets.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -56,7 +52,6 @@ pub enum Event {
         lint_ok: bool,
         issue_codes: Vec<String>,
         title: String,
-        /// The same content was recorded before; `revision_id` is that earlier revision.
         reused: bool,
     },
     #[serde(rename = "spec.spec.approved")]
@@ -96,7 +91,6 @@ pub enum Event {
         trigger: Trigger,
         entry_phase: StagePhase,
         reason: Option<String>,
-        /// Set when the run retries a blocker; the session prompt uses it.
         retry_of: Option<Coded>,
     },
     #[serde(rename = "delivery.stage_run.phase_changed")]
@@ -199,7 +193,6 @@ pub enum Event {
         state: SessionState,
         running_ms: i64,
     },
-    /// Saka decided to send a turn; a job delivers it to the runner.
     #[serde(rename = "runtime.session.turn_requested")]
     SessionTurnRequested {
         work_item_id: WorkItemId,
@@ -289,7 +282,6 @@ pub enum Event {
         work_item_id: WorkItemId,
         change_request_id: ChangeRequestId,
     },
-    /// A job ran out of attempts. The engine records it next to the blocker it causes.
     #[serde(rename = "engine.job.exhausted")]
     JobExhausted {
         job_id: uuid::Uuid,
@@ -298,17 +290,13 @@ pub enum Event {
     },
 }
 
-/// What a turn asks of the agent. The runtime renders the text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Prompt {
-    /// The work packet: task, criteria, commands, and the pinned spec.
     WorkPacket { retry_of: Option<Coded> },
-    /// The worktree is dirty or has no commit yet.
     Uncommitted { dirty: bool, commits_ahead: u32 },
 }
 
-/// The aggregate an event belongs to, as `(stream_type, stream_id)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stream {
     Repo(RepoId),
@@ -349,7 +337,6 @@ impl Stream {
 impl Event {
     pub const VERSION: u32 = 1;
 
-    /// The wire kind, e.g. `delivery.work_item.admitted`.
     pub fn kind(&self) -> String {
         match serde_json::to_value(self) {
             Ok(Value::Object(map)) => map
@@ -361,7 +348,6 @@ impl Event {
         }
     }
 
-    /// The payload object without the kind.
     pub fn payload(&self) -> Value {
         match serde_json::to_value(self) {
             Ok(Value::Object(mut map)) => map.remove("payload").unwrap_or(Value::Null),
@@ -419,7 +405,6 @@ impl Event {
         }
     }
 
-    /// The task an event concerns, if any.
     pub fn work_item_id(&self) -> Option<WorkItemId> {
         use Event as E;
         match self {

@@ -1,7 +1,3 @@
-//! Source control: Saka pushes task branches, opens change requests, reads CI at the
-//! head, merges at the gate head, and deletes branches. Every call checks the current
-//! state first, so repeating it after a crash has no second effect.
-
 use async_trait::async_trait;
 use saka_core::gate::Check;
 use saka_core::ids::RepoId;
@@ -10,22 +6,17 @@ use saka_core::vocab::{ChangeState, MergeMethod};
 
 use crate::PortResult;
 
-/// A repository as the adapters need it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
     pub repo_id: RepoId,
-    /// Which configured SCM integration serves this repo.
     pub integration_id: String,
-    /// `owner/name`.
     pub full_name: String,
     pub url: String,
 }
 
-/// A repository as the provider describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInfo {
     pub full_name: String,
-    /// The HTTPS web URL.
     pub url: String,
     pub default_branch: String,
 }
@@ -35,15 +26,12 @@ pub struct PushRequest {
     pub repo: RepoRef,
     pub branch: String,
     pub local_sha: String,
-    /// The sha Saka pushed last, used as the lease; `None` for a new branch.
     pub expected_remote_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushOutcome {
-    /// The remote branch now points at the local sha (also when it already did).
     Pushed { sha: String },
-    /// The remote branch points at a sha Saka did not push.
     Rejected { remote_sha: String },
 }
 
@@ -63,7 +51,6 @@ pub struct OpenedChange {
     pub head_sha: String,
 }
 
-/// A change request as read now, with CI normalized at its head.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSnapshot {
     pub state: ChangeState,
@@ -77,7 +64,6 @@ pub struct ChangeSnapshot {
 pub struct MergeRequest {
     pub repo: RepoRef,
     pub number: u64,
-    /// The head the gate passed at; the merge fails if the change moved since.
     pub head_sha: String,
     pub method: MergeMethod,
     pub commit_title: String,
@@ -89,27 +75,22 @@ pub enum MergeOutcome {
         merge_commit_sha: String,
         merged_at: Option<Timestamp>,
     },
-    /// `not_mergeable`, `head_changed`, or `rejected`.
-    Rejected { reason: String },
+    Rejected {
+        reason: String,
+    },
 }
 
 #[async_trait]
 pub trait Scm: Send + Sync {
-    /// Reads a repository of an integration; fails with `scm_repo_inaccessible` when Saka
-    /// cannot reach it.
     async fn repository(&self, integration_id: &str, full_name: &str) -> PortResult<RepoInfo>;
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome>;
 
-    /// Opens the change request, or returns the one that already exists for the branch.
     async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<OpenedChange>;
 
     async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot>;
 
-    /// Merges at `head_sha`. The engine reads the change first and skips the merge when it
-    /// is already merged.
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
 
-    /// Deletes the remote branch; a branch that is already gone is a success.
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()>;
 }

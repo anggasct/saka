@@ -1,6 +1,3 @@
-//! JSON log lines on stderr. Fields of the enclosing spans (`correlation_id`,
-//! `work_item_id`, `job_kind`, …) are written at the top level of every line inside them.
-
 use std::fmt;
 
 use serde_json::{Map, Value};
@@ -75,7 +72,6 @@ where
     }
 }
 
-/// `SAKA_LOG` = `error | warn | info | debug | trace` (default `info`).
 fn level() -> Level {
     std::env::var("SAKA_LOG")
         .ok()

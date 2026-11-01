@@ -1,6 +1,3 @@
-//! Repos and projects. Registration decisions come with the control API; the rows and
-//! their events are fixed here so every table has one writer.
-
 use crate::event::Event;
 use crate::model::{Project, Repo};
 use crate::time::Timestamp;

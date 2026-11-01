@@ -1,9 +1,3 @@
-//! Spec parser and structure lint. Pure: no I/O, async, clock, or randomness.
-//!
-//! A spec is a markdown file marked by front matter `saka: spec`. Only three parts have a
-//! fixed shape: acceptance criteria with ids, a Steps table, and the commands that prove
-//! each step. Everything else is free text.
-
 mod lint;
 mod model;
 mod parse;

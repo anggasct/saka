@@ -1,7 +1,3 @@
-//! Registration from the control API: a project from the `saka.toml` in its folder, and a
-//! spec from its file on the base branch. Reads go through the ports first; the write is
-//! one decision under the engine lock.
-
 use saka_core::ids::{ProjectId, RepoId};
 use saka_core::paths::{self, PathIssue};
 use saka_core::rejection::Rejection;
@@ -15,16 +11,13 @@ use crate::project_config;
 use crate::views::{ProjectView, SpecView};
 use crate::{Cause, Engine, EngineError, Result};
 
-/// An SCM integration from the operator config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Integration {
     pub id: String,
     pub provider: String,
-    /// `https://github.com`.
     pub web_url: String,
 }
 
-/// `POST /projects`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddProject {
     pub workspace_url: String,
@@ -32,8 +25,6 @@ pub struct AddProject {
     pub base_branch: Option<String>,
 }
 
-/// `https://<host>/<owner>/<name>` (an optional `.git` or `/` at the end):
-/// `(host, owner, name)`.
 pub fn parse_repo_url(url: &str) -> Option<(String, String, String)> {
     let rest = url.strip_prefix("https://")?;
     let rest = rest.trim_end_matches('/');
@@ -65,7 +56,6 @@ fn web_host(web_url: &str) -> Option<String> {
     Some(rest.trim_end_matches('/').to_ascii_lowercase())
 }
 
-/// A branch name Saka passes to git.
 fn branch_ok(branch: &str) -> bool {
     !branch.is_empty()
         && branch.len() <= 255
@@ -103,7 +93,6 @@ fn base_branch_error(e: saka_ports::PortError) -> EngineError {
 }
 
 impl Engine {
-    /// Registers a project from `saka.toml` at the tip of its base branch.
     pub async fn add_project(
         &self,
         req: &AddProject,
@@ -179,7 +168,6 @@ impl Engine {
         let entry = config.repos.first().cloned().ok_or_else(|| {
             EngineError::Internal("project config without a repo passed parsing".into())
         })?;
-        // Code in a repo other than the workspace comes with multi-repo projects.
         let same_repo = parse_repo_url(&entry.url).is_some_and(|(h, o, n)| {
             h == host && format!("{o}/{n}").eq_ignore_ascii_case(&info.full_name)
         });
@@ -224,7 +212,6 @@ impl Engine {
         Ok(())
     }
 
-    /// Reads a spec file at the tip of the project's base branch and records it.
     pub async fn add_spec(
         &self,
         project_id: ProjectId,

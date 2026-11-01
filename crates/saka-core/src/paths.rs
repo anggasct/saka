@@ -1,14 +1,7 @@
-//! Workspace paths: the project folder and spec files inside it.
-
-/// Why a path is not a workspace path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathIssue {
-    /// Empty, absolute, with an empty, `.` or `..` segment, or with a character outside
-    /// `A-Za-z0-9._-`.
     Invalid,
-    /// Not inside the project folder.
     OutsideProject,
-    /// Not a markdown file.
     NotMarkdown,
 }
 
@@ -24,7 +17,6 @@ fn segments_ok(path: &str) -> bool {
         })
 }
 
-/// Checks a project folder: `.` for the repo root, or a relative path.
 pub fn check_project_path(project_path: &str) -> Result<(), PathIssue> {
     if project_path == "." || segments_ok(project_path) {
         Ok(())
@@ -33,7 +25,6 @@ pub fn check_project_path(project_path: &str) -> Result<(), PathIssue> {
     }
 }
 
-/// Checks a spec path: relative to the repo root, inside `project_path`, ending in `.md`.
 pub fn check_spec_path(project_path: &str, path: &str) -> Result<(), PathIssue> {
     check_project_path(project_path)?;
     if !segments_ok(path) {
@@ -48,7 +39,6 @@ pub fn check_spec_path(project_path: &str, path: &str) -> Result<(), PathIssue> 
     Ok(())
 }
 
-/// `saka.toml` of a project folder.
 pub fn project_config_path(project_path: &str) -> String {
     if project_path == "." {
         "saka.toml".to_string()

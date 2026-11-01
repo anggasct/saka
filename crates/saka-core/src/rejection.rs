@@ -1,5 +1,3 @@
-//! Why a decision refused a command. Each rejection maps to one stable API error code.
-
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

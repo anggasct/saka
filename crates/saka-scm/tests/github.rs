@@ -1,6 +1,3 @@
-//! The GitHub adapter against an HTTP mock: App JWT, installation token cache, change
-//! requests, CI normalization, merge at the gate head, and error mapping.
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -66,7 +63,6 @@ impl Repos for NoRepos {
     }
 }
 
-/// Accepts only a valid App JWT: RS256, signed by the App key, with the expected claims.
 struct AppJwt {
     public_pem: Vec<u8>,
     clock: Arc<TestClock>,
@@ -89,7 +85,6 @@ impl Match for AppJwt {
             return false;
         };
         let mut validation = Validation::new(Algorithm::RS256);
-        // The clock is virtual; the claims are checked against it below.
         validation.validate_exp = false;
         validation.required_spec_claims.clear();
         let Ok(data) = jsonwebtoken::decode::<Value>(token, &key, &validation) else {
@@ -196,8 +191,6 @@ impl World {
         }
     }
 
-    /// The installation lookup and token endpoints; tokens are `ghs_1`, `ghs_2`, … and
-    /// live one hour from the time they are issued.
     async fn mount_tokens(&self) {
         Mock::given(method("GET"))
             .and(path("/repos/acme/app/installation"))
@@ -262,7 +255,6 @@ async fn the_installation_token_is_cached_until_five_minutes_before_it_expires()
     assert_eq!(w.app.token("acme/app").await.unwrap(), "ghs_1");
     assert_eq!(w.token_requests().await, 1);
 
-    // The JWT matcher checks iat/exp against the advanced clock too.
     w.advance_to(expires - 5 * 60_000);
     assert_eq!(w.app.token("acme/app").await.unwrap(), "ghs_2");
     assert_eq!(w.token_requests().await, 2);
@@ -397,7 +389,6 @@ async fn check_runs_over_pages_and_statuses_normalize_to_one_gate_outcome() {
                 CheckStatus::Completed,
                 Some(CheckConclusion::Success)
             ),
-            // The re-run (higher id) replaces the failed run.
             ("test", CheckKind::CheckRun, CheckStatus::InProgress, None),
             (
                 "deploy/preview",

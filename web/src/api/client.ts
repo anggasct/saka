@@ -1,6 +1,3 @@
-// The one API client: typed from the OpenAPI document, with problem details mapped to
-// `ApiError { code, params }`.
-
 import createClient from "openapi-fetch";
 
 import { platform } from "@/platform";
@@ -27,7 +24,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Turns an error body (problem+json, or anything else) into an `ApiError`. */
 export function toApiError(status: number, body: unknown): ApiError {
   const problem: Problem = isRecord(body) ? body : {};
   const code =
@@ -42,7 +38,6 @@ export const api = createClient<paths>({
   fetch: (request) => globalThis.fetch(request),
 });
 
-/** Unwraps an openapi-fetch result, throwing `ApiError` for an error response. */
 export function unwrap<T>(result: {
   data?: T;
   error?: unknown;

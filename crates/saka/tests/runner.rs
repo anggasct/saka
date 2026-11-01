@@ -1,9 +1,3 @@
-//! The real `saka runner` process with the fake Claude CLI.
-//!
-//! This file has its own `main` (no test harness): started with `SAKA_FAKE_CLAUDE` set, the
-//! test binary is the fake CLI, so the runner can start it like any program. The systemd
-//! test runs only with `SAKA_TEST_SYSTEMD=1` (`cargo xtask test-systemd`).
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -181,6 +175,7 @@ impl Fixture {
             .await
             .unwrap();
         (conn, rx)
+        }
     }
 
     fn file_events(&self) -> Vec<LogEvent> {
@@ -200,7 +195,6 @@ async fn wait_for(mut done: impl FnMut() -> bool) {
     }
 }
 
-/// The next event matching `want`; every event seen on the way must already be in the file.
 async fn next_event(
     fx: &Fixture,
     rx: &mut mpsc::UnboundedReceiver<RunnerEvent>,
@@ -250,7 +244,6 @@ fn events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server()
         };
         assert_eq!(tool, "Bash");
 
-        // The server goes away while the CLI waits for an answer; the runner stays.
         drop(conn);
         drop(rx);
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -259,7 +252,6 @@ fn events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server()
             "the runner exited with the server"
         );
 
-        // A new connection replays the log from the offset asked for.
         let (conn, mut rx) = fx.connect(0).await;
         assert_eq!(conn.next_offset, fx.file_events().len() as u64);
         for expected in 0..conn.next_offset {
@@ -283,7 +275,6 @@ fn events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server()
             matches!(k, RunnerEventKind::PermissionDelivered { .. })
         })
         .await;
-        // The CLI gets the original input back.
         let said = next_event(
             &fx,
             &mut rx,
@@ -294,7 +285,6 @@ fn events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server()
             matches!(said.kind, RunnerEventKind::Activity { summary, .. } if summary == "allowed: make deploy")
         );
 
-        // A repeated answer is not delivered again, but the runner confirms it.
         conn.send(
             fx.session,
             &ServerFrame::PermissionAnswer {
@@ -310,7 +300,6 @@ fn events_are_in_the_file_before_the_socket_and_the_runner_outlives_the_server()
         })
         .await;
 
-        // The turn ends while nobody listens: the event is still written.
         drop(conn);
         drop(rx);
         wait_for(|| fx.file_events().iter().any(|e| e.kind == "turn_ended")).await;
@@ -578,7 +567,6 @@ fn systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing() {
             socket_path: launched.socket_path,
         };
         agents.send_turn(&session, 1, "work").await.unwrap();
-        // The runner and the CLI both live in the unit.
         let processes = SystemdSupervisor::processes(&unit).await;
         assert!(
             processes.len() >= 2,

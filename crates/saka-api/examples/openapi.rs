@@ -1,6 +1,3 @@
-//! Writes the OpenAPI document generated from the code to `crates/saka-api/openapi.json`;
-//! with `--check`, exits 1 when the committed file differs.
-
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;

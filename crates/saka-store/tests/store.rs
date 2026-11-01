@@ -1,6 +1,3 @@
-//! Store behaviour against a real SQLite file: transactions, projections written by the
-//! core round-trip through the schema, the job queue, and replay data.
-
 #![allow(
     clippy::unwrap_used,
     reason = "test helpers fail loudly on a broken setup"
@@ -215,8 +212,6 @@ impl World {
         tasks
     }
 
-    /// Decides on the stored task, writes everything, and checks the stored task equals
-    /// the one the core produced.
     fn step(&mut self, id: WorkItemId, input: TaskInput) -> Vec<Event> {
         let before = self
             .store
@@ -320,7 +315,6 @@ fn a_whole_task_round_trips_through_the_schema() {
     w.tick(1000);
     w.step(id, TaskInput::TurnAccepted { turn: 1 });
     w.tick(5000);
-    // `running_since` comes back from the event log.
     let stored = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
     assert_eq!(stored.session.as_ref().unwrap().running_ms_at(w.now), 5000);
 
@@ -437,7 +431,6 @@ fn a_whole_task_round_trips_through_the_schema() {
     let pending_jobs: i64 = count(&w.store, "job");
     assert!(pending_jobs >= 10);
 
-    // The reconcile set holds the done step and the queued next step.
     let set = w
         .store
         .read(|c| read::load_tasks(c, TaskSet::Reconcile))
@@ -566,7 +559,6 @@ fn job_queue_leases_reclaims_retries_and_dies_with_its_blocker() {
         "a leased job is not claimed twice"
     );
 
-    // An expired lease is reclaimed by another worker; the old owner can no longer finish.
     w.tick(saka_store::LEASE_MS + 1);
     let second = w.store.claim_job("w2", w.now).unwrap().unwrap();
     assert_eq!((second.id, second.attempts), (first.id, 2));
@@ -587,7 +579,6 @@ fn job_queue_leases_reclaims_retries_and_dies_with_its_blocker() {
     ));
     w.store.extend_lease(second.id, "w2", w.now).unwrap();
 
-    // A retryable failure waits for its backoff.
     let run_at = second.backoff(w.now);
     assert_eq!(run_at, w.now.plus_ms(20_000));
     let retry = Batch {
@@ -606,7 +597,6 @@ fn job_queue_leases_reclaims_retries_and_dies_with_its_blocker() {
     assert_eq!(third.attempts, 3);
     assert_eq!(third.last_error, Some(json!({ "code": "git_failed" })));
 
-    // The last attempt fails: the job dies and its event and blocker are written with it.
     let exhausted = Event::WorkItemAdmitted {
         work_item_id: tasks[0].item.id,
     };

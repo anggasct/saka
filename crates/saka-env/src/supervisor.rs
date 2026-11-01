@@ -1,9 +1,3 @@
-//! Supervisors for runner units.
-//!
-//! - [`SystemdSupervisor`]: a transient `systemd --user` service per session, outside the
-//!   server's cgroup, with `MemoryMax`, `CPUQuota`, and `TasksMax`.
-//! - [`DirectSupervisor`]: a child process in its own process group (tests only).
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -46,7 +40,6 @@ impl SystemdSupervisor {
             .is_ok_and(|o| o.status.success())
     }
 
-    /// A unit property as `systemctl show` prints it.
     pub async fn property(name: &str, property: &str) -> Option<String> {
         let out = Self::systemctl(&["show", "-p", property, "--value", &Self::service(name)])
             .await
@@ -54,7 +47,6 @@ impl SystemdSupervisor {
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    /// Processes in the unit's cgroup (empty when the unit is gone).
     pub async fn processes(name: &str) -> Vec<u32> {
         let Some(cgroup) = Self::property(name, "ControlGroup")
             .await
@@ -132,7 +124,6 @@ impl Supervisor for SystemdSupervisor {
     }
 }
 
-/// Runs each runner as a child in its own process group, logging to `log_dir/<name>.log`.
 pub struct DirectSupervisor {
     log_dir: PathBuf,
     children: Mutex<HashMap<String, Child>>,
@@ -154,7 +145,6 @@ impl DirectSupervisor {
         self.children.lock().ok()?.remove(name)
     }
 
-    /// The runner's pid, while it runs.
     pub fn pid(&self, name: &str) -> Option<u32> {
         self.children.lock().ok()?.get(name).and_then(Child::id)
     }

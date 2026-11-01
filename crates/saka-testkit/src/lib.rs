@@ -1,10 +1,3 @@
-//! Fake ports, a virtual clock, and the loop simulation harness for tests.
-//!
-//! [`FakeWorld`] is one in-memory world behind every adapter port: a git remote with a
-//! commit graph, worktrees, change requests with CI, and scripted agent sessions. It
-//! counts every effect, so tests can assert that nothing happened twice. [`Sim`] drives a
-//! real engine on a real SQLite file against that world, one step at a time.
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

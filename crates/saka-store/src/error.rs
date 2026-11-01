@@ -1,5 +1,3 @@
-//! Store errors. Driver errors are mapped once here; callers never see SQLite codes.
-
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("migration {version} was changed after it was applied")]
@@ -29,7 +27,6 @@ pub enum StoreError {
 }
 
 impl StoreError {
-    /// Stable code for logs and process exit messages.
     pub fn code(&self) -> &'static str {
         match self {
             StoreError::MigrationChecksumMismatch { .. } => "migration_checksum_mismatch",

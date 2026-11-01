@@ -1,12 +1,11 @@
-// ESLint flat config. Feature code reaches browser and desktop APIs only through
-// `src/platform/`, and shows text only through the message catalog.
-
 import js from "@eslint/js";
 import formatjs from "eslint-plugin-formatjs";
 import jsxA11y from "eslint-plugin-jsx-a11y";
 import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 import tseslint from "typescript-eslint";
+
+import { comments } from "./eslint-rules/comments.js";
 
 const BROWSER_GLOBALS = [
   "window",
@@ -33,6 +32,17 @@ export default tseslint.config(
       // Linted on purpose by scripts/eslint-fixtures.test.ts.
       "eslint-fixtures/**",
     ],
+  },
+  {
+    linterOptions: {
+      noInlineConfig: true,
+      reportUnusedDisableDirectives: "error",
+    },
+  },
+  {
+    files: ["**/*.{ts,tsx,js,mjs}"],
+    plugins: { saka: { rules: { comments } } },
+    rules: { "saka/comments": "error" },
   },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
@@ -80,6 +90,11 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    files: ["src/main.tsx"],
+    // Module augmentation of the router's Register type needs an interface.
+    rules: { "@typescript-eslint/consistent-type-definitions": "off" },
   },
   {
     files: ["eslint-fixtures/**", "**/*.js", "**/*.mjs"],

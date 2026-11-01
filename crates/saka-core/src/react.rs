@@ -1,6 +1,3 @@
-//! Events → jobs. Job keys are deterministic, so deriving the same job again (from the
-//! reconciler or a repeated decision) never runs a side effect twice.
-
 use serde_json::json;
 
 use crate::event::Event;
@@ -10,7 +7,6 @@ use crate::task::LoopConfig;
 use crate::time::Timestamp;
 use crate::vocab::{EnvironmentState, PermissionState, Stage, StagePhase, WorkItemState};
 
-/// Jobs caused by `event`, given the task after the event was applied.
 pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     use Event as E;
     let id = task.item.id;
@@ -109,8 +105,6 @@ fn deliver(
     )
 }
 
-/// The jobs the task's current place needs. Used on every phase change and by the
-/// reconciler, which is how a lost job is recreated.
 pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     let item = &task.item;
     let id = item.id;
@@ -118,7 +112,6 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     let run_id = run.map(|r| r.id);
     let mut jobs = Vec::new();
 
-    // Clean up after a task that stopped for good.
     if item.state.is_terminal() || item.state == WorkItemState::Blocked {
         if let Some(s) = task.live_session().filter(|_| item.state.is_terminal()) {
             jobs.push(stop(task, s.id, now));

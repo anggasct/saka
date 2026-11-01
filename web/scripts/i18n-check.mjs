@@ -1,4 +1,3 @@
-// Fails when a message key is missing in any locale catalog.
 import { readFileSync } from "node:fs";
 
 const locales = ["en", "id"];

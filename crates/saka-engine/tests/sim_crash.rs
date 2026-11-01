@@ -1,6 +1,3 @@
-//! Crashes: the engine is dropped and started again on the same database file, between
-//! steps or between a job's side effect and its commit.
-
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use std::sync::OnceLock;
@@ -20,7 +17,6 @@ fn waiting_script() -> AgentScript {
     }
 }
 
-/// Steps until nothing is due.
 fn settle(sim: &mut Sim) {
     for _ in 0..STEPS {
         if sim.step() == Step::Idle {
@@ -99,7 +95,6 @@ fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second
         .unwrap();
     drop(engine);
 
-    // The merge happens on the host, then the process dies before recording it.
     assert!(sim.crash_mid_job());
     assert_eq!(sim.stats().merges, 1);
     assert!(sim.task(1).is_at(Stage::Merge, StagePhase::Merging));
@@ -131,8 +126,6 @@ fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second
     assert_eq!(sim.stats().merges, 2);
 }
 
-/// Blockers a crash can leave behind: lost sessions, and a job whose every attempt was
-/// taken by crashes.
 fn crash_config() -> SimConfig {
     let mut cfg = SimConfig::default();
     cfg.operator.retry = vec![
@@ -201,8 +194,6 @@ fn the_baseline_ships_with_one_change_and_one_merge_per_task() {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 64, failure_persistence: None, ..ProptestConfig::default() })]
 
-    /// Crashing at random points (between steps, or between a side effect and its commit)
-    /// ends in the same place as a run without crashes, with no effect done twice.
     #[test]
     fn crashes_at_random_points_end_the_same_with_no_duplicate_effects(
         raw in prop::collection::vec((0.0f64..1.0, any::<bool>()), 1..4),

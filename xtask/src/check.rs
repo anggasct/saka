@@ -1,19 +1,15 @@
-//! `cargo xtask check`: every gate a change must pass, in a fixed order.
-
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{deps, metadata};
+use crate::{deps, hygiene, metadata};
 
-/// Pure crates share one clippy config; the first one is the source of truth.
 const PURE_CLIPPY_CONFIGS: &[&str] = &[
     "crates/saka-core/clippy.toml",
     "crates/saka-spec/clippy.toml",
 ];
 
-/// Paths the purity fixture must be rejected for.
 const PURITY_FIXTURE_EXPECTS: &[&str] = &[
     "std::time::SystemTime::now",
     "std::time::Instant::now",
@@ -37,6 +33,7 @@ pub fn run() -> Result<()> {
             &[&["fmt", "--check"], args(&selected).as_slice()].concat(),
         )
     })?;
+    step("source hygiene", || hygiene::run(&root))?;
     step("cargo clippy", || {
         cargo(
             &root,
@@ -136,7 +133,6 @@ fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// `pnpm` at the version `web/package.json` pins, through corepack.
 fn pnpm(root: &Path, args: &[&str]) -> Result<()> {
     // Run from `web/`: corepack picks the pnpm version from the nearest package.json.
     let status = Command::new("corepack")
@@ -168,8 +164,6 @@ fn same_files(root: &Path, files: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Lints a crate full of forbidden calls with the pure-crate config and requires a
-/// rejection for each one, so the config cannot silently stop working.
 fn purity_fixture(root: &Path) -> Result<()> {
     let config_dir = root.join("crates/saka-core");
     let out = Command::new(metadata::cargo())

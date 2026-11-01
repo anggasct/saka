@@ -1,5 +1,3 @@
-//! Gate outcome from neutral CI checks at one head.
-
 use serde::{Deserialize, Serialize};
 
 use crate::vocab::{CheckConclusion, CheckKind, CheckStatus, GateOutcome};
@@ -40,8 +38,6 @@ impl Check {
     }
 }
 
-/// `failed` if any check failed; `passed` if there is at least one check and all passed;
-/// `pending` otherwise (including no checks yet).
 pub fn outcome(checks: &[Check]) -> GateOutcome {
     if checks.iter().any(Check::is_failure) {
         GateOutcome::Failed

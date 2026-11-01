@@ -1,7 +1,6 @@
-//! Repository tasks, run as `cargo xtask <command>`.
-
 mod check;
 mod deps;
+mod hygiene;
 mod metadata;
 mod systemd;
 
@@ -12,9 +11,10 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("check") => check::run(),
         Some("deps") => deps::run(),
+        Some("hygiene") => metadata::workspace_root().and_then(|root| hygiene::run(&root)),
         Some("test-systemd") => systemd::run(),
         _ => {
-            eprintln!("usage: cargo xtask <check|deps|test-systemd>");
+            eprintln!("usage: cargo xtask <check|deps|hygiene|test-systemd>");
             return ExitCode::from(2);
         }
     };

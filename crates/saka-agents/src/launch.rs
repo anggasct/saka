@@ -1,6 +1,3 @@
-//! `launch.json`: everything the runner needs to start one session, written by the server
-//! (mode 0600) before the runner unit starts.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +15,6 @@ pub struct LaunchSpec {
     pub cwd: String,
     pub program: String,
     pub args: Vec<String>,
-    /// The CLI's whole environment; nothing else is inherited.
     pub env: BTreeMap<String, String>,
     pub redaction: Redaction,
 }
@@ -28,14 +24,10 @@ pub struct Redaction {
     pub known_values: Vec<String>,
 }
 
-/// Where one session's files go.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPaths {
-    /// `$XDG_RUNTIME_DIR/saka/runners/<id>.sock`.
     pub socket_path: PathBuf,
-    /// `data_dir/sessions/<id>`: `launch.json`, `events.ndjson`, `cli.stderr`.
     pub session_dir: PathBuf,
-    /// The environment root: `home/` and `tmp/` for the session live here.
     pub env_root: PathBuf,
     pub worktree: PathBuf,
 }
@@ -76,23 +68,17 @@ fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-/// Operator settings for the Claude Code CLI, with paths already expanded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeSettings {
-    /// `agent.command`, looked up in `path`.
     pub command: String,
-    /// `agent.account_dir`, given to the CLI as `CLAUDE_CONFIG_DIR`.
     pub account_dir: String,
-    /// `agent.model`; `None` uses the CLI default.
     pub model: Option<String>,
-    /// `agent.path`.
     pub path: Vec<String>,
     pub author_name: String,
     pub author_email: String,
 }
 
 impl ClaudeSettings {
-    /// The first executable `command` in `path`.
     pub fn program(&self) -> Option<PathBuf> {
         if self.command.contains('/') {
             return Some(PathBuf::from(&self.command));
@@ -109,7 +95,6 @@ fn is_executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Builds the launch spec for a Claude Code session. Every flag is here.
 pub fn claude(
     settings: &ClaudeSettings,
     program: &Path,
@@ -124,8 +109,7 @@ pub fn claude(
         "--output-format",
         "stream-json",
         "--verbose",
-        // The baseline that passed spike S1: nothing is allowed without an answer, and
-        // every prompt comes to the runner over stdio.
+        // Nothing is allowed without an answer, and every prompt comes to the runner over stdio.
         "--permission-mode",
         "manual",
         "--permission-prompt-tool",

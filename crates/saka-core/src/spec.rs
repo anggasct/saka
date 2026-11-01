@@ -1,5 +1,3 @@
-//! Spec decisions: record a revision, approve it (one task per step), ship it.
-
 use uuid::Uuid;
 
 use crate::Ctx;
@@ -10,7 +8,6 @@ use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{SpecOrigin, SpecState};
 
-/// A revision read from git and linted by the caller.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRevision {
     pub source_commit: String,
@@ -20,8 +17,6 @@ pub struct NewRevision {
     pub title: String,
 }
 
-/// Records what was read at `path`. `known` is the revision of this spec that already has
-/// the same content hash, if any. Returns no events when nothing changed.
 pub fn record_revision(
     existing: Option<&Spec>,
     project_id: ProjectId,
@@ -63,7 +58,6 @@ pub fn record_revision(
     events
 }
 
-/// Approves the latest revision. `if_match` is the revision the operator saw.
 pub fn approve(
     spec: &Spec,
     latest: &RevisionView,
@@ -113,7 +107,6 @@ pub fn approve(
     Ok(events)
 }
 
-/// Ships an approved spec once every task is done.
 pub fn ship(spec: &Spec, all_tasks_done: bool) -> Result<Vec<Event>, Rejection> {
     match (spec.state, spec.approved_revision_id) {
         (SpecState::Approved, Some(revision_id)) if all_tasks_done => {
@@ -128,7 +121,6 @@ pub fn ship(spec: &Spec, all_tasks_done: bool) -> Result<Vec<Event>, Rejection> 
     }
 }
 
-/// Applies a spec event.
 pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec> {
     match (spec, event) {
         (

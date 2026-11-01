@@ -1,6 +1,3 @@
-// The Delivery page in a real browser against mocked API routes: no horizontal scroll at
-// 375 px and no WCAG 2.2 AA violation.
-
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";

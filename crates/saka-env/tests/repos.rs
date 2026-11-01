@@ -1,7 +1,3 @@
-//! Mirrors, worktrees, and Saka's push against a local bare remote. `git` runs through a
-//! wrapper that logs its argv and the `GIT_CONFIG_*` it was given, so the tests can see
-//! where the credential went.
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -27,7 +23,6 @@ const SECRET: &str = "AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzX3Rlc3Q=";
 const HEADER_KEY: &str = "http.https://scm.invalid/.extraheader";
 const BRANCH: &str = "saka/two-step/s1";
 
-/// Plain git for test setup, isolated from the user's config.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
@@ -79,9 +74,7 @@ impl GitAccess for StaticAccess {
 
 struct World {
     _dir: tempfile::TempDir,
-    /// The "remote" every fetch and push goes to.
     remote: PathBuf,
-    /// A clone of the remote standing in for someone else.
     other: PathBuf,
     log: PathBuf,
     repos: GitRepos,
@@ -234,7 +227,6 @@ async fn the_token_reaches_only_the_git_child_through_git_config_variables() {
     assert!(log.contains("env GIT_CONFIG_GLOBAL=/dev/null"), "{log}");
     assert!(log.contains("env GIT_CONFIG_NOSYSTEM=1"), "{log}");
 
-    // Local commands get no credential at all.
     let mut current_is_local = false;
     for line in log.lines() {
         if line.starts_with("argv") {
@@ -249,7 +241,6 @@ async fn the_token_reaches_only_the_git_child_through_git_config_variables() {
         }
     }
 
-    // Nothing persisted the credential: not the mirror config, not the worktree.
     let bare = w.repos.mirror_path(w.repo.repo_id);
     let config = std::fs::read_to_string(bare.join("config")).unwrap();
     assert!(
@@ -268,7 +259,6 @@ async fn saka_pushes_with_a_lease_and_never_overwrites_someone_else() {
     let env = w.prepare(1).await;
     let wt = PathBuf::from(&env.worktree_path);
 
-    // A new branch: the lease says it must not exist yet.
     let first = commit(&wt, "a.txt", "a\n");
     assert_eq!(
         w.push(&first, None).await,
@@ -283,7 +273,6 @@ async fn saka_pushes_with_a_lease_and_never_overwrites_someone_else() {
         w.log()
     );
 
-    // The remote already at the same sha: success without a push.
     let pushes = |log: String| {
         log.lines()
             .filter(|l| l.starts_with("argv") && l.contains(" push "))
@@ -296,7 +285,6 @@ async fn saka_pushes_with_a_lease_and_never_overwrites_someone_else() {
     );
     assert_eq!(pushes(w.log()), before);
 
-    // An update leases against the sha Saka pushed last.
     let second = commit(&wt, "b.txt", "b\n");
     assert_eq!(
         w.push(&second, Some(&first)).await,
@@ -310,7 +298,6 @@ async fn saka_pushes_with_a_lease_and_never_overwrites_someone_else() {
     );
     assert_eq!(w.remote_branch(BRANCH), Some(second.clone()));
 
-    // Someone else moves the branch: Saka refuses to overwrite it.
     git(&w.other, &["fetch", "-q", "origin"]);
     git(
         &w.other,
@@ -351,7 +338,6 @@ async fn a_worktree_starts_at_the_latest_base_and_reports_its_state() {
     assert_eq!(git(&wt, &["branch", "--show-current"]), BRANCH);
     assert!(wt.join("NEWS.md").is_file());
 
-    // Preparing the same environment again returns it as it is.
     std::fs::write(wt.join("keep.txt"), "x").unwrap();
     let again = w.prepare(1).await;
     assert_eq!(again.worktree_path, env.worktree_path);
@@ -367,7 +353,6 @@ async fn a_worktree_starts_at_the_latest_base_and_reports_its_state() {
         (false, 1, sha)
     );
 
-    // Files are read byte-exact at a commit of the base branch.
     let tip = w.repos.tip(&w.repo, "main").await.unwrap().unwrap();
     assert_eq!(tip, newer);
     assert_eq!(
@@ -428,7 +413,6 @@ async fn sync_checks_the_merge_on_the_base_branch_and_teardown_cleans_up() {
     let bare = w.repos.mirror_path(w.repo.repo_id);
     assert_eq!(git(&bare, &["branch", "--list", BRANCH]), "");
     assert!(!git(&bare, &["worktree", "list"]).contains("worktree"));
-    // Tearing down twice is fine.
     w.repos.teardown(&env).await.unwrap();
 }
 
@@ -436,7 +420,6 @@ async fn sync_checks_the_merge_on_the_base_branch_and_teardown_cleans_up() {
 async fn a_new_environment_replaces_an_unfinished_one_that_holds_the_branch() {
     let w = World::new();
     let old = w.prepare(1).await;
-    // The old environment never finished: its marker is gone.
     std::fs::remove_file(Path::new(&old.root_path).join("base-sha")).unwrap();
     let new = w.prepare(2).await;
     assert_ne!(old.worktree_path, new.worktree_path);
@@ -480,6 +463,5 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
         assert!(!r(raw).inside_worktree, "{raw}");
         assert_eq!(r(raw).path, raw);
     }
-    // `out/..` follows the link first, as the file system does.
     assert_eq!(r("out/../worktree/src"), inside("src"));
 }

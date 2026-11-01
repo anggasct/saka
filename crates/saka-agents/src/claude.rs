@@ -1,24 +1,16 @@
-//! Claude Code headless (`claude -p`, stream-json both ways): what the runner writes to
-//! the CLI, and how CLI output maps to runner events.
-
 use serde_json::{Value, json};
 
-/// Summaries are cut to this many characters.
 pub const SUMMARY_MAX: usize = 500;
 pub const RESULT_SUMMARY_MAX: usize = 2000;
 
-/// What one line of CLI stdout means.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
-    /// A runner event: `(kind, data)`, not yet redacted.
     Event(&'static str, Value),
-    /// The CLI asks to use a tool. `input` is the original, kept only in memory.
     Permission {
         request_id: String,
         tool: String,
         input: Value,
     },
-    /// Nothing worth recording (control responses, partial chunks).
     Nothing,
 }
 
@@ -30,7 +22,6 @@ pub fn cut(text: &str, max: usize) -> String {
     }
 }
 
-/// Maps a stdout line. `turn` is the turn being run.
 pub fn parse(line: &str, turn: u32) -> Output {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
         return Output::Event(
@@ -118,7 +109,6 @@ pub fn user_message(text: &str, cli_session_id: Option<&str>) -> Value {
     })
 }
 
-/// The answer to `can_use_tool`. An allow carries the original input back.
 pub fn permission_response(
     request_id: &str,
     allow: bool,

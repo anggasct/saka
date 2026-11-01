@@ -1,6 +1,3 @@
-//! What the engine counts while it runs, and the state it reports for `/metrics` and
-//! `/readyz`. Gauges are read from the store when asked; counters live in memory.
-
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,7 +32,6 @@ fn copy(map: &Mutex<BTreeMap<(String, String), u64>>) -> Vec<(String, String, u6
         .unwrap_or_default()
 }
 
-/// The adapter a job kind calls.
 fn adapter(kind: JobKind) -> &'static str {
     let name = kind.as_str();
     if name.starts_with("scm.") {
@@ -65,24 +61,18 @@ impl Counters {
     }
 }
 
-/// Everything `/metrics` shows from the engine and the store.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricsSnapshot {
-    /// `(kind, state, count)`.
     pub jobs: Vec<(String, String, i64)>,
     pub oldest_ready_job_age_ms: Option<i64>,
-    /// `(kind, outcome, count)`.
     pub job_runs: Vec<(String, String, u64)>,
     pub sessions_active: Vec<(String, i64)>,
     pub permission_requests_pending: i64,
     pub work_items: Vec<(String, i64)>,
-    /// `(stage, outcome, milliseconds)` per finished stage run.
     pub stage_durations: Vec<(String, String, i64)>,
-    /// `(adapter, outcome, count)`.
     pub adapter_requests: Vec<(String, String, u64)>,
 }
 
-/// What `/readyz` checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Readiness {
     pub db: bool,

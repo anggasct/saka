@@ -1,5 +1,3 @@
-//! `/healthz`, `/readyz`, and `/metrics` (Prometheus text format 0.0.4).
-
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -49,7 +47,6 @@ pub async fn readyz(State(s): State<AppState>) -> Response {
     )
 }
 
-/// Upper bounds of `saka_stage_duration_seconds`.
 const BUCKETS: &[f64] = &[1.0, 10.0, 60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0];
 
 fn label(value: &str) -> String {

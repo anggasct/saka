@@ -1,6 +1,3 @@
-//! The GitHub App: a JWT for the App, then an installation token per repo (cached until
-//! five minutes before it expires), and the REST calls made with them.
-
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -17,26 +14,20 @@ use saka_ports::{Clock, GitAccess, GitRemote, PortError, PortResult, RepoRef};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-/// The REST API version the adapter is written against.
 pub const API_VERSION: &str = "2026-03-10";
 const JWT_BACKDATE_SECS: i64 = 60;
 const JWT_LIFETIME_SECS: i64 = 540;
-/// A cached token is renewed this long before it expires.
 const TOKEN_MARGIN_MS: i64 = 5 * 60 * 1000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGES: usize = 20;
 
-/// One `[[scm]]` entry with `provider = "github"`.
 #[derive(Debug, Clone)]
 pub struct GitHubConfig {
     pub integration_id: String,
-    /// `https://api.github.com`, or the API of a GitHub Enterprise Server.
     pub api_url: String,
-    /// `https://github.com`; git remotes are `<web_url>/<owner>/<repo>.git`.
     pub web_url: String,
     pub app_id: u64,
-    /// Read again for every JWT; must be mode 0600.
     pub private_key_file: PathBuf,
     pub user_agent: String,
 }
@@ -55,7 +46,6 @@ pub struct GitHubApp {
     tokens: Mutex<HashMap<String, CachedToken>>,
 }
 
-/// A response the caller decides about (2xx, 4xx other than auth and rate limits).
 #[derive(Debug)]
 pub struct Reply {
     pub status: StatusCode,
@@ -102,7 +92,6 @@ pub(crate) fn inaccessible(full_name: &str, status: u16) -> PortError {
     )
 }
 
-/// `owner/name` as two path segments.
 pub(crate) fn split_repo(full_name: &str) -> PortResult<(&str, &str)> {
     let ok = |s: &str| {
         !s.is_empty()
@@ -133,7 +122,6 @@ fn next_link(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-/// When a rate-limited request may be tried again.
 fn rate_limit_reset(headers: &HeaderMap, now: Timestamp) -> Option<Timestamp> {
     let header = |name: &str| headers.get(name)?.to_str().ok()?.trim().parse::<i64>().ok();
     if let Some(secs) = headers
@@ -154,7 +142,6 @@ pub(crate) fn parse_time(value: &Value) -> Option<Timestamp> {
     Some(Timestamp(ts.as_millisecond()))
 }
 
-/// Who a request is made as.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum As {
     App,
@@ -206,7 +193,6 @@ impl GitHubApp {
         Ok(url)
     }
 
-    /// A JWT for the App: RS256, `iss` = app id, `iat` = now − 60 s, `exp` = now + 540 s.
     pub fn jwt(&self) -> PortResult<String> {
         let path = &self.cfg.private_key_file;
         let key_error = |reason: &str| {
@@ -234,8 +220,6 @@ impl GitHubApp {
             .map_err(|_| key_error("signing_failed"))
     }
 
-    /// The installation token for `full_name`, from the cache while it has more than five
-    /// minutes left.
     pub async fn token(&self, full_name: &str) -> PortResult<String> {
         let now = self.clock.now();
         if let Some(cached) = self.cached(full_name)
@@ -305,8 +289,6 @@ impl GitHubApp {
         }
     }
 
-    /// A call for a repo with its installation token. A 401 drops the cached token and
-    /// the call is made once more with a new one.
     pub async fn call(
         &self,
         full_name: &str,
@@ -336,7 +318,6 @@ impl GitHubApp {
         ))
     }
 
-    /// Every item of a paginated list, following `Link: rel="next"` on the API host only.
     pub async fn pages(
         &self,
         full_name: &str,
@@ -434,7 +415,6 @@ impl GitHubApp {
         })
     }
 
-    /// A status the call did not expect.
     pub(crate) fn unexpected(&self, op: &str, reply: &Reply) -> PortError {
         PortError::permanent(
             "scm_rejected",
@@ -449,7 +429,6 @@ impl GitHubApp {
 
 #[async_trait]
 impl GitAccess for GitHubApp {
-    /// `http.<web_url>/.extraheader` carries the token as basic auth for `x-access-token`.
     async fn remote(&self, repo: &RepoRef) -> PortResult<GitRemote> {
         split_repo(&repo.full_name)?;
         let token = self.token(&repo.full_name).await?;

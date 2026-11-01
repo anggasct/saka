@@ -1,6 +1,3 @@
-//! Runner events → facts for the core. Permission requests are evaluated against the
-//! policy here, after the tool's path is resolved against the worktree.
-
 use saka_core::ids::PermissionRequestId;
 use saka_core::model::Task;
 use saka_core::policy::ToolRequest;
@@ -11,7 +8,6 @@ use serde_json::Value;
 
 use crate::{Engine, Extra, Mode, Result};
 
-/// Tools whose input names a file.
 const FILE_TOOLS: &[(&str, &str)] = &[
     ("Read", "file_path"),
     ("Write", "file_path"),
@@ -25,8 +21,6 @@ const FILE_TOOLS: &[(&str, &str)] = &[
 const SUMMARY_MAX: usize = 200;
 
 impl Engine {
-    /// Applies one runner event. Events of a session that is no longer the task's live
-    /// session, and repeated events, change nothing.
     pub fn on_runner_event(&self, event: RunnerEvent) -> Result<()> {
         let Some(work_item) = self
             .store
@@ -133,7 +127,6 @@ impl Engine {
                 },
                 raw,
             )),
-            // Without a worktree nothing is inside it.
             (Some(raw), _, _) => Some(saka_core::policy::RequestPath {
                 path: raw.to_string(),
                 inside_worktree: false,
@@ -162,7 +155,6 @@ impl Engine {
     }
 }
 
-/// A short line for people: the command for `Bash`, the path for file tools.
 fn summary(tool: &str, input: &Value) -> String {
     let detail = if tool == "Bash" {
         input.get("command").and_then(Value::as_str)

@@ -1,15 +1,8 @@
-//! Permission policy for tool requests from agent sessions.
-//!
-//! Order: built-in deny, then operator `deny`, `ask`, `allow`, and finally `ask` when no
-//! rule matches. Permission is never bypassed; an unmatched request goes to a human.
-
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
-/// Shell metacharacters that make a command more than one simple command.
 const METACHARACTERS: &[&str] = &[";", "&", "|", "`", "$(", ">", "<", "\n", "\r"];
 
-/// Built-in rule names, recorded as `policy:builtin:<name>`.
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
 pub const BUILTIN_GIT_PUSH: &str = "git_push";
 
@@ -21,7 +14,6 @@ pub enum Effect {
     Ask,
 }
 
-/// An operator rule as written in the config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleSpec {
     pub id: String,
@@ -33,20 +25,15 @@ pub struct RuleSpec {
     pub commands: Vec<String>,
 }
 
-/// A tool request, already normalized by the shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRequest {
     pub tool: String,
-    /// The shell command, for `Bash`.
     pub command: Option<String>,
-    /// The file the tool touches, for file tools.
     pub path: Option<RequestPath>,
 }
 
-/// A path after canonicalization (including symlinks) against the worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPath {
-    /// Relative to the worktree root when `inside_worktree`; the raw path otherwise.
     pub path: String,
     pub inside_worktree: bool,
 }
@@ -60,7 +47,6 @@ pub enum DecisionSource {
 }
 
 impl DecisionSource {
-    /// The value stored as `answer_source`: `policy:<rule>` or `policy:builtin:<rule>`.
     pub fn answer_source(&self) -> Option<String> {
         match self {
             DecisionSource::Builtin(name) => Some(format!("policy:builtin:{name}")),
@@ -93,7 +79,6 @@ struct Rule {
     commands: Option<GlobSet>,
 }
 
-/// Compiled operator rules.
 #[derive(Debug, Clone)]
 pub struct Policy {
     rules: Vec<Rule>,
@@ -210,7 +195,6 @@ fn builtin_deny(request: &ToolRequest) -> Option<&'static str> {
     None
 }
 
-/// True when any simple command in `command` runs the git `push` subcommand.
 fn runs_git_push(command: &str) -> bool {
     command
         .split([';', '&', '|', '\n', '\r', '(', ')', '`'])

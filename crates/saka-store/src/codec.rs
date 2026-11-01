@@ -1,6 +1,3 @@
-//! Column encodings: ids as hyphenated TEXT, vocabularies by wire name, JSON as TEXT,
-//! booleans as 0/1, time as INTEGER milliseconds.
-
 use std::str::FromStr;
 
 use rusqlite::Row;

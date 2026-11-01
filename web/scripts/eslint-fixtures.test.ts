@@ -1,6 +1,4 @@
 // @vitest-environment node
-// The lint rules that keep feature code off browser and desktop APIs and off literal
-// text are proven by files that break them.
 
 import { fileURLToPath } from "node:url";
 
@@ -9,10 +7,16 @@ import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-async function rulesFor(file: string): Promise<string[]> {
+async function messagesFor(
+  file: string,
+): Promise<ESLint.LintResult["messages"]> {
   const eslint = new ESLint({ cwd: root, ignore: false });
   const [result] = await eslint.lintFiles([`eslint-fixtures/${file}`]);
-  return (result?.messages ?? []).map((m) => m.ruleId ?? "fatal");
+  return result?.messages ?? [];
+}
+
+async function rulesFor(file: string): Promise<string[]> {
+  return (await messagesFor(file)).map((m) => m.ruleId ?? "fatal");
 }
 
 describe("lint fixtures", () => {
@@ -24,6 +28,22 @@ describe("lint fixtures", () => {
   it("refuse desktop imports outside the platform layer", async () => {
     expect(await rulesFor("tauri-import.ts")).toEqual([
       "no-restricted-imports",
+    ]);
+  });
+
+  it("refuse doc, block, long, task, commented-out, and suppression comments", async () => {
+    const found = (await messagesFor("comments.ts")).map((m) => [
+      m.line,
+      m.ruleId,
+      m.messageId,
+    ]);
+    expect(found).toEqual([
+      [1, "saka/comments", "block"],
+      [3, "saka/comments", "block"],
+      [4, "saka/comments", "task"],
+      [5, "saka/comments", "code"],
+      [7, "saka/comments", "long"],
+      [11, null, undefined],
     ]);
   });
 

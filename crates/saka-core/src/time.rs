@@ -1,5 +1,3 @@
-//! Time as milliseconds since the Unix epoch (UTC), given to the core by the caller.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(
@@ -13,7 +11,6 @@ impl Timestamp {
         Timestamp(self.0.saturating_add(ms))
     }
 
-    /// Milliseconds from `earlier` to `self`, zero if `earlier` is later.
     pub fn since(self, earlier: Timestamp) -> i64 {
         self.0.saturating_sub(earlier.0).max(0)
     }
