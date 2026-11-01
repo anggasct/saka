@@ -122,6 +122,20 @@ vocab!(SessionState {
     Ended => "ended",
     Failed => "failed",
 });
+vocab!(ResumeCause { Lost => "lost", Retry => "retry" });
+vocab!(InterruptBy { Operator => "operator", Saka => "saka" });
+vocab!(
+    ResumeReason {
+        RunnerLost => "runner_lost",
+        OperatorStopped => "operator_stopped",
+        IdleTimeout => "idle_timeout",
+        PermissionExpired => "permission_expired",
+        BudgetExhausted => "budget_exhausted",
+        QuotaExhausted => "quota_exhausted",
+        Retried => "retried",
+    }
+);
+vocab!(BudgetDimension { RunningMinutes => "running_minutes", Turns => "turns", Tokens => "tokens", CostUsd => "cost_usd" });
 vocab!(PermissionState { Pending => "pending", Allowed => "allowed", Denied => "denied", Expired => "expired" });
 vocab!(ChangeState { Open => "open", Merged => "merged", Closed => "closed" });
 vocab!(GateSource { Scm => "scm", Saka => "saka" });

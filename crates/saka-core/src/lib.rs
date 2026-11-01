@@ -10,6 +10,8 @@ pub mod policy;
 pub mod react;
 pub mod reconcile;
 pub mod rejection;
+pub mod resume;
+pub mod rule;
 pub mod spec;
 pub mod task;
 pub mod time;

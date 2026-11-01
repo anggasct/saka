@@ -73,6 +73,14 @@ impl Engine {
                 }
                 Ok(text)
             }
+            Prompt::Resume { cause, retry_of } => {
+                let text = saka_core::resume::text(*cause);
+                Ok(match retry_of.as_ref().and_then(ci_failure) {
+                    Some(ci) => format!("{text}\n\n{ci}"),
+                    None => text,
+                })
+            }
+            Prompt::Steer { text } => Ok(text.clone()),
         }
     }
 

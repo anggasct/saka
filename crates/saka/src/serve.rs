@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -8,10 +8,11 @@ use async_trait::async_trait;
 use saka_agents::launch::ClaudeSettings;
 use saka_agents::{AgentsConfig, ClaudeAgents};
 use saka_api::{ApiConfig, AppState};
+use saka_core::model::Budget;
 use saka_core::policy::Policy;
 use saka_core::task::LoopConfig;
 use saka_core::time::Timestamp;
-use saka_core::vocab::MergeMethod;
+use saka_core::vocab::{MergeMethod, Stage};
 use saka_docs::GitDocs;
 use saka_engine::{Engine, EngineConfig, Integration, Ports};
 use saka_env::{Git, GitRepos, ReposConfig, SystemdSupervisor};
@@ -149,9 +150,28 @@ pub fn migrate(cfg: &Config) -> ExitCode {
 
 fn loop_config(cfg: &Config) -> LoopConfig {
     let first = cfg.scm.first();
+    let dev = &cfg.budget.dev;
+    let micros = (dev.cost_usd * 1_000_000.0).round();
     LoopConfig {
         max_followup_turns: cfg.agent.max_followup_turns,
-        max_running_ms: cfg.agent.max_running_minutes * 60_000,
+        permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
+        idle_ms: cfg.agent.idle_minutes * 60_000,
+        budgets: BTreeMap::from([(
+            Stage::Dev,
+            Budget {
+                running_minutes: dev.running_minutes,
+                turns: dev.turns,
+                tokens: dev.tokens,
+                cost_usd_micros: if micros.is_finite() && micros < i64::MAX as f64 {
+                    micros as i64
+                } else {
+                    0
+                },
+            },
+        )]),
+        budget_warn_percent: cfg.budget.warn_percent,
+        rate_limit_pause: cfg.agent.rate_limit_pause,
+        account: format!("{}:{}", cfg.agent.cli, cfg.account_name()),
         ci_appear_timeout_ms: first.map_or(600, |s| {
             i64::try_from(s.ci_appear_timeout_secs).unwrap_or(600)
         }) * 1000,

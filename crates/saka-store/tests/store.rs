@@ -41,7 +41,20 @@ impl IdSource for Counter {
 fn cfg() -> LoopConfig {
     LoopConfig {
         max_followup_turns: 1,
-        max_running_ms: 3_600_000,
+        permission_wait_ms: 24 * 3_600_000,
+        idle_ms: 30 * 60_000,
+        budgets: std::collections::BTreeMap::from([(
+            saka_core::vocab::Stage::Dev,
+            saka_core::model::Budget {
+                running_minutes: 60,
+                turns: 10,
+                tokens: 0,
+                cost_usd_micros: 0,
+            },
+        )]),
+        budget_warn_percent: 80,
+        rate_limit_pause: 0.9,
+        account: "claude:default".into(),
         ci_appear_timeout_ms: 600_000,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
@@ -264,6 +277,10 @@ impl World {
             .unwrap();
         let mut expected = after;
         expected.retired_runs.clear();
+        expected.retired_sessions.clear();
+        expected.usage_records.clear();
+        expected.quota_observations.clear();
+        expected.added_rules.clear();
         expected.permissions.retain(|p| {
             p.state == saka_core::vocab::PermissionState::Pending
                 || p.delivered_at.is_none() && p.state != saka_core::vocab::PermissionState::Expired
@@ -422,6 +439,8 @@ fn a_whole_task_round_trips_through_the_schema() {
             allow: true,
             message: None,
             actor: "operator:local".into(),
+            remember: false,
+            active_rules: Vec::new(),
         },
     );
     w.step(
@@ -954,8 +973,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(4));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(5));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1080,5 +1099,246 @@ fn reconcile_keeps_loading_shipped_tasks_whose_environment_still_needs_cleanup()
     assert_eq!(
         set[0].environment.as_ref().unwrap().state,
         EnvironmentState::TeardownFailed
+    );
+}
+
+fn launched(n: u128) -> TaskInput {
+    TaskInput::SessionLaunched {
+        session_id: SessionId(Uuid::from_u128(n)),
+        cli: "claude".into(),
+        cli_version: Some("2.1.0".into()),
+        model: None,
+        account: "default".into(),
+        runner_unit: format!("saka-session-{n}"),
+        socket_path: format!("/run/{n}.sock"),
+        log_path: format!("/data/{n}/events.ndjson"),
+    }
+}
+
+#[test]
+fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
+    let mut w = World::new();
+    let tasks = w.approve();
+    let id = tasks[0].item.id;
+    w.step(id, TaskInput::Admit);
+    w.step(
+        id,
+        TaskInput::EnvironmentPrepared {
+            environment_id: EnvironmentId(Uuid::from_u128(76)),
+            root_path: "/e".into(),
+            worktree_path: "/e/w".into(),
+            base_sha: "a".repeat(40),
+        },
+    );
+    w.step(id, launched(77));
+    w.step(
+        id,
+        TaskInput::SessionInitialized {
+            cli_session_id: "cli-1".into(),
+            model: None,
+        },
+    );
+    w.step(id, TaskInput::TurnAccepted { turn: 1 });
+    let first = SessionId(Uuid::from_u128(77));
+    w.tick(60_000);
+    w.step(
+        id,
+        TaskInput::Steer {
+            session_id: first,
+            text: "keep going".into(),
+        },
+    );
+    w.step(
+        id,
+        TaskInput::PermissionRequested {
+            permission_request_id: PermissionRequestId(Uuid::from_u128(78)),
+            cli_request_id: "c1".into(),
+            tool: "Bash".into(),
+            summary: "npm install".into(),
+            input: json!({ "command": "npm install" }),
+            decision: Decision {
+                effect: Effect::Ask,
+                source: DecisionSource::Default,
+            },
+        },
+    );
+    w.step(
+        id,
+        TaskInput::AnswerPermission {
+            permission_request_id: PermissionRequestId(Uuid::from_u128(78)),
+            allow: true,
+            message: None,
+            actor: "operator:local".into(),
+            remember: true,
+            active_rules: Vec::new(),
+        },
+    );
+    w.step(
+        id,
+        TaskInput::QuotaObserved {
+            window: "five_hour".into(),
+            utilization: 0.4,
+            status: "allowed".into(),
+            resets_at: Some(Timestamp(9_000_000)),
+        },
+    );
+    w.tick(30_000);
+    w.step(
+        id,
+        TaskInput::TurnEnded {
+            turn: 1,
+            status: "success".into(),
+            cost_usd_micros: Some(1_500),
+            input_tokens: Some(10),
+            output_tokens: Some(20),
+        },
+    );
+    w.step(
+        id,
+        TaskInput::Steer {
+            session_id: first,
+            text: "add a test".into(),
+        },
+    );
+    w.step(id, TaskInput::TurnAccepted { turn: 2 });
+    w.tick(10_000);
+    w.step(
+        id,
+        TaskInput::CliExited {
+            code: Some(137),
+            signal: None,
+        },
+    );
+    w.step(id, launched(79));
+    w.step(id, TaskInput::TurnAccepted { turn: 1 });
+    let second = SessionId(Uuid::from_u128(79));
+    w.step(id, TaskInput::Interrupt { session_id: second });
+    w.tick(5_000);
+    w.step(
+        id,
+        TaskInput::TurnEnded {
+            turn: 1,
+            status: "error_during_execution".into(),
+            cost_usd_micros: None,
+            input_tokens: None,
+            output_tokens: None,
+        },
+    );
+
+    let stored = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let run = stored.stage_run.as_ref().unwrap();
+    assert!(run.resumed_lost);
+    assert_eq!(run.budget.map(|b| b.turns), Some(10));
+    assert_eq!(stored.prior_usage.running_ms, 100_000);
+    assert_eq!(stored.prior_usage.turns, 2);
+    assert_eq!(stored.prior_usage.tokens, 30);
+    let s = stored.session.as_ref().unwrap();
+    assert_eq!(
+        (s.state, s.resumed_from_session_id, s.resume_cause),
+        (
+            saka_core::vocab::SessionState::Idle,
+            Some(first),
+            Some(saka_core::vocab::ResumeCause::Lost)
+        )
+    );
+    assert_eq!(
+        s.interrupt_requested,
+        Some(saka_core::vocab::InterruptBy::Operator)
+    );
+    assert_eq!((s.recorded_turn, s.recorded_running_ms), (1, 5_000));
+
+    let sessions = w.store.read(|c| read::sessions(c, id)).unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].state, saka_core::vocab::SessionState::Resumed);
+    assert_eq!(sessions[0].steers, 2);
+    assert_eq!(
+        (sessions[0].recorded_turn, sessions[0].recorded_running_ms),
+        (1, 90_000)
+    );
+
+    let usage: Vec<(String, i64, i64)> = w
+        .store
+        .read(|c| {
+            let mut stmt = c
+                .prepare(
+                    "SELECT session_id, turn, running_ms FROM usage_record ORDER BY ended_at, turn",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            Ok(rows)
+        })
+        .unwrap();
+    assert_eq!(
+        usage,
+        vec![
+            (first.to_string(), 1, 90_000),
+            (second.to_string(), 1, 5_000)
+        ]
+    );
+
+    let rules = w
+        .store
+        .read(|c| read::active_permission_rules(c, w.project.id))
+        .unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].tool.as_str(), rules[0].command.as_deref()),
+        ("Bash", Some("npm install"))
+    );
+    let revoked = saka_core::rule::evolve(
+        Some(rules[0].clone()),
+        &saka_core::rule::revoke(&rules[0], "too broad".into()).unwrap()[0],
+        w.now,
+    )
+    .unwrap();
+    w.store
+        .commit(&Batch {
+            permission_rules: vec![revoked.clone()],
+            ..Batch::new(w.now)
+        })
+        .unwrap();
+    assert!(
+        w.store
+            .read(|c| read::active_permission_rules(c, w.project.id))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        w.store
+            .read(|c| read::load_permission_rule(c, revoked.id))
+            .unwrap(),
+        Some(revoked)
+    );
+
+    let quotas = w.store.read(read::account_quotas).unwrap();
+    assert_eq!(quotas.len(), 1);
+    assert_eq!(
+        (
+            quotas[0].account.as_str(),
+            quotas[0].window.as_str(),
+            quotas[0].utilization
+        ),
+        ("claude:default", "five_hour", 0.4)
+    );
+    let mut stale = stored.clone();
+    stale.quota_observations = vec![saka_core::model::AccountQuota {
+        utilization: 0.99,
+        observed_at: Timestamp(1),
+        ..quotas[0].clone()
+    }];
+    w.store
+        .commit(&Batch {
+            tasks: vec![stale],
+            ..Batch::new(w.now)
+        })
+        .unwrap();
+    assert_eq!(
+        w.store.read(read::account_quotas).unwrap()[0].utilization,
+        0.4,
+        "an older observation does not replace a newer one"
     );
 }

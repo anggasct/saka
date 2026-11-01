@@ -80,6 +80,9 @@ impl Counters {
                 .map(|w| match w {
                     Waiting::Step { work_item_id, .. } => work_item_id.to_string(),
                     Waiting::Spec { spec_id, .. } => spec_id.to_string(),
+                    Waiting::Quota {
+                        account, window, ..
+                    } => format!("{account}:{window}"),
                 })
                 .collect();
             tracing::info!(

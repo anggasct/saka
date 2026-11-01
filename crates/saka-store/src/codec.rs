@@ -55,6 +55,21 @@ pub(crate) fn value_json(value: &Value) -> Result<String> {
     to_json(value)
 }
 
+pub(crate) fn budget_json(budget: Option<&saka_core::model::Budget>) -> Result<String> {
+    match budget {
+        Some(b) => to_json(b),
+        None => Ok("{}".to_string()),
+    }
+}
+
+pub(crate) fn budget_col(row: &Row<'_>, col: &str) -> Result<Option<saka_core::model::Budget>> {
+    let v: Value = json(row, col)?;
+    if v.as_object().is_some_and(serde_json::Map::is_empty) {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_value(v)?))
+}
+
 pub(crate) fn u32_col(row: &Row<'_>, col: &str) -> Result<u32> {
     let v: i64 = row.get(col)?;
     u32::try_from(v).map_err(|_| StoreError::Corrupt(format!("{col}: out of range: {v}")))

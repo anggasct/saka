@@ -40,4 +40,6 @@ id_type!(
     EnvironmentId,
     SessionId,
     PermissionRequestId,
+    PermissionRuleId,
+    UsageRecordId,
 );

@@ -5,14 +5,15 @@ use serde_json::Value;
 
 use crate::gate::Check;
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
-    RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
+    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
+    ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    Autonomy, BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome,
-    GateSource, PermissionState, SessionState, SpecOrigin, SpecState, Stage, StagePhase,
-    StageRunState, Trigger, WorkItemOrigin, WorkItemState, WorkflowPreset,
+    Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, EnvironmentState,
+    GateOutcome, GateSource, InterruptBy, PermissionState, ResumeCause, SessionState, SpecOrigin,
+    SpecState, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    WorkflowPreset,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,10 +163,103 @@ pub struct StageRun {
     pub entry_phase: StagePhase,
     pub head_sha: Option<String>,
     pub failure: Option<Coded>,
+    pub budget: Option<Budget>,
+    pub budget_warnings: Vec<BudgetDimension>,
+    pub resumed_lost: bool,
     pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Budget {
+    pub running_minutes: u32,
+    pub turns: u32,
+    pub tokens: i64,
+    pub cost_usd_micros: i64,
+}
+
+impl Budget {
+    pub fn limit(&self, dimension: BudgetDimension) -> i64 {
+        match dimension {
+            BudgetDimension::RunningMinutes => i64::from(self.running_minutes) * 60_000,
+            BudgetDimension::Turns => i64::from(self.turns),
+            BudgetDimension::Tokens => self.tokens,
+            BudgetDimension::CostUsd => self.cost_usd_micros,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub running_ms: i64,
+    pub turns: u32,
+    pub tokens: i64,
+    pub cost_usd_micros: i64,
+}
+
+impl Usage {
+    pub fn used(&self, dimension: BudgetDimension) -> i64 {
+        match dimension {
+            BudgetDimension::RunningMinutes => self.running_ms,
+            BudgetDimension::Turns => i64::from(self.turns),
+            BudgetDimension::Tokens => self.tokens,
+            BudgetDimension::CostUsd => self.cost_usd_micros,
+        }
+    }
+
+    pub fn add(&mut self, other: Usage) {
+        self.running_ms += other.running_ms;
+        self.turns += other.turns;
+        self.tokens += other.tokens;
+        self.cost_usd_micros += other.cost_usd_micros;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageRecord {
+    pub id: UsageRecordId,
+    pub work_item_id: WorkItemId,
+    pub stage_run_id: StageRunId,
+    pub session_id: SessionId,
+    pub account: String,
+    pub turn: u32,
+    pub status: String,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cost_usd_micros: Option<i64>,
+    pub running_ms: i64,
+    pub ended_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccountQuota {
+    pub account: String,
+    pub window: String,
+    pub utilization: f64,
+    pub status: String,
+    pub resets_at: Option<Timestamp>,
+    pub observed_at: Timestamp,
+}
+
+impl AccountQuota {
+    pub fn rejected(&self) -> bool {
+        !matches!(self.status.as_str(), "allowed" | "allowed_warning")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionRule {
+    pub id: PermissionRuleId,
+    pub project_id: ProjectId,
+    pub tool: String,
+    pub command: Option<String>,
+    pub permission_request_id: PermissionRequestId,
+    pub created_by: String,
+    pub created_at: Timestamp,
+    pub revoked_at: Option<Timestamp>,
+    pub revoke_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +341,13 @@ pub struct Session {
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub end_reason: Option<Coded>,
+    pub resumed_from_session_id: Option<SessionId>,
+    pub resume_cause: Option<ResumeCause>,
+    pub idle_since: Option<Timestamp>,
+    pub interrupt_requested: Option<InterruptBy>,
+    pub steers: u32,
+    pub recorded_turn: u32,
+    pub recorded_running_ms: i64,
     pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,
     pub created_at: Timestamp,
@@ -256,6 +357,19 @@ pub struct Session {
 impl Session {
     pub fn running_ms_at(&self, now: Timestamp) -> i64 {
         self.running_ms + self.running_since.map_or(0, |since| now.since(since))
+    }
+
+    pub fn usage_at(&self, now: Timestamp) -> Usage {
+        Usage {
+            running_ms: self.running_ms_at(now),
+            turns: self.turns,
+            tokens: self.input_tokens.unwrap_or(0) + self.output_tokens.unwrap_or(0),
+            cost_usd_micros: self.cost_usd_micros.unwrap_or(0),
+        }
+    }
+
+    pub fn qualified_account(&self) -> String {
+        format!("{}:{}", self.cli, self.account)
     }
 }
 
@@ -288,9 +402,34 @@ pub struct Task {
     pub permissions: Vec<PermissionRequest>,
     pub attempts: BTreeMap<Stage, u32>,
     pub retired_runs: Vec<StageRun>,
+    pub retired_sessions: Vec<Session>,
+    pub prior_usage: Usage,
+    pub usage_records: Vec<UsageRecord>,
+    pub quota_observations: Vec<AccountQuota>,
+    pub added_rules: Vec<PermissionRule>,
 }
 
 impl Task {
+    pub fn new(item: WorkItem) -> Task {
+        Task {
+            item,
+            stage_run: None,
+            gate: None,
+            blocker: None,
+            change_request: None,
+            environment: None,
+            session: None,
+            permissions: Vec::new(),
+            attempts: BTreeMap::new(),
+            retired_runs: Vec::new(),
+            retired_sessions: Vec::new(),
+            prior_usage: Usage::default(),
+            usage_records: Vec::new(),
+            quota_observations: Vec::new(),
+            added_rules: Vec::new(),
+        }
+    }
+
     pub fn open_blocker(&self) -> Option<&Blocker> {
         self.blocker.as_ref().filter(|b| b.resolution.is_none())
     }
@@ -303,6 +442,16 @@ impl Task {
         self.environment
             .as_ref()
             .filter(|e| e.state == EnvironmentState::Ready)
+    }
+
+    pub fn stage_usage(&self, now: Timestamp) -> Usage {
+        let mut usage = self.prior_usage;
+        if let (Some(s), Some(run)) = (&self.session, &self.stage_run)
+            && s.stage_run_id == run.id
+        {
+            usage.add(s.usage_at(now));
+        }
+        usage
     }
 
     pub fn is_at(&self, stage: Stage, phase: StagePhase) -> bool {

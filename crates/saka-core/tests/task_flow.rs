@@ -21,8 +21,8 @@ use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
-    MergeMethod, PermissionState, SessionState, SpecState, Stage, StagePhase, StageRunState,
-    Trigger, WorkItemState,
+    InterruptBy, MergeMethod, PermissionState, SessionState, SpecState, Stage, StagePhase,
+    StageRunState, Trigger, WorkItemState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -39,7 +39,20 @@ impl IdSource for Counter {
 fn cfg() -> LoopConfig {
     LoopConfig {
         max_followup_turns: 1,
-        max_running_ms: 60 * 60_000,
+        permission_wait_ms: 24 * 3_600_000,
+        idle_ms: 30 * 60_000,
+        budgets: std::collections::BTreeMap::from([(
+            saka_core::vocab::Stage::Dev,
+            saka_core::model::Budget {
+                running_minutes: 60,
+                turns: 10,
+                tokens: 0,
+                cost_usd_micros: 0,
+            },
+        )]),
+        budget_warn_percent: 80,
+        rate_limit_pause: 0.9,
+        account: "claude:default".into(),
         ci_appear_timeout_ms: 600_000,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
@@ -192,6 +205,7 @@ impl World {
     fn reconcile(&self) -> Vec<Action> {
         reconcile(
             &Snapshot {
+                quotas: Vec::new(),
                 specs: vec![self.spec.clone()],
                 tasks: self.tasks.clone(),
                 work_item_dependencies: self.deps.clone(),
@@ -305,6 +319,31 @@ fn launched(step: u32) -> TaskInput {
         runner_unit: format!("saka-session-{step}"),
         socket_path: "/run/s.sock".into(),
         log_path: "/data/s/events.ndjson".into(),
+    }
+}
+
+fn launched_again(step: u32) -> TaskInput {
+    match launched(step) {
+        TaskInput::SessionLaunched {
+            session_id,
+            cli,
+            cli_version,
+            model,
+            account,
+            runner_unit,
+            socket_path,
+            log_path,
+        } => TaskInput::SessionLaunched {
+            session_id: SessionId(Uuid::from_u128(session_id.0.as_u128() + 50)),
+            cli,
+            cli_version,
+            model,
+            account,
+            runner_unit,
+            socket_path,
+            log_path,
+        },
+        other => other,
     }
 }
 
@@ -433,6 +472,8 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
             allow: true,
             message: None,
             actor: "operator:local".into(),
+            remember: false,
+            active_rules: Vec::new(),
         },
     );
     assert_eq!(
@@ -447,7 +488,9 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
                 permission_request_id: id,
                 allow: false,
                 message: None,
-                actor: "operator:local".into()
+                actor: "operator:local".into(),
+                remember: false,
+                active_rules: Vec::new(),
             }
         ),
         Err(Rejection::PermissionAlreadyAnswered)
@@ -847,18 +890,30 @@ fn running_time_excludes_waiting_for_a_person() {
             allow: false,
             message: None,
             actor: "operator:local".into(),
+            remember: false,
+            active_rules: Vec::new(),
         },
     );
     assert_eq!(
         w.task(1).permissions[0].message.as_deref(),
         Some("Denied by the operator.")
     );
-    w.now = w.now.plus_ms(51 * 60_000);
+    w.now = w.now.plus_ms(50 * 60_000);
     w.jobs.clear();
     w.decide(1, TaskInput::Tick);
     let t = w.task(1);
-    assert_eq!(t.open_blocker().unwrap().code, BlockerCode::SessionTimeout);
-    assert_eq!(t.session.as_ref().unwrap().state, SessionState::Interrupted);
+    assert_eq!(
+        t.open_blocker().map(|b| (b.code, b.params.clone())),
+        Some((
+            BlockerCode::BudgetExhausted,
+            json!({ "dimension": "running_minutes", "used": 60, "limit": 60 })
+        ))
+    );
+    assert_eq!(t.session.as_ref().unwrap().state, SessionState::Failed);
+    assert_eq!(
+        t.session.as_ref().unwrap().interrupt_requested,
+        Some(InterruptBy::Saka)
+    );
     assert_eq!(
         w.take_jobs(),
         vec![JobKind::SessionInterrupt, JobKind::SessionStop]
@@ -866,7 +921,7 @@ fn running_time_excludes_waiting_for_a_person() {
 }
 
 #[test]
-fn server_restart_loses_the_session_and_expires_its_requests() {
+fn server_restart_loses_the_session_expires_its_requests_and_resumes_it() {
     let mut w = World::new();
     w.approve();
     w.decide(1, TaskInput::Admit);
@@ -874,6 +929,7 @@ fn server_restart_loses_the_session_and_expires_its_requests() {
     w.decide(1, launched(1));
     w.decide(1, TaskInput::TurnAccepted { turn: 1 });
     w.decide(1, ask("r", 802));
+    w.jobs.clear();
     w.decide(1, TaskInput::ServerRestarted);
     let t = w.task(1);
     assert_eq!(t.session.as_ref().unwrap().state, SessionState::Lost);
@@ -882,11 +938,25 @@ fn server_restart_loses_the_session_and_expires_its_requests() {
         t.permissions[0].answer_source.as_deref(),
         Some("system:session_ended")
     );
-    let b = t.open_blocker().unwrap();
+    assert!(t.open_blocker().is_none());
+    assert_eq!(w.take_jobs(), vec![JobKind::SessionStop]);
+    let start: Vec<Job> = w
+        .reconcile()
+        .into_iter()
+        .filter_map(|a| match a {
+            Action::Enqueue(j) if j.kind == JobKind::SessionStart => Some(j),
+            _ => None,
+        })
+        .collect();
+    let t = w.task(1);
+    let run = t.stage_run.as_ref().unwrap().id;
+    let lost = t.session.as_ref().unwrap().id;
+    assert_eq!(start.len(), 1);
     assert_eq!(
-        (b.code, b.params["cause"].clone()),
-        (BlockerCode::SessionLost, json!("server_restart"))
+        start[0].idempotency_key,
+        format!("session.start:{run}:{lost}")
     );
+    assert_eq!(start[0].payload["resume"]["cause"], json!("lost"));
     assert_eq!(
         w.try_decide(
             1,
@@ -894,7 +964,9 @@ fn server_restart_loses_the_session_and_expires_its_requests() {
                 permission_request_id: PermissionRequestId(Uuid::from_u128(802)),
                 allow: true,
                 message: None,
-                actor: "x".into()
+                actor: "x".into(),
+                remember: false,
+                active_rules: Vec::new(),
             }
         ),
         Err(Rejection::PermissionAlreadyAnswered)
@@ -909,10 +981,17 @@ fn failed_turns_runner_exits_and_empty_work_block_with_their_codes() {
             BlockerCode::SessionFailed,
         ),
         (
-            vec![TaskInput::CliExited {
-                code: Some(1),
-                signal: None,
-            }],
+            vec![
+                TaskInput::CliExited {
+                    code: Some(1),
+                    signal: None,
+                },
+                launched_again(1),
+                TaskInput::CliExited {
+                    code: Some(1),
+                    signal: None,
+                },
+            ],
             BlockerCode::SessionLost,
         ),
         (

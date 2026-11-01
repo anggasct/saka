@@ -6,16 +6,18 @@ use saka_core::ids::{
     RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
-    Blocker, ChangeRequest, Environment, GateResult, PermissionRequest, Project, ProjectRepo, Repo,
-    RevisionView, Session, Spec, SpecDependency, StageRun, StepPlan, Task, WorkItem,
-    WorkItemDependency,
+    AccountQuota, Blocker, ChangeRequest, Environment, GateResult, PermissionRequest,
+    PermissionRule, Project, ProjectRepo, Repo, RevisionView, Session, Spec, SpecDependency,
+    StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SessionState, Stage};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::codec::{json, opt_json, opt_uuid, opt_vocab, u32_col, u64_col, uuid, vocab};
+use crate::codec::{
+    budget_col, json, opt_json, opt_uuid, opt_vocab, u32_col, u64_col, uuid, vocab,
+};
 use crate::error::{Result, StoreError};
 use crate::write::{ActionRecord, SpecRevisionRow};
 
@@ -25,6 +27,13 @@ pub enum TaskSet<'a> {
     Reconcile,
     Spec(SpecId),
 }
+
+const SESSION_SELECT: &str = "SELECT s.*,
+    (SELECT COUNT(*) FROM event e WHERE e.stream_type = 'session' AND e.stream_id = s.id
+       AND e.kind = 'runtime.session.steered') AS steers,
+    (SELECT ifnull(MAX(turn), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_turn,
+    (SELECT ifnull(SUM(running_ms), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_running_ms
+  FROM session s";
 
 const WORK_ITEM_COLUMNS: &str = "id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key,
     work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at";
@@ -123,23 +132,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     };
     let mut tasks: BTreeMap<WorkItemId, Task> = items
         .into_iter()
-        .map(|item| {
-            (
-                item.id,
-                Task {
-                    item,
-                    stage_run: None,
-                    gate: None,
-                    blocker: None,
-                    change_request: None,
-                    environment: None,
-                    session: None,
-                    permissions: Vec::new(),
-                    attempts: BTreeMap::new(),
-                    retired_runs: Vec::new(),
-                },
-            )
-        })
+        .map(|item| (item.id, Task::new(item)))
         .collect();
     if tasks.is_empty() {
         return Ok(Vec::new());
@@ -217,14 +210,31 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for s in rows(
         conn,
-        "SELECT * FROM session",
+        SESSION_SELECT,
         selection,
         "created_at DESC, id DESC",
         b,
         session,
     )? {
         if let Some(t) = tasks.get_mut(&s.work_item_id) {
-            t.session.get_or_insert(s);
+            match (&t.session, &mut t.stage_run) {
+                (None, _) => t.session = Some(s),
+                (Some(_), Some(run)) if s.stage_run_id == run.id => {
+                    if s.resume_cause == Some(saka_core::vocab::ResumeCause::Lost) {
+                        run.resumed_lost = true;
+                    }
+                    t.prior_usage.add(s.usage_at(Timestamp(0)));
+                }
+                _ => {}
+            }
+        }
+    }
+    for t in tasks.values_mut() {
+        if let (Some(s), Some(run)) = (&t.session, &mut t.stage_run)
+            && s.stage_run_id == run.id
+            && s.resume_cause == Some(saka_core::vocab::ResumeCause::Lost)
+        {
+            run.resumed_lost = true;
         }
     }
     let running: HashMap<SessionId, Timestamp> = running_since(conn, selection, b)?;
@@ -236,7 +246,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         if let Some(s) = t
             .session
             .as_mut()
-            .filter(|s| s.state == SessionState::Running)
+            .filter(|s| matches!(s.state, SessionState::Running | SessionState::Interrupted))
         {
             s.running_since = running.get(&s.id).copied();
         }
@@ -306,7 +316,8 @@ fn running_since(
 ) -> Result<HashMap<SessionId, Timestamp>> {
     let sql = format!(
         "SELECT e.stream_id, e.occurred_at FROM event e
-         JOIN session s ON s.id = e.stream_id AND s.state = 'running' AND s.work_item_id IN ({selection})
+         JOIN session s ON s.id = e.stream_id AND s.state IN ('running', 'interrupted')
+           AND s.work_item_id IN ({selection})
          WHERE e.stream_type = 'session' AND e.kind = 'runtime.session.state_changed'
            AND e.seq = (SELECT MAX(seq) FROM event WHERE stream_type = 'session' AND stream_id = e.stream_id
                         AND kind = 'runtime.session.state_changed')"
@@ -332,6 +343,9 @@ pub(crate) fn stage_run(row: &Row<'_>) -> Result<StageRun> {
         entry_phase: vocab(row, "entry_phase")?,
         head_sha: row.get("head_sha")?,
         failure: opt_json(row, "failure")?,
+        budget: budget_col(row, "budget")?,
+        budget_warnings: json(row, "budget_warnings")?,
+        resumed_lost: false,
         started_at: opt_ts(row, "started_at")?,
         ended_at: opt_ts(row, "ended_at")?,
         created_at: ts(row, "created_at")?,
@@ -422,11 +436,100 @@ pub(crate) fn session(row: &Row<'_>) -> Result<Session> {
         input_tokens: row.get("input_tokens")?,
         output_tokens: row.get("output_tokens")?,
         end_reason: opt_json(row, "end_reason")?,
+        resumed_from_session_id: opt_uuid(row, "resumed_from_session_id")?.map(SessionId),
+        resume_cause: opt_vocab(row, "resume_cause")?,
+        idle_since: opt_ts(row, "idle_since")?,
+        interrupt_requested: opt_vocab(row, "interrupt_requested")?,
+        steers: optional_u32(row, "steers")?,
+        recorded_turn: optional_u32(row, "recorded_turn")?,
+        recorded_running_ms: optional_i64(row, "recorded_running_ms")?,
         started_at: opt_ts(row, "started_at")?,
         ended_at: opt_ts(row, "ended_at")?,
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,
     })
+}
+
+fn optional_i64(row: &Row<'_>, col: &str) -> Result<i64> {
+    match row.as_ref().column_index(col) {
+        Ok(i) => Ok(row.get(i)?),
+        Err(_) => Ok(0),
+    }
+}
+
+fn optional_u32(row: &Row<'_>, col: &str) -> Result<u32> {
+    let v = optional_i64(row, col)?;
+    u32::try_from(v).map_err(|_| StoreError::Corrupt(format!("{col}: out of range: {v}")))
+}
+
+pub fn sessions(conn: &Connection, work_item: WorkItemId) -> Result<Vec<Session>> {
+    let mut stmt = conn.prepare(&format!(
+        "{SESSION_SELECT} WHERE s.work_item_id = ?1 ORDER BY s.created_at, s.id"
+    ))?;
+    let mut q = stmt.query([work_item.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(session(row)?);
+    }
+    Ok(out)
+}
+
+pub fn active_permission_rules(
+    conn: &Connection,
+    project: ProjectId,
+) -> Result<Vec<PermissionRule>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM permission_rule WHERE project_id = ?1 AND revoked_at IS NULL ORDER BY created_at, id",
+    )?;
+    let mut q = stmt.query([project.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(permission_rule(row)?);
+    }
+    Ok(out)
+}
+
+pub fn load_permission_rule(
+    conn: &Connection,
+    id: saka_core::ids::PermissionRuleId,
+) -> Result<Option<PermissionRule>> {
+    one(
+        conn,
+        "SELECT * FROM permission_rule WHERE id = ?1",
+        &[&id.0.to_string()],
+        permission_rule,
+    )
+}
+
+fn permission_rule(row: &Row<'_>) -> Result<PermissionRule> {
+    Ok(PermissionRule {
+        id: saka_core::ids::PermissionRuleId(uuid(row, "id")?),
+        project_id: ProjectId(uuid(row, "project_id")?),
+        tool: row.get("tool")?,
+        command: row.get("command")?,
+        permission_request_id: PermissionRequestId(uuid(row, "permission_request_id")?),
+        created_by: row.get("created_by")?,
+        created_at: ts(row, "created_at")?,
+        revoked_at: opt_ts(row, "revoked_at")?,
+        revoke_reason: row.get("revoke_reason")?,
+    })
+}
+
+pub fn account_quotas(conn: &Connection) -> Result<Vec<AccountQuota>> {
+    let mut stmt = conn.prepare("SELECT * FROM account_quota ORDER BY account, window")?;
+    let mut q = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(AccountQuota {
+            account: row.get("account")?,
+            window: row.get("window")?,
+            utilization: row.get("utilization")?,
+            status: row.get("status")?,
+            resets_at: opt_ts(row, "resets_at")?,
+            observed_at: ts(row, "observed_at")?,
+        });
+    }
+    Ok(out)
 }
 
 pub(crate) fn permission(row: &Row<'_>) -> Result<PermissionRequest> {

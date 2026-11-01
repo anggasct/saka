@@ -2730,6 +2730,40 @@
                 "format": "uuid"
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "An agent account window at or above `agent.rate_limit_pause` that has not reset yet.",
+            "required": [
+              "account",
+              "window",
+              "utilization",
+              "kind"
+            ],
+            "properties": {
+              "account": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "quota"
+                ]
+              },
+              "resets_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "utilization": {
+                "type": "number",
+                "format": "double"
+              },
+              "window": {
+                "type": "string"
+              }
+            }
           }
         ]
       },

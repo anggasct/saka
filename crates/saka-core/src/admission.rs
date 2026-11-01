@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{SpecId, WorkItemId};
-use crate::model::{Spec, SpecDependency, Task, WorkItemDependency};
+use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency};
 use crate::time::Timestamp;
 use crate::vocab::{SpecState, WorkItemState};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
     Step {
@@ -16,6 +16,12 @@ pub enum Waiting {
         slug: String,
         spec_id: SpecId,
     },
+    Quota {
+        account: String,
+        window: String,
+        utilization: f64,
+        resets_at: Option<Timestamp>,
+    },
 }
 
 impl Waiting {
@@ -23,11 +29,43 @@ impl Waiting {
         match self {
             Waiting::Step { .. } => "step",
             Waiting::Spec { .. } => "spec",
+            Waiting::Quota { .. } => "quota",
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub fn paused_windows<'a>(
+    quotas: &'a [AccountQuota],
+    account: &str,
+    threshold: f64,
+    now: Timestamp,
+) -> impl Iterator<Item = &'a AccountQuota> {
+    let account = account.to_string();
+    quotas.iter().filter(move |q| {
+        q.account == account && q.utilization >= threshold && q.resets_at.is_some_and(|r| r > now)
+    })
+}
+
+pub fn quota_waits(
+    quotas: &[AccountQuota],
+    account: &str,
+    threshold: f64,
+    now: Timestamp,
+) -> Vec<Waiting> {
+    let mut windows: Vec<&AccountQuota> = paused_windows(quotas, account, threshold, now).collect();
+    windows.sort_by(|a, b| a.window.cmp(&b.window));
+    windows
+        .into_iter()
+        .map(|q| Waiting::Quota {
+            account: q.account.clone(),
+            window: q.window.clone(),
+            utilization: q.utilization,
+            resets_at: q.resets_at,
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub work_item_id: WorkItemId,
     pub priority: i64,

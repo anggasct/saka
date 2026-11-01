@@ -772,6 +772,15 @@ export interface components {
           slug: string;
           /** Format: uuid */
           spec_id: string;
+        }
+      | {
+          account: string;
+          /** @enum {string} */
+          kind: "quota";
+          resets_at?: string | null;
+          /** Format: double */
+          utilization: number;
+          window: string;
         };
     WorkItem: {
       admitted_at?: string | null;

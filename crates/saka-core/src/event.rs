@@ -3,15 +3,16 @@ use serde_json::Value;
 
 use crate::gate::Check;
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
-    RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
+    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
+    ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::job::JobKind;
-use crate::model::{Coded, DependsOn, ProjectRepo};
+use crate::model::{Budget, Coded, DependsOn, ProjectRepo};
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, GateOutcome, MergeMethod, PermissionState, SessionState, Stage,
-    StagePhase, SupersedeReason, Trigger,
+    BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, InterruptBy, MergeMethod,
+    PermissionState, ResumeCause, ResumeReason, SessionState, Stage, StagePhase, SupersedeReason,
+    Trigger,
 };
 
 fn first_parser_version() -> u32 {
@@ -123,6 +124,7 @@ pub enum Event {
         entry_phase: StagePhase,
         reason: Option<String>,
         retry_of: Option<Coded>,
+        budget: Option<Budget>,
     },
     #[serde(rename = "delivery.stage_run.phase_changed")]
     StagePhaseChanged {
@@ -215,6 +217,36 @@ pub enum Event {
         runner_unit: String,
         socket_path: String,
         log_path: String,
+        resumed_from_session_id: Option<SessionId>,
+        resume_cause: Option<ResumeCause>,
+    },
+    #[serde(rename = "runtime.session.reattached")]
+    SessionReattached {
+        work_item_id: WorkItemId,
+        session_id: SessionId,
+        runner_version: String,
+        from_offset: u64,
+    },
+    #[serde(rename = "runtime.session.steered")]
+    SessionSteered {
+        work_item_id: WorkItemId,
+        session_id: SessionId,
+        text: String,
+        turn: u32,
+        n: u32,
+    },
+    #[serde(rename = "runtime.session.interrupt_requested")]
+    SessionInterruptRequested {
+        work_item_id: WorkItemId,
+        session_id: SessionId,
+        actor: InterruptBy,
+        turn: u32,
+    },
+    #[serde(rename = "runtime.session.stop_requested")]
+    SessionStopRequested {
+        work_item_id: WorkItemId,
+        session_id: SessionId,
+        reason: String,
     },
     #[serde(rename = "runtime.session.initialized")]
     SessionInitialized {
@@ -246,6 +278,9 @@ pub enum Event {
         cost_usd_micros: Option<i64>,
         input_tokens: Option<i64>,
         output_tokens: Option<i64>,
+        running_ms: i64,
+        account: String,
+        usage_record_id: UsageRecordId,
     },
     #[serde(rename = "runtime.session.ended")]
     SessionEnded {
@@ -281,6 +316,40 @@ pub enum Event {
     PermissionDelivered {
         work_item_id: WorkItemId,
         permission_request_id: PermissionRequestId,
+    },
+    #[serde(rename = "runtime.permission_rule.added")]
+    PermissionRuleAdded {
+        rule_id: PermissionRuleId,
+        project_id: ProjectId,
+        work_item_id: WorkItemId,
+        tool: String,
+        command: Option<String>,
+        permission_request_id: PermissionRequestId,
+        created_by: String,
+    },
+    #[serde(rename = "runtime.permission_rule.revoked")]
+    PermissionRuleRevoked {
+        rule_id: PermissionRuleId,
+        project_id: ProjectId,
+        reason: String,
+    },
+    #[serde(rename = "runtime.budget.warned")]
+    BudgetWarned {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        dimension: BudgetDimension,
+        used: Value,
+        limit: Value,
+    },
+    #[serde(rename = "runtime.quota.observed")]
+    QuotaObserved {
+        work_item_id: WorkItemId,
+        session_id: SessionId,
+        account: String,
+        window: String,
+        utilization: f64,
+        status: String,
+        resets_at: Option<Timestamp>,
     },
 
     #[serde(rename = "scm.branch.pushed")]
@@ -330,8 +399,20 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Prompt {
-    WorkPacket { retry_of: Option<Coded> },
-    Uncommitted { dirty: bool, commits_ahead: u32 },
+    WorkPacket {
+        retry_of: Option<Coded>,
+    },
+    Uncommitted {
+        dirty: bool,
+        commits_ahead: u32,
+    },
+    Resume {
+        cause: ResumeReason,
+        retry_of: Option<Coded>,
+    },
+    Steer {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,12 +484,19 @@ impl Event {
             | E::SpecWithdrawn { spec_id, .. }
             | E::SpecShipped { spec_id, .. } => Stream::Spec(*spec_id),
             E::SessionStarted { session_id, .. }
+            | E::SessionReattached { session_id, .. }
+            | E::SessionSteered { session_id, .. }
+            | E::SessionInterruptRequested { session_id, .. }
+            | E::SessionStopRequested { session_id, .. }
             | E::SessionInitialized { session_id, .. }
             | E::SessionStateChanged { session_id, .. }
             | E::SessionTurnRequested { session_id, .. }
             | E::SessionTurnEnded { session_id, .. }
             | E::SessionEnded { session_id, .. }
-            | E::SessionLost { session_id, .. } => Stream::Session(*session_id),
+            | E::SessionLost { session_id, .. }
+            | E::QuotaObserved { session_id, .. } => Stream::Session(*session_id),
+            E::PermissionRuleAdded { project_id, .. }
+            | E::PermissionRuleRevoked { project_id, .. } => Stream::Project(*project_id),
             E::PermissionRequested {
                 permission_request_id,
                 ..
@@ -437,6 +525,7 @@ impl Event {
             | E::EnvironmentPrepared { work_item_id, .. }
             | E::EnvironmentTornDown { work_item_id, .. }
             | E::EnvironmentTeardownFailed { work_item_id, .. }
+            | E::BudgetWarned { work_item_id, .. }
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }
@@ -453,8 +542,15 @@ impl Event {
             | E::SpecRevisionRecorded { .. }
             | E::SpecApproved { .. }
             | E::SpecWithdrawn { .. }
-            | E::SpecShipped { .. } => None,
+            | E::SpecShipped { .. }
+            | E::PermissionRuleRevoked { .. } => None,
             E::SessionStarted { work_item_id, .. }
+            | E::SessionReattached { work_item_id, .. }
+            | E::SessionSteered { work_item_id, .. }
+            | E::SessionInterruptRequested { work_item_id, .. }
+            | E::SessionStopRequested { work_item_id, .. }
+            | E::QuotaObserved { work_item_id, .. }
+            | E::PermissionRuleAdded { work_item_id, .. }
             | E::SessionInitialized { work_item_id, .. }
             | E::SessionStateChanged { work_item_id, .. }
             | E::SessionTurnRequested { work_item_id, .. }

@@ -1,6 +1,8 @@
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
+use crate::model::PermissionRule;
+
 const METACHARACTERS: &[&str] = &[";", "&", "|", "`", "$(", ">", "<", "\n", "\r"];
 
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
@@ -43,6 +45,7 @@ pub struct RequestPath {
 pub enum DecisionSource {
     Builtin(String),
     Rule(String),
+    Project(String),
     Default,
 }
 
@@ -51,6 +54,7 @@ impl DecisionSource {
         match self {
             DecisionSource::Builtin(name) => Some(format!("policy:builtin:{name}")),
             DecisionSource::Rule(id) => Some(format!("policy:{id}")),
+            DecisionSource::Project(id) => Some(format!("policy:project:{id}")),
             DecisionSource::Default => None,
         }
     }
@@ -105,28 +109,44 @@ impl Policy {
     }
 
     pub fn evaluate(&self, request: &ToolRequest) -> Decision {
+        self.evaluate_with(request, &[])
+    }
+
+    pub fn evaluate_with(&self, request: &ToolRequest, project: &[PermissionRule]) -> Decision {
         if let Some(name) = builtin_deny(request) {
             return Decision {
                 effect: Effect::Deny,
                 source: DecisionSource::Builtin(name.to_string()),
             };
         }
-        for effect in [Effect::Deny, Effect::Ask, Effect::Allow] {
-            if let Some(rule) = self
-                .rules
-                .iter()
-                .find(|r| r.effect == effect && r.matches(request))
-            {
-                return Decision {
-                    effect,
-                    source: DecisionSource::Rule(rule.id.clone()),
-                };
-            }
+        if let Some(rule) = self.first(Effect::Deny, request) {
+            return rule;
         }
-        Decision {
-            effect: Effect::Ask,
-            source: DecisionSource::Default,
+        if let Some(rule) = project
+            .iter()
+            .find(|r| crate::rule::matches(r, &request.tool, request.command.as_deref()))
+        {
+            return Decision {
+                effect: Effect::Allow,
+                source: DecisionSource::Project(rule.id.to_string()),
+            };
         }
+        self.first(Effect::Ask, request)
+            .or_else(|| self.first(Effect::Allow, request))
+            .unwrap_or(Decision {
+                effect: Effect::Ask,
+                source: DecisionSource::Default,
+            })
+    }
+
+    fn first(&self, effect: Effect, request: &ToolRequest) -> Option<Decision> {
+        self.rules
+            .iter()
+            .find(|r| r.effect == effect && r.matches(request))
+            .map(|rule| Decision {
+                effect,
+                source: DecisionSource::Rule(rule.id.clone()),
+            })
     }
 }
 

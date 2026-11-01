@@ -32,6 +32,8 @@ pub struct Config {
     #[serde(default)]
     pub agent: Agent,
     #[serde(default)]
+    pub budget: BudgetConfig,
+    #[serde(default)]
     pub git: Git,
     #[serde(default)]
     pub permission: Permission,
@@ -147,12 +149,58 @@ pub struct Agent {
     pub model: String,
     #[serde(default = "default_path")]
     pub path: Vec<String>,
-    #[serde(default = "sixty")]
-    pub max_running_minutes: i64,
     #[serde(default = "one")]
     pub max_followup_turns: u32,
+    #[serde(default = "twenty_four")]
+    pub permission_wait_hours: i64,
+    #[serde(default = "thirty")]
+    pub idle_minutes: i64,
+    #[serde(default = "rate_limit_pause")]
+    pub rate_limit_pause: f64,
     #[serde(default)]
     pub limits: Limits,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetConfig {
+    #[serde(default = "eighty")]
+    pub warn_percent: u32,
+    #[serde(default)]
+    pub dev: StageBudget,
+}
+
+impl Default for BudgetConfig {
+    fn default() -> BudgetConfig {
+        BudgetConfig {
+            warn_percent: eighty(),
+            dev: StageBudget::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageBudget {
+    #[serde(default = "sixty_minutes")]
+    pub running_minutes: u32,
+    #[serde(default = "ten")]
+    pub turns: u32,
+    #[serde(default)]
+    pub tokens: i64,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+impl Default for StageBudget {
+    fn default() -> StageBudget {
+        StageBudget {
+            running_minutes: sixty_minutes(),
+            turns: ten(),
+            tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
 }
 
 impl Default for Agent {
@@ -163,8 +211,10 @@ impl Default for Agent {
             account_dir: None,
             model: String::new(),
             path: default_path(),
-            max_running_minutes: sixty(),
             max_followup_turns: one(),
+            permission_wait_hours: twenty_four(),
+            idle_minutes: thirty(),
+            rate_limit_pause: rate_limit_pause(),
             limits: Limits::default(),
         }
     }
@@ -184,8 +234,23 @@ fn default_path() -> Vec<String> {
     .map(String::from)
     .to_vec()
 }
-fn sixty() -> i64 {
+fn sixty_minutes() -> u32 {
     60
+}
+fn ten() -> u32 {
+    10
+}
+fn eighty() -> u32 {
+    80
+}
+fn twenty_four() -> i64 {
+    24
+}
+fn thirty() -> i64 {
+    30
+}
+fn rate_limit_pause() -> f64 {
+    0.9
 }
 fn one() -> u32 {
     1
@@ -334,11 +399,41 @@ impl Config {
                 "agent.cli must be claude in this version",
             ));
         }
-        if self.agent.max_running_minutes < 1 {
-            return Err(err(
-                "config_invalid",
-                "agent.max_running_minutes must be at least 1",
-            ));
+        let a = &self.agent;
+        let b = &self.budget;
+        let checks: [(bool, &str); 8] = [
+            (
+                (1..=168).contains(&a.permission_wait_hours),
+                "agent.permission_wait_hours must be 1..=168",
+            ),
+            (
+                (1..=1440).contains(&a.idle_minutes),
+                "agent.idle_minutes must be 1..=1440",
+            ),
+            (
+                (0.5..=1.0).contains(&a.rate_limit_pause),
+                "agent.rate_limit_pause must be 0.5..=1.0",
+            ),
+            (
+                (50..=99).contains(&b.warn_percent),
+                "budget.warn_percent must be 50..=99",
+            ),
+            (
+                (1..=1440).contains(&b.dev.running_minutes),
+                "budget.dev.running_minutes must be 1..=1440",
+            ),
+            (
+                (1..=100).contains(&b.dev.turns),
+                "budget.dev.turns must be 1..=100",
+            ),
+            (b.dev.tokens >= 0, "budget.dev.tokens must be 0 or more"),
+            (
+                b.dev.cost_usd >= 0.0 && b.dev.cost_usd.is_finite(),
+                "budget.dev.cost_usd must be 0 or more",
+            ),
+        ];
+        if let Some((_, message)) = checks.iter().find(|(ok, _)| !ok) {
+            return Err(err("config_invalid", *message));
         }
         Ok(())
     }
@@ -361,6 +456,13 @@ impl Config {
             .or_else(|| home().map(|h| h.join(".local").join("share")))
             .unwrap_or_else(|| PathBuf::from("."))
             .join("saka")
+    }
+
+    pub fn account_name(&self) -> String {
+        self.account_dir().file_name().map_or_else(
+            || "default".to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        )
     }
 
     pub fn account_dir(&self) -> PathBuf {
@@ -431,6 +533,33 @@ mod tests {
         assert_eq!(Config::parse(&twice).unwrap_err().code, "config_invalid");
         let rules = "[[permission.rule]]\nid = \"read\"\neffect = \"allow\"\ntools = [\"Read\"]\n";
         assert_eq!(Config::parse(rules).unwrap().permission.rule.len(), 1);
+        assert_eq!(cfg.agent.permission_wait_hours, 24);
+        assert_eq!(cfg.agent.idle_minutes, 30);
+        assert_eq!(cfg.budget.warn_percent, 80);
+        assert_eq!(
+            (cfg.budget.dev.running_minutes, cfg.budget.dev.turns),
+            (60, 10)
+        );
+        for bad in [
+            "[agent]\npermission_wait_hours = 0\n",
+            "[agent]\nidle_minutes = 1441\n",
+            "[agent]\nrate_limit_pause = 0.4\n",
+            "[budget]\nwarn_percent = 100\n",
+            "[budget.dev]\nturns = 0\n",
+            "[budget.dev]\ncost_usd = -1.0\n",
+        ] {
+            assert_eq!(
+                Config::parse(bad).unwrap_err().code,
+                "config_invalid",
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            Config::parse("[agent]\nmax_running_minutes = 60\n")
+                .unwrap_err()
+                .code,
+            "config_unknown_field"
+        );
     }
 
     #[test]

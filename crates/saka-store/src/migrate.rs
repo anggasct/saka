@@ -15,6 +15,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         4,
         include_str!("../migrations/0004_environment_teardown_failed.sql"),
     ),
+    (5, include_str!("../migrations/0005_agent_runtime.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -491,7 +492,7 @@ mod tests {
         let before = ids(&conn, columns);
         assert_eq!(before.len(), 4);
 
-        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..4], &backups, Timestamp(3)).unwrap();
         assert_eq!(report.applied, vec![4]);
         assert_eq!(ids(&conn, columns), before);
         assert_eq!(
@@ -524,6 +525,151 @@ mod tests {
         for sql in refused {
             assert!(conn.execute(sql, []).is_err(), "{sql}");
         }
+    }
+
+    #[test]
+    fn the_agent_runtime_migration_keeps_sessions_and_adds_the_runtime_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V2_DATA).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..4], &backups, Timestamp(2)).unwrap();
+        conn.execute_batch(
+            "INSERT INTO session (id, project_id, work_item_id, stage_run_id, environment_id, cli, cli_session_id,
+                 account, state, runner_unit, socket_path, log_path, protocol_version, last_offset, turns, running_ms,
+                 cost_usd_micros, end_reason, created_at, updated_at)
+               VALUES ('x2', 'p1', 'w4', 'run1', 'e1', 'claude', 'cli-2', 'default', 'lost', 'unit2', '/s2', '/l2', 1,
+                 41, 2, 9000, 120, '{\"code\":\"session_lost\",\"params\":{}}', 3, 4);
+             UPDATE session SET state = 'idle', updated_at = 7 WHERE id = 'x1';",
+        )
+        .unwrap();
+        let sessions = "SELECT id || ':' || state || ':' || ifnull(cli_session_id, '-') || ':' || last_offset || ':' \
+                        || turns || ':' || running_ms || ':' || ifnull(cost_usd_micros, '-') || ':' \
+                        || ifnull(end_reason, '-') || ':' || created_at || ':' || updated_at FROM session ORDER BY id";
+        let runs = "SELECT id || ':' || state || ':' || attempt FROM stage_run ORDER BY id";
+        let permissions =
+            "SELECT id || ':' || session_id || ':' || state FROM permission_request ORDER BY id";
+        let before = (
+            ids(&conn, sessions),
+            ids(&conn, runs),
+            ids(&conn, permissions),
+        );
+
+        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        assert_eq!(report.applied, vec![5]);
+        assert!(report.backup.is_some());
+        assert_eq!(
+            (
+                ids(&conn, sessions),
+                ids(&conn, runs),
+                ids(&conn, permissions)
+            ),
+            before
+        );
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT id || ':' || ifnull(idle_since, '-') || ':' || ifnull(resumed_from_session_id, '-') || ':' \
+                 || ifnull(resume_cause, '-') || ':' || ifnull(interrupt_requested, '-') FROM session ORDER BY id"
+            ),
+            vec!["x1:7:-:-:-", "x2:-:-:-:-"]
+        );
+        assert_eq!(
+            ids(&conn, "SELECT budget || budget_warnings FROM stage_run"),
+            vec!["{}[]"]
+        );
+        let protocol: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('session') WHERE name = 'protocol_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(protocol, 0);
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL
+                   AND tbl_name IN ('session', 'session_activity', 'permission_rule', 'usage_record', 'account_quota')
+                 ORDER BY name"
+            ),
+            vec![
+                "permission_rule_active",
+                "session_one_live",
+                "session_stage_run_idx",
+                "session_state_idx",
+                "session_work_item_idx",
+                "usage_record_account_idx",
+                "usage_record_stage_run_idx",
+                "usage_record_work_item_idx",
+            ]
+        );
+        let broken: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(broken, None);
+
+        conn.execute_batch(
+            "UPDATE session SET state = 'resumed', idle_since = NULL WHERE id = 'x2';
+             INSERT INTO session (id, project_id, work_item_id, stage_run_id, environment_id, cli, account, state,
+                 runner_unit, socket_path, log_path, resumed_from_session_id, resume_cause, created_at, updated_at)
+               VALUES ('x3', 'p1', 'w5', 'run1', 'e1', 'claude', 'default', 'ended', 'unit3', '/s3', '/l3', 'x2',
+                 'lost', 5, 5);
+             INSERT INTO session_activity (session_id, \"offset\", work_item_id, project_id, at, kind, summary, data)
+               VALUES ('x3', 1, 'w5', 'p1', 5, 'action', 'Bash: ls', '{\"tool\":\"Bash\"}');
+             INSERT INTO permission_rule (id, project_id, effect, tool, command, permission_request_id, created_by,
+                 created_at)
+               VALUES ('pr1', 'p1', 'allow', 'Bash', 'npm install', 'q1', 'human:operator:local', 5);
+             INSERT INTO usage_record VALUES ('u1', 'p1', 'w4', 'run1', 'x1', 'claude:default', 1, 'success', 10, 5,
+               120, 9000, 5);
+             INSERT INTO account_quota VALUES ('claude:default', 'seven_day', 0.42, 'allowed', 99, 5);",
+        )
+        .unwrap();
+        let refused = [
+            "UPDATE session SET state = 'idle' WHERE id = 'x3'",
+            "UPDATE session SET idle_since = 9 WHERE id = 'x3'",
+            "UPDATE session SET resume_cause = NULL WHERE id = 'x3'",
+            "UPDATE session SET resume_cause = 'whim' WHERE id = 'x3'",
+            "UPDATE session SET interrupt_requested = 'nobody' WHERE id = 'x3'",
+            "UPDATE session SET resumed_from_session_id = 'missing' WHERE id = 'x3'",
+            "INSERT INTO session (id, project_id, work_item_id, stage_run_id, environment_id, cli, account, state,
+               runner_unit, socket_path, log_path, created_at, updated_at)
+             VALUES ('x4', 'p1', 'w4', 'run1', 'e1', 'claude', 'default', 'starting', 'u', '/s', '/l', 6, 6)",
+            "UPDATE stage_run SET budget = 'nope' WHERE id = 'run1'",
+            "INSERT INTO session_activity (session_id, \"offset\", work_item_id, project_id, at, kind, summary, data)
+               VALUES ('x3', 1, 'w5', 'p1', 6, 'action', 'again', '{}')",
+            "INSERT INTO session_activity (session_id, \"offset\", work_item_id, project_id, at, kind, summary, data)
+               VALUES ('x3', 2, 'w5', 'p1', 6, 'gossip', 'x', '{}')",
+            "INSERT INTO permission_rule (id, project_id, effect, tool, command, permission_request_id, created_by,
+               created_at) VALUES ('pr2', 'p1', 'allow', 'Bash', 'npm install', 'q1', 'human:operator:local', 6)",
+            "INSERT INTO permission_rule (id, project_id, effect, tool, permission_request_id, created_by, created_at)
+               VALUES ('pr3', 'p1', 'allow', 'Bash', 'q1', 'human:operator:local', 6)",
+            "INSERT INTO permission_rule (id, project_id, effect, tool, permission_request_id, created_by, created_at)
+               VALUES ('pr4', 'p1', 'deny', 'Edit', 'q1', 'human:operator:local', 6)",
+            "UPDATE permission_rule SET revoked_at = 7 WHERE id = 'pr1'",
+            "INSERT INTO usage_record VALUES ('u2', 'p1', 'w4', 'run1', 'x1', 'claude:default', 1, 'success', NULL,
+               NULL, NULL, 1, 6)",
+            "INSERT INTO usage_record VALUES ('u3', 'p1', 'w4', 'run1', 'x1', 'claude:default', 2, 'success', -1,
+               NULL, NULL, 1, 6)",
+            "INSERT INTO account_quota VALUES ('claude:default', 'seven_day', 0.5, 'allowed', NULL, 6)",
+        ];
+        for sql in refused {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+        conn.execute(
+            "UPDATE permission_rule SET revoked_at = 7, revoke_reason = 'too broad' WHERE id = 'pr1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO permission_rule (id, project_id, effect, tool, command, permission_request_id, created_by,
+               created_at) VALUES ('pr5', 'p1', 'allow', 'Bash', 'npm install', 'q1', 'human:operator:local', 8)",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

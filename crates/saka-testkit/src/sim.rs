@@ -55,7 +55,20 @@ impl Default for SimConfig {
         SimConfig {
             loop_cfg: LoopConfig {
                 max_followup_turns: 1,
-                max_running_ms: 60 * 60_000,
+                permission_wait_ms: 24 * 3_600_000,
+                idle_ms: 30 * 60_000,
+                budgets: std::collections::BTreeMap::from([(
+                    saka_core::vocab::Stage::Dev,
+                    saka_core::model::Budget {
+                        running_minutes: 60,
+                        turns: 10,
+                        tokens: 0,
+                        cost_usd_micros: 0,
+                    },
+                )]),
+                budget_warn_percent: 80,
+                rate_limit_pause: 0.9,
+                account: "claude:default".into(),
                 ci_appear_timeout_ms: 600_000,
                 poll_interval_ms: 15_000,
                 merge_method: MergeMethod::Squash,
@@ -339,42 +352,31 @@ impl Sim {
         let now = self.clock.now();
         let repo_id = self.spec_task_repo();
         let mut batch = Batch::new(now);
-        batch.tasks.push(Task {
-            item: WorkItem {
-                id: WorkItemId(
-                    uuid::Uuid::from_slice(&Sha256::digest(branch.as_bytes())[..16])
-                        .expect("16 bytes of the digest"),
-                ),
-                project_id,
-                origin: WorkItemOrigin::ExternalChange,
-                spec_id: None,
-                spec_revision_id: None,
-                step_id: None,
-                step_index: None,
-                task_key: format!("external/{branch}"),
-                work: "External change".into(),
-                repo_id,
-                branch: branch.into(),
-                state: WorkItemState::Queued,
-                stage: None,
-                stage_phase: None,
-                priority: 0,
-                version: 1,
-                admitted_at: None,
-                done_at: None,
-                created_at: now,
-                updated_at: now,
-            },
-            stage_run: None,
-            gate: None,
-            blocker: None,
-            change_request: None,
-            environment: None,
-            session: None,
-            permissions: Vec::new(),
-            attempts: std::collections::BTreeMap::new(),
-            retired_runs: Vec::new(),
-        });
+        batch.tasks.push(Task::new(WorkItem {
+            id: WorkItemId(
+                uuid::Uuid::from_slice(&Sha256::digest(branch.as_bytes())[..16])
+                    .expect("16 bytes of the digest"),
+            ),
+            project_id,
+            origin: WorkItemOrigin::ExternalChange,
+            spec_id: None,
+            spec_revision_id: None,
+            step_id: None,
+            step_index: None,
+            task_key: format!("external/{branch}"),
+            work: "External change".into(),
+            repo_id,
+            branch: branch.into(),
+            state: WorkItemState::Queued,
+            stage: None,
+            stage_phase: None,
+            priority: 0,
+            version: 1,
+            admitted_at: None,
+            done_at: None,
+            created_at: now,
+            updated_at: now,
+        }));
         self.engine().store().commit(&batch).unwrap();
     }
 
@@ -423,6 +425,14 @@ impl Sim {
             .into_iter()
             .find(|t| t.item.step_index == Some(step))
             .expect("task for step")
+    }
+
+    pub fn sessions(&self, step: u32) -> Vec<saka_core::model::Session> {
+        let id = self.task(step).item.id;
+        self.engine()
+            .store()
+            .read(|c| read::sessions(c, id))
+            .unwrap()
     }
 
     pub fn spec(&self) -> Spec {

@@ -27,9 +27,20 @@ command = "claude"                 # looked up in agent.path
 account_dir = "~/.local/share/saka/agents/claude/default"   # CLAUDE_CONFIG_DIR; log in once by hand
 model = ""                         # empty = the CLI default
 path = ["~/.local/bin", "/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-max_running_minutes = 60           # running time; time spent waiting for a permission answer is not counted
 max_followup_turns = 1
+permission_wait_hours = 24         # 1..=168; a permission request pending longer blocks the task
+idle_minutes = 30                  # 1..=1440; an interrupted session idle longer blocks the task
+rate_limit_pause = 0.9             # 0.5..=1.0; new tasks wait while an account window is this full
 limits = { memory_max = "4G", cpu_quota = "200%", tasks_max = 512 }
+
+[budget]
+warn_percent = 80                  # 50..=99
+
+[budget.dev]
+running_minutes = 60               # 1..=1440; running time of all sessions of a stage run, without waiting or idle time
+turns = 10                         # 1..=100; turns sent to the CLI in a stage run
+tokens = 0                         # 0 = no limit; input + output
+cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
 
 [git]
 author_name = "Saka Agent"

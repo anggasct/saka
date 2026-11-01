@@ -117,7 +117,9 @@ merge_method = "squash"
 [agent]
 account_dir = {claude_dir}
 model = {model}
-max_running_minutes = 20
+
+[budget.dev]
+running_minutes = 20
 
 [[permission.rule]]
 id = "read-tools"
