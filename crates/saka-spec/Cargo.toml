@@ -9,3 +9,8 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+comrak.workspace = true
+serde.workspace = true
+serde_json.workspace = true
