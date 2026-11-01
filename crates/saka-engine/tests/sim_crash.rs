@@ -131,8 +131,8 @@ fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second
     assert_eq!(sim.stats().merges, 2);
 }
 
-/// Blockers a crash can leave behind: lost sessions, and a job whose last attempt was
-/// taken by the crash (`env.verify_merged` has a single attempt).
+/// Blockers a crash can leave behind: lost sessions, and a job whose every attempt was
+/// taken by crashes.
 fn crash_config() -> SimConfig {
     let mut cfg = SimConfig::default();
     cfg.operator.retry = vec![
@@ -143,6 +143,29 @@ fn crash_config() -> SimConfig {
         BlockerCode::DodFailed,
     ];
     cfg
+}
+
+#[test]
+fn a_crash_while_checking_the_merge_does_not_block_the_task() {
+    let mut sim = Sim::new(SimConfig {
+        operator: Operator {
+            merge: true,
+            retry: vec![],
+            answer: None,
+        },
+        ..SimConfig::default()
+    });
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Sync, StagePhase::Verifying)
+    }));
+    assert!(sim.crash_mid_job(), "the check is due");
+    let mut blocked = false;
+    assert!(sim.run_until(STEPS, |s| {
+        blocked |= s.task(1).item.state == WorkItemState::Blocked;
+        s.task(1).item.state == WorkItemState::Done
+    }));
+    assert!(!blocked);
 }
 
 fn baseline() -> &'static (SimOutcome, usize) {
