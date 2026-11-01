@@ -3,6 +3,7 @@
 mod check;
 mod deps;
 mod metadata;
+mod systemd;
 
 use std::process::ExitCode;
 
@@ -11,8 +12,9 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("check") => check::run(),
         Some("deps") => deps::run(),
+        Some("test-systemd") => systemd::run(),
         _ => {
-            eprintln!("usage: cargo xtask <check|deps>");
+            eprintln!("usage: cargo xtask <check|deps|test-systemd>");
             return ExitCode::from(2);
         }
     };

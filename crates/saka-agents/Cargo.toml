@@ -9,3 +9,17 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+async-trait.workspace = true
+regex.workspace = true
+rustix = { workspace = true, features = ["process"] }
+saka-core = { path = "../saka-core" }
+saka-ports = { path = "../saka-ports" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
