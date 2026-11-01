@@ -517,7 +517,7 @@ async fn a_refused_token_is_renewed_once_and_the_request_repeated() {
         .expect(1)
         .mount(&w.server)
         .await;
-    let info = w.gh.repository("acme/app").await.unwrap();
+    let info = w.gh.repository("github", "acme/app").await.unwrap();
     assert_eq!(info.default_branch, "main");
     assert_eq!(w.token_requests().await, 2);
 }
@@ -571,7 +571,7 @@ async fn rate_limits_server_errors_and_missing_installations_map_to_codes() {
         .await
         .unwrap();
 
-    let gone = w.gh.repository("acme/gone").await.unwrap_err();
+    let gone = w.gh.repository("github", "acme/gone").await.unwrap_err();
     assert_eq!(
         (gone.code.as_str(), gone.retryable),
         ("scm_repo_inaccessible", false)

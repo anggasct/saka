@@ -65,6 +65,22 @@ pub fn run() -> Result<()> {
             bail!("{} violation(s)", violations.len())
         }
     })?;
+    step("OpenAPI drift", || {
+        cargo(
+            &root,
+            &[
+                "run",
+                "--locked",
+                "--quiet",
+                "-p",
+                "saka-api",
+                "--example",
+                "openapi",
+                "--",
+                "--check",
+            ],
+        )
+    })?;
     step("pure crates share one clippy config", || {
         same_files(&root, PURE_CLIPPY_CONFIGS)
     })?;

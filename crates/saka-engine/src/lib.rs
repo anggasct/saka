@@ -9,10 +9,15 @@
 //! which is how the simulation drives the engine deterministically. [`Engine::run`] loops
 //! them for the server.
 
+mod action;
 mod commands;
+mod metrics;
+mod project_config;
 mod reconciler;
+mod register;
 mod runner;
 mod text;
+mod views;
 mod worker;
 
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -28,14 +33,22 @@ use saka_core::react::react;
 use saka_core::rejection::Rejection;
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
-use saka_ports::{Agents, Clock, Environments, Ids, IdsSource, Scm};
+use saka_ports::{Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm};
 use saka_store::read;
 use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
+pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewProject, RegisteredSpec};
-pub use worker::JobReport;
+pub use metrics::{MetricsSnapshot, Readiness};
+pub use register::{AddProject, Integration, parse_repo_url};
+pub use saka_store::StoredEvent;
+pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
+pub use views::{
+    Paged, PermissionView, ProjectView, RevisionInfo, SessionView, SpecView, TaskDetail,
+};
+pub use worker::{JobReport, JobResult};
 
 /// Operator settings the engine applies.
 #[derive(Debug, Clone)]
@@ -47,6 +60,8 @@ pub struct EngineConfig {
     pub policy: Policy,
     /// Lease owner name for this process's workers.
     pub worker_id: String,
+    /// `[[scm]]` entries; a project's repo URL picks one by host.
+    pub integrations: Vec<Integration>,
 }
 
 /// The adapters the engine uses.
@@ -57,6 +72,7 @@ pub struct Ports {
     pub env: Arc<dyn Environments>,
     pub scm: Arc<dyn Scm>,
     pub agents: Arc<dyn Agents>,
+    pub docs: Arc<dyn DocSource>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +84,9 @@ pub enum EngineError {
     Invalid { field: &'static str, code: String },
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// An adapter call made for the command failed.
+    #[error("port: {}", .0.code)]
+    Port(#[from] PortError),
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -95,11 +114,20 @@ enum Mode {
 }
 
 /// Extra rows written with a decision.
-#[derive(Debug, Default)]
-struct Extra {
+#[derive(Default)]
+struct Extra<'a> {
     outcome: Option<JobOutcome>,
     events: Vec<Event>,
     jobs: Vec<Job>,
+    /// The API action and what its response shows.
+    action: Option<(&'a Action<'a>, Shows)>,
+}
+
+/// What the response of an action on a task shows.
+#[derive(Debug, Clone, Copy)]
+enum Shows {
+    Task,
+    Permission(saka_core::ids::PermissionRequestId),
 }
 
 pub struct Engine {
@@ -108,6 +136,7 @@ pub struct Engine {
     cfg: EngineConfig,
     lock: Mutex<()>,
     changed: Notify,
+    counters: metrics::Counters,
 }
 
 impl Engine {
@@ -118,6 +147,7 @@ impl Engine {
             cfg,
             lock: Mutex::new(()),
             changed: Notify::new(),
+            counters: metrics::Counters::default(),
         }
     }
 
@@ -170,7 +200,7 @@ impl Engine {
         input: Option<TaskInput>,
         mode: Mode,
         cause: &Cause,
-        extra: Extra,
+        extra: Extra<'_>,
     ) -> Result<Vec<Event>> {
         let _guard = self.locked()?;
         let now = self.now();
@@ -199,6 +229,27 @@ impl Engine {
         }
         for job in extra.jobs {
             self.push_job(&mut batch, job, project, cause);
+        }
+        if let Some((action, shows)) = extra.action {
+            let reply = match shows {
+                Shows::Task => (action.respond)(Produced::Task(&after)),
+                Shows::Permission(pid) => {
+                    let request = after
+                        .permissions
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .cloned()
+                        .ok_or_else(|| {
+                            EngineError::Internal("answered request not in the task".into())
+                        })?;
+                    let view = PermissionView {
+                        request,
+                        project_id: after.item.project_id,
+                    };
+                    (action.respond)(Produced::Permission(&view))
+                }
+            };
+            batch.action = Some(action.record(self, cause, project, Some(id.0), reply));
         }
         if !events.is_empty() {
             batch.tasks.push(after);
@@ -266,7 +317,7 @@ impl Engine {
 
     fn commit(&self, batch: &Batch) -> Result<Vec<i64>> {
         let seqs = self.store.commit(batch)?;
-        if !batch.events.is_empty() || !batch.jobs.is_empty() {
+        if !batch.events.is_empty() || !batch.jobs.is_empty() || batch.action.is_some() {
             self.changed.notify_waiters();
         }
         Ok(seqs)
@@ -276,11 +327,17 @@ impl Engine {
     /// first.
     pub async fn run(self: Arc<Self>, workers: usize, mut shutdown: watch::Receiver<bool>) {
         let mut tasks = tokio::task::JoinSet::new();
+        self.counters
+            .worker_started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         for _ in 0..workers.max(1) {
             let engine = Arc::clone(&self);
             let shutdown = shutdown.clone();
             tasks.spawn(async move { engine.worker_loop(shutdown).await });
         }
+        self.counters
+            .reconciler_started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         loop {
             if let Err(e) = self.reconcile() {
                 tracing::error!(error = %e, "reconcile failed");

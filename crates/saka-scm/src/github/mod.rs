@@ -11,20 +11,12 @@ use reqwest::{Method, StatusCode};
 use saka_core::vocab::ChangeState;
 use saka_ports::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
-    PortResult, PushOutcome, PushRequest, RepoRef, Repos, Scm,
+    PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm,
 };
 use serde_json::{Value, json};
 
 pub use app::{API_VERSION, GitHubApp, GitHubConfig};
 use app::{Reply, inaccessible, parse_time, split_repo};
-
-/// A repository as GitHub describes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepoInfo {
-    pub full_name: String,
-    pub url: String,
-    pub default_branch: String,
-}
 
 pub struct GitHub {
     app: Arc<GitHubApp>,
@@ -68,23 +60,6 @@ impl GitHub {
         segments.extend_from_slice(tail);
         let url = self.app.url(&segments)?;
         self.app.call(full_name, method, url, body).await
-    }
-
-    /// Reads the repository (and so checks that the App can reach it).
-    pub async fn repository(&self, full_name: &str) -> PortResult<RepoInfo> {
-        let reply = self.repo_call(full_name, Method::GET, &[], None).await?;
-        if reply.status == StatusCode::NOT_FOUND {
-            return Err(inaccessible(full_name, 404));
-        }
-        if !reply.status.is_success() {
-            return Err(self.app.unexpected("repository", &reply));
-        }
-        let text = |key: &str| reply.body[key].as_str().unwrap_or_default().to_string();
-        Ok(RepoInfo {
-            full_name: text("full_name"),
-            url: text("html_url"),
-            default_branch: text("default_branch"),
-        })
     }
 
     /// The commit a merged pull request put on the base branch: the `merged` event's
@@ -137,6 +112,23 @@ impl GitHub {
 
 #[async_trait]
 impl Scm for GitHub {
+    /// Reads the repository (and so checks that the App can reach it).
+    async fn repository(&self, _integration_id: &str, full_name: &str) -> PortResult<RepoInfo> {
+        let reply = self.repo_call(full_name, Method::GET, &[], None).await?;
+        if reply.status == StatusCode::NOT_FOUND {
+            return Err(inaccessible(full_name, 404));
+        }
+        if !reply.status.is_success() {
+            return Err(self.app.unexpected("repository", &reply));
+        }
+        let text = |key: &str| reply.body[key].as_str().unwrap_or_default().to_string();
+        Ok(RepoInfo {
+            full_name: text("full_name"),
+            url: text("html_url"),
+            default_branch: text("default_branch"),
+        })
+    }
+
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {
         self.repos.push(request).await
     }

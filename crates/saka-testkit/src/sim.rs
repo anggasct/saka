@@ -14,7 +14,7 @@ use saka_core::task::LoopConfig;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
-use saka_engine::{Engine, EngineConfig, JobReport, NewProject, Ports};
+use saka_engine::{Engine, EngineConfig, Integration, JobReport, NewProject, Ports};
 use saka_ports::Clock;
 use saka_store::{Store, TaskSet, read};
 
@@ -202,12 +202,18 @@ impl Sim {
             env: self.world.clone(),
             scm: self.world.clone(),
             agents: self.world.clone(),
+            docs: self.world.clone(),
         };
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),
             max_active_tasks: self.cfg.max_active_tasks,
             policy: Policy::compile(&self.cfg.rules).unwrap(),
             worker_id: format!("sim-{}", self.restarts),
+            integrations: vec![Integration {
+                id: "github".into(),
+                provider: "github".into(),
+                web_url: "https://github.com".into(),
+            }],
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

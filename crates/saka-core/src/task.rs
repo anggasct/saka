@@ -1752,3 +1752,36 @@ fn session_mut(t: &mut Task, id: SessionId, now: Timestamp) -> Option<&mut Sessi
     s.updated_at = now;
     Some(s)
 }
+
+/// The operator actions the task accepts now, in the order `merge`, `retry`, `cancel`.
+pub fn available_actions(task: &Task) -> Vec<&'static str> {
+    let mut actions = Vec::new();
+    let merge_ready = task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+        && task.gate.as_ref().is_some_and(|g| {
+            g.outcome == GateOutcome::Passed
+                && task
+                    .change_request
+                    .as_ref()
+                    .is_some_and(|c| c.head_sha == g.head_sha)
+        });
+    if merge_ready {
+        actions.push("merge");
+    }
+    let retryable = task.item.state == WorkItemState::Blocked
+        && task
+            .open_blocker()
+            .is_some_and(|b| retry_entry(b.code, &b.params).is_some());
+    if retryable {
+        actions.push("retry");
+    }
+    if matches!(
+        task.item.state,
+        WorkItemState::Queued
+            | WorkItemState::Admitted
+            | WorkItemState::InStage
+            | WorkItemState::Blocked
+    ) {
+        actions.push("cancel");
+    }
+    actions
+}

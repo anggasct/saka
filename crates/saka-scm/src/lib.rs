@@ -2,4 +2,4 @@
 
 pub mod github;
 
-pub use github::{GitHub, GitHubApp, GitHubConfig, RepoInfo};
+pub use github::{GitHub, GitHubApp, GitHubConfig};

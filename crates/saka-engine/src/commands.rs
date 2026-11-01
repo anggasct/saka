@@ -11,11 +11,13 @@ use saka_core::task::{self, TaskInput};
 use saka_core::workspace;
 use saka_ports::IdsSource;
 use saka_spec::{LintIssue, PARSER_VERSION};
-use saka_store::{Batch, SpecRevisionRow, read};
+use saka_store::{Batch, SpecRevisionRow, TaskSet, list, read};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result};
+use crate::action::{Action, Produced};
+use crate::views::{ProjectView, RevisionInfo, SpecView};
+use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
 
 const REASON_MAX: usize = 500;
 
@@ -63,17 +65,38 @@ fn content_hash(bytes: &[u8]) -> String {
 
 impl Engine {
     pub fn register_project(&self, p: &NewProject, cause: &Cause) -> Result<(ProjectId, RepoId)> {
+        let view = self.register_project_with(p, None, cause, None)?;
+        Ok((view.project.id, view.project.workspace_repo_id))
+    }
+
+    /// Registers the project; a new repo gets `repo_id` when given (the id its mirror was
+    /// fetched under).
+    pub(crate) fn register_project_with(
+        &self,
+        p: &NewProject,
+        repo_id: Option<RepoId>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<ProjectView> {
         let _guard = self.locked()?;
         let now = self.now();
         let existing = self
             .store
             .read(|c| read::repo_by_name(c, &p.integration_id, &p.full_name))?;
+        if let Some(repo) = &existing {
+            self.refuse_existing_project(repo.id, &p.project_path)?;
+        }
         let mut batch = Batch::new(now);
         let mut events = Vec::new();
+        let mut repos = Vec::new();
         let repo_id = match existing {
-            Some(repo) => repo.id,
+            Some(repo) => {
+                let id = repo.id;
+                repos.push(repo);
+                id
+            }
             None => {
-                let repo_id = RepoId(self.new_id());
+                let repo_id = repo_id.unwrap_or_else(|| RepoId(self.new_id()));
                 events.push(Event::RepoRegistered {
                     repo_id,
                     integration_id: p.integration_id.clone(),
@@ -100,17 +123,28 @@ impl Engine {
                 path_scope: vec!["**".into()],
             }],
         });
+        let mut project = None;
         for e in &events {
             if let Some(repo) = workspace::evolve_repo(None, e, now) {
-                batch.repos.push(repo);
+                batch.repos.push(repo.clone());
+                repos.push(repo);
             }
-            if let Some(project) = workspace::evolve_project(None, e, now) {
-                batch.projects.push(project);
+            if let Some(p) = workspace::evolve_project(None, e, now) {
+                batch.projects.push(p.clone());
+                project = Some(p);
             }
             self.push_event(&mut batch, e, Some(project_id), cause, now);
         }
+        let project =
+            project.ok_or_else(|| EngineError::Internal("project not registered".into()))?;
+        let view = ProjectView { project, repos };
+        if let Some(action) = action {
+            let reply = (action.respond)(Produced::Project(&view));
+            batch.action =
+                Some(action.record(self, cause, Some(project_id), Some(project_id.0), reply));
+        }
         self.commit(&batch)?;
-        Ok((project_id, repo_id))
+        Ok(view)
     }
 
     /// Records the spec file read at `source_commit` as a revision (or finds the revision
@@ -123,6 +157,27 @@ impl Engine {
         bytes: &[u8],
         cause: &Cause,
     ) -> Result<RegisteredSpec> {
+        let (view, _) =
+            self.register_spec_with(project_id, path, source_commit, bytes, cause, None)?;
+        Ok(RegisteredSpec {
+            spec_id: view.spec.id,
+            revision_id: view.revision.id,
+            lint_ok: view.revision.lint_ok,
+            issues: serde_json::from_value(view.revision.issues)
+                .map_err(|e| EngineError::Internal(e.to_string()))?,
+        })
+    }
+
+    /// Records the revision; returns the spec and whether it is new.
+    pub(crate) fn register_spec_with(
+        &self,
+        project_id: ProjectId,
+        path: &str,
+        source_commit: &str,
+        bytes: &[u8],
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<(SpecView, bool)> {
         let _guard = self.locked()?;
         let now = self.now();
         let file_name = path.rsplit('/').next().unwrap_or(path);
@@ -156,6 +211,17 @@ impl Engine {
             .model
             .as_ref()
             .map_or_else(|| stem.to_string(), |m| m.slug.clone());
+        if existing.is_none()
+            && let Some(other) = self
+                .store
+                .read(|c| list::spec_by_slug(c, project_id, &slug))?
+        {
+            return Err(Rejection::SpecSlugConflict {
+                slug,
+                path: other.path,
+            }
+            .into());
+        }
         let mut ids = IdsSource(&*self.ports.ids);
         let mut ctx = Ctx { now, ids: &mut ids };
         let events = spec::record_revision(
@@ -207,13 +273,34 @@ impl Engine {
         let spec = after.ok_or_else(|| EngineError::Internal("spec not recorded".into()))?;
         let revision_id = revision_id.ok_or_else(|| EngineError::Internal("no revision".into()))?;
         batch.specs.push(spec.clone());
+        let revision = match batch.revisions.iter().find(|r| r.id == revision_id.0) {
+            Some(row) => RevisionInfo::from(row),
+            None => self
+                .store
+                .read(|c| read::load_revision(c, revision_id))?
+                .as_ref()
+                .map(RevisionInfo::from)
+                .ok_or_else(|| EngineError::Internal("revision not found".into()))?,
+        };
+        let work_items = self
+            .store
+            .read(|c| read::load_tasks(c, TaskSet::Spec(spec.id)))?
+            .iter()
+            .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
+            .collect();
+        let created = existing.is_none();
+        let view = SpecView {
+            spec,
+            revision,
+            work_items,
+        };
+        if let Some(action) = action {
+            let reply = (action.respond)(Produced::Spec(&view, created));
+            batch.action =
+                Some(action.record(self, cause, Some(project_id), Some(view.spec.id.0), reply));
+        }
         self.commit(&batch)?;
-        Ok(RegisteredSpec {
-            spec_id: spec.id,
-            revision_id,
-            lint_ok,
-            issues: parsed.issues,
-        })
+        Ok((view, created))
     }
 
     /// Approves the latest revision: one task per step, in one transaction.
@@ -224,6 +311,21 @@ impl Engine {
         reason: Option<String>,
         cause: &Cause,
     ) -> Result<Vec<WorkItemId>> {
+        self.approve_spec_with(spec_id, if_match, reason, cause, None)
+            .map(|view| view.work_items.into_iter().map(|(_, id)| id).collect())
+    }
+
+    pub fn approve_spec_with(
+        &self,
+        spec_id: SpecId,
+        if_match: SpecRevisionId,
+        reason: Option<String>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<SpecView> {
+        if let Some(r) = &reason {
+            self::reason(r)?;
+        }
         let _guard = self.locked()?;
         let now = self.now();
         let (spec, view) = self.store.read(|c| {
@@ -254,35 +356,88 @@ impl Engine {
         for e in &events {
             after = spec::evolve(after, e, now);
             if let Some(t) = task::evolve(None, e, now) {
-                created.push(t.item.id);
+                created.push(t.clone());
                 batch.tasks.push(t);
             }
             self.push_event(&mut batch, e, Some(spec.project_id), cause, now);
         }
-        batch.specs.extend(after);
+        let branches: Vec<String> = created.iter().map(|t| t.item.branch.clone()).collect();
+        let taken = self
+            .store
+            .read(|c| list::branches_in_use(c, default_repo, &branches, spec.project_id))?;
+        if !taken.is_empty() {
+            return Err(Rejection::TaskBranchConflict { branches: taken }.into());
+        }
+        let after = after.ok_or_else(|| EngineError::Internal("spec lost on approve".into()))?;
+        batch.specs.push(after.clone());
+        let revision = self
+            .store
+            .read(|c| read::load_revision(c, after.latest_revision_id))?
+            .as_ref()
+            .map(RevisionInfo::from)
+            .ok_or_else(|| EngineError::Internal("revision not found".into()))?;
+        let result = SpecView {
+            spec: after,
+            revision,
+            work_items: created
+                .iter()
+                .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
+                .collect(),
+        };
+        if let Some(action) = action {
+            let reply = (action.respond)(Produced::Spec(&result, false));
+            batch.action =
+                Some(action.record(self, cause, Some(spec.project_id), Some(spec_id.0), reply));
+        }
         self.commit(&batch)?;
-        Ok(created)
+        Ok(result)
     }
 
     pub fn retry(&self, id: WorkItemId, why: &str, cause: &Cause) -> Result<Vec<Event>> {
+        self.retry_with(id, why, cause, None)
+    }
+
+    pub fn retry_with(
+        &self,
+        id: WorkItemId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
         let reason = reason(why)?;
         self.decide(
             id,
             Some(TaskInput::Retry { reason }),
             Mode::Command,
             cause,
-            Extra::default(),
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
         )
     }
 
     pub fn cancel(&self, id: WorkItemId, why: &str, cause: &Cause) -> Result<Vec<Event>> {
+        self.cancel_with(id, why, cause, None)
+    }
+
+    pub fn cancel_with(
+        &self,
+        id: WorkItemId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
         let reason = reason(why)?;
         self.decide(
             id,
             Some(TaskInput::Cancel { reason }),
             Mode::Command,
             cause,
-            Extra::default(),
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
         )
     }
 
@@ -293,6 +448,17 @@ impl Engine {
         why: Option<&str>,
         cause: &Cause,
     ) -> Result<Vec<Event>> {
+        self.request_merge_with(id, expected_version, why, cause, None)
+    }
+
+    pub fn request_merge_with(
+        &self,
+        id: WorkItemId,
+        expected_version: u64,
+        why: Option<&str>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
         let reason = why.map(reason).transpose()?;
         self.decide(
             id,
@@ -302,7 +468,10 @@ impl Engine {
             }),
             Mode::Command,
             cause,
-            Extra::default(),
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
         )
     }
 
@@ -313,6 +482,23 @@ impl Engine {
         message: Option<String>,
         cause: &Cause,
     ) -> Result<Vec<Event>> {
+        self.answer_permission_with(request, allow, message, cause, None)
+    }
+
+    pub fn answer_permission_with(
+        &self,
+        request: PermissionRequestId,
+        allow: bool,
+        message: Option<String>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        if let Some(m) = &message {
+            self::reason(m).map_err(|_| EngineError::Invalid {
+                field: "message",
+                code: "length".into(),
+            })?;
+        }
         let work_item = self
             .store
             .read(|c| read::permission_work_item(c, request))?
@@ -328,7 +514,10 @@ impl Engine {
             Some(input),
             Mode::Command,
             cause,
-            Extra::default(),
+            Extra {
+                action: action.map(|a| (a, Shows::Permission(request))),
+                ..Extra::default()
+            },
         )
     }
 }

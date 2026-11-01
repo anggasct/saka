@@ -17,6 +17,7 @@ use saka_ports::{
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tracing::Instrument;
 
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, text};
 
@@ -81,8 +82,28 @@ impl Engine {
         let Some(job) = self.claim_job()? else {
             return Ok(None);
         };
-        let execution = self.execute_leased(&job).await;
-        self.complete_job(&job, execution).map(Some)
+        let work_item = job
+            .payload
+            .get("work_item_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let span = tracing::info_span!(
+            "job",
+            correlation_id = %job.correlation_id,
+            job_kind = job.kind.as_str(),
+            job_id = %job.id,
+            work_item_id = %work_item,
+        );
+        let execution = self.execute_leased(&job).instrument(span.clone()).await;
+        let adapter_ok = match &execution {
+            Ok(Effect::Skipped) => None,
+            Ok(_) => Some(true),
+            Err(_) => Some(false),
+        };
+        let report = span.in_scope(|| self.complete_job(&job, execution))?;
+        self.counters.job(job.kind, &report.result, adapter_ok);
+        Ok(Some(report))
     }
 
     pub fn claim_job(&self) -> Result<Option<ClaimedJob>> {

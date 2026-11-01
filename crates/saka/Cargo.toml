@@ -11,21 +11,35 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
+axum.workspace = true
 clap.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+rustix = { workspace = true, features = ["process"] }
 saka-agents = { path = "../saka-agents" }
-tokio = { workspace = true, features = ["rt"] }
-tracing.workspace = true
-tracing-subscriber.workspace = true
-
-[dev-dependencies]
+saka-api = { path = "../saka-api" }
 saka-core = { path = "../saka-core" }
+saka-docs = { path = "../saka-docs" }
+saka-engine = { path = "../saka-engine" }
 saka-env = { path = "../saka-env" }
 saka-ports = { path = "../saka-ports" }
-saka-testkit = { path = "../saka-testkit" }
+saka-scm = { path = "../saka-scm" }
+saka-store = { path = "../saka-store" }
+serde.workspace = true
 serde_json.workspace = true
-tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "process", "rt", "sync", "time"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+rusqlite.workspace = true
+saka-testkit = { path = "../saka-testkit" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
 
 [[test]]
 name = "runner"

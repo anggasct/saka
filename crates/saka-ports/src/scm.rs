@@ -21,6 +21,15 @@ pub struct RepoRef {
     pub url: String,
 }
 
+/// A repository as the provider describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoInfo {
+    pub full_name: String,
+    /// The HTTPS web URL.
+    pub url: String,
+    pub default_branch: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushRequest {
     pub repo: RepoRef,
@@ -86,6 +95,10 @@ pub enum MergeOutcome {
 
 #[async_trait]
 pub trait Scm: Send + Sync {
+    /// Reads a repository of an integration; fails with `scm_repo_inaccessible` when Saka
+    /// cannot reach it.
+    async fn repository(&self, integration_id: &str, full_name: &str) -> PortResult<RepoInfo>;
+
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome>;
 
     /// Opens the change request, or returns the one that already exists for the branch.

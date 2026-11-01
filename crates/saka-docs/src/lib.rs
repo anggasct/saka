@@ -3,73 +3,9 @@
 
 use std::sync::Arc;
 
-use saka_ports::{PortError, PortResult, RepoRef, Repos};
+use async_trait::async_trait;
+use saka_ports::{DocFile, DocSource, PortError, PortResult, RepoRef, Repos};
 use serde_json::json;
-
-/// A file as read at a commit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocFile {
-    pub path: String,
-    pub commit: String,
-    pub bytes: Vec<u8>,
-}
-
-/// Why a path is not a workspace path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PathIssue {
-    /// Empty, absolute, with an empty, `.` or `..` segment, or with a character outside
-    /// `A-Za-z0-9._-`.
-    Invalid,
-    /// Not inside the project folder.
-    OutsideProject,
-    /// Not a markdown file.
-    NotMarkdown,
-}
-
-fn segments_ok(path: &str) -> bool {
-    !path.is_empty()
-        && path.split('/').all(|seg| {
-            !seg.is_empty()
-                && seg != "."
-                && seg != ".."
-                && seg
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-        })
-}
-
-/// Checks a project folder: `.` for the repo root, or a relative path.
-pub fn check_project_path(project_path: &str) -> Result<(), PathIssue> {
-    if project_path == "." || segments_ok(project_path) {
-        Ok(())
-    } else {
-        Err(PathIssue::Invalid)
-    }
-}
-
-/// Checks a spec path: relative to the repo root, inside `project_path`, ending in `.md`.
-pub fn check_spec_path(project_path: &str, path: &str) -> Result<(), PathIssue> {
-    check_project_path(project_path)?;
-    if !segments_ok(path) {
-        return Err(PathIssue::Invalid);
-    }
-    if project_path != "." && !path.starts_with(&format!("{project_path}/")) {
-        return Err(PathIssue::OutsideProject);
-    }
-    if !path.ends_with(".md") {
-        return Err(PathIssue::NotMarkdown);
-    }
-    Ok(())
-}
-
-/// `saka.toml` of a project folder.
-pub fn project_config_path(project_path: &str) -> String {
-    if project_path == "." {
-        "saka.toml".to_string()
-    } else {
-        format!("{project_path}/saka.toml")
-    }
-}
 
 pub struct GitDocs {
     repos: Arc<dyn Repos>,
@@ -78,21 +14,6 @@ pub struct GitDocs {
 impl GitDocs {
     pub fn new(repos: Arc<dyn Repos>) -> GitDocs {
         GitDocs { repos }
-    }
-
-    /// Fetches, then reads `path` at the tip of `origin/<branch>`. `Ok(None)` when the
-    /// branch has the commit but not the file.
-    pub async fn read_at_tip(
-        &self,
-        repo: &RepoRef,
-        branch: &str,
-        path: &str,
-    ) -> PortResult<Option<DocFile>> {
-        self.repos.fetch(repo).await?;
-        let commit = self.repos.tip(repo, branch).await?.ok_or_else(|| {
-            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
-        })?;
-        self.read_at(repo, &commit, path).await
     }
 
     /// Reads `path` at `commit` from the mirror, without fetching.
@@ -114,52 +35,32 @@ impl GitDocs {
     }
 }
 
+#[async_trait]
+impl DocSource for GitDocs {
+    async fn read_at_tip(
+        &self,
+        repo: &RepoRef,
+        branch: &str,
+        path: &str,
+    ) -> PortResult<Option<DocFile>> {
+        self.repos.fetch(repo).await?;
+        let commit = self.repos.tip(repo, branch).await?.ok_or_else(|| {
+            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+        })?;
+        self.read_at(repo, &commit, path).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use async_trait::async_trait;
     use saka_core::ids::RepoId;
     use saka_ports::{PushOutcome, PushRequest};
     use uuid::Uuid;
 
     use super::*;
-
-    #[test]
-    fn spec_paths_stay_inside_the_project_folder() {
-        assert_eq!(check_spec_path("docs", "docs/specs/a.md"), Ok(()));
-        assert_eq!(check_spec_path(".", "specs/a.md"), Ok(()));
-        assert_eq!(
-            check_spec_path("docs", "src/a.md"),
-            Err(PathIssue::OutsideProject)
-        );
-        assert_eq!(
-            check_spec_path("docs", "docsx/a.md"),
-            Err(PathIssue::OutsideProject)
-        );
-        assert_eq!(
-            check_spec_path("docs", "docs/a.txt"),
-            Err(PathIssue::NotMarkdown)
-        );
-        for bad in [
-            "",
-            "/docs/a.md",
-            "docs/../a.md",
-            "docs//a.md",
-            "docs/./a.md",
-            "docs/a b.md",
-        ] {
-            assert_eq!(
-                check_spec_path("docs", bad),
-                Err(PathIssue::Invalid),
-                "{bad}"
-            );
-        }
-        assert_eq!(check_project_path("docs/../x"), Err(PathIssue::Invalid));
-        assert_eq!(project_config_path("."), "saka.toml");
-        assert_eq!(project_config_path("docs"), "docs/saka.toml");
-    }
 
     #[derive(Default)]
     struct Mirror {
