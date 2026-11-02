@@ -10,12 +10,12 @@ use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
 use saka_core::workspace;
 use saka_ports::{IdsSource, RepoRef};
-use saka_spec::{LintIssue, PARSER_VERSION, Parsed};
+use saka_spec::{LintIssue, PARSER_VERSION, Parsed, content_hash};
 use saka_store::{Batch, ContextBlobRow, SpecRevisionRow, TaskSet, list, read};
 use serde_json::json;
 
 use crate::action::{Action, Produced};
-use crate::context::{PinnedContext, sha256};
+use crate::context::PinnedContext;
 use crate::views::{ProjectView, RevisionInfo, SpecView, step_items};
 use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
 
@@ -44,7 +44,7 @@ pub struct NewProject {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SpecFile<'a> {
+pub struct SpecFile<'a> {
     pub path: &'a str,
     pub source_commit: &'a str,
     pub bytes: &'a [u8],
@@ -229,7 +229,7 @@ impl Engine {
         let now = self.now();
         let file_name = path.rsplit('/').next().unwrap_or(path);
         let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
-        let hash = sha256(bytes);
+        let hash = content_hash(bytes);
         let (existing, known) = self.store.read(|c| {
             let existing = read::spec_by_path(c, project_id, path)?;
             let known = match &existing {

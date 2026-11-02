@@ -1,6 +1,7 @@
 mod action;
 mod commands;
 mod context;
+mod docs;
 mod metrics;
 pub mod packet;
 mod project_config;
@@ -30,7 +31,8 @@ use saka_core::rejection::Rejection;
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm, SecretStore, Toolchains,
+    Agents, Clock, CommitIdentity, DocSource, Environments, Ids, IdsSource, PortError, Scm,
+    SecretStore, Toolchains,
 };
 use saka_store::read;
 use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
@@ -39,6 +41,7 @@ use uuid::Uuid;
 
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewProject, RegisteredSpec, SessionCommand};
+pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
@@ -48,7 +51,7 @@ pub use saka_store::read::{TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{
     AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
-    SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    RevisionRef, SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 pub use worker::{JobReport, JobResult};
 
@@ -60,6 +63,7 @@ pub struct EngineConfig {
     pub worker_id: String,
     pub integrations: Vec<Integration>,
     pub env: EnvConfig,
+    pub docs_author: CommitIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -54,6 +54,17 @@ pub enum Rejection {
     SecretTooShort,
     #[error("secret name is not valid")]
     SecretNameInvalid,
+    #[error("file changed on the base branch")]
+    FileStale {
+        blob: Option<String>,
+        commit: String,
+    },
+    #[error("file path is blocked by another entry")]
+    FilePathConflict { path: String },
+    #[error("remote refused the push")]
+    FilePushRejected { branch: String },
+    #[error("file cannot be edited")]
+    FileUnsupported { reason: FileUnsupported },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -87,6 +98,10 @@ impl Rejection {
             Rejection::RetryLimitReached { .. } => "retry_limit_reached",
             Rejection::SecretTooShort => "secret_too_short",
             Rejection::SecretNameInvalid => "secret_name_invalid",
+            Rejection::FileStale { .. } => "file_stale",
+            Rejection::FilePathConflict { .. } => "file_path_conflict",
+            Rejection::FilePushRejected { .. } => "file_push_rejected",
+            Rejection::FileUnsupported { .. } => "file_unsupported",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -123,10 +138,33 @@ impl Rejection {
             Rejection::RetryLimitReached { stage, limit } => {
                 json!({ "stage": stage, "limit": limit })
             }
+            Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
+            Rejection::FilePathConflict { path } => json!({ "path": path }),
+            Rejection::FilePushRejected { branch } => json!({ "branch": branch }),
+            Rejection::FileUnsupported { reason } => reason.params(),
             Rejection::Invalid { field, code } => {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }
             _ => json!({}),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileUnsupported {
+    TooLarge { bytes: u64, max_bytes: u64 },
+    NotUtf8,
+    NotRegular,
+}
+
+impl FileUnsupported {
+    pub fn params(self) -> Value {
+        match self {
+            FileUnsupported::TooLarge { bytes, max_bytes } => {
+                json!({ "reason": "too_large", "bytes": bytes, "max_bytes": max_bytes })
+            }
+            FileUnsupported::NotUtf8 => json!({ "reason": "not_utf8" }),
+            FileUnsupported::NotRegular => json!({ "reason": "not_regular" }),
         }
     }
 }

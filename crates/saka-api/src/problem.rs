@@ -85,13 +85,14 @@ fn rejection_status(r: &Rejection) -> StatusCode {
     use Rejection as R;
     match r {
         R::NotFound | R::SpecFileNotFound { .. } => StatusCode::NOT_FOUND,
-        R::RevisionStale | R::VersionStale => StatusCode::PRECONDITION_FAILED,
+        R::RevisionStale | R::VersionStale | R::FileStale { .. } => StatusCode::PRECONDITION_FAILED,
         R::SpecNotReady { .. }
         | R::ScmIntegrationUnknown { .. }
         | R::ProjectConfigInvalid { .. }
         | R::MultiRepoUnsupported { .. }
         | R::SecretTooShort
         | R::SecretNameInvalid
+        | R::FileUnsupported { .. }
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
@@ -105,6 +106,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::SpecSlugConflict { .. }
         | R::TaskBranchConflict { .. }
         | R::WorkPacketUnavailable { .. }
+        | R::FilePathConflict { .. }
+        | R::FilePushRejected { .. }
         | R::RetryLimitReached { .. } => StatusCode::CONFLICT,
     }
 }

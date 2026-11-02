@@ -45,7 +45,11 @@ export const spec: SpecItem = {
     context: [],
     created_at: "2026-10-31T10:00:00.000Z",
   },
-  approved_revision_id: "0193f0c4-1b2a-7c3d-9e8f-001122334477",
+  approved_revision: {
+    id: "0193f0c4-1b2a-7c3d-9e8f-001122334477",
+    source_commit: "9f1c".padEnd(40, "0"),
+    content_hash: "sha256:" + "4b8e".padEnd(64, "0"),
+  },
   revision_plan: null,
   lint: { ok: true, issues: [] },
   steps: [],

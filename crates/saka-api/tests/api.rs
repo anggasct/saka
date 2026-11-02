@@ -232,7 +232,15 @@ fn a_spec_is_read_from_the_base_branch_linted_and_approved_with_if_match() {
     );
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     assert_eq!(r.body["state"], "approved");
-    assert_eq!(r.body["approved_revision_id"], revision.as_str());
+    assert_eq!(r.body["approved_revision"]["id"], revision.as_str());
+    assert_eq!(
+        r.body["approved_revision"]["content_hash"],
+        r.body["revision"]["content_hash"]
+    );
+    assert_eq!(
+        r.body["approved_revision"]["source_commit"],
+        r.body["revision"]["source_commit"]
+    );
     assert!(r.body["steps"][0]["work_item_id"].is_string());
 
     let events = api.sim.engine().events_after(before, 100).unwrap();
@@ -1289,7 +1297,7 @@ fn re_approval_repins_supersedes_restores_and_adds_as_the_plan_said() {
     let before = api.last_seq();
     let r = api.approve_tag(&spec, &v2_rev);
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
-    assert_eq!(r.body["approved_revision_id"], v2_rev.as_str());
+    assert_eq!(r.body["approved_revision"]["id"], v2_rev.as_str());
     assert_eq!(r.body["approved_at"], approved_at);
     assert_eq!(r.body["priority"], 5);
     assert_eq!(r.body["revision_plan"], Value::Null);
@@ -1634,7 +1642,7 @@ fn withdraw_closes_a_spec_that_has_no_active_tasks() {
     let ready = api.register_doc("docs/specs/ready.md", &one_step_spec("Ready", ""));
     let r = api.withdraw(ready.body["id"].as_str().unwrap(), "not now");
     assert_eq!(r.body["state"], "withdrawn");
-    assert_eq!(r.body["approved_revision_id"], Value::Null);
+    assert_eq!(r.body["approved_revision"], Value::Null);
 
     let target = api.register_doc(
         APPROVAL,
@@ -1687,7 +1695,7 @@ fn withdraw_closes_a_spec_that_has_no_active_tasks() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     assert_eq!(r.body["state"], "withdrawn");
     assert_eq!(
-        r.body["approved_revision_id"],
+        r.body["approved_revision"]["id"],
         target.body["revision"]["id"]
     );
     let events = api.sim.engine().events_after(before, 100).unwrap();

@@ -8,8 +8,8 @@ use saka_core::task::{available_actions, session_actions};
 use saka_core::time::Timestamp;
 use saka_core::vocab::EnvironmentState;
 use saka_engine::{
-    AccountView, BudgetView, PermissionView, ProjectView, SessionView, SpecView, TaskDetail,
-    TaskView, UsageView,
+    AccountView, BudgetView, DocContentView, DocTreeView, DocWriteView, PermissionView,
+    ProjectView, SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -121,6 +121,15 @@ pub struct Revision {
     /// Context documents pinned with this revision, in work packet order (`link` first, then `always`).
     pub context: Vec<ContextDoc>,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RevisionRef {
+    pub id: Uuid,
+    /// Commit of the workspace repo the revision was read at.
+    pub source_commit: String,
+    /// `sha256:<hex>` over the raw bytes of the spec file.
+    pub content_hash: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -241,7 +250,8 @@ pub struct Spec {
     /// Specs that must ship before this one starts, resolved in the project.
     pub depends_on: Vec<SpecDependency>,
     pub revision: Revision,
-    pub approved_revision_id: Option<Uuid>,
+    /// The revision that was approved; null before the first approval.
+    pub approved_revision: Option<RevisionRef>,
     /// Null unless the spec is approved and a newer revision is recorded.
     pub revision_plan: Option<RevisionPlan>,
     pub lint: Lint,
@@ -327,7 +337,11 @@ impl Spec {
                     .collect(),
                 created_at: time(r.created_at),
             },
-            approved_revision_id: s.approved_revision_id.map(|id| id.0),
+            approved_revision: v.approved_revision.as_ref().map(|a| RevisionRef {
+                id: a.id.0,
+                source_commit: a.source_commit.clone(),
+                content_hash: a.content_hash.clone(),
+            }),
             revision_plan: v.revision_plan.as_ref().map(RevisionPlan::from_plan),
             lint: Lint {
                 ok: r.lint_ok,
@@ -1195,6 +1209,126 @@ pub struct TemplateQuery {
     pub locale: Option<String>,
 }
 
+/// Markdown files of the project folder at the tip of the base branch.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileTree {
+    /// Tip of the base branch the list was read at.
+    pub commit: String,
+    pub base_branch: String,
+    pub project_path: String,
+    /// Regular `.md`/`.markdown` files under the project folder, sorted by path bytes.
+    pub files: Vec<FileEntry>,
+    /// More than 5000 files exist; `files` holds the first 5000.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileEntry {
+    /// Path relative to the workspace repo root.
+    pub path: String,
+    /// Git blob sha of the file at the tip.
+    pub blob: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileContent {
+    pub path: String,
+    /// Tip of the base branch the file was read at.
+    pub commit: String,
+    /// Git blob sha of the file; also the strong `ETag`.
+    pub blob: String,
+    pub bytes: u64,
+    /// The exact file content (a leading BOM is U+FEFF; line endings are kept as they are).
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileWrite {
+    pub path: String,
+    /// The new commit, or the tip when the content was already there (`committed: false`).
+    pub commit: String,
+    /// Git blob sha of the file; also the strong `ETag`.
+    pub blob: String,
+    pub bytes: u64,
+    /// False when the content equals the file at the tip: no commit was made.
+    pub committed: bool,
+    /// The spec registered from this file in the same request, with its acceptance criteria.
+    pub spec: Option<Spec>,
+    /// Why the file was not registered as a spec, although it should have been.
+    pub spec_problem: Option<SpecProblem>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecProblem {
+    /// Same codes as registering a spec: `spec_slug_conflict`, `validation_failed`, `scm_unavailable`.
+    pub code: String,
+    pub params: Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteFileBody {
+    /// The exact new file content, at most 1 MiB as UTF-8.
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FileQuery {
+    /// Path of the file relative to the workspace repo root, inside the project folder.
+    pub path: Option<String>,
+}
+
+impl FileTree {
+    pub fn from_view(v: &DocTreeView) -> FileTree {
+        FileTree {
+            commit: v.commit.clone(),
+            base_branch: v.base_branch.clone(),
+            project_path: v.project_path.clone(),
+            files: v
+                .files
+                .iter()
+                .map(|f| FileEntry {
+                    path: f.path.clone(),
+                    blob: f.blob.clone(),
+                    bytes: f.bytes,
+                })
+                .collect(),
+            truncated: v.truncated,
+        }
+    }
+}
+
+impl FileContent {
+    pub fn from_view(v: &DocContentView) -> FileContent {
+        FileContent {
+            path: v.path.clone(),
+            commit: v.commit.clone(),
+            blob: v.blob.clone(),
+            bytes: v.bytes,
+            content: v.content.clone(),
+        }
+    }
+}
+
+impl FileWrite {
+    pub fn from_view(v: &DocWriteView) -> FileWrite {
+        FileWrite {
+            path: v.path.clone(),
+            commit: v.commit.clone(),
+            blob: v.blob.clone(),
+            bytes: v.bytes,
+            committed: v.committed,
+            spec: v.spec.as_ref().map(|s| Spec::from_view(s, true)),
+            spec_problem: v.spec_problem.as_ref().map(|p| SpecProblem {
+                code: p.code.clone(),
+                params: p.params.clone(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SpecTemplate {
     pub locale: String,
@@ -1215,6 +1349,8 @@ pub struct ListQuery {
 pub struct SpecListQuery {
     /// One or more of `draft, ready, approved, shipped, withdrawn`, comma-separated.
     pub state: Option<String>,
+    /// Only the spec registered at exactly this path (at most 1024 bytes).
+    pub path: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }

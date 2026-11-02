@@ -2,7 +2,10 @@ use std::fmt;
 
 use async_trait::async_trait;
 
+use saka_core::time::Timestamp;
+
 use crate::PortResult;
+use crate::docs::CommitIdentity;
 use crate::scm::{PushOutcome, PushRequest, RepoRef};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -65,4 +68,77 @@ pub trait Repos: Send + Sync {
     ) -> PortResult<Vec<String>>;
 
     async fn push(&self, request: &PushRequest) -> PortResult<PushOutcome>;
+
+    async fn list_tree(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        dir: &str,
+    ) -> PortResult<Vec<TreeEntry>>;
+
+    async fn entries(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        paths: &[String],
+    ) -> PortResult<Vec<TreeEntry>>;
+
+    async fn write_blob(&self, repo: &RepoRef, bytes: &[u8]) -> PortResult<String>;
+
+    async fn commit_one(&self, request: &CommitOne) -> PortResult<String>;
+
+    async fn push_commit(&self, request: &PushCommit) -> PortResult<CommitPush>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    Blob,
+    Tree,
+    Commit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    pub path: String,
+    pub mode: String,
+    pub kind: EntryKind,
+    pub object: String,
+    pub bytes: Option<u64>,
+}
+
+impl TreeEntry {
+    pub const REGULAR: &'static str = "100644";
+    pub const EXECUTABLE: &'static str = "100755";
+
+    pub fn is_regular_file(&self) -> bool {
+        self.kind == EntryKind::Blob
+            && (self.mode == Self::REGULAR || self.mode == Self::EXECUTABLE)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitOne {
+    pub repo: RepoRef,
+    pub parent: String,
+    pub path: String,
+    pub mode: String,
+    pub blob: String,
+    pub message: String,
+    pub author: CommitIdentity,
+    pub at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushCommit {
+    pub repo: RepoRef,
+    pub branch: String,
+    pub commit: String,
+    pub expected: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitPush {
+    Pushed,
+    Moved { remote_sha: Option<String> },
+    Rejected,
 }

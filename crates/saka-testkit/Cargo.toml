@@ -17,6 +17,7 @@ saka-engine = { path = "../saka-engine" }
 saka-ports = { path = "../saka-ports" }
 saka-store = { path = "../saka-store" }
 serde_json.workspace = true
+sha1.workspace = true
 sha2.workspace = true
 tracing.workspace = true
 tempfile.workspace = true

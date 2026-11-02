@@ -9,6 +9,7 @@ pub mod spa;
 mod state;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{get, post, put};
 use utoipa::OpenApi;
@@ -25,6 +26,7 @@ pub use state::{ApiConfig, AppState};
         routes::set_secret, routes::list_secrets, routes::remove_secret,
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
         routes::spec_template,
+        routes::list_files, routes::get_file, routes::put_file,
         routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::merge, routes::retry, routes::cancel,
         routes::list_permissions, routes::answer_permission, routes::get_session,
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
@@ -35,11 +37,13 @@ pub use state::{ApiConfig, AppState};
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
-        (name = "projects"), (name = "specs"), (name = "delivery"), (name = "runtime"),
+        (name = "projects"), (name = "specs"), (name = "files"), (name = "delivery"), (name = "runtime"),
         (name = "system"), (name = "ops"),
     )
 )]
 pub struct ApiDoc;
+
+const FILE_BODY_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 pub fn openapi_json() -> String {
     let mut text = ApiDoc::openapi().to_pretty_json().unwrap_or_default();
@@ -65,6 +69,16 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{project_id}/specs",
             post(routes::add_spec).get(routes::list_specs),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/files",
+            get(routes::list_files),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/file",
+            get(routes::get_file)
+                .put(routes::put_file)
+                .layer(DefaultBodyLimit::max(FILE_BODY_MAX_BYTES)),
         )
         .route("/api/v1/specs/{spec_id}", get(routes::get_spec))
         .route("/api/v1/spec-template", get(routes::spec_template))

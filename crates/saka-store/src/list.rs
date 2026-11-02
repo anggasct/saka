@@ -150,10 +150,14 @@ pub fn specs(
     conn: &Connection,
     project: ProjectId,
     states: &[String],
+    path: Option<&str>,
     page: &Page,
 ) -> Result<Vec<Spec>> {
     let mut q = Query::new();
     q.eq("project_id", project.0.to_string());
+    if let Some(path) = path {
+        q.eq("path", path.to_string());
+    }
     q.any_of("state", states);
     q.after("updated_at", page, true);
     q.run(

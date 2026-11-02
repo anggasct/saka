@@ -37,7 +37,7 @@ const spec = {
   origin: "manual",
   priority: 0,
   revision: { id: "r", source_commit: "c", content_hash: "h", created_at: AT },
-  approved_revision_id: "r",
+  approved_revision: { id: "r", source_commit: "c", content_hash: "h" },
   lint: { ok: true, issues: [] },
   steps: [],
   approved_at: null,

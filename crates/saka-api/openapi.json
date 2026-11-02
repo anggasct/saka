@@ -432,6 +432,244 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/file": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "get_file",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Path of the file relative to the workspace repo root, inside the project folder.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "\"<blob>\""
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContent"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "put_file",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Path of the file relative to the workspace repo root, inside the project folder.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "\"<blob>\" of the file being replaced, or * for any existing file",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "* to create a file that must not exist yet",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteFileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "An existing file, changed or already equal",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "\"<blob>\""
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileWrite"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new file",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "\"<blob>\""
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileWrite"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/files": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "list_files",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileTree"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/permission-rules": {
       "get": {
         "tags": [
@@ -638,6 +876,15 @@
             "name": "state",
             "in": "query",
             "description": "One or more of `draft, ready, approved, shipped, withdrawn`, comma-separated.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Only the spec registered at exactly this path (at most 1024 bytes).",
             "required": false,
             "schema": {
               "type": "string"
@@ -2055,6 +2302,149 @@
           "params": {}
         }
       },
+      "FileContent": {
+        "type": "object",
+        "required": [
+          "path",
+          "commit",
+          "blob",
+          "bytes",
+          "content"
+        ],
+        "properties": {
+          "blob": {
+            "type": "string",
+            "description": "Git blob sha of the file; also the strong `ETag`."
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "commit": {
+            "type": "string",
+            "description": "Tip of the base branch the file was read at."
+          },
+          "content": {
+            "type": "string",
+            "description": "The exact file content (a leading BOM is U+FEFF; line endings are kept as they are)."
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "FileEntry": {
+        "type": "object",
+        "required": [
+          "path",
+          "blob",
+          "bytes"
+        ],
+        "properties": {
+          "blob": {
+            "type": "string",
+            "description": "Git blob sha of the file at the tip."
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace repo root."
+          }
+        }
+      },
+      "FileTree": {
+        "type": "object",
+        "description": "Markdown files of the project folder at the tip of the base branch.",
+        "required": [
+          "commit",
+          "base_branch",
+          "project_path",
+          "files",
+          "truncated"
+        ],
+        "properties": {
+          "base_branch": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string",
+            "description": "Tip of the base branch the list was read at."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntry"
+            },
+            "description": "Regular `.md`/`.markdown` files under the project folder, sorted by path bytes."
+          },
+          "project_path": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More than 5000 files exist; `files` holds the first 5000."
+          }
+        }
+      },
+      "FileWrite": {
+        "type": "object",
+        "required": [
+          "path",
+          "commit",
+          "blob",
+          "bytes",
+          "committed"
+        ],
+        "properties": {
+          "blob": {
+            "type": "string",
+            "description": "Git blob sha of the file; also the strong `ETag`."
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "commit": {
+            "type": "string",
+            "description": "The new commit, or the tip when the content was already there (`committed: false`)."
+          },
+          "committed": {
+            "type": "boolean",
+            "description": "False when the content equals the file at the tip: no commit was made."
+          },
+          "path": {
+            "type": "string"
+          },
+          "spec": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Spec",
+                "description": "The spec registered from this file in the same request, with its acceptance criteria."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spec_problem": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpecProblem",
+                "description": "Why the file was not registered as a spec, although it should have been."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "Gate": {
         "type": "object",
         "required": [
@@ -2423,12 +2813,16 @@
                     "null"
                   ]
                 },
-                "approved_revision_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
+                "approved_revision": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RevisionRef",
+                      "description": "The revision that was approved; null before the first approval."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "created_at": {
                   "type": "string"
@@ -3307,6 +3701,28 @@
           }
         }
       },
+      "RevisionRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "source_commit",
+          "content_hash"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": "string",
+            "description": "`sha256:<hex>` over the raw bytes of the spec file."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_commit": {
+            "type": "string",
+            "description": "Commit of the workspace repo the revision was read at."
+          }
+        }
+      },
       "SecretList": {
         "type": "object",
         "description": "The secrets of a project, ordered by name. At most 200, so there is no paging.",
@@ -3588,12 +4004,16 @@
               "null"
             ]
           },
-          "approved_revision_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
+          "approved_revision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevisionRef",
+                "description": "The revision that was approved; null before the first approval."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "type": "string"
@@ -3690,6 +4110,20 @@
               "null"
             ]
           }
+        }
+      },
+      "SpecProblem": {
+        "type": "object",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Same codes as registering a spec: `spec_slug_conflict`, `validation_failed`, `scm_unavailable`."
+          },
+          "params": {}
         }
       },
       "SpecTemplate": {
@@ -4524,6 +4958,19 @@
             "format": "uuid"
           }
         }
+      },
+      "WriteFileBody": {
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The exact new file content, at most 1 MiB as UTF-8."
+          }
+        },
+        "additionalProperties": false
       }
     }
   },
@@ -4533,6 +4980,9 @@
     },
     {
       "name": "specs"
+    },
+    {
+      "name": "files"
     },
     {
       "name": "delivery"

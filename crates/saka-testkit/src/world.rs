@@ -13,8 +13,9 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
-    Agents, Blob, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession,
-    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    Agents, Blob, ChangeSnapshot, Clock, DocBlob, DocCommit, DocEntry, DocExpect, DocFile,
+    DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments, LaunchedSession, Link,
+    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
     RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
     Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Toolchains, WebhookDelivery,
@@ -157,6 +158,9 @@ struct State {
     next_request: u32,
     docs: BTreeMap<String, Vec<u8>>,
     doc_history: HashMap<String, BTreeMap<String, Vec<u8>>>,
+    doc_links: BTreeSet<String>,
+    doc_writes: VecDeque<DocWrite>,
+    doc_commits: Vec<DocCommit>,
     inaccessible: BTreeSet<String>,
     prompts: Vec<String>,
     resumes: Vec<Option<String>>,
@@ -271,6 +275,9 @@ impl FakeWorld {
                 stats: Stats::default(),
                 next_request: 0,
                 docs: BTreeMap::new(),
+                doc_links: BTreeSet::new(),
+                doc_writes: VecDeque::new(),
+                doc_commits: Vec::new(),
                 doc_history: HashMap::new(),
                 inaccessible: BTreeSet::new(),
                 prompts: Vec::new(),
@@ -388,6 +395,22 @@ impl FakeWorld {
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
         commit
+    }
+
+    pub fn put_doc_link(&self, path: &str) {
+        self.state().doc_links.insert(path.to_string());
+    }
+
+    pub fn doc(&self, path: &str) -> Option<Vec<u8>> {
+        self.state().docs.get(path).cloned()
+    }
+
+    pub fn script_doc_write(&self, outcome: DocWrite) {
+        self.state().doc_writes.push_back(outcome);
+    }
+
+    pub fn doc_commits(&self) -> Vec<DocCommit> {
+        self.state().doc_commits.clone()
     }
 
     pub fn set_capabilities(&self, capabilities: ScmCapabilities) {
@@ -539,6 +562,26 @@ fn script_checks(ci: &CiScript) -> Vec<Check> {
 
 fn sha(n: u64) -> String {
     format!("{n:040x}")
+}
+
+pub fn git_blob(bytes: &[u8]) -> String {
+    use sha1::{Digest as _, Sha1};
+    let mut h = Sha1::new();
+    h.update(format!("blob {}\0", bytes.len()).as_bytes());
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn inside_folder(project_path: &str, path: &str) -> bool {
+    match project_path.trim_matches('/') {
+        "" | "." => true,
+        dir => path.starts_with(&format!("{dir}/")),
+    }
+}
+
+fn markdown_name(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
 }
 
 impl State {
@@ -959,6 +1002,108 @@ impl DocSource for FakeWorld {
                 bytes: b.len() as u64,
             },
             Some(b) => Blob::Bytes(b.clone()),
+        })
+    }
+
+    async fn tree(
+        &self,
+        _repo: &RepoRef,
+        branch: &str,
+        project_path: &str,
+        max_files: usize,
+    ) -> PortResult<DocTree> {
+        let s = self.state();
+        let commit = s.remote.get(branch).cloned().ok_or_else(|| {
+            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+        })?;
+        let mut files: Vec<DocEntry> = s
+            .docs
+            .iter()
+            .filter(|(path, _)| {
+                inside_folder(project_path, path)
+                    && markdown_name(path)
+                    && !s.doc_links.contains(*path)
+            })
+            .map(|(path, bytes)| DocEntry {
+                path: path.clone(),
+                blob: git_blob(bytes),
+                bytes: bytes.len() as u64,
+            })
+            .collect();
+        let truncated = files.len() > max_files;
+        files.truncate(max_files);
+        Ok(DocTree {
+            commit,
+            files,
+            truncated,
+        })
+    }
+
+    async fn open(
+        &self,
+        _repo: &RepoRef,
+        branch: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<DocOpened> {
+        let s = self.state();
+        let commit = s.remote.get(branch).cloned().ok_or_else(|| {
+            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+        })?;
+        let blob = match s.docs.get(path) {
+            None => DocBlob::Missing,
+            Some(_) if s.doc_links.contains(path) => DocBlob::NotRegular,
+            Some(b) if b.len() as u64 > max_bytes => DocBlob::TooLarge {
+                blob: git_blob(b),
+                bytes: b.len() as u64,
+            },
+            Some(b) => DocBlob::Bytes {
+                blob: git_blob(b),
+                bytes: b.clone(),
+            },
+        };
+        Ok(DocOpened { commit, blob })
+    }
+
+    async fn commit_file(&self, request: &DocCommit) -> PortResult<DocWrite> {
+        let mut s = self.state();
+        s.doc_commits.push(request.clone());
+        if let Some(outcome) = s.doc_writes.pop_front() {
+            return Ok(outcome);
+        }
+        let tip = s.remote.get(&request.branch).cloned().ok_or_else(|| {
+            PortError::permanent(
+                "base_branch_missing",
+                json!({ "base_branch": request.branch }),
+            )
+        })?;
+        let blob = git_blob(&request.bytes);
+        let current = s.docs.get(&request.path).map(|b| git_blob(b));
+        if current.as_deref() == Some(blob.as_str()) {
+            return Ok(DocWrite::Unchanged { commit: tip, blob });
+        }
+        let holds = match &request.expect {
+            DocExpect::Absent => current.is_none(),
+            DocExpect::Exists => current.is_some(),
+            DocExpect::Blob(b) => current.as_deref() == Some(b.as_str()),
+        };
+        if !holds {
+            return Ok(DocWrite::Stale {
+                commit: tip,
+                blob: current,
+            });
+        }
+        let commit = s.new_commit(vec![tip.clone()]);
+        s.remote.insert(request.branch.clone(), commit.clone());
+        s.docs.insert(request.path.clone(), request.bytes.clone());
+        let snapshot = s.docs.clone();
+        s.doc_history.insert(commit.clone(), snapshot);
+        Ok(DocWrite::Committed {
+            commit,
+            parent: tip,
+            blob,
+            created: current.is_none(),
+            attempts: 1,
         })
     }
 
