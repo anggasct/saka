@@ -28,14 +28,14 @@ pub enum TaskSet<'a> {
     Spec(SpecId),
 }
 
-const SESSION_SELECT: &str = "SELECT s.*,
+pub(crate) const SESSION_SELECT: &str = "SELECT s.*,
     (SELECT COUNT(*) FROM event e WHERE e.stream_type = 'session' AND e.stream_id = s.id
        AND e.kind = 'runtime.session.steered') AS steers,
     (SELECT ifnull(MAX(turn), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_turn,
     (SELECT ifnull(SUM(running_ms), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_running_ms
   FROM session s";
 
-const ENVIRONMENT_SELECT: &str = "SELECT e.*,
+pub(crate) const ENVIRONMENT_SELECT: &str = "SELECT e.*,
     CASE WHEN e.work_item_id IS NOT NULL THEN e.id END AS stage_run_id
   FROM environment e";
 
@@ -120,7 +120,27 @@ fn rows<T>(
     bind: &[&dyn rusqlite::ToSql],
     map: impl Fn(&Row<'_>) -> Result<T>,
 ) -> Result<Vec<T>> {
-    let sql = format!("{sql_select} WHERE work_item_id IN ({selection}) ORDER BY {order}");
+    rows_of(
+        conn,
+        sql_select,
+        "work_item_id",
+        selection,
+        order,
+        bind,
+        map,
+    )
+}
+
+pub(crate) fn rows_of<T>(
+    conn: &Connection,
+    sql_select: &str,
+    column: &str,
+    selection: &str,
+    order: &str,
+    bind: &[&dyn rusqlite::ToSql],
+    map: impl Fn(&Row<'_>) -> Result<T>,
+) -> Result<Vec<T>> {
+    let sql = format!("{sql_select} WHERE {column} IN ({selection}) ORDER BY {order}");
     let mut stmt = conn.prepare(&sql)?;
     let mut out = Vec::new();
     let mut q = stmt.query(bind)?;
@@ -305,7 +325,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             run.resumed_lost = true;
         }
     }
-    let running: HashMap<SessionId, Timestamp> = running_since(conn, selection, b)?;
+    let running: HashMap<SessionId, Timestamp> = running_since(conn, "work_item_id", selection, b)?;
     let latest_sessions: HashMap<SessionId, WorkItemId> = tasks
         .values()
         .filter_map(|t| t.session.as_ref().map(|s| (s.id, t.item.id)))
@@ -365,15 +385,16 @@ pub fn permission_owner(
     )
 }
 
-fn running_since(
+pub(crate) fn running_since(
     conn: &Connection,
+    column: &str,
     selection: &str,
     bind: &[&dyn rusqlite::ToSql],
 ) -> Result<HashMap<SessionId, Timestamp>> {
     let sql = format!(
         "SELECT e.stream_id, e.occurred_at FROM event e
          JOIN session s ON s.id = e.stream_id AND s.state IN ('running', 'interrupted')
-           AND s.work_item_id IN ({selection})
+           AND s.{column} IN ({selection})
          WHERE e.stream_type = 'session' AND e.kind = 'runtime.session.state_changed'
            AND e.seq = (SELECT MAX(seq) FROM event WHERE stream_type = 'session' AND stream_id = e.stream_id
                         AND kind = 'runtime.session.state_changed')"
@@ -454,7 +475,7 @@ fn change_request(row: &Row<'_>) -> Result<ChangeRequest> {
     })
 }
 
-fn environment(row: &Row<'_>) -> Result<Environment> {
+pub(crate) fn environment(row: &Row<'_>) -> Result<Environment> {
     Ok(Environment {
         id: EnvironmentId(uuid(row, "id")?),
         owner: run_owner(row)?,

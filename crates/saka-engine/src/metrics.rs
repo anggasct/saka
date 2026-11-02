@@ -26,6 +26,8 @@ pub struct Counters {
     gate_seconds: Mutex<SecondsHistogram>,
     advance_seconds: Mutex<SecondsHistogram>,
     dod: Mutex<BTreeMap<(String, String), u64>>,
+    drafts_finished: Mutex<BTreeMap<(String, String), u64>>,
+    draft_lint_rounds: Mutex<BTreeMap<(String, String), u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -103,6 +105,14 @@ impl Counters {
     pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
         bump(&self.gate_runs, source, outcome);
         observe(&self.gate_seconds, &GATE_SECONDS_BUCKETS, seconds);
+    }
+
+    pub(crate) fn draft_finished(&self, state: &str) {
+        bump(&self.drafts_finished, state, "");
+    }
+
+    pub(crate) fn draft_lint_round(&self, outcome: &str) {
+        bump(&self.draft_lint_rounds, outcome, "");
     }
 
     pub(crate) fn dod(&self, outcome: &str) {
@@ -206,6 +216,7 @@ impl Counters {
                         account, window, ..
                     } => format!("{account}:{window}"),
                     Waiting::PortBlock => "port_block".to_string(),
+                    Waiting::ArchitectSlot => "architect_slot".to_string(),
                 })
                 .collect();
             tracing::info!(
@@ -256,6 +267,9 @@ pub struct MetricsSnapshot {
     pub gate_seconds: SecondsHistogram,
     pub advance_seconds: SecondsHistogram,
     pub dod_verifications: Vec<(String, u64)>,
+    pub spec_drafts_active: i64,
+    pub spec_drafts_finished: Vec<(String, u64)>,
+    pub spec_draft_lint_rounds: Vec<(String, u64)>,
 }
 
 pub(crate) enum DodVerification {
@@ -337,6 +351,7 @@ impl Engine {
                 list::stage_durations(c)?,
             ))
         })?;
+        let drafts_active = self.store.read(saka_store::draft::active_count)?;
         let (resumed, exhausted, usage, quotas) = self.store.read(|c| {
             Ok((
                 list::resumed_session_counts(c)?,
@@ -373,6 +388,15 @@ impl Engine {
             gate_seconds: snapshot_of(&self.counters.gate_seconds),
             advance_seconds: snapshot_of(&self.counters.advance_seconds),
             dod_verifications: copy(&self.counters.dod)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            spec_drafts_active: drafts_active,
+            spec_drafts_finished: copy(&self.counters.drafts_finished)
+                .into_iter()
+                .map(|(state, _, n)| (state, n))
+                .collect(),
+            spec_draft_lint_rounds: copy(&self.counters.draft_lint_rounds)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
                 .collect(),

@@ -17,6 +17,7 @@ use crate::vocab::{PlanAction, SpecOrigin, SpecState, SupersedeReason, WorkItemS
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRevision {
+    pub origin: SpecOrigin,
     pub source_commit: String,
     pub content_hash: String,
     pub context_hash: String,
@@ -52,6 +53,7 @@ pub fn record_revision(
                 project_id,
                 path: path.to_string(),
                 slug: slug.to_string(),
+                origin: revision.origin,
             });
             id
         }
@@ -446,6 +448,7 @@ pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec>
                 project_id,
                 path,
                 slug,
+                origin,
             },
         ) => Some(Spec {
             id: *spec_id,
@@ -454,7 +457,7 @@ pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec>
             slug: slug.clone(),
             title: String::new(),
             state: SpecState::Draft,
-            origin: SpecOrigin::Manual,
+            origin: *origin,
             priority: 0,
             latest_revision_id: SpecRevisionId(Uuid::nil()),
             approved_revision_id: None,

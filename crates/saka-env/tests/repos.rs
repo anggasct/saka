@@ -683,6 +683,7 @@ fn a_relative_path_resolves_from_the_session_cwd_and_stays_relative_to_the_workt
     let inside = |p: &str| saka_core::policy::RequestPath {
         path: p.into(),
         inside_worktree: true,
+        through_symlink: false,
     };
     assert_eq!(r("docs", "specs/a.md"), inside("docs/specs/a.md"));
     assert_eq!(r("docs", "./specs/../a.md"), inside("docs/a.md"));
@@ -712,6 +713,7 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
     let inside = |p: &str| saka_core::policy::RequestPath {
         path: p.into(),
         inside_worktree: true,
+        through_symlink: false,
     };
     assert_eq!(r("src/main.go"), inside("src/main.go"));
     assert_eq!(
@@ -719,7 +721,11 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
         inside("src/new/file.go")
     );
     assert_eq!(r("./src/../README.md"), inside("README.md"));
-    assert_eq!(r("in/lib.go"), inside("src/lib.go"));
+    let linked = |p: &str| saka_core::policy::RequestPath {
+        through_symlink: true,
+        ..inside(p)
+    };
+    assert_eq!(r("in/lib.go"), linked("src/lib.go"));
     assert_eq!(r("new/../x"), inside("x"));
     for raw in [
         "../secret/key",
@@ -732,7 +738,7 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
         assert!(!r(raw).inside_worktree, "{raw}");
         assert_eq!(r(raw).path, raw);
     }
-    assert_eq!(r("out/../worktree/src"), inside("src"));
+    assert_eq!(r("out/../worktree/src"), linked("src"));
 }
 
 fn set_mode(path: &Path, mode: u32) {

@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
+use saka_core::draft::DraftInput;
 use saka_core::event::{Event, Prompt};
 use saka_core::gate::{Check, GatePolicy};
 use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId};
 use saka_core::job::{Job, JobKind};
-use saka_core::model::{Coded, Environment, EnvironmentSetup, RunOwner, Task, ToolchainUse};
+use saka_core::model::{
+    Coded, Environment, EnvironmentSetup, PermissionRequest, RunOwner, Session, Task, ToolchainUse,
+};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
 use saka_core::vocab::{
@@ -47,12 +50,21 @@ pub enum JobResult {
 #[derive(Debug)]
 pub enum Effect {
     Fact(TaskInput),
+    Draft {
+        input: DraftInput,
+        events: Vec<Event>,
+    },
     Nothing,
     Skipped,
     Later(Job),
 }
 
 pub type Execution = std::result::Result<Effect, PortError>;
+
+enum Input {
+    Task(TaskInput),
+    Draft(DraftInput),
+}
 
 pub(crate) enum Refusal {
     Block(BlockerCode, Value),
@@ -79,7 +91,10 @@ fn check_name(command: &str) -> String {
     format!("{cut}…")
 }
 
-fn field<T: DeserializeOwned>(payload: &Value, name: &str) -> std::result::Result<T, PortError> {
+pub(crate) fn field<T: DeserializeOwned>(
+    payload: &Value,
+    name: &str,
+) -> std::result::Result<T, PortError> {
     payload
         .get(name)
         .cloned()
@@ -93,8 +108,135 @@ fn owner_run(payload: &Value) -> PortResult<StageRunId> {
         .ok_or_else(|| PortError::permanent("job_payload_invalid", json!({ "field": "owner" })))
 }
 
-fn internal(e: EngineError) -> PortError {
+pub(crate) fn internal(e: EngineError) -> PortError {
     PortError::retryable("internal", json!({ "error": e.to_string() }))
+}
+
+pub(crate) enum SessionJob {
+    Input(SessionInput),
+    Done,
+    Skipped,
+}
+
+impl SessionJob {
+    pub(crate) fn effect(self, wrap: impl FnOnce(SessionInput) -> Effect) -> Effect {
+        match self {
+            SessionJob::Input(input) => wrap(input),
+            SessionJob::Done => Effect::Nothing,
+            SessionJob::Skipped => Effect::Skipped,
+        }
+    }
+}
+
+pub(crate) fn session_ref(session: Option<&Session>, id: SessionId) -> Option<SessionRef> {
+    session
+        .filter(|s| s.id == id && s.state.is_live())
+        .map(|s| SessionRef {
+            session_id: s.id,
+            runner_unit: s.runner_unit.clone(),
+            socket_path: s.socket_path.clone(),
+        })
+}
+
+fn stopping_ref(session: Option<&Session>, id: SessionId) -> Option<SessionRef> {
+    session_ref(session, id).or_else(|| {
+        session
+            .filter(|s| {
+                s.id == id && s.interrupt_requested == Some(saka_core::vocab::InterruptBy::Saka)
+            })
+            .map(|s| SessionRef {
+                session_id: s.id,
+                runner_unit: s.runner_unit.clone(),
+                socket_path: s.socket_path.clone(),
+            })
+    })
+}
+
+impl Engine {
+    pub(crate) async fn session_job(
+        &self,
+        kind: JobKind,
+        p: &Value,
+        session: Option<&Session>,
+        permissions: &[PermissionRequest],
+    ) -> std::result::Result<SessionJob, PortError> {
+        match kind {
+            JobKind::SessionDeliverPermissionAnswer => {
+                let id: saka_core::ids::PermissionRequestId = field(p, "permission_request_id")?;
+                let Some(request) = permissions.iter().find(|r| {
+                    r.id == id && r.delivered_at.is_none() && saka_core::session::awaits_delivery(r)
+                }) else {
+                    return Ok(SessionJob::Skipped);
+                };
+                let Some(target) = stopping_ref(session, request.session_id) else {
+                    return Ok(SessionJob::Skipped);
+                };
+                self.ports
+                    .agents
+                    .answer_permission(
+                        &target,
+                        &request.cli_request_id,
+                        request.state == PermissionState::Allowed,
+                        request.message.as_deref(),
+                    )
+                    .await?;
+                Ok(SessionJob::Done)
+            }
+            JobKind::SessionInterrupt => {
+                let Some(target) = stopping_ref(session, field(p, "session_id")?) else {
+                    return Ok(SessionJob::Skipped);
+                };
+                self.ports.agents.interrupt(&target).await?;
+                Ok(SessionJob::Done)
+            }
+            JobKind::SessionSteer => {
+                let Some(target) = session_ref(session, field(p, "session_id")?) else {
+                    return Ok(SessionJob::Skipped);
+                };
+                let text: String = field(p, "text")?;
+                self.ports
+                    .agents
+                    .steer(&target, field(p, "n")?, &text)
+                    .await?;
+                Ok(SessionJob::Done)
+            }
+            JobKind::SessionReattach => {
+                let id: SessionId = field(p, "session_id")?;
+                let Some(target) = session_ref(session, id) else {
+                    return Ok(SessionJob::Skipped);
+                };
+                if !self.ports.agents.unit_active(&target).await? {
+                    return Ok(SessionJob::Input(SessionInput::Gone {
+                        cause: "runner_exited".into(),
+                    }));
+                }
+                let last = session.map_or(0, |s| s.last_offset);
+                let from_offset = if last == 0 { 0 } else { last + 1 };
+                match self.ports.agents.reattach(&target, from_offset).await {
+                    Ok(r) => Ok(SessionJob::Input(SessionInput::Reattached {
+                        runner_version: r.runner_version,
+                        from_offset,
+                    })),
+                    Err(e) if e.code == "version_mismatch" => {
+                        let _ = self.ports.agents.stop(id, Some(&target.runner_unit)).await;
+                        Ok(SessionJob::Input(SessionInput::Gone {
+                            cause: "version_mismatch".into(),
+                        }))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            JobKind::SessionStop => {
+                let id: SessionId = field(p, "session_id")?;
+                let unit: Option<String> = p
+                    .get("runner_unit")
+                    .and_then(|u| u.as_str().map(String::from));
+                self.ports.agents.stop(id, unit.as_deref()).await?;
+                Ok(SessionJob::Done)
+            }
+            _ => Ok(SessionJob::Skipped),
+        }
+    }
 }
 
 impl Engine {
@@ -156,10 +298,10 @@ impl Engine {
         }
         let id = match saka_core::job::owner_of(&job.payload) {
             Some(RunOwner::StageRun { work_item_id, .. }) => work_item_id,
-            Some(RunOwner::DraftAttempt { .. }) => {
-                tracing::warn!(job_id = %job.id, "job for a run without a decider");
-                return Ok(Effect::Skipped);
-            }
+            Some(RunOwner::DraftAttempt {
+                spec_draft_id,
+                attempt_id,
+            }) => return self.execute_draft(job, spec_draft_id, attempt_id).await,
             None => field(&job.payload, "work_item_id")?,
         };
         let Some(task) = self
@@ -182,37 +324,14 @@ impl Engine {
                 )
                 .await
             }
-            JobKind::SessionDeliverPermissionAnswer => {
-                self.deliver_answer(&task, field(p, "permission_request_id")?)
-                    .await
-            }
-            JobKind::SessionInterrupt => {
-                let Some(session) = self.stopping_ref(&task, field(p, "session_id")?) else {
-                    return Ok(Effect::Skipped);
-                };
-                self.ports.agents.interrupt(&session).await?;
-                Ok(Effect::Nothing)
-            }
-            JobKind::SessionSteer => {
-                let Some(session) = self.session_ref(&task, field(p, "session_id")?) else {
-                    return Ok(Effect::Skipped);
-                };
-                let text: String = field(p, "text")?;
-                self.ports
-                    .agents
-                    .steer(&session, field(p, "n")?, &text)
-                    .await?;
-                Ok(Effect::Nothing)
-            }
-            JobKind::SessionReattach => self.reattach(&task, field(p, "session_id")?).await,
-            JobKind::SessionStop => {
-                let session: SessionId = field(p, "session_id")?;
-                let unit: Option<String> = p
-                    .get("runner_unit")
-                    .and_then(|u| u.as_str().map(String::from));
-                self.ports.agents.stop(session, unit.as_deref()).await?;
-                Ok(Effect::Nothing)
-            }
+            JobKind::SessionDeliverPermissionAnswer
+            | JobKind::SessionInterrupt
+            | JobKind::SessionSteer
+            | JobKind::SessionReattach
+            | JobKind::SessionStop => Ok(self
+                .session_job(job.kind, p, task.session.as_ref(), &task.permissions)
+                .await?
+                .effect(|i| Effect::Fact(TaskInput::Session(i)))),
             JobKind::EnvInspectWorktree => {
                 self.inspect(&task, field(p, "session_id")?, field(p, "turn")?)
                     .await
@@ -230,6 +349,7 @@ impl Engine {
             }
             JobKind::ScmReportStatus => self.report_status(&task, p).await,
             JobKind::ScmPollCommit => self.poll_commit(&task, field(p, "sha")?).await,
+            JobKind::DraftLint | JobKind::DraftCommit => Ok(Effect::Skipped),
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;
@@ -248,8 +368,13 @@ impl Engine {
 
     pub fn complete_job(&self, job: &ClaimedJob, execution: Execution) -> Result<JobReport> {
         let owner = self.cfg.worker_id.clone();
+        let draft = saka_core::job::spec_draft_of(&job.payload);
+        let actor = match job.kind {
+            JobKind::DraftCommit => crate::draft::ARCHITECT_ACTOR.to_string(),
+            kind => format!("system:worker:{}", kind.as_str()),
+        };
         let cause = Cause {
-            actor: format!("system:worker:{}", job.kind.as_str()),
+            actor,
             causation_id: Some(job.id),
             correlation_id: job.correlation_id,
         };
@@ -258,31 +383,22 @@ impl Engine {
             id: job.id,
             owner: owner.clone(),
         };
+        let done = |events: Vec<Event>| Extra {
+            outcome: Some(succeeded()),
+            events,
+            ..Extra::default()
+        };
         let (input, extra, result) = match execution {
-            Ok(Effect::Fact(input)) => (
-                Some(input),
-                Extra {
-                    outcome: Some(succeeded()),
-                    ..Extra::default()
-                },
+            Ok(Effect::Fact(input)) => {
+                (Some(Input::Task(input)), done(vec![]), JobResult::Succeeded)
+            }
+            Ok(Effect::Draft { input, events }) => (
+                Some(Input::Draft(input)),
+                done(events),
                 JobResult::Succeeded,
             ),
-            Ok(Effect::Nothing) => (
-                None,
-                Extra {
-                    outcome: Some(succeeded()),
-                    ..Extra::default()
-                },
-                JobResult::Succeeded,
-            ),
-            Ok(Effect::Skipped) => (
-                None,
-                Extra {
-                    outcome: Some(succeeded()),
-                    ..Extra::default()
-                },
-                JobResult::Skipped,
-            ),
+            Ok(Effect::Nothing) => (None, done(vec![]), JobResult::Succeeded),
+            Ok(Effect::Skipped) => (None, done(vec![]), JobResult::Skipped),
             Ok(Effect::Later(next)) => (
                 None,
                 Extra {
@@ -321,11 +437,27 @@ impl Engine {
                     kind: job.kind,
                     last_error: last_error.clone(),
                 };
-                (
-                    Some(TaskInput::JobExhausted {
+                let teardown = field::<EnvironmentId>(&job.payload, "environment_id")
+                    .ok()
+                    .filter(|_| job.kind == JobKind::EnvTeardown);
+                let input = if let (Some(_), Some(environment_id)) = (draft, teardown) {
+                    Input::Draft(DraftInput::TeardownFailed {
+                        environment_id,
+                        error: last_error,
+                    })
+                } else if draft.is_some() {
+                    Input::Draft(DraftInput::JobExhausted {
                         kind: job.kind,
                         error: last_error,
-                    }),
+                    })
+                } else {
+                    Input::Task(TaskInput::JobExhausted {
+                        kind: job.kind,
+                        error: last_error,
+                    })
+                };
+                (
+                    Some(input),
                     Extra {
                         outcome: Some(JobOutcome::Dead {
                             id: job.id,
@@ -339,11 +471,24 @@ impl Engine {
                 )
             }
         };
-        let committed = match work_item {
-            Some(id) => self
-                .decide(id, input, Mode::Fact, &cause, extra)
-                .map(|_| ()),
-            None => self.commit_outcome_only(extra),
+        let committed = match (draft, work_item, input) {
+            (Some(id), _, input) => {
+                let input = match input {
+                    Some(Input::Draft(i)) => Some(i),
+                    _ => None,
+                };
+                self.decide_draft(id, input, Mode::Fact, &cause, extra)
+                    .map(|_| ())
+            }
+            (None, Some(id), input) => {
+                let input = match input {
+                    Some(Input::Task(i)) => Some(i),
+                    _ => None,
+                };
+                self.decide(id, input, Mode::Fact, &cause, extra)
+                    .map(|_| ())
+            }
+            (None, None, _) => self.commit_outcome_only(extra),
         };
         // A prepare that will run again keeps its block; any other end frees the reservation,
         // since a committed environment row now holds the block in the store.
@@ -535,31 +680,6 @@ impl Engine {
         let _ = self.run_teardown_commands(env, recipe).await;
         self.ports.env.teardown(env).await?;
         Ok(Effect::Fact(TaskInput::EnvironmentFailed { code, params }))
-    }
-
-    fn stopping_ref(&self, task: &Task, id: SessionId) -> Option<SessionRef> {
-        self.session_ref(task, id).or_else(|| {
-            task.session
-                .as_ref()
-                .filter(|s| {
-                    s.id == id && s.interrupt_requested == Some(saka_core::vocab::InterruptBy::Saka)
-                })
-                .map(|s| SessionRef {
-                    session_id: s.id,
-                    runner_unit: s.runner_unit.clone(),
-                    socket_path: s.socket_path.clone(),
-                })
-        })
-    }
-
-    fn session_ref(&self, task: &Task, id: SessionId) -> Option<SessionRef> {
-        task.live_session()
-            .filter(|s| s.id == id)
-            .map(|s| SessionRef {
-                session_id: s.id,
-                runner_unit: s.runner_unit.clone(),
-                socket_path: s.socket_path.clone(),
-            })
     }
 
     async fn install_toolchains(
@@ -777,32 +897,6 @@ impl Engine {
         })))
     }
 
-    async fn reattach(&self, task: &Task, id: SessionId) -> Execution {
-        let Some(session) = self.session_ref(task, id) else {
-            return Ok(Effect::Skipped);
-        };
-        if !self.ports.agents.unit_active(&session).await? {
-            return Ok(Effect::Fact(TaskInput::Session(SessionInput::Gone {
-                cause: "runner_exited".into(),
-            })));
-        }
-        let last = task.session.as_ref().map_or(0, |s| s.last_offset);
-        let from_offset = if last == 0 { 0 } else { last + 1 };
-        match self.ports.agents.reattach(&session, from_offset).await {
-            Ok(r) => Ok(Effect::Fact(TaskInput::Session(SessionInput::Reattached {
-                runner_version: r.runner_version,
-                from_offset,
-            }))),
-            Err(e) if e.code == "version_mismatch" => {
-                let _ = self.ports.agents.stop(id, Some(&session.runner_unit)).await;
-                Ok(Effect::Fact(TaskInput::Session(SessionInput::Gone {
-                    cause: "version_mismatch".into(),
-                })))
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     async fn send_turn(
         &self,
         task: &Task,
@@ -810,7 +904,7 @@ impl Engine {
         turn: u32,
         prompt: Prompt,
     ) -> Execution {
-        let Some(session) = self.session_ref(task, session) else {
+        let Some(session) = session_ref(task.session.as_ref(), session) else {
             return Ok(Effect::Skipped);
         };
         let body = match &prompt {
@@ -837,34 +931,11 @@ impl Engine {
         )))
     }
 
-    async fn deliver_answer(
-        &self,
-        task: &Task,
-        id: saka_core::ids::PermissionRequestId,
-    ) -> Execution {
-        let Some(request) = task.permissions.iter().find(|p| {
-            p.id == id && p.delivered_at.is_none() && saka_core::session::awaits_delivery(p)
-        }) else {
-            return Ok(Effect::Skipped);
-        };
-        let Some(session) = self.stopping_ref(task, request.session_id) else {
-            return Ok(Effect::Skipped);
-        };
-        self.ports
-            .agents
-            .answer_permission(
-                &session,
-                &request.cli_request_id,
-                request.state == PermissionState::Allowed,
-                request.message.as_deref(),
-            )
-            .await?;
-        Ok(Effect::Nothing)
-    }
-
     async fn inspect(&self, task: &Task, session: SessionId, turn: u32) -> Execution {
-        let (Some(_), Some(env)) = (self.session_ref(task, session), task.ready_environment())
-        else {
+        let (Some(_), Some(env)) = (
+            session_ref(task.session.as_ref(), session),
+            task.ready_environment(),
+        ) else {
             return Ok(Effect::Skipped);
         };
         let base = env.base_sha.clone().unwrap_or_default();

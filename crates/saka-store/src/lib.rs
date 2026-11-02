@@ -1,5 +1,6 @@
 mod codec;
 mod conn;
+pub mod draft;
 mod error;
 mod jobs;
 pub mod list;
@@ -14,6 +15,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use saka_core::time::Timestamp;
 use uuid::Uuid;
 
+pub use draft::DraftSet;
 pub use error::{Result, StoreError};
 pub use jobs::{ClaimedJob, LEASE_EXTEND_MS, LEASE_MS};
 pub use migrate::MigrationReport;

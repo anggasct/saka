@@ -211,6 +211,7 @@ impl Run {
                 decision: Decision {
                     effect: Effect::Ask,
                     source: DecisionSource::Default,
+                    message: None,
                 },
             },
         ));
@@ -948,6 +949,7 @@ fn remember_makes_an_exact_project_rule_that_never_beats_a_deny() {
         path: Some(RequestPath {
             path: "/etc/passwd".into(),
             inside_worktree: false,
+            through_symlink: false,
         }),
     };
     assert_eq!(p.evaluate_with(&outside, &wide).effect, Effect::Deny);
@@ -979,6 +981,7 @@ fn remember_makes_an_exact_project_rule_that_never_beats_a_deny() {
             decision: Decision {
                 effect: Effect::Ask,
                 source: DecisionSource::Default,
+                message: None,
             },
         },
     ));

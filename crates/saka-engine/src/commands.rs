@@ -9,6 +9,7 @@ use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
+use saka_core::vocab::SpecOrigin;
 use saka_core::workspace;
 use saka_ports::{IdsSource, RepoRef};
 use saka_spec::{LintIssue, PARSER_VERSION, Parsed, content_hash};
@@ -49,6 +50,7 @@ pub struct SpecFile<'a> {
     pub path: &'a str,
     pub source_commit: &'a str,
     pub bytes: &'a [u8],
+    pub origin: SpecOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,7 +61,7 @@ pub struct RegisteredSpec {
     pub issues: Vec<LintIssue>,
 }
 
-fn reason(value: &str) -> Result<String> {
+pub(crate) fn reason(value: &str) -> Result<String> {
     let trimmed = value.trim();
     let len = trimmed.chars().count();
     if len == 0 || len > REASON_MAX {
@@ -166,6 +168,7 @@ impl Engine {
             path,
             source_commit,
             bytes,
+            origin: SpecOrigin::Manual,
         };
         let (view, _) = self.register_at(&project, &repo, file, cause, None).await?;
         Ok(RegisteredSpec {
@@ -225,6 +228,7 @@ impl Engine {
             path,
             source_commit,
             bytes,
+            origin,
         } = file;
         let _guard = self.locked()?;
         let now = self.now();
@@ -244,6 +248,7 @@ impl Engine {
         issues.sort_by_key(|i| i.line);
         let lint_ok = parsed.is_ready() && !context.issues.iter().any(LintIssue::is_error);
         let revision = NewRevision {
+            origin,
             source_commit: source_commit.to_string(),
             content_hash: hash.clone(),
             context_hash: context.hash.clone(),
@@ -664,7 +669,6 @@ impl Engine {
             .store
             .read(|c| read::session_owner(c, session))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
-        let work_item = owner_task(owner)?;
         let steering = matches!(command, SessionCommand::Steer { .. });
         let input = match command {
             SessionCommand::Steer { text } => {
@@ -675,39 +679,59 @@ impl Engine {
                         code: "length".into(),
                     });
                 }
-                TaskInput::Session(SessionInput::Steer {
+                SessionInput::Steer {
                     session_id: session,
                     text,
-                })
+                }
             }
-            SessionCommand::Interrupt => TaskInput::Session(SessionInput::Interrupt {
+            SessionCommand::Interrupt => SessionInput::Interrupt {
                 session_id: session,
-            }),
-            SessionCommand::Stop { reason: why } => TaskInput::Session(SessionInput::Stop {
+            },
+            SessionCommand::Stop { reason: why } => SessionInput::Stop {
                 session_id: session,
                 reason: reason(&why)?,
-            }),
-        };
-        let events = self.decide(
-            work_item,
-            Some(input),
-            Mode::Command,
-            cause,
-            Extra {
-                action: action.map(|a| (a, Shows::Session(session))),
-                ..Extra::default()
             },
-        )?;
+        };
+        let extra = Extra {
+            action: action.map(|a| (a, Shows::Session(session))),
+            ..Extra::default()
+        };
+        let events = self.decide_owner(owner, input, cause, extra)?;
         let steered = events
             .iter()
             .any(|e| matches!(e, Event::SessionSteered { .. }));
         if steering && !steered {
-            // The turn budget ran out: the task is now blocked and the steer was not sent.
+            // The turn budget ran out: the run has stopped and the steer was not sent.
             return Err(EngineError::Rejected(Rejection::InvalidState {
                 state: "idle".into(),
             }));
         }
         Ok(events)
+    }
+
+    fn decide_owner(
+        &self,
+        owner: RunOwner,
+        input: SessionInput,
+        cause: &Cause,
+        extra: Extra<'_>,
+    ) -> Result<Vec<Event>> {
+        match owner {
+            RunOwner::StageRun { work_item_id, .. } => self.decide(
+                work_item_id,
+                Some(TaskInput::Session(input)),
+                Mode::Command,
+                cause,
+                extra,
+            ),
+            RunOwner::DraftAttempt { spec_draft_id, .. } => self.decide_draft(
+                spec_draft_id,
+                Some(saka_core::draft::DraftInput::Session(input)),
+                Mode::Command,
+                cause,
+                extra,
+            ),
+        }
     }
 
     pub fn revoke_rule(
@@ -771,38 +795,26 @@ impl Engine {
             .store
             .read(|c| read::permission_owner(c, request))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
-        let work_item = owner_task(owner)?;
-        let active_rules = if remember {
-            let task = self.load_task(work_item)?;
-            self.store
-                .read(|c| read::active_permission_rules(c, task.item.project_id))?
-        } else {
-            Vec::new()
+        let active_rules = match owner {
+            RunOwner::StageRun { work_item_id, .. } if remember => {
+                let task = self.load_task(work_item_id)?;
+                self.store
+                    .read(|c| read::active_permission_rules(c, task.item.project_id))?
+            }
+            _ => Vec::new(),
         };
-        let input = TaskInput::Session(SessionInput::AnswerPermission {
+        let input = SessionInput::AnswerPermission {
             permission_request_id: request,
             allow,
             message,
             actor: OPERATOR.to_string(),
             remember,
             active_rules,
-        });
-        self.decide(
-            work_item,
-            Some(input),
-            Mode::Command,
-            cause,
-            Extra {
-                action: action.map(|a| (a, Shows::Permission(request))),
-                ..Extra::default()
-            },
-        )
-    }
-}
-
-fn owner_task(owner: RunOwner) -> Result<WorkItemId> {
-    match owner {
-        RunOwner::StageRun { work_item_id, .. } => Ok(work_item_id),
-        RunOwner::DraftAttempt { .. } => Err(EngineError::Rejected(Rejection::Unsupported)),
+        };
+        let extra = Extra {
+            action: action.map(|a| (a, Shows::Permission(request))),
+            ..Extra::default()
+        };
+        self.decide_owner(owner, input, cause, extra)
     }
 }

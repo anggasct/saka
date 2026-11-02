@@ -2,6 +2,7 @@ mod action;
 mod commands;
 mod context;
 mod docs;
+mod draft;
 mod metrics;
 pub mod packet;
 mod project_config;
@@ -42,6 +43,7 @@ use uuid::Uuid;
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewProject, RegisteredSpec, SessionCommand};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
+pub use draft::{DraftView, NewSpecDraft};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
@@ -64,6 +66,8 @@ pub struct EngineConfig {
     pub integrations: Vec<Integration>,
     pub env: EnvConfig,
     pub docs_author: CommitIdentity,
+    pub draft: saka_core::draft::DraftConfig,
+    pub architect_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +108,8 @@ pub enum EngineError {
     Rejected(#[from] Rejection),
     #[error("{field}: {code}")]
     Invalid { field: &'static str, code: String },
+    #[error("{field}: {code}")]
+    InvalidItem { field: String, code: String },
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("port: {}", .0.code)]
@@ -142,6 +148,7 @@ struct Extra<'a> {
 #[derive(Debug, Clone, Copy)]
 enum Shows {
     Task,
+    Draft,
     Permission(saka_core::ids::PermissionRequestId),
     Session(saka_core::ids::SessionId),
 }
@@ -254,7 +261,7 @@ impl Engine {
         }
         if let Some((action, shows)) = extra.action {
             let reply = match shows {
-                Shows::Task => (action.respond)(Produced::Task(&after)),
+                Shows::Task | Shows::Draft => (action.respond)(Produced::Task(&after)),
                 Shows::Permission(pid) => {
                     let request = after
                         .permissions

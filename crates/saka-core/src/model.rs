@@ -12,9 +12,10 @@ use crate::ids::{
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, ContextOrigin,
-    EnvironmentState, GateOutcome, GateSource, InterruptBy, PermissionState, ResumeCause,
-    SessionState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
-    WorkItemOrigin, WorkItemState, WorkflowPreset,
+    DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome, GateSource, InterruptBy,
+    LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState, SpecDraftState,
+    SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger, WorkItemOrigin,
+    WorkItemState, WorkflowPreset,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -528,6 +529,18 @@ impl Task {
         }
     }
 
+    pub fn run_parts(&mut self) -> crate::session::RunParts<'_> {
+        crate::session::RunParts {
+            environment: &mut self.environment,
+            session: &mut self.session,
+            retired_sessions: &mut self.retired_sessions,
+            permissions: &mut self.permissions,
+            prior_usage: &mut self.prior_usage,
+            usage_records: &mut self.usage_records,
+            quota_observations: &mut self.quota_observations,
+        }
+    }
+
     pub fn run_owner(&self) -> Option<RunOwner> {
         self.stage_run.as_ref().map(|r| RunOwner::StageRun {
             work_item_id: self.item.id,
@@ -569,5 +582,182 @@ impl Task {
         self.item.state == WorkItemState::InStage
             && self.item.stage == Some(stage)
             && self.item.stage_phase == Some(phase)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftDocument {
+    pub index: u32,
+    pub path: Option<String>,
+    pub origin: PacketOrigin,
+    pub bytes: u64,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpecDraft {
+    pub id: SpecDraftId,
+    pub project_id: ProjectId,
+    pub path: String,
+    pub slug: String,
+    pub idea: String,
+    pub locale: DraftLocale,
+    pub context_paths: Vec<String>,
+    pub state: SpecDraftState,
+    pub attempt: u32,
+    pub current_attempt_id: Option<SpecDraftAttemptId>,
+    pub retries: u32,
+    pub queued_at: Timestamp,
+    pub failure: Option<Coded>,
+    pub spec_id: Option<SpecId>,
+    pub commit_sha: Option<String>,
+    pub version: u64,
+    pub created_by: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub finished_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpecDraftAttempt {
+    pub id: SpecDraftAttemptId,
+    pub spec_draft_id: SpecDraftId,
+    pub attempt: u32,
+    pub trigger: Trigger,
+    pub reason: Option<String>,
+    pub note: Option<String>,
+    pub state: DraftAttemptState,
+    pub base_sha: Option<String>,
+    pub budget: Budget,
+    pub budget_warnings: Vec<BudgetDimension>,
+    pub resumed_lost: bool,
+    pub rounds: u32,
+    pub packet_sha256: Option<String>,
+    pub failure: Option<Coded>,
+    pub started_at: Timestamp,
+    pub ended_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LintRound {
+    pub spec_draft_id: SpecDraftId,
+    pub attempt_id: SpecDraftAttemptId,
+    pub round: u32,
+    pub session_id: SessionId,
+    pub turn: u32,
+    pub outcome: LintOutcome,
+    pub bytes: Option<u64>,
+    pub content: Option<Vec<u8>>,
+    pub content_hash: Option<String>,
+    pub parser_version: u32,
+    pub issues: Vec<Value>,
+    pub decisions_open: u32,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoundMark {
+    pub attempt_id: SpecDraftAttemptId,
+    pub round: u32,
+    pub session_id: SessionId,
+    pub turn: u32,
+    pub outcome: LintOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryRequest {
+    pub reason: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Draft {
+    pub draft: SpecDraft,
+    pub attempt: Option<SpecDraftAttempt>,
+    pub environment: Option<Environment>,
+    pub retired_environments: Vec<Environment>,
+    pub session: Option<Session>,
+    pub retired_sessions: Vec<Session>,
+    pub permissions: Vec<PermissionRequest>,
+    pub prior_usage: Usage,
+    pub usage_records: Vec<UsageRecord>,
+    pub quota_observations: Vec<AccountQuota>,
+    pub last_round: Option<RoundMark>,
+    pub has_content: bool,
+    pub retry_request: Option<RetryRequest>,
+}
+
+impl Draft {
+    pub fn new(draft: SpecDraft) -> Draft {
+        Draft {
+            draft,
+            attempt: None,
+            environment: None,
+            retired_environments: Vec::new(),
+            session: None,
+            retired_sessions: Vec::new(),
+            permissions: Vec::new(),
+            prior_usage: Usage::default(),
+            usage_records: Vec::new(),
+            quota_observations: Vec::new(),
+            last_round: None,
+            has_content: false,
+            retry_request: None,
+        }
+    }
+
+    pub fn id(&self) -> SpecDraftId {
+        self.draft.id
+    }
+
+    pub fn run_parts(&mut self) -> crate::session::RunParts<'_> {
+        crate::session::RunParts {
+            environment: &mut self.environment,
+            session: &mut self.session,
+            retired_sessions: &mut self.retired_sessions,
+            permissions: &mut self.permissions,
+            prior_usage: &mut self.prior_usage,
+            usage_records: &mut self.usage_records,
+            quota_observations: &mut self.quota_observations,
+        }
+    }
+
+    pub fn running_attempt(&self) -> Option<&SpecDraftAttempt> {
+        self.attempt
+            .as_ref()
+            .filter(|a| a.state == DraftAttemptState::Running)
+    }
+
+    pub fn run_owner(&self) -> Option<RunOwner> {
+        self.attempt.as_ref().map(|a| RunOwner::DraftAttempt {
+            spec_draft_id: self.draft.id,
+            attempt_id: a.id,
+        })
+    }
+
+    pub fn live_session(&self) -> Option<&Session> {
+        self.session.as_ref().filter(|s| s.state.is_live())
+    }
+
+    pub fn ready_environment(&self) -> Option<&Environment> {
+        self.environment
+            .as_ref()
+            .filter(|e| e.state == EnvironmentState::Ready)
+    }
+
+    pub fn environment_by_id(&self, id: EnvironmentId) -> Option<&Environment> {
+        self.environment
+            .iter()
+            .chain(self.retired_environments.iter())
+            .find(|e| e.id == id)
+    }
+
+    pub fn live_environment(&self) -> Option<&Environment> {
+        self.environment.as_ref().filter(|e| {
+            matches!(
+                e.state,
+                EnvironmentState::Ready | EnvironmentState::Preparing
+            )
+        })
     }
 }

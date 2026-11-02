@@ -91,6 +91,7 @@ impl World {
         let now = Timestamp(1_000_000);
         let mut ctx = Ctx { now, ids: &mut ids };
         let revision = NewRevision {
+            origin: saka_core::vocab::SpecOrigin::Manual,
             source_commit: "a".repeat(40),
             content_hash: "sha256:x".into(),
             context_hash: "sha256:none".into(),
@@ -433,6 +434,7 @@ fn ask(cli_request_id: &str, id: u128) -> TaskInput {
         decision: Decision {
             effect: Effect::Ask,
             source: DecisionSource::Default,
+            message: None,
         },
     })
 }
@@ -799,6 +801,7 @@ fn same_content_records_nothing_and_old_content_reuses_its_revision() {
         ids: &mut ids,
     };
     let revision = || NewRevision {
+        origin: saka_core::vocab::SpecOrigin::Manual,
         source_commit: "b".repeat(40),
         content_hash: "h".into(),
         context_hash: "sha256:none".into(),

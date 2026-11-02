@@ -163,6 +163,40 @@ vocab!(CheckConclusion {
     Error => "error",
 });
 vocab!(MergeMethod { Merge => "merge", Squash => "squash", Rebase => "rebase" });
+vocab!(SpecDraftState {
+    Queued => "queued",
+    Preparing => "preparing",
+    Drafting => "drafting",
+    Committing => "committing",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+vocab!(DraftAttemptState { Running => "running", Succeeded => "succeeded", Failed => "failed", Cancelled => "cancelled" });
+vocab!(DraftLocale { En => "en", Id => "id" });
+vocab!(LintOutcome { Passed => "passed", Failed => "failed", Missing => "missing" });
+vocab!(PacketOrigin { Template => "template", Rules => "rules", Selected => "selected", Always => "always" });
+vocab!(PrimaryAction { Retry => "retry", OpenWritten => "open_written", OpenFile => "open_file" });
+vocab!(TargetTaken { FileExists => "file_exists", SpecRegistered => "spec_registered", SlugTaken => "slug_taken", DraftActive => "draft_active" });
+vocab!(
+    DraftFailureCode {
+        LintRoundsExhausted => "lint_rounds_exhausted",
+        BudgetExhausted => "budget_exhausted",
+        QuotaExhausted => "quota_exhausted",
+        SessionFailed => "session_failed",
+        SessionLost => "session_lost",
+        SessionTimeout => "session_timeout",
+        PermissionExpired => "permission_expired",
+        EnvSetupFailed => "env_setup_failed",
+        ContextUnavailable => "context_unavailable",
+        WorktreeUnreadable => "worktree_unreadable",
+        ScmUnavailable => "scm_unavailable",
+        PushRejected => "push_rejected",
+        TargetExists => "target_exists",
+        TargetPathConflict => "target_path_conflict",
+        RegisterFailed => "register_failed",
+    }
+);
 
 impl SessionState {
     pub fn is_live(self) -> bool {
@@ -174,6 +208,56 @@ impl SessionState {
                 | SessionState::Idle
                 | SessionState::Interrupted
         )
+    }
+}
+
+impl SpecDraftState {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, SpecDraftState::Succeeded | SpecDraftState::Cancelled)
+    }
+
+    pub fn is_finished(self) -> bool {
+        matches!(
+            self,
+            SpecDraftState::Succeeded | SpecDraftState::Failed | SpecDraftState::Cancelled
+        )
+    }
+
+    pub fn holds_slot(self) -> bool {
+        matches!(
+            self,
+            SpecDraftState::Preparing | SpecDraftState::Drafting | SpecDraftState::Committing
+        )
+    }
+
+    pub fn holds_path(self) -> bool {
+        !self.is_terminal()
+    }
+}
+
+impl DraftFailureCode {
+    pub fn is_retryable(self) -> bool {
+        !matches!(
+            self,
+            DraftFailureCode::TargetExists
+                | DraftFailureCode::TargetPathConflict
+                | DraftFailureCode::RegisterFailed
+        )
+    }
+
+    pub fn from_blocker(code: BlockerCode) -> Option<DraftFailureCode> {
+        Some(match code {
+            BlockerCode::BudgetExhausted => DraftFailureCode::BudgetExhausted,
+            BlockerCode::QuotaExhausted => DraftFailureCode::QuotaExhausted,
+            BlockerCode::SessionFailed => DraftFailureCode::SessionFailed,
+            BlockerCode::SessionLost => DraftFailureCode::SessionLost,
+            BlockerCode::SessionTimeout => DraftFailureCode::SessionTimeout,
+            BlockerCode::PermissionExpired => DraftFailureCode::PermissionExpired,
+            BlockerCode::EnvSetupFailed => DraftFailureCode::EnvSetupFailed,
+            BlockerCode::ScmUnavailable => DraftFailureCode::ScmUnavailable,
+            BlockerCode::PushRejected => DraftFailureCode::PushRejected,
+            _ => return None,
+        })
     }
 }
 

@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
-use saka_core::model::ContextRef;
-use saka_core::vocab::{ContextOrigin, Tool};
+use saka_core::model::{ContextRef, DraftDocument};
+use saka_core::vocab::{ContextOrigin, DraftLocale, PacketOrigin, Tool};
 
 use saka_spec::content_hash;
 
@@ -55,10 +55,14 @@ pub struct Packet {
 }
 
 fn push_document(out: &mut String, index: u32, path: &str, commit: &str, content: &[u8]) {
+    push_source(out, index, &format!("{path} @ {commit}"), content);
+}
+
+fn push_source(out: &mut String, index: u32, source: &str, content: &[u8]) {
     let text = String::from_utf8_lossy(content).replace("</document", "<\\/document");
     let _ = write!(
         out,
-        "<document index=\"{index}\">\n<source>{path} @ {commit}</source>\n<document_content>\n{}\n</document_content>\n</document>\n",
+        "<document index=\"{index}\">\n<source>{source}</source>\n<document_content>\n{}\n</document_content>\n</document>\n",
         text.trim_end_matches('\n')
     );
 }
@@ -164,6 +168,273 @@ pub fn render(input: &PacketInput) -> Packet {
         source_commit: spec.source_commit.clone(),
         documents,
         sha256,
+    }
+}
+
+pub const ARCHITECT_MAX_DOCUMENTS: usize = 32;
+pub const ARCHITECT_MAX_BYTES: u64 = 256 * 1024;
+pub const ARCHITECT_MAX_INDEX: usize = 500;
+pub const ARCHITECT_MAX_ISSUES: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviousAttempt {
+    pub attempt: u32,
+    pub code: String,
+    pub seeded: bool,
+    pub issues: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectInput {
+    pub project_name: String,
+    pub project_path: String,
+    pub base_sha: String,
+    pub locale: DraftLocale,
+    pub idea: String,
+    pub target: String,
+    pub selected: Vec<(String, Vec<u8>)>,
+    pub always: Vec<(String, Vec<u8>)>,
+    pub unreadable: Vec<String>,
+    pub index: Vec<String>,
+    pub previous: Option<PreviousAttempt>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectPacket {
+    pub text: String,
+    pub sha256: String,
+    pub documents: Vec<DraftDocument>,
+}
+
+fn template_locale(locale: DraftLocale) -> saka_spec::Locale {
+    match locale {
+        DraftLocale::En => saka_spec::Locale::En,
+        DraftLocale::Id => saka_spec::Locale::Id,
+    }
+}
+
+fn language(locale: DraftLocale) -> &'static str {
+    match locale {
+        DraftLocale::En => "English",
+        DraftLocale::Id => "Indonesian (Bahasa Indonesia)",
+    }
+}
+
+#[must_use]
+pub fn issue_line(issue: &serde_json::Value) -> String {
+    let code = issue
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let line = issue
+        .get("line")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1);
+    let params = issue
+        .get("params")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    format!("- line {line}: {code} {params}")
+}
+
+#[must_use]
+pub fn blocking_issues(issues: &[serde_json::Value]) -> Vec<&serde_json::Value> {
+    issues
+        .iter()
+        .filter(|i| {
+            i.get("severity").and_then(serde_json::Value::as_str) == Some("error")
+                && i.get("code").and_then(serde_json::Value::as_str)
+                    != Some(saka_spec::LintCode::DecisionUnanswered.as_str())
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn issue_list(issues: &[&serde_json::Value]) -> String {
+    let mut out = String::new();
+    for issue in issues.iter().take(ARCHITECT_MAX_ISSUES) {
+        let _ = writeln!(out, "{}", issue_line(issue));
+    }
+    if issues.len() > ARCHITECT_MAX_ISSUES {
+        let _ = writeln!(out, "- …and {} more", issues.len() - ARCHITECT_MAX_ISSUES);
+    }
+    out
+}
+
+#[must_use]
+pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
+    let mut text = String::from("<documents>\n");
+    let mut documents = Vec::new();
+    let template = saka_spec::template(template_locale(input.locale)).as_bytes();
+    let rules = saka_spec::rules().as_bytes();
+    let fixed = [
+        (
+            format!(
+                "saka:spec-template/{} (parser {})",
+                input.locale.as_str(),
+                saka_spec::PARSER_VERSION
+            ),
+            PacketOrigin::Template,
+            template,
+        ),
+        (
+            format!("saka:spec-rules (parser {})", saka_spec::PARSER_VERSION),
+            PacketOrigin::Rules,
+            rules,
+        ),
+    ];
+    for (index, (source, origin, content)) in (1u32..).zip(fixed) {
+        push_source(&mut text, index, &source, content);
+        documents.push(DraftDocument {
+            index,
+            path: None,
+            origin,
+            bytes: content.len() as u64,
+            content_hash: content_hash(content),
+        });
+    }
+    let mut seen: Vec<&str> = vec![input.target.as_str()];
+    let mut wanted: Vec<(&str, PacketOrigin, &[u8])> = Vec::new();
+    for (path, content) in &input.selected {
+        if !seen.contains(&path.as_str()) {
+            seen.push(path);
+            wanted.push((path, PacketOrigin::Selected, content));
+        }
+    }
+    let mut always: Vec<&(String, Vec<u8>)> = input.always.iter().collect();
+    always.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    for (path, content) in always {
+        if !seen.contains(&path.as_str()) {
+            seen.push(path);
+            wanted.push((path, PacketOrigin::Always, content));
+        }
+    }
+    let mut omitted: Vec<&str> = Vec::new();
+    let mut total = 0u64;
+    let mut index = 3u32;
+    for (path, origin, content) in wanted {
+        let bytes = content.len() as u64;
+        let fits = omitted.is_empty()
+            && documents.len() - 2 < ARCHITECT_MAX_DOCUMENTS
+            && total + bytes <= ARCHITECT_MAX_BYTES;
+        if !fits {
+            omitted.push(path);
+            continue;
+        }
+        total += bytes;
+        push_source(
+            &mut text,
+            index,
+            &format!("{path} @ {}", input.base_sha),
+            content,
+        );
+        documents.push(DraftDocument {
+            index,
+            path: Some(path.to_string()),
+            origin,
+            bytes,
+            content_hash: content_hash(content),
+        });
+        index += 1;
+    }
+    omitted.extend(input.unreadable.iter().map(String::as_str));
+    text.push_str("</documents>\n\n");
+
+    let _ = writeln!(
+        text,
+        "You are the architect for project \"{}\". Write one new spec in this repository from the idea below.",
+        input.project_name
+    );
+    text.push_str(
+        "Document 1 is the spec template and document 2 is the spec format and its lint rules.",
+    );
+    match documents.len() - 2 {
+        0 => {}
+        1 => {
+            let _ = write!(
+                text,
+                " Document 3 is a doc the operator chose or the project marks as always relevant, read at commit {}.",
+                input.base_sha
+            );
+        }
+        n => {
+            let _ = write!(
+                text,
+                " Documents 3–{} are docs the operator chose and docs the project marks as always relevant, read at commit {}.",
+                n + 2,
+                input.base_sha
+            );
+        }
+    }
+    let _ = write!(
+        text,
+        "\n\nIdea:\n<idea>\n{}\n</idea>\n\nTarget file: {}\nLanguage: write the prose in {}. Headings and column names stay the English keywords from document 2.\n\n",
+        input.idea.trim_end_matches('\n'),
+        input.target,
+        language(input.locale)
+    );
+    let mut index: Vec<&String> = input.index.iter().collect();
+    index.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    let _ = writeln!(
+        text,
+        "Project docs ({} markdown files under {} at {}):",
+        index.len(),
+        input.project_path,
+        input.base_sha
+    );
+    for path in index.iter().take(ARCHITECT_MAX_INDEX) {
+        let _ = writeln!(text, "- {path}");
+    }
+    if index.len() > ARCHITECT_MAX_INDEX {
+        let _ = writeln!(text, "- …and {} more", index.len() - ARCHITECT_MAX_INDEX);
+    }
+    if !omitted.is_empty() {
+        let _ = writeln!(
+            text,
+            "Not included because of the context limit: {}",
+            omitted.join(", ")
+        );
+    }
+    text.push('\n');
+    if let Some(previous) = &input.previous {
+        let _ = write!(
+            text,
+            "Previous attempt {} stopped: {}.",
+            previous.attempt, previous.code
+        );
+        if previous.seeded {
+            let _ = write!(text, " {} already contains what it wrote.", input.target);
+        }
+        let blocking = blocking_issues(&previous.issues);
+        if blocking.is_empty() {
+            text.push('\n');
+        } else {
+            text.push_str(" Its last check found:\n");
+            text.push_str(&issue_list(&blocking));
+        }
+        text.push('\n');
+    }
+    if let Some(note) = &input.note {
+        let _ = write!(text, "Operator note:\n{}\n\n", note.trim_end_matches('\n'));
+    }
+    let _ = write!(
+        text,
+        "Rules:\n\
+         - Read any file in this repository that helps. You cannot run commands or use the web.\n\
+         - Write the spec only to {target}. Every other write is refused.\n\
+         - Follow document 2 exactly and start from document 1.\n\
+         - For each material technical decision the docs do not settle, add a question under \"## Decisions\" with two or three options, the recommended option first and marked \"(recommended)\". Leave every option unchecked; the operator answers.\n\
+         - Do not commit. When the file is complete, end your turn. Saka checks it and tells you what to fix.\n",
+        target = input.target
+    );
+    let sha256 = content_hash(text.as_bytes())
+        .trim_start_matches("sha256:")
+        .to_string();
+    ArchitectPacket {
+        text,
+        sha256,
+        documents,
     }
 }
 

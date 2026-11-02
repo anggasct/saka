@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::ids::WorkItemId;
+use crate::ids::{SpecDraftId, WorkItemId};
 use crate::model::RunOwner;
 use crate::time::Timestamp;
 use crate::vocab::{BlockerCode, StagePhase};
@@ -52,6 +52,8 @@ job_kinds! {
     GateVerify => "gate.verify", 3;
     ScmReportStatus => "scm.report_status", 3;
     ScmPollCommit => "scm.poll_commit", 5;
+    DraftLint => "draft.lint", 3;
+    DraftCommit => "draft.commit", 5;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -86,7 +88,9 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmDeleteBranch
         | JobKind::EnvTeardown
         | JobKind::ScmWebhookPrune
-        | JobKind::ScmReportStatus => None,
+        | JobKind::ScmReportStatus
+        | JobKind::DraftLint
+        | JobKind::DraftCommit => None,
     }
 }
 
@@ -129,6 +133,10 @@ pub fn work_item_of(payload: &Value) -> Option<WorkItemId> {
     }
 }
 
+pub fn spec_draft_of(payload: &Value) -> Option<SpecDraftId> {
+    owner_of(payload)?.spec_draft_id()
+}
+
 fn key_prefix(kind: JobKind) -> &'static str {
     match kind {
         JobKind::EnvPrepare => "env.prepare",
@@ -151,5 +159,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::GateVerify => "gate.verify",
         JobKind::ScmReportStatus => "scm.report_status",
         JobKind::ScmPollCommit => "scm.poll_commit",
+        JobKind::DraftLint => "draft.lint",
+        JobKind::DraftCommit => "draft.commit",
     }
 }

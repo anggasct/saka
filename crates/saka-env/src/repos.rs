@@ -1179,6 +1179,7 @@ pub fn resolve_in(worktree: &Path, cwd: &str, raw: &str) -> RequestPath {
         RequestPath {
             path: raw.to_string(),
             inside_worktree: false,
+            through_symlink: resolved.through_symlink,
         }
     }
 }
@@ -1301,6 +1302,7 @@ pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
     let outside = || RequestPath {
         path: raw.to_string(),
         inside_worktree: false,
+        through_symlink: false,
     };
     let Ok(root) = worktree.canonicalize() else {
         return outside();
@@ -1312,6 +1314,7 @@ pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
         root.clone()
     };
     let mut existing = true;
+    let mut through_symlink = false;
     for part in start.components() {
         match part {
             Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
@@ -1322,8 +1325,11 @@ pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
                 resolved.push(name);
                 if existing {
                     match std::fs::symlink_metadata(&resolved) {
-                        Ok(_) => match resolved.canonicalize() {
-                            Ok(real) => resolved = real,
+                        Ok(meta) => match resolved.canonicalize() {
+                            Ok(real) => {
+                                through_symlink |= meta.file_type().is_symlink();
+                                resolved = real;
+                            }
                             Err(_) => return outside(),
                         },
                         Err(_) => existing = false,
@@ -1336,6 +1342,7 @@ pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
         Ok(rel) => RequestPath {
             path: rel.to_string_lossy().into_owned(),
             inside_worktree: true,
+            through_symlink,
         },
         Err(_) => outside(),
     }

@@ -34,6 +34,8 @@ pub struct Config {
     #[serde(default)]
     pub budget: BudgetConfig,
     #[serde(default)]
+    pub architect: Architect,
+    #[serde(default)]
     pub git: Git,
     #[serde(default)]
     pub permission: Permission,
@@ -286,6 +288,8 @@ pub struct BudgetConfig {
     pub warn_percent: u32,
     #[serde(default)]
     pub dev: StageBudget,
+    #[serde(default)]
+    pub architect: ArchitectBudget,
 }
 
 impl Default for BudgetConfig {
@@ -293,8 +297,67 @@ impl Default for BudgetConfig {
         BudgetConfig {
             warn_percent: eighty(),
             dev: StageBudget::default(),
+            architect: ArchitectBudget::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Architect {
+    #[serde(default = "one_usize")]
+    pub max_active: usize,
+    #[serde(default = "four")]
+    pub lint_rounds: u32,
+    #[serde(default)]
+    pub model: String,
+}
+
+impl Default for Architect {
+    fn default() -> Architect {
+        Architect {
+            max_active: one_usize(),
+            lint_rounds: four(),
+            model: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchitectBudget {
+    #[serde(default = "thirty_minutes")]
+    pub running_minutes: u32,
+    #[serde(default = "six")]
+    pub turns: u32,
+    #[serde(default)]
+    pub tokens: i64,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+impl Default for ArchitectBudget {
+    fn default() -> ArchitectBudget {
+        ArchitectBudget {
+            running_minutes: thirty_minutes(),
+            turns: six(),
+            tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+}
+
+fn one_usize() -> usize {
+    1
+}
+fn four() -> u32 {
+    4
+}
+fn six() -> u32 {
+    6
+}
+fn thirty_minutes() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -573,6 +636,38 @@ impl Config {
         if let Some((_, message)) = checks.iter().find(|(ok, _)| !ok) {
             return Err(err("config_invalid", *message));
         }
+        let r = &self.architect;
+        let ab = &b.architect;
+        let architect: [(bool, &str); 7] = [
+            (
+                (1..=4).contains(&r.max_active),
+                "architect.max_active must be 1..=4",
+            ),
+            (
+                (1..=10).contains(&r.lint_rounds),
+                "architect.lint_rounds must be 1..=10",
+            ),
+            (
+                (1..=1440).contains(&ab.running_minutes),
+                "budget.architect.running_minutes must be 1..=1440",
+            ),
+            (
+                (1..=100).contains(&ab.turns),
+                "budget.architect.turns must be 1..=100",
+            ),
+            (
+                ab.turns >= r.lint_rounds,
+                "budget.architect.turns must be at least architect.lint_rounds",
+            ),
+            (ab.tokens >= 0, "budget.architect.tokens must be 0 or more"),
+            (
+                ab.cost_usd >= 0.0 && ab.cost_usd.is_finite(),
+                "budget.architect.cost_usd must be 0 or more",
+            ),
+        ];
+        if let Some((_, message)) = architect.iter().find(|(ok, _)| !ok) {
+            return Err(err("config_invalid", *message));
+        }
         let e = &self.env;
         if !(1..=100).contains(&e.ports_per_env) {
             return Err(err("config_invalid", "env.ports_per_env must be 1..=100"));
@@ -727,6 +822,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn architect_defaults_and_the_field_that_is_out_of_range() {
+        let cfg = Config::parse("").unwrap();
+        assert_eq!(
+            (cfg.architect.max_active, cfg.architect.lint_rounds),
+            (1, 4)
+        );
+        assert!(cfg.architect.model.is_empty());
+        let b = &cfg.budget.architect;
+        assert_eq!((b.running_minutes, b.turns, b.tokens), (30, 6, 0));
+        assert!(b.cost_usd.abs() < f64::EPSILON);
+        let partial = Config::parse("[budget.architect]\ntokens = 5\n").unwrap();
+        assert_eq!(partial.budget.architect.running_minutes, 30);
+        for (bad, field) in [
+            ("[architect]\nlint_rounds = 0\n", "architect.lint_rounds"),
+            ("[architect]\nlint_rounds = 8\n", "budget.architect.turns"),
+            ("[architect]\nmax_active = 9\n", "architect.max_active"),
+        ] {
+            let e = Config::parse(bad).unwrap_err();
+            assert_eq!(e.code, "config_invalid");
+            assert!(e.detail.starts_with(field), "{bad}: {}", e.detail);
+        }
+    }
+
+    #[test]
     fn defaults_unknown_fields_and_ranges() {
         let cfg = Config::parse("").unwrap();
         assert_eq!(cfg.server.listen, "127.0.0.1:7420");
@@ -764,6 +883,14 @@ mod tests {
             "[budget]\nwarn_percent = 100\n",
             "[budget.dev]\nturns = 0\n",
             "[budget.dev]\ncost_usd = -1.0\n",
+            "[architect]\nmax_active = 0\n",
+            "[architect]\nmax_active = 5\n",
+            "[architect]\nlint_rounds = 11\n",
+            "[budget.architect]\nrunning_minutes = 0\n",
+            "[budget.architect]\nturns = 101\n",
+            "[budget.architect]\nturns = 3\n",
+            "[budget.architect]\ntokens = -1\n",
+            "[budget.architect]\ncost_usd = -0.5\n",
         ] {
             assert_eq!(
                 Config::parse(bad).unwrap_err().code,

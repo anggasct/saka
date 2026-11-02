@@ -15,9 +15,9 @@ pub use clock::{FakeClock, FakeIds};
 pub use fixtures::{
     AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec,
 };
-pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step};
+pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step, draft_config};
 pub use world::{
-    AgentOutcome, AgentScript, CiScript, CommandScript, FAKE_CAPABILITIES, FAKE_INTEGRATION,
-    FAKE_SIGNATURE_HEADER, FakeWorld, Launch, RecipeRun, SIM_RUNNER_VERSION, Stats,
-    ToolchainScript, TurnUsage, fake_signature, git_blob,
+    AgentOutcome, AgentScript, CiScript, CommandScript, DraftTurn, FAKE_CAPABILITIES,
+    FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, Launch, RecipeRun, SIM_RUNNER_VERSION,
+    Stats, ToolchainScript, TurnUsage, fake_signature, git_blob,
 };

@@ -1,5 +1,6 @@
-use saka_core::ids::PermissionRequestId;
-use saka_core::model::{RunOwner, Task};
+use saka_core::draft::DraftInput;
+use saka_core::ids::{PermissionRequestId, RepoId};
+use saka_core::model::{Draft, Environment, PermissionRequest, RunOwner, Session, Task};
 use saka_core::policy::{Effect, ToolRequest};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
@@ -21,6 +22,27 @@ const FILE_TOOLS: &[(&str, &str)] = &[
 ];
 const SUMMARY_MAX: usize = 200;
 
+enum Run {
+    Task(Box<Task>),
+    Draft(Box<Draft>),
+}
+
+impl Run {
+    fn session(&self) -> Option<&Session> {
+        match self {
+            Run::Task(t) => t.session.as_ref(),
+            Run::Draft(d) => d.session.as_ref(),
+        }
+    }
+
+    fn permissions(&self) -> &[PermissionRequest] {
+        match self {
+            Run::Task(t) => &t.permissions,
+            Run::Draft(d) => &d.permissions,
+        }
+    }
+}
+
 impl Engine {
     pub fn on_runner_event(&self, event: RunnerEvent) -> Result<()> {
         let Some(owner) = self
@@ -29,15 +51,21 @@ impl Engine {
         else {
             return Ok(());
         };
-        let work_item = match owner {
-            RunOwner::StageRun { work_item_id, .. } => work_item_id,
-            RunOwner::DraftAttempt { .. } => {
-                tracing::warn!(session_id = %event.session_id, "runner event for a run without a decider");
-                return Ok(());
+        let run = match owner {
+            RunOwner::StageRun { work_item_id, .. } => {
+                Run::Task(Box::new(self.load_task(work_item_id)?))
+            }
+            RunOwner::DraftAttempt { spec_draft_id, .. } => {
+                match self
+                    .store
+                    .read(|c| saka_store::draft::load_draft(c, spec_draft_id))?
+                {
+                    Some(d) => Run::Draft(Box::new(d)),
+                    None => return Ok(()),
+                }
             }
         };
-        let task = self.load_task(work_item)?;
-        let Some(session) = task.session.as_ref().filter(|s| s.id == event.session_id) else {
+        let Some(session) = run.session().filter(|s| s.id == event.session_id) else {
             return Ok(());
         };
         let replayed =
@@ -47,31 +75,27 @@ impl Engine {
         }
         let live = session.state.is_live();
         let mut permission = None;
-        let mut inputs: Vec<TaskInput> = match &event.kind {
+        let mut inputs: Vec<SessionInput> = match &event.kind {
             RunnerEventKind::SessionInit {
                 cli_session_id,
                 model,
-            } => vec![TaskInput::Session(SessionInput::Initialized {
+            } => vec![SessionInput::Initialized {
                 cli_session_id: cli_session_id.clone(),
                 model: model.clone(),
-            })],
+            }],
             RunnerEventKind::PermissionRequest {
                 request_id,
                 tool,
                 input,
             } if live => {
-                let next = self.permission_request(
-                    &task,
-                    request_id.clone(),
-                    tool.clone(),
-                    input.clone(),
-                )?;
-                if let TaskInput::Session(SessionInput::PermissionRequested {
+                let next =
+                    self.permission_request(&run, request_id.clone(), tool.clone(), input.clone())?;
+                if let SessionInput::PermissionRequested {
                     permission_request_id,
                     summary,
                     decision,
                     ..
-                }) = &next
+                } = &next
                 {
                     let state = match decision.effect {
                         Effect::Allow => "allowed",
@@ -86,8 +110,8 @@ impl Engine {
                 request_id,
                 behavior,
             } => {
-                let found = task
-                    .permissions
+                let found = run
+                    .permissions()
                     .iter()
                     .find(|p| &p.cli_request_id == request_id);
                 if let Some(p) = found {
@@ -99,10 +123,8 @@ impl Engine {
                     permission = Some((p.id, p.summary.clone(), state));
                 }
                 found
-                    .map(|p| {
-                        TaskInput::Session(SessionInput::PermissionDelivered {
-                            permission_request_id: p.id,
-                        })
+                    .map(|p| SessionInput::PermissionDelivered {
+                        permission_request_id: p.id,
                     })
                     .into_iter()
                     .collect()
@@ -114,23 +136,18 @@ impl Engine {
                 input_tokens,
                 output_tokens,
                 ..
-            } => vec![TaskInput::Session(SessionInput::TurnEnded {
+            } => vec![SessionInput::TurnEnded {
                 turn: *turn,
                 status: status.clone(),
                 cost_usd_micros: *cost_usd_micros,
                 input_tokens: *input_tokens,
                 output_tokens: *output_tokens,
-            })],
-            RunnerEventKind::CliExited { code, signal } => {
-                vec![TaskInput::Session(SessionInput::CliExited {
-                    code: *code,
-                    signal: *signal,
-                })]
-            }
-            RunnerEventKind::RateLimit { info } => timeline::quota_windows(info)
-                .into_iter()
-                .map(TaskInput::Session)
-                .collect(),
+            }],
+            RunnerEventKind::CliExited { code, signal } => vec![SessionInput::CliExited {
+                code: *code,
+                signal: *signal,
+            }],
+            RunnerEventKind::RateLimit { info } => timeline::quota_windows(info),
             RunnerEventKind::RunnerError { code, .. } => {
                 tracing::warn!(session_id = %event.session_id, code = %code, "runner error");
                 vec![]
@@ -153,46 +170,93 @@ impl Engine {
         } else {
             Some(inputs.remove(0))
         };
-        self.decide(
-            work_item,
-            first,
-            Mode::Fact,
-            &cause,
-            Extra {
-                activity: row,
-                offset: Some((event.session_id, event.offset)),
-                ..Extra::default()
-            },
-        )?;
+        let extra = Extra {
+            activity: row,
+            offset: Some((event.session_id, event.offset)),
+            ..Extra::default()
+        };
+        let decide = |input: Option<SessionInput>, extra: Extra<'_>| match &run {
+            Run::Task(t) => self
+                .decide(
+                    t.item.id,
+                    input.map(TaskInput::Session),
+                    Mode::Fact,
+                    &cause,
+                    extra,
+                )
+                .map(|_| ()),
+            Run::Draft(d) => self
+                .decide_draft(
+                    d.draft.id,
+                    input.map(DraftInput::Session),
+                    Mode::Fact,
+                    &cause,
+                    extra,
+                )
+                .map(|_| ()),
+        };
+        decide(first, extra)?;
         for input in inputs {
-            self.decide(work_item, Some(input), Mode::Fact, &cause, Extra::default())?;
+            decide(Some(input), Extra::default())?;
         }
         Ok(())
     }
 
     fn permission_request(
         &self,
-        task: &Task,
+        run: &Run,
         request_id: String,
         tool: String,
         input: Value,
-    ) -> Result<TaskInput> {
-        let request = self.tool_request(task, &tool, &input);
-        let rules = self
-            .store
-            .read(|c| read::active_permission_rules(c, task.item.project_id))?;
-        let decision = self.cfg.policy.evaluate_with(&request, &rules);
-        Ok(TaskInput::Session(SessionInput::PermissionRequested {
+    ) -> Result<SessionInput> {
+        let decision = match run {
+            Run::Task(task) => {
+                let request = self.tool_request(
+                    task.environment.as_ref(),
+                    task.item.repo_id,
+                    "",
+                    &tool,
+                    &input,
+                );
+                let rules = self
+                    .store
+                    .read(|c| read::active_permission_rules(c, task.item.project_id))?;
+                self.cfg.policy.evaluate_with(&request, &rules)
+            }
+            Run::Draft(d) => {
+                let (project, _) = self.workspace_of(d.draft.project_id)?;
+                let cwd = match project.project_path.trim_matches('/') {
+                    "." => String::new(),
+                    dir => dir.to_string(),
+                };
+                let request = self.tool_request(
+                    d.environment.as_ref(),
+                    project.workspace_repo_id,
+                    &cwd,
+                    &tool,
+                    &input,
+                );
+                saka_core::policy::architect(&request, &d.draft.path, &self.cfg.policy)
+            }
+        };
+        Ok(SessionInput::PermissionRequested {
             permission_request_id: PermissionRequestId(self.new_id()),
             cli_request_id: request_id,
             summary: summary(&tool, &input),
             tool,
             input,
             decision,
-        }))
+        })
     }
 
-    fn tool_request(&self, task: &Task, tool: &str, input: &Value) -> ToolRequest {
+    fn tool_request(
+        &self,
+        environment: Option<&Environment>,
+        repo_id: RepoId,
+        cwd: &str,
+        tool: &str,
+        input: &Value,
+    ) -> ToolRequest {
         let command = (tool == "Bash")
             .then(|| {
                 input
@@ -205,7 +269,7 @@ impl Engine {
             .iter()
             .find(|(name, _)| *name == tool)
             .and_then(|(_, key)| input.get(*key).and_then(Value::as_str));
-        let path = match (raw, task.environment.as_ref(), self.repo_for_paths(task)) {
+        let path = match (raw, environment, self.repo_for_paths(repo_id)) {
             (Some(raw), Some(env), Some(repo)) => Some(self.ports.env.resolve_path(
                 &EnvRef {
                     environment_id: env.id,
@@ -217,12 +281,13 @@ impl Engine {
                     path_prefix: Vec::new(),
                     secrets: Vec::new(),
                 },
-                "",
+                cwd,
                 raw,
             )),
             (Some(raw), _, _) => Some(saka_core::policy::RequestPath {
                 path: raw.to_string(),
                 inside_worktree: false,
+                through_symlink: false,
             }),
             (None, _, _) => None,
         };
@@ -233,10 +298,10 @@ impl Engine {
         }
     }
 
-    fn repo_for_paths(&self, task: &Task) -> Option<saka_ports::RepoRef> {
+    fn repo_for_paths(&self, repo_id: RepoId) -> Option<saka_ports::RepoRef> {
         let repo = self
             .store
-            .read(|c| read::load_repo(c, task.item.repo_id))
+            .read(|c| read::load_repo(c, repo_id))
             .ok()
             .flatten()?;
         Some(saka_ports::RepoRef {

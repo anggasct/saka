@@ -593,6 +593,8 @@ pub enum WaitingOn {
     },
     /// Every port block in `env.port_range` is held by a live environment.
     PortBlock,
+    /// Every architect slot (`architect.max_active`) is held by another draft.
+    ArchitectSlot,
 }
 
 impl From<&Waiting> for WaitingOn {
@@ -621,6 +623,7 @@ impl From<&Waiting> for WaitingOn {
                 resets_at: resets_at.map(time),
             },
             Waiting::PortBlock => WaitingOn::PortBlock,
+            Waiting::ArchitectSlot => WaitingOn::ArchitectSlot,
         }
     }
 }

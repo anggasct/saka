@@ -2,6 +2,7 @@ use saka_core::event::Event;
 use saka_core::ids::ProjectId;
 use saka_core::paths::{self, MAX_DOC_BYTES, MAX_TREE_FILES};
 use saka_core::rejection::{FileUnsupported, Rejection};
+use saka_core::vocab::SpecOrigin;
 use saka_ports::{DocBlob, DocCommit, DocEntry, DocExpect, DocWrite};
 use saka_store::{Batch, read};
 use serde_json::{Value, json};
@@ -35,6 +36,14 @@ pub enum Precondition {
     Blob(String),
     Exists,
     Absent,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WrittenDoc {
+    pub commit: String,
+    pub blob: String,
+    pub bytes: Vec<u8>,
+    pub event: Option<Event>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +135,56 @@ impl Engine {
         let (project, repo) = self.workspace_of(project_id)?;
         paths::check_doc_path(&project.project_path, path)
             .map_err(|issue| invalid("path", path_code(issue)))?;
+        let written = self
+            .commit_doc(&project, &repo, path, bytes, precondition)
+            .await?;
+        let (spec, spec_problem) = self
+            .register_saved(
+                &project,
+                &repo,
+                path,
+                &written.commit,
+                &written.bytes,
+                cause,
+            )
+            .await?;
+        let view = DocWriteView {
+            project_id,
+            path: path.to_string(),
+            commit: written.commit.clone(),
+            blob: written.blob.clone(),
+            bytes: written.bytes.len() as u64,
+            committed: written.event.is_some(),
+            created: written
+                .event
+                .as_ref()
+                .is_some_and(|e| matches!(e, Event::DocCommitted { created: true, .. })),
+            spec,
+            spec_problem,
+        };
+        let _guard = self.locked()?;
+        let now = self.now();
+        let mut batch = Batch::new(now);
+        if let Some(event) = &written.event {
+            self.push_event(&mut batch, event, Some(project_id), cause, now);
+        }
+        if let Some(action) = action {
+            let reply = (action.respond)(Produced::Doc(&view));
+            batch.action =
+                Some(action.record(self, cause, Some(project_id), Some(project_id.0), reply));
+        }
+        self.commit(&batch)?;
+        Ok(view)
+    }
+
+    pub(crate) async fn commit_doc(
+        &self,
+        project: &saka_core::model::Project,
+        repo: &saka_ports::RepoRef,
+        path: &str,
+        bytes: Vec<u8>,
+        precondition: Precondition,
+    ) -> Result<WrittenDoc> {
         let request = DocCommit {
             repo: repo.clone(),
             branch: project.base_branch.clone(),
@@ -139,9 +198,10 @@ impl Engine {
             author: self.cfg.docs_author.clone(),
             at: self.now(),
         };
+        let project_id = project.id;
         let outcome = self.ports.docs.commit_file(&request).await?;
         let size = request.bytes.len() as u64;
-        let (commit, blob, committed) = match outcome {
+        let (commit, blob, event) = match outcome {
             DocWrite::Committed {
                 commit,
                 parent,
@@ -150,7 +210,16 @@ impl Engine {
                 attempts,
             } => {
                 tracing::info!(project_id = %project_id, %commit, created, bytes = size, attempts, "docs.file.committed");
-                (commit, blob, Some((parent, created)))
+                let event = Event::DocCommitted {
+                    project_id,
+                    path: path.to_string(),
+                    commit: commit.clone(),
+                    parent,
+                    blob: blob.clone(),
+                    bytes: size,
+                    created,
+                };
+                (commit, blob, Some(event))
             }
             DocWrite::Unchanged { commit, blob } => {
                 tracing::info!(project_id = %project_id, "docs.file.unchanged");
@@ -176,42 +245,12 @@ impl Engine {
                 .into());
             }
         };
-        let (spec, spec_problem) = self
-            .register_saved(&project, &repo, path, &commit, &request.bytes, cause)
-            .await?;
-        let view = DocWriteView {
-            project_id,
-            path: path.to_string(),
-            commit: commit.clone(),
-            blob: blob.clone(),
-            bytes: size,
-            committed: committed.is_some(),
-            created: committed.as_ref().is_some_and(|(_, created)| *created),
-            spec,
-            spec_problem,
-        };
-        let _guard = self.locked()?;
-        let now = self.now();
-        let mut batch = Batch::new(now);
-        if let Some((parent, created)) = committed {
-            let event = Event::DocCommitted {
-                project_id,
-                path: path.to_string(),
-                commit,
-                parent,
-                blob,
-                bytes: size,
-                created,
-            };
-            self.push_event(&mut batch, &event, Some(project_id), cause, now);
-        }
-        if let Some(action) = action {
-            let reply = (action.respond)(Produced::Doc(&view));
-            batch.action =
-                Some(action.record(self, cause, Some(project_id), Some(project_id.0), reply));
-        }
-        self.commit(&batch)?;
-        Ok(view)
+        Ok(WrittenDoc {
+            commit,
+            blob,
+            bytes: request.bytes,
+            event,
+        })
     }
 
     async fn register_saved(
@@ -250,6 +289,7 @@ impl Engine {
             path,
             source_commit: commit,
             bytes,
+            origin: SpecOrigin::Manual,
         };
         match self.register_at(project, repo, file, cause, None).await {
             Ok((view, _)) => Ok((Some(view), None)),

@@ -263,6 +263,32 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     for (outcome, n) in &m.dod_verifications {
         t.sample("saka_dod_verifications_total", &[("outcome", outcome)], n);
     }
+    t.family(
+        "saka_spec_drafts_active",
+        "gauge",
+        "Spec drafts preparing, drafting, or committing.",
+    );
+    t.sample("saka_spec_drafts_active", &[], m.spec_drafts_active);
+    t.family(
+        "saka_spec_drafts_finished_total",
+        "counter",
+        "Spec drafts that ended, by state.",
+    );
+    for (state, n) in &m.spec_drafts_finished {
+        t.sample("saka_spec_drafts_finished_total", &[("state", state)], n);
+    }
+    t.family(
+        "saka_spec_draft_lint_rounds_total",
+        "counter",
+        "Lint rounds on architect drafts, by outcome.",
+    );
+    for (outcome, n) in &m.spec_draft_lint_rounds {
+        t.sample(
+            "saka_spec_draft_lint_rounds_total",
+            &[("outcome", outcome)],
+            n,
+        );
+    }
     histogram(
         &mut t,
         "saka_step_advance_seconds",

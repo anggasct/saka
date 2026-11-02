@@ -147,6 +147,7 @@
   "waiting.spec": "Menunggu spec {slug} shipped.",
   "waiting.quota": "Menunggu akun agent {account}: jendela {window} ada di {percent}{resets, select, none {} other {, dan reset {resets}}}.",
   "waiting.port_block": "Menunggu blok port yang kosong.",
+  "waiting.architect_slot": "Menunggu slot architect yang kosong.",
   "waiting.more": "+{count, number} lagi",
   "task.holds": "Menahan {count, number} step yang menunggu",
   "task.back": "Kembali ke Delivery",

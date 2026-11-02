@@ -262,6 +262,7 @@ fn priority_follows_the_latest_revision_until_approve() {
         ids: &mut ids,
     };
     let revision = |priority| NewRevision {
+        origin: saka_core::vocab::SpecOrigin::Manual,
         source_commit: "a".repeat(40),
         content_hash: format!("h{priority}"),
         context_hash: "sha256:none".into(),
