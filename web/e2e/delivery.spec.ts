@@ -139,7 +139,7 @@ async function mockApi(page: Page, empty: boolean) {
     } else if (path === `/api/v1/projects/${PROJECT_ID}`) {
       await json(project);
     } else if (path === "/api/v1/permission-requests") {
-      await json(page_([{ id: "p" }]));
+      await json(page_([]));
     } else {
       await route.fulfill({
         status: 404,

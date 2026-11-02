@@ -9,7 +9,7 @@ import { Button } from "@/ui/button";
 import { codeOf } from "./page-error";
 import type { Session } from "./queries";
 import { interruptSession, steerSession, stopSession } from "./queries";
-import { ReasonDialog } from "./reason-dialog";
+import { ActionDialog } from "./action-dialog";
 import { errorText } from "./text";
 
 export const STEER_MAX = 4000;
@@ -124,13 +124,12 @@ export function SessionControls({ session }: { session: Session }) {
           </Button>
         )}
         {canStop && (
-          <ReasonDialog
+          <ActionDialog
             trigger={t("session.stop.trigger")}
             title={t("session.stop.title")}
             description={t("session.stop.description")}
-            reasonLabel={t("dialog.reason")}
+            reason={{ label: t("dialog.reason"), required: true }}
             submit={t("session.stop.submit")}
-            required
             onSubmit={async (reason, key) => {
               try {
                 await stopSession(session.id, reason ?? "", key);

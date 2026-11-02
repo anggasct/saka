@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
 
+import { permissionAnchor } from "./permission-card";
 import type { ProjectItem, SpecItem, WorkItem } from "./queries";
 import { isRetired, placeText, stateTone } from "./task-state";
 import { label } from "./text";
@@ -12,13 +14,20 @@ export function TaskHeader({
   task,
   spec,
   project,
+  firstPermission,
+  actions,
 }: {
   task: WorkItem;
   spec: SpecItem | undefined;
   project: ProjectItem | undefined;
+  firstPermission: string | undefined;
+  actions: ReactNode;
 }) {
   const t = useT();
   const place = placeText(t, task);
+  const waiting = t("task.pendingPermissions", {
+    count: task.pending_permission_count,
+  });
   return (
     <header className="space-y-3">
       <Link
@@ -34,13 +43,19 @@ export function TaskHeader({
         <Badge tone={stateTone(task.state)}>
           {label(t, "task.state", task.state)}
         </Badge>
-        {task.pending_permission_count > 0 && (
-          <Badge tone="attention">
-            {t("task.pendingPermissions", {
-              count: task.pending_permission_count,
-            })}
-          </Badge>
-        )}
+        {task.pending_permission_count > 0 &&
+          (firstPermission === undefined ? (
+            <Badge tone="attention">{waiting}</Badge>
+          ) : (
+            <Link
+              to="/delivery/tasks/$workItemId"
+              params={{ workItemId: task.id }}
+              hash={permissionAnchor(firstPermission)}
+              className="inline-flex min-h-11 items-center rounded-full"
+            >
+              <Badge tone="attention">{waiting}</Badge>
+            </Link>
+          ))}
       </div>
       <p
         className={
@@ -95,6 +110,7 @@ export function TaskHeader({
           </>
         )}
       </dl>
+      {actions}
     </header>
   );
 }

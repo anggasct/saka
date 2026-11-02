@@ -10,9 +10,16 @@ import { ChangeSection } from "./change-section";
 import { EnvironmentSection } from "./environment-section";
 import { GatesSection } from "./gates-section";
 import { PageError } from "./page-error";
-import { useProject, useSpec, useWorkItem, useWorkItems } from "./queries";
+import {
+  useProject,
+  useSpec,
+  useTaskPermissions,
+  useWorkItem,
+  useWorkItems,
+} from "./queries";
 import { SessionSection } from "./session-section";
 import { StageRunsSection } from "./stage-runs-section";
+import { RetryDialog, TaskActions } from "./task-actions";
 import { TaskHeader } from "./task-header";
 import { WaitingSection } from "./waiting-section";
 import { WorkPacketSection } from "./work-packet-section";
@@ -25,6 +32,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
   const spec = useSpec(task.data?.spec_id);
   const project = useProject(task.data?.project_id);
   const siblings = useWorkItems(task.data?.project_id);
+  const permissions = useTaskPermissions(workItemId);
 
   if (task.isPending) {
     return (
@@ -71,15 +79,34 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
   const tasks = siblings.data ?? [];
   return (
     <div className={PAGE}>
-      <TaskHeader task={item} spec={spec.data} project={project.data} />
-      {item.blocker && <BlockerCard blocker={item.blocker} />}
+      <TaskHeader
+        task={item}
+        spec={spec.data}
+        project={project.data}
+        firstPermission={permissions.data?.[0]?.id}
+        actions={<TaskActions task={item} />}
+      />
+      {item.blocker && (
+        <BlockerCard
+          blocker={item.blocker}
+          action={
+            item.available_actions.includes("retry") && (
+              <RetryDialog task={item} primary />
+            )
+          }
+        />
+      )}
       <WaitingSection task={item} tasks={tasks} />
       <ChangeSection task={item} />
       <GatesSection task={item} />
       <StageRunsSection task={item} spec={spec.data} tasks={tasks} />
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />
-      <SessionSection task={item} />
+      <SessionSection
+        task={item}
+        project={project.data?.name}
+        permissions={permissions.data ?? []}
+      />
     </div>
   );
 }

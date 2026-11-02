@@ -1,11 +1,11 @@
 import { useT } from "@/i18n/use-t";
-import { Badge } from "@/ui/badge";
 import { Card } from "@/ui/card";
 import { Skeleton } from "@/ui/skeleton";
 
 import { PageError } from "./page-error";
+import { PermissionPanel } from "./permission-panel";
 import { ProjectSection } from "./project-section";
-import { usePendingPermissionCount, useProjects, useSpecsOf } from "./queries";
+import { useProjects, useSpecsOf } from "./queries";
 
 const ADD_PROJECT = "saka project add <repo-url> --path docs";
 const APPROVE_SPEC = "saka spec approve <project> docs/specs/<spec>.md";
@@ -14,7 +14,6 @@ export function DeliveryPage() {
   const t = useT();
   const projects = useProjects();
   const specs = useSpecsOf((projects.data ?? []).map((p) => p.id));
-  const pending = usePendingPermissionCount();
   const loading = projects.isPending || specs.some((s) => s.isPending);
   const failed = projects.error ?? specs.find((s) => s.error)?.error ?? null;
   const anySpec = specs.some((s) => (s.data ?? []).length > 0);
@@ -28,14 +27,8 @@ export function DeliveryPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-2xl font-semibold">{t("delivery.title")}</h1>
-        {pending.data !== undefined && pending.data > 0 && (
-          <Badge tone="attention">
-            {t("delivery.pendingPermissions", { count: pending.data })}
-          </Badge>
-        )}
-      </div>
+      <h1 className="text-2xl font-semibold">{t("delivery.title")}</h1>
+      <PermissionPanel projects={projects.data ?? []} />
       {failed !== null ? (
         <PageError
           title="delivery.error.title"

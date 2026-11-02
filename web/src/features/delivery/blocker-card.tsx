@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { useT } from "@/i18n/use-t";
 
 import { useFormat } from "./format";
@@ -10,7 +12,13 @@ function list(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text) : [];
 }
 
-export function BlockerCard({ blocker }: { blocker: Blocker }) {
+export function BlockerCard({
+  blocker,
+  action,
+}: {
+  blocker: Blocker;
+  action: ReactNode;
+}) {
   const t = useT();
   const format = useFormat();
   const params = record(blocker.params);
@@ -96,6 +104,7 @@ export function BlockerCard({ blocker }: { blocker: Blocker }) {
           {t("task.blocker.log", { path: log })}
         </p>
       )}
+      {action}
     </Section>
   );
 }
