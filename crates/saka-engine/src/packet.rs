@@ -67,6 +67,31 @@ fn push_source(out: &mut String, index: u32, source: &str, content: &[u8]) {
     );
 }
 
+// Content is escaped at `</document`, so each document ends at the first `</document>` after it.
+#[must_use]
+pub fn sources(text: &str) -> std::collections::BTreeMap<u32, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some(mut rest) = text.strip_prefix("<documents>\n") else {
+        return out;
+    };
+    while let Some(document) = rest.strip_prefix("<document index=\"") {
+        let Some((index, body)) = document.split_once("\">\n<source>") else {
+            break;
+        };
+        let Some((source, _)) = body.split_once("</source>\n") else {
+            break;
+        };
+        if let Ok(index) = index.parse() {
+            out.insert(index, source.to_string());
+        }
+        let Some((_, next)) = body.split_once("</document>\n") else {
+            break;
+        };
+        rest = next;
+    }
+    out
+}
+
 fn listed(items: &[String]) -> String {
     if items.is_empty() {
         "none".to_string()

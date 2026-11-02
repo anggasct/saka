@@ -865,6 +865,146 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/spec-drafts": {
+      "get": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "list_spec_drafts",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`active` (default: queued, preparing, drafting, committing, failed), `finished` (succeeded, cancelled), or `all`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_SpecDraft"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "create_spec_draft",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSpecDraftBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/specs": {
       "get": {
         "tags": [
@@ -1355,6 +1495,296 @@
             }
           },
           "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}": {
+      "get": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "get_spec_draft",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel": {
+      "post": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "cancel_spec_draft",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}/actions/retry": {
+      "post": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "retry_spec_draft",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrySpecDraftBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}/content": {
+      "get": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "get_spec_draft_content",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraftContent"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds": {
+      "get": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "list_spec_draft_rounds",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraftLintRoundList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}/packet": {
+      "get": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "get_spec_draft_packet",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraftPacket"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2303,6 +2733,38 @@
           }
         }
       },
+      "CreateSpecDraftBody": {
+        "type": "object",
+        "required": [
+          "idea",
+          "path"
+        ],
+        "properties": {
+          "context_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 16 distinct docs in the project folder the architect reads first."
+          },
+          "idea": {
+            "type": "string",
+            "description": "1 to 8000 characters after trimming; stored as written."
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`en` (default) or `id`: the template and the language of the prose."
+          },
+          "path": {
+            "type": "string",
+            "description": "The new spec file from the repo root, inside the project folder, ending in `.md`."
+          }
+        },
+        "additionalProperties": false
+      },
       "Decision": {
         "type": "string",
         "enum": [
@@ -2925,6 +3387,196 @@
                 },
                 "updated_at": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Page_SpecDraft": {
+        "type": "object",
+        "description": "A list page.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A spec that the architect drafts from an idea, until Saka's lint passes and the file is committed.",
+              "required": [
+                "id",
+                "project_id",
+                "path",
+                "slug",
+                "locale",
+                "context_paths",
+                "state",
+                "waiting_on",
+                "available_actions",
+                "retries",
+                "version",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "attempt": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/SpecDraftAttempt",
+                      "description": "The latest attempt; `null` before the first admission."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "available_actions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Subset of `retry`, `cancel`."
+                },
+                "budget": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/SpecDraftBudget",
+                      "description": "Use and limits of the running attempt; `null` when no attempt runs."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "commit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The docs commit once `succeeded`, and for `failed` with `register_failed`."
+                },
+                "context_paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "failure": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Failure",
+                      "description": "`{code, params}` while `failed`."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finished_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "idea": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "As the operator wrote it; `null` in lists."
+                },
+                "last_round": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/SpecDraftLastRound",
+                      "description": "The latest lint round of any attempt; `issues` is empty in lists."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "locale": {
+                  "type": "string",
+                  "description": "`en | id`"
+                },
+                "path": {
+                  "type": "string",
+                  "description": "The new spec file, from the repo root."
+                },
+                "primary_action": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`retry | open_written | open_file`; `null` unless `failed`."
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "retries": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Manual retries so far, at most 3.",
+                  "minimum": 0
+                },
+                "session": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionBrief",
+                      "description": "The latest session of the latest attempt."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "slug": {
+                  "type": "string",
+                  "description": "The file name without its extension."
+                },
+                "spec_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The registered spec once `succeeded`."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "`queued | preparing | drafting | committing | succeeded | failed | cancelled`"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "waiting_on": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WaitingOn"
+                  },
+                  "description": "Only while `queued`: an architect slot or an agent account window. Empty in action responses."
                 }
               }
             }
@@ -3652,6 +4304,26 @@
         },
         "additionalProperties": false
       },
+      "RetrySpecDraftBody": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 4000 characters, sent to the architect in the packet of the new attempt."
+          },
+          "reason": {
+            "type": "string",
+            "description": "1 to 500 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "Revision": {
         "type": "object",
         "required": [
@@ -4259,6 +4931,558 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "SpecDraft": {
+        "type": "object",
+        "description": "A spec that the architect drafts from an idea, until Saka's lint passes and the file is committed.",
+        "required": [
+          "id",
+          "project_id",
+          "path",
+          "slug",
+          "locale",
+          "context_paths",
+          "state",
+          "waiting_on",
+          "available_actions",
+          "retries",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "attempt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpecDraftAttempt",
+                "description": "The latest attempt; `null` before the first admission."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "available_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subset of `retry`, `cancel`."
+          },
+          "budget": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpecDraftBudget",
+                "description": "Use and limits of the running attempt; `null` when no attempt runs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The docs commit once `succeeded`, and for `failed` with `register_failed`."
+          },
+          "context_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Failure",
+                "description": "`{code, params}` while `failed`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idea": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "As the operator wrote it; `null` in lists."
+          },
+          "last_round": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpecDraftLastRound",
+                "description": "The latest lint round of any attempt; `issues` is empty in lists."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "locale": {
+            "type": "string",
+            "description": "`en | id`"
+          },
+          "path": {
+            "type": "string",
+            "description": "The new spec file, from the repo root."
+          },
+          "primary_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`retry | open_written | open_file`; `null` unless `failed`."
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "retries": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Manual retries so far, at most 3.",
+            "minimum": 0
+          },
+          "session": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionBrief",
+                "description": "The latest session of the latest attempt."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "description": "The file name without its extension."
+          },
+          "spec_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The registered spec once `succeeded`."
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued | preparing | drafting | committing | succeeded | failed | cancelled`"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "waiting_on": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingOn"
+            },
+            "description": "Only while `queued`: an architect slot or an agent account window. Empty in action responses."
+          }
+        }
+      },
+      "SpecDraftAttempt": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "trigger",
+          "state",
+          "rounds",
+          "max_rounds",
+          "started_at"
+        ],
+        "properties": {
+          "base_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The base branch commit the attempt's environment was prepared at."
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`architect.lint_rounds`.",
+            "minimum": 0
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "packet_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rounds": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "`running | succeeded | failed | cancelled`"
+          },
+          "trigger": {
+            "type": "string",
+            "description": "`auto` (first) or `manual` (retry)."
+          }
+        }
+      },
+      "SpecDraftBudget": {
+        "type": "object",
+        "required": [
+          "attempt_id",
+          "warn_percent",
+          "running_minutes",
+          "turns",
+          "tokens",
+          "cost_usd"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cost_usd": {
+            "$ref": "#/components/schemas/Measure",
+            "description": "Decimal strings in dollars."
+          },
+          "running_minutes": {
+            "$ref": "#/components/schemas/Measure",
+            "description": "Minutes; `used` is a decimal number."
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/Measure"
+          },
+          "turns": {
+            "$ref": "#/components/schemas/Measure"
+          },
+          "warn_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SpecDraftContent": {
+        "type": "object",
+        "description": "The latest file content the architect wrote.",
+        "required": [
+          "attempt",
+          "round",
+          "path",
+          "bytes",
+          "content"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "content": {
+            "type": "string",
+            "description": "The bytes as written, as UTF-8 (line endings kept)."
+          },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "round": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SpecDraftLastRound": {
+        "type": "object",
+        "required": [
+          "attempt",
+          "round",
+          "outcome",
+          "decisions_open",
+          "parser_version",
+          "issues",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempt number.",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`null` when the file was missing.",
+            "minimum": 0
+          },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sha256:<hex>`; `null` when the file was missing or too large."
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "decisions_open": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LintIssue"
+            }
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`passed | failed | missing`"
+          },
+          "parser_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "round": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SpecDraftLintRound": {
+        "type": "object",
+        "required": [
+          "attempt",
+          "round",
+          "session_id",
+          "turn",
+          "outcome",
+          "parser_version",
+          "decisions_open",
+          "issues",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempt number.",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "decisions_open": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LintIssue"
+            },
+            "description": "Same shape as `Spec.lint.issues`, context issues included."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`passed | failed | missing`"
+          },
+          "parser_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "round": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turn": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SpecDraftLintRoundList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecDraftLintRound"
+            },
+            "description": "Ascending by attempt, then round."
+          }
+        }
+      },
+      "SpecDraftPacket": {
+        "type": "object",
+        "description": "The packet of the latest attempt, as sent to the architect.",
+        "required": [
+          "attempt",
+          "base_sha",
+          "sha256",
+          "documents",
+          "text"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "base_sha": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecDraftPacketDocument"
+            }
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 hex of `text`."
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "SpecDraftPacketDocument": {
+        "type": "object",
+        "required": [
+          "index",
+          "source",
+          "origin",
+          "bytes",
+          "content_hash"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "origin": {
+            "type": "string",
+            "description": "`template | rules | selected | always`"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` for the template and the rules."
+          },
+          "source": {
+            "type": "string",
+            "description": "What the packet names the document by, for example `docs/prd.md @ <commit>`."
           }
         }
       },
@@ -5141,6 +6365,9 @@
       "name": "specs"
     },
     {
+      "name": "spec-drafts"
+    },
+    {
       "name": "files"
     },
     {
@@ -5148,6 +6375,9 @@
     },
     {
       "name": "runtime"
+    },
+    {
+      "name": "spec-drafts"
     },
     {
       "name": "system"

@@ -739,7 +739,7 @@ fn guards_errors_meta_and_pagination_follow_the_conventions() {
             "server_version": "0.1.0-test",
             "api_version": "1",
             "min_client_api_version": "1",
-            "capabilities": ["projects", "spec_approve", "work_item_merge", "work_item_retry", "work_item_cancel", "permission_answer", "events_sse"],
+            "capabilities": ["projects", "spec_approve", "work_item_merge", "work_item_retry", "work_item_cancel", "permission_answer", "events_sse", "spec_draft"],
         })
     );
 

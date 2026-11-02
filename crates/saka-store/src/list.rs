@@ -238,6 +238,28 @@ pub fn work_items(
     )
 }
 
+pub fn spec_drafts(
+    conn: &Connection,
+    project: ProjectId,
+    states: &[String],
+    page: &Page,
+) -> Result<Vec<(SpecDraftId, Key)>> {
+    let mut q = Query::new();
+    q.eq("project_id", project.0.to_string());
+    q.any_of("state", states);
+    q.after("created_at", page, true);
+    q.run(
+        conn,
+        "SELECT id, created_at FROM spec_draft",
+        "created_at DESC, id DESC",
+        page,
+        |r| {
+            let id = uuid(r, "id")?;
+            Ok((SpecDraftId(id), (ts(r, "created_at")?.0, id)))
+        },
+    )
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionFilter {
     pub states: Vec<String>,

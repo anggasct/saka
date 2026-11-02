@@ -24,6 +24,17 @@ const POLL: Duration = Duration::from_secs(1);
 const DEFAULT_MODEL: &str = "haiku";
 const SLOW_COMMAND: &str = "sleep 30";
 const ADVANCE_LIMIT: Duration = Duration::from_secs(5 * 60);
+const DRAFT_IDEA: &str = "Add a `tasks count` command to the CLI that prints how many tasks are open and how many are done, one number per line.";
+const ARCHITECT_TOOLS: &[&str] = &[
+    "Read",
+    "Glob",
+    "Grep",
+    "LS",
+    "TodoWrite",
+    "Write",
+    "Edit",
+    "MultiEdit",
+];
 const DENY_MESSAGE: &str = "Not allowed in this run. Use one command per call, without &&, ;, |, or redirects. The Done when commands are allowed exactly as written in the spec.";
 
 struct Settings {
@@ -607,6 +618,7 @@ fn wait_ready(api: &Api) -> Result<()> {
 
 struct Run<'a> {
     settings: &'a Settings,
+    run_id: String,
     saka: PathBuf,
     dir: PathBuf,
     base: String,
@@ -680,7 +692,66 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
         &mut restart,
     )?;
     println!("  spec shipped");
-    verify(github, &run.base)
+    verify(github, &run.base)?;
+    draft(&api, &cli, github, &project_id, run)
+}
+
+fn draft(api: &Api, cli: &Cli<'_>, github: &GitHub, project: &str, run: &Run<'_>) -> Result<()> {
+    let path = format!("docs/specs/e2e-draft-{}.md", run.run_id);
+    println!("  architect drafts {path}");
+    let draft = cli.run(&[
+        "spec", "draft", project, &path, "--idea", DRAFT_IDEA, "--wait",
+    ])?;
+    if text(&draft["state"]) != "succeeded" {
+        bail!("the draft did not succeed: {draft}");
+    }
+    let commit = text(&draft["commit"]);
+    let spec = api.get(&format!("/api/v1/specs/{}", text(&draft["spec_id"])))?;
+    if spec["origin"] != "architect" || spec["path"] != path.as_str() {
+        bail!("the drafted spec is not registered from the architect: {spec}");
+    }
+    let tip = github.last_commit_touching(&run.base, &path)?;
+    if tip.as_deref() != Some(commit) {
+        bail!(
+            "{path} on {} was last changed by {tip:?}, not by the draft commit {commit}",
+            run.base
+        );
+    }
+    let sessions = api.get(&format!(
+        "/api/v1/sessions?spec_draft_id={}",
+        text(&draft["id"])
+    ))?;
+    let mut tools = BTreeSet::new();
+    for s in sessions["items"].as_array().into_iter().flatten() {
+        let mut after = String::new();
+        loop {
+            let page = api.get(&format!(
+                "/api/v1/sessions/{}/timeline?limit=500{after}",
+                text(&s["id"])
+            ))?;
+            for row in page["items"].as_array().into_iter().flatten() {
+                if row["kind"] == "action" {
+                    tools.insert(text(&row["data"]["tool"]).to_string());
+                }
+            }
+            match page["next_after"].as_u64() {
+                Some(next) => after = format!("&after={next}"),
+                None => break,
+            }
+        }
+    }
+    let outside: Vec<&String> = tools
+        .iter()
+        .filter(|t| !ARCHITECT_TOOLS.contains(&t.as_str()))
+        .collect();
+    if !outside.is_empty() {
+        bail!("the architect session used tools outside its allow-list: {outside:?}");
+    }
+    println!(
+        "  draft succeeded in {} round(s), commit {commit}, tools {tools:?}",
+        draft["last_round"]["round"]
+    );
+    Ok(())
 }
 
 fn build_saka(root: &Path) -> Result<PathBuf> {
@@ -727,6 +798,7 @@ pub fn run() -> Result<()> {
 
     let run = Run {
         settings: &settings,
+        run_id: run_id.clone(),
         saka,
         dir,
         base,

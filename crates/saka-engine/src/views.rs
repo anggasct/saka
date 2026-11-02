@@ -141,7 +141,7 @@ pub(crate) fn step_items(tasks: &[Task]) -> Vec<(String, WorkItemId)> {
         .collect()
 }
 
-fn paged<T>(mut rows: Vec<T>, page: &Page, key: impl Fn(&T) -> Key) -> Paged<T> {
+pub(crate) fn paged<T>(mut rows: Vec<T>, page: &Page, key: impl Fn(&T) -> Key) -> Paged<T> {
     let limit = usize::try_from(page.limit).unwrap_or(usize::MAX);
     let more = rows.len() > limit;
     rows.truncate(limit);
@@ -149,7 +149,7 @@ fn paged<T>(mut rows: Vec<T>, page: &Page, key: impl Fn(&T) -> Key) -> Paged<T> 
     Paged { items: rows, next }
 }
 
-fn probe(page: &Page) -> Page {
+pub(crate) fn probe(page: &Page) -> Page {
     Page {
         after: page.after,
         limit: page.limit.saturating_add(1),

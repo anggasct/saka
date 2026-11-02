@@ -8,6 +8,16 @@ use zeroize::Zeroizing;
 
 pub const EXIT_LINT: u8 = 3;
 pub const EXIT_CONFLICT: u8 = 4;
+const DRAFT_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub struct NewDraft<'a> {
+    pub project: &'a str,
+    pub path: &'a str,
+    pub idea: &'a str,
+    pub context: &'a [String],
+    pub locale: Option<&'a str>,
+    pub wait: bool,
+}
 
 pub struct Client {
     base: String,
@@ -105,6 +115,16 @@ pub fn read_secret(name: &str, multiline: bool) -> Result<SecretText, ExitCode> 
         raw.trim_end_matches('\n').trim_end_matches('\r')
     };
     Ok(SecretText::new(value.to_string()))
+}
+
+pub fn read_idea(file: &std::path::Path) -> Result<String, ExitCode> {
+    std::fs::read_to_string(file).map_err(|e| {
+        err(&format!(
+            "error: idea_file_unreadable {}",
+            json!({ "path": file.display().to_string(), "reason": e.to_string() })
+        ));
+        ExitCode::FAILURE
+    })
 }
 
 fn hide_input() -> Option<rustix::termios::Termios> {
@@ -580,8 +600,8 @@ impl Client {
         }
     }
 
-    async fn session_of(&self, task: &str) -> Result<String, ExitCode> {
-        match self.get(&format!("/api/v1/work-items/{task}")).await {
+    async fn session_at(&self, resource: &str) -> Result<String, ExitCode> {
+        match self.get(resource).await {
             Ok(a) if a.ok() => match a.body["session"]["id"].as_str() {
                 Some(id) => Ok(id.to_string()),
                 None => {
@@ -594,16 +614,19 @@ impl Client {
         }
     }
 
-    pub async fn task_session(&self, task: &str, action: &str, body: &Value) -> ExitCode {
-        let session = match self.session_of(task).await {
-            Ok(s) => s,
-            Err(code) => return code,
-        };
+    async fn post_to_session(&self, session: &str, action: &str, body: &Value) -> ExitCode {
         match self
             .post(&format!("/api/v1/sessions/{session}/{action}"), body, None)
             .await
         {
             Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn task_session(&self, task: &str, action: &str, body: &Value) -> ExitCode {
+        match self.session_at(&format!("/api/v1/work-items/{task}")).await {
+            Ok(session) => self.post_to_session(&session, action, body).await,
             Err(code) => code,
         }
     }
@@ -617,9 +640,18 @@ impl Client {
             Ok(a) => return fail(&a),
             Err(code) => return code,
         };
+        let ids: Vec<String> = sessions["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|s| text(&s["id"]))
+            .collect();
+        self.print_timeline(&ids).await
+    }
+
+    async fn print_timeline(&self, sessions: &[String]) -> ExitCode {
         let mut rows = Vec::new();
-        for s in sessions["items"].as_array().into_iter().flatten() {
-            let id = text(&s["id"]);
+        for id in sessions {
             let mut after: Option<u64> = None;
             loop {
                 let cursor = after.map(|a| format!("&after={a}")).unwrap_or_default();
@@ -655,6 +687,161 @@ impl Client {
             }
         }
         ExitCode::SUCCESS
+    }
+
+    pub async fn spec_draft(&self, new: &NewDraft<'_>) -> ExitCode {
+        let id = match self.project_id(new.project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let body = json!({
+            "idea": new.idea,
+            "path": new.path,
+            "context_paths": new.context,
+            "locale": new.locale,
+        });
+        let created = match self
+            .post(&format!("/api/v1/projects/{id}/spec-drafts"), &body, None)
+            .await
+        {
+            Ok(a) => a,
+            Err(code) => return code,
+        };
+        if !created.ok() || !new.wait {
+            return self.finish(&created, |b| text(&b["id"]));
+        }
+        let draft = text(&created.body["id"]);
+        if !self.json {
+            out(&draft);
+        }
+        loop {
+            let current = match self.get(&format!("/api/v1/spec-drafts/{draft}")).await {
+                Ok(a) if a.ok() => a.body,
+                Ok(a) => return fail(&a),
+                Err(code) => return code,
+            };
+            let state = text(&current["state"]);
+            if matches!(state.as_str(), "succeeded" | "failed" | "cancelled") {
+                return self.drafted(&current);
+            }
+            tokio::time::sleep(DRAFT_POLL).await;
+        }
+    }
+
+    fn drafted(&self, draft: &Value) -> ExitCode {
+        if self.json {
+            out(&draft.to_string());
+        }
+        let failure = &draft["failure"];
+        match text(&draft["state"]).as_str() {
+            "succeeded" => {
+                if !self.json {
+                    out(&format!(
+                        "succeeded spec {} commit {}",
+                        text(&draft["spec_id"]),
+                        text(&draft["commit"])
+                    ));
+                }
+                ExitCode::SUCCESS
+            }
+            "failed" if failure["code"] == "lint_rounds_exhausted" => {
+                if !self.json {
+                    for issue in draft["last_round"]["issues"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
+                        out(&issue_line(issue));
+                    }
+                }
+                err(&format!(
+                    "error: lint_rounds_exhausted {}",
+                    failure["params"]
+                ));
+                ExitCode::from(EXIT_LINT)
+            }
+            "failed" => {
+                err(&format!(
+                    "error: {} {}",
+                    text(&failure["code"]),
+                    failure["params"]
+                ));
+                ExitCode::FAILURE
+            }
+            _ => {
+                err("error: cancelled {}");
+                ExitCode::from(EXIT_CONFLICT)
+            }
+        }
+    }
+
+    pub async fn draft_list(&self, project: &str, state: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let mut items: Vec<Value> = Vec::new();
+        let mut cursor = String::new();
+        loop {
+            let a = match self
+                .get(&format!(
+                    "/api/v1/projects/{id}/spec-drafts?state={state}&limit=200&cursor={cursor}"
+                ))
+                .await
+            {
+                Ok(a) if a.ok() => a,
+                Ok(a) => return self.finish(&a, |_| String::new()),
+                Err(code) => return code,
+            };
+            items.extend(a.body["items"].as_array().cloned().unwrap_or_default());
+            match a.body["next_cursor"].as_str() {
+                Some(next) => cursor = next.to_string(),
+                None => break,
+            }
+        }
+        if self.json {
+            out(&json!({ "items": items }).to_string());
+        } else {
+            for d in &items {
+                out(&draft_line(d));
+            }
+        }
+        ExitCode::SUCCESS
+    }
+
+    pub async fn draft_show(&self, id: &str) -> ExitCode {
+        match self.get(&format!("/api/v1/spec-drafts/{id}")).await {
+            Ok(a) => self.finish(&a, draft_summary),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn draft_timeline(&self, id: &str) -> ExitCode {
+        match self.session_at(&format!("/api/v1/spec-drafts/{id}")).await {
+            Ok(session) => self.print_timeline(&[session]).await,
+            Err(code) => code,
+        }
+    }
+
+    pub async fn draft_session(&self, id: &str, action: &str, body: &Value) -> ExitCode {
+        match self.session_at(&format!("/api/v1/spec-drafts/{id}")).await {
+            Ok(session) => self.post_to_session(&session, action, body).await,
+            Err(code) => code,
+        }
+    }
+
+    pub async fn draft_action(&self, id: &str, action: &str, body: &Value) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/spec-drafts/{id}/actions/{action}"),
+                body,
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
     }
 
     pub async fn permission_rules(&self, project: &str) -> ExitCode {
@@ -726,4 +913,62 @@ fn lines(body: &Value, line: impl Fn(&Value) -> String) -> String {
         .as_array()
         .map(|items| items.iter().map(&line).collect::<Vec<_>>().join("\n"))
         .unwrap_or_default()
+}
+
+fn draft_line(d: &Value) -> String {
+    format!(
+        "{}  {}  {} {}",
+        text(&d["id"]),
+        text(&d["path"]),
+        text(&d["state"]),
+        d["failure"]["code"].as_str().unwrap_or_default()
+    )
+    .trim_end()
+    .to_string()
+}
+
+fn draft_summary(d: &Value) -> String {
+    let mut lines = vec![draft_line(d)];
+    let attempt = &d["attempt"];
+    if !attempt.is_null() {
+        let round = &d["last_round"];
+        let last = if round.is_null() {
+            "no round yet".to_string()
+        } else {
+            format!(
+                "round {} of {}: {}",
+                round["round"],
+                attempt["max_rounds"],
+                text(&round["outcome"])
+            )
+        };
+        lines.push(format!(
+            "attempt {} ({}), {last}",
+            attempt["number"],
+            text(&attempt["state"])
+        ));
+    }
+    for issue in d["last_round"]["issues"].as_array().into_iter().flatten() {
+        lines.push(issue_line(issue));
+    }
+    if !d["failure"].is_null() {
+        lines.push(format!(
+            "failure {} {}",
+            text(&d["failure"]["code"]),
+            d["failure"]["params"]
+        ));
+    }
+    if let Some(spec) = d["spec_id"].as_str() {
+        lines.push(format!("spec {spec} commit {}", text(&d["commit"])));
+    }
+    let actions: Vec<String> = d["available_actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(text)
+        .collect();
+    if !actions.is_empty() {
+        lines.push(format!("actions {}", actions.join(",")));
+    }
+    lines.join("\n")
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use saka_core::vocab::{DraftLocale, PacketOrigin};
-use saka_engine::packet::{ArchitectInput, PreviousAttempt, render_architect};
+use saka_engine::packet::{ArchitectInput, PreviousAttempt, render_architect, sources};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -154,4 +154,17 @@ fn english_drafts_name_the_language_and_template() {
             .text
             .contains("Language: write the prose in English.")
     );
+}
+
+#[test]
+fn the_sources_of_a_rendered_packet_are_read_back_per_document() {
+    let packet = render_architect(&input());
+    let read = sources(&packet.text);
+    let indexes: Vec<u32> = read.keys().copied().collect();
+    assert_eq!(indexes, [1, 2, 3, 4, 5]);
+    assert_eq!(read[&1], "saka:spec-template/id (parser 4)");
+    assert_eq!(read[&2], "saka:spec-rules (parser 4)");
+    assert_eq!(read[&3], format!("docs/prd.md @ {BASE}"));
+    assert_eq!(read[&5], format!("docs/glossary.md @ {BASE}"));
+    assert!(sources("not a packet").is_empty());
 }
