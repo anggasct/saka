@@ -127,6 +127,15 @@
           {
             "name": "work_item_id",
             "in": "query",
+            "description": "Exclusive with `spec_draft_id`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "spec_draft_id",
+            "in": "query",
             "required": false,
             "schema": {
               "type": "string"
@@ -1017,6 +1026,15 @@
           {
             "name": "work_item_id",
             "in": "query",
+            "description": "Exactly one of `work_item_id` and `spec_draft_id` is required.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "spec_draft_id",
+            "in": "query",
             "required": false,
             "schema": {
               "type": "string"
@@ -1561,7 +1579,15 @@
           {
             "name": "work_item_id",
             "in": "query",
-            "description": "One of `work_item_id` and `session_id` is required.",
+            "description": "One of `work_item_id`, `spec_draft_id`, and `session_id` is required; `work_item_id` and `spec_draft_id` are exclusive.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "spec_draft_id",
+            "in": "query",
             "required": false,
             "schema": {
               "type": "string"
@@ -2048,7 +2074,7 @@
         "description": "The `data` of a `runtime.session.activity.v1` SSE message: a new timeline row to read with the timeline cursor.",
         "required": [
           "session_id",
-          "work_item_id",
+          "owner",
           "offset",
           "kind"
         ],
@@ -2061,11 +2087,10 @@
             "format": "int64",
             "minimum": 0
           },
-          "session_id": {
-            "type": "string",
-            "format": "uuid"
+          "owner": {
+            "$ref": "#/components/schemas/RunOwner"
           },
-          "work_item_id": {
+          "session_id": {
             "type": "string",
             "format": "uuid"
           }
@@ -2632,7 +2657,7 @@
               "required": [
                 "id",
                 "project_id",
-                "work_item_id",
+                "owner",
                 "session_id",
                 "tool",
                 "summary",
@@ -2666,6 +2691,9 @@
                     "null"
                   ]
                 },
+                "owner": {
+                  "$ref": "#/components/schemas/RunOwner"
+                },
                 "project_id": {
                   "type": "string",
                   "format": "uuid"
@@ -2686,10 +2714,6 @@
                 },
                 "tool": {
                   "type": "string"
-                },
-                "work_item_id": {
-                  "type": "string",
-                  "format": "uuid"
                 }
               }
             }
@@ -2927,8 +2951,7 @@
               "required": [
                 "id",
                 "project_id",
-                "work_item_id",
-                "stage_run_id",
+                "owner",
                 "session_id",
                 "account",
                 "turn",
@@ -2969,6 +2992,9 @@
                   ],
                   "format": "int64"
                 },
+                "owner": {
+                  "$ref": "#/components/schemas/RunOwner"
+                },
                 "project_id": {
                   "type": "string",
                   "format": "uuid"
@@ -2981,10 +3007,6 @@
                   "type": "string",
                   "format": "uuid"
                 },
-                "stage_run_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
                 "status": {
                   "type": "string",
                   "description": "The CLI result subtype, e.g. `success`."
@@ -2993,10 +3015,6 @@
                   "type": "integer",
                   "format": "int32",
                   "minimum": 0
-                },
-                "work_item_id": {
-                  "type": "string",
-                  "format": "uuid"
                 }
               }
             }
@@ -3228,7 +3246,7 @@
         "required": [
           "id",
           "project_id",
-          "work_item_id",
+          "owner",
           "session_id",
           "tool",
           "summary",
@@ -3262,6 +3280,9 @@
               "null"
             ]
           },
+          "owner": {
+            "$ref": "#/components/schemas/RunOwner"
+          },
           "project_id": {
             "type": "string",
             "format": "uuid"
@@ -3282,10 +3303,6 @@
           },
           "tool": {
             "type": "string"
-          },
-          "work_item_id": {
-            "type": "string",
-            "format": "uuid"
           }
         }
       },
@@ -3731,6 +3748,61 @@
           }
         }
       },
+      "RunOwner": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A stage run of a task.",
+            "required": [
+              "work_item_id",
+              "stage_run_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stage_run"
+                ]
+              },
+              "stage_run_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "work_item_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An attempt of a spec draft.",
+            "required": [
+              "spec_draft_id",
+              "attempt_id",
+              "kind"
+            ],
+            "properties": {
+              "attempt_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "draft_attempt"
+                ]
+              },
+              "spec_draft_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "The run that owns a session, its permission requests, and its usage records."
+      },
       "SecretList": {
         "type": "object",
         "description": "The secrets of a project, ordered by name. At most 200, so there is no paging.",
@@ -3768,8 +3840,7 @@
         "required": [
           "id",
           "project_id",
-          "work_item_id",
-          "stage_run_id",
+          "owner",
           "cli",
           "state",
           "turns",
@@ -3840,6 +3911,9 @@
             ],
             "format": "int64"
           },
+          "owner": {
+            "$ref": "#/components/schemas/RunOwner"
+          },
           "project_id": {
             "type": "string",
             "format": "uuid"
@@ -3863,10 +3937,6 @@
             "type": "integer",
             "format": "int64"
           },
-          "stage_run_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "started_at": {
             "type": [
               "string",
@@ -3880,10 +3950,6 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "work_item_id": {
-            "type": "string",
-            "format": "uuid"
           }
         }
       },
@@ -4458,8 +4524,7 @@
         "required": [
           "id",
           "project_id",
-          "work_item_id",
-          "stage_run_id",
+          "owner",
           "session_id",
           "account",
           "turn",
@@ -4500,6 +4565,9 @@
             ],
             "format": "int64"
           },
+          "owner": {
+            "$ref": "#/components/schemas/RunOwner"
+          },
           "project_id": {
             "type": "string",
             "format": "uuid"
@@ -4512,10 +4580,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "stage_run_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "status": {
             "type": "string",
             "description": "The CLI result subtype, e.g. `success`."
@@ -4524,10 +4588,6 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "work_item_id": {
-            "type": "string",
-            "format": "uuid"
           }
         }
       },

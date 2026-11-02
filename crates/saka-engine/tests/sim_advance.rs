@@ -127,13 +127,13 @@ fn a_change_merged_while_the_agent_works_ends_the_session_without_another_push()
     let ended = rows(
         &sim,
         "SELECT json_extract(payload, '$.end_reason.code') FROM event
-         WHERE kind = 'runtime.session.ended' AND json_extract(payload, '$.work_item_id') = ?1",
+         WHERE kind = 'runtime.session.ended' AND json_extract(payload, '$.owner.work_item_id') = ?1",
     );
     assert_eq!(ended.last().unwrap(), &vec![text("change_merged")]);
     let stopped = count(
         &sim,
         "SELECT CAST(COUNT(*) AS TEXT) FROM job WHERE kind = 'session.stop'
-         AND json_extract(payload, '$.work_item_id') = ?1",
+         AND json_extract(payload, '$.owner.work_item_id') = ?1",
     );
     assert!(stopped >= 1);
     let dev = rows(

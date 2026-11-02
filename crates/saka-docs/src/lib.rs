@@ -190,9 +190,25 @@ impl DocSource for GitDocs {
         max_files: usize,
     ) -> PortResult<DocTree> {
         let commit = self.fetched_tip(repo, branch).await?;
+        let mut files = self.tree_at(repo, &commit, project_path).await?;
+        let truncated = files.len() > max_files;
+        files.truncate(max_files);
+        Ok(DocTree {
+            commit,
+            files,
+            truncated,
+        })
+    }
+
+    async fn tree_at(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        project_path: &str,
+    ) -> PortResult<Vec<DocEntry>> {
         let mut files: Vec<DocEntry> = self
             .repos
-            .list_tree(repo, &commit, project_path)
+            .list_tree(repo, commit, project_path)
             .await?
             .into_iter()
             .filter(|e| {
@@ -207,13 +223,7 @@ impl DocSource for GitDocs {
             })
             .collect();
         files.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
-        let truncated = files.len() > max_files;
-        files.truncate(max_files);
-        Ok(DocTree {
-            commit,
-            files,
-            truncated,
-        })
+        Ok(files)
     }
 
     async fn open(
@@ -526,6 +536,8 @@ mod tests {
         assert!(cut.truncated);
         let all = docs.tree(&repo(), "main", ".", 10).await.unwrap();
         assert!(all.files.iter().any(|f| f.path == "src/e.md"));
+        let at = docs.tree_at(&repo(), TIP, "docs").await.unwrap();
+        assert_eq!(at, listed.files);
     }
 
     #[tokio::test]

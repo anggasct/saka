@@ -561,10 +561,9 @@ export interface components {
       kind: string;
       /** Format: int64 */
       offset: number;
+      owner: components["schemas"]["RunOwner"];
       /** Format: uuid */
       session_id: string;
-      /** Format: uuid */
-      work_item_id: string;
     };
     AddProjectBody: {
       base_branch?: string | null;
@@ -737,6 +736,7 @@ export interface components {
         /** @description Redacted. */
         input: unknown;
         message?: string | null;
+        owner: components["schemas"]["RunOwner"];
         /** Format: uuid */
         project_id: string;
         requested_at: string;
@@ -746,8 +746,6 @@ export interface components {
         state: string;
         summary: string;
         tool: string;
-        /** Format: uuid */
-        work_item_id: string;
       }[];
       next_cursor?: string | null;
     };
@@ -817,20 +815,17 @@ export interface components {
         input_tokens?: number | null;
         /** Format: int64 */
         output_tokens?: number | null;
+        owner: components["schemas"]["RunOwner"];
         /** Format: uuid */
         project_id: string;
         /** Format: int64 */
         running_ms: number;
         /** Format: uuid */
         session_id: string;
-        /** Format: uuid */
-        stage_run_id: string;
         /** @description The CLI result subtype, e.g. `success`. */
         status: string;
         /** Format: int32 */
         turn: number;
-        /** Format: uuid */
-        work_item_id: string;
       }[];
       next_cursor?: string | null;
     };
@@ -890,6 +885,7 @@ export interface components {
       /** @description Redacted. */
       input: unknown;
       message?: string | null;
+      owner: components["schemas"]["RunOwner"];
       /** Format: uuid */
       project_id: string;
       requested_at: string;
@@ -899,8 +895,6 @@ export interface components {
       state: string;
       summary: string;
       tool: string;
-      /** Format: uuid */
-      work_item_id: string;
     };
     PermissionRule: {
       /** @description The whole Bash command; `null` for other tools. */
@@ -1043,6 +1037,24 @@ export interface components {
       /** @description Commit of the workspace repo the revision was read at. */
       source_commit: string;
     };
+    /** @description The run that owns a session, its permission requests, and its usage records. */
+    RunOwner:
+      | {
+          /** @enum {string} */
+          kind: "stage_run";
+          /** Format: uuid */
+          stage_run_id: string;
+          /** Format: uuid */
+          work_item_id: string;
+        }
+      | {
+          /** Format: uuid */
+          attempt_id: string;
+          /** @enum {string} */
+          kind: "draft_attempt";
+          /** Format: uuid */
+          spec_draft_id: string;
+        };
     /** @description The secrets of a project, ordered by name. At most 200, so there is no paging. */
     SecretList: {
       items: components["schemas"]["SecretName"][];
@@ -1069,6 +1081,7 @@ export interface components {
       model?: string | null;
       /** Format: int64 */
       output_tokens?: number | null;
+      owner: components["schemas"]["RunOwner"];
       /** Format: uuid */
       project_id: string;
       /** @description `lost | retry | null` */
@@ -1080,14 +1093,10 @@ export interface components {
       resumed_from_session_id?: string | null;
       /** Format: int64 */
       running_ms: number;
-      /** Format: uuid */
-      stage_run_id: string;
       started_at?: string | null;
       state: string;
       /** Format: int32 */
       turns: number;
-      /** Format: uuid */
-      work_item_id: string;
     };
     SessionActivity: {
       at: string;
@@ -1272,20 +1281,17 @@ export interface components {
       input_tokens?: number | null;
       /** Format: int64 */
       output_tokens?: number | null;
+      owner: components["schemas"]["RunOwner"];
       /** Format: uuid */
       project_id: string;
       /** Format: int64 */
       running_ms: number;
       /** Format: uuid */
       session_id: string;
-      /** Format: uuid */
-      stage_run_id: string;
       /** @description The CLI result subtype, e.g. `success`. */
       status: string;
       /** Format: int32 */
       turn: number;
-      /** Format: uuid */
-      work_item_id: string;
     };
     WaitingOn:
       | {
@@ -1520,7 +1526,9 @@ export interface operations {
         /** @description One or more of `pending, allowed, denied, expired`, comma-separated. */
         state?: string;
         project_id?: string;
+        /** @description Exclusive with `spec_draft_id`. */
         work_item_id?: string;
+        spec_draft_id?: string;
         cursor?: string;
         limit?: number;
       };
@@ -2084,7 +2092,9 @@ export interface operations {
   list_sessions: {
     parameters: {
       query?: {
+        /** @description Exactly one of `work_item_id` and `spec_draft_id` is required. */
         work_item_id?: string;
+        spec_draft_id?: string;
       };
       header?: never;
       path?: never;
@@ -2429,8 +2439,9 @@ export interface operations {
   list_usage_records: {
     parameters: {
       query?: {
-        /** @description One of `work_item_id` and `session_id` is required. */
+        /** @description One of `work_item_id`, `spec_draft_id`, and `session_id` is required; `work_item_id` and `spec_draft_id` are exclusive. */
         work_item_id?: string;
+        spec_draft_id?: string;
         session_id?: string;
         cursor?: string;
         limit?: number;

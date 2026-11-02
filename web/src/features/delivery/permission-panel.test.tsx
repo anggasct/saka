@@ -312,8 +312,11 @@ describe("permission in the timeline", () => {
           {
             id: SESSION_ID,
             project_id: PROJECT_ID,
-            work_item_id: item.id,
-            stage_run_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344c1",
+            owner: {
+              kind: "stage_run",
+              work_item_id: item.id,
+              stage_run_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344c1",
+            },
             cli: "claude",
             cli_version: null,
             model: null,

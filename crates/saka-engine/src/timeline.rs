@@ -1,6 +1,6 @@
-use saka_core::ids::{PermissionRequestId, WorkItemId};
-use saka_core::model::SessionActivity;
-use saka_core::task::TaskInput;
+use saka_core::ids::PermissionRequestId;
+use saka_core::model::{RunOwner, SessionActivity};
+use saka_core::session::SessionInput;
 use saka_core::time::Timestamp;
 use saka_ports::{RunnerEvent, RunnerEventKind};
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ pub(crate) fn cut(text: &str) -> String {
 
 pub(crate) fn activity(
     event: &RunnerEvent,
-    work_item_id: WorkItemId,
+    owner: RunOwner,
     permission: Option<(PermissionRequestId, &str, &str)>,
 ) -> Option<SessionActivity> {
     let system = |code: &str, params: Value| {
@@ -77,7 +77,7 @@ pub(crate) fn activity(
     Some(SessionActivity {
         session_id: event.session_id,
         offset: event.offset,
-        work_item_id,
+        owner,
         at: event.at,
         kind: kind.to_string(),
         summary: cut(&summary),
@@ -92,9 +92,9 @@ fn reset_ms(v: &Value) -> Option<Timestamp> {
     (0.0..9.0e15).contains(&ms).then_some(Timestamp(ms as i64))
 }
 
-fn window(name: &str, w: &Value, refused: bool) -> Option<TaskInput> {
+fn window(name: &str, w: &Value, refused: bool) -> Option<SessionInput> {
     let utilization = w.get("utilization").and_then(Value::as_f64)?;
-    Some(TaskInput::QuotaObserved {
+    Some(SessionInput::QuotaObserved {
         window: name.to_string(),
         utilization: utilization.max(0.0),
         status: if refused {
@@ -116,31 +116,32 @@ fn resets_at(w: &Value) -> Option<Timestamp> {
 
 // Only the top-level status says whether requests are refused; a window's own status
 // is informational, so the block always lands on the limiting window, `rateLimitType`.
-pub(crate) fn quota_windows(info: &Value) -> Vec<TaskInput> {
+pub(crate) fn quota_windows(info: &Value) -> Vec<SessionInput> {
     let refused = info.get("status").and_then(Value::as_str) == Some("rejected");
     let limiting = info
         .get("rateLimitType")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    let mut observed: Vec<TaskInput> = match info.get("unifiedWindows").and_then(Value::as_object) {
-        Some(windows) => windows
-            .iter()
-            .filter_map(|(name, w)| window(name, w, refused && name == limiting))
-            .collect(),
-        None if info.get("rateLimitType").is_some() => {
-            window(limiting, info, refused).into_iter().collect()
-        }
-        None => vec![],
-    };
+    let mut observed: Vec<SessionInput> =
+        match info.get("unifiedWindows").and_then(Value::as_object) {
+            Some(windows) => windows
+                .iter()
+                .filter_map(|(name, w)| window(name, w, refused && name == limiting))
+                .collect(),
+            None if info.get("rateLimitType").is_some() => {
+                window(limiting, info, refused).into_iter().collect()
+            }
+            None => vec![],
+        };
     let blocked = observed
         .iter()
-        .any(|o| matches!(o, TaskInput::QuotaObserved { refused: true, .. }));
+        .any(|o| matches!(o, SessionInput::QuotaObserved { refused: true, .. }));
     if refused && !blocked {
         let reset = info
             .get("unifiedWindows")
             .and_then(|w| w.get(limiting))
             .and_then(resets_at);
-        observed.push(TaskInput::QuotaObserved {
+        observed.push(SessionInput::QuotaObserved {
             window: limiting.to_string(),
             utilization: info
                 .get("utilization")
@@ -173,9 +174,12 @@ mod tests {
 
     #[test]
     fn every_runner_event_kind_maps_to_its_timeline_row() {
-        let item = WorkItemId(Uuid::from_u128(2));
+        let owner = RunOwner::StageRun {
+            work_item_id: saka_core::ids::WorkItemId(Uuid::from_u128(2)),
+            stage_run_id: saka_core::ids::StageRunId(Uuid::from_u128(5)),
+        };
         let perm = PermissionRequestId(Uuid::from_u128(3));
-        let row = |kind, p| activity(&event(kind), item, p).map(|a| (a.kind, a.summary, a.data));
+        let row = |kind, p| activity(&event(kind), owner, p).map(|a| (a.kind, a.summary, a.data));
         let act = |category: &str, summary: &str, tool: Option<&str>, is_error: Option<bool>| {
             RunnerEventKind::Activity {
                 category: category.into(),
@@ -287,8 +291,8 @@ mod tests {
         status: &str,
         reset_s: i64,
         refused: bool,
-    ) -> TaskInput {
-        TaskInput::QuotaObserved {
+    ) -> SessionInput {
+        SessionInput::QuotaObserved {
             window: window.into(),
             utilization,
             status: status.into(),
@@ -358,7 +362,7 @@ mod tests {
         );
         assert_eq!(
             quota_windows(&json!({ "status": "rejected", "utilization": 0.97 })),
-            vec![TaskInput::QuotaObserved {
+            vec![SessionInput::QuotaObserved {
                 window: "unknown".into(),
                 utilization: 0.97,
                 status: "rejected".into(),

@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use saka_agents::claude;
-use saka_agents::launch::{self, ClaudeSettings, LaunchSpec, SessionPaths};
+use saka_agents::launch::{self, ClaudeSettings, LaunchOptions, LaunchSpec, SessionPaths};
 
 const WAIT: Duration = Duration::from_secs(90);
 const PARENT: &str = "parent-memory-7f3a";
@@ -87,7 +87,13 @@ impl Fixture {
             &self.root,
             &self.root.join("worktree"),
         );
-        launch::claude(&settings, &program, "conformance", &paths, vec![], None).unwrap()
+        let options = LaunchOptions {
+            cwd: &paths.worktree,
+            tools: None,
+            model: None,
+            resume: None,
+        };
+        launch::claude(&settings, &program, "conformance", &paths, vec![], &options).unwrap()
     }
 }
 

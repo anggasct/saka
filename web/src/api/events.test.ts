@@ -88,6 +88,7 @@ describe("startEventStream", () => {
 });
 
 const SESSION = "0193f0c4-1b2a-7c3d-9e8f-0011223344e1";
+const OWNER = { kind: "stage_run", work_item_id: "w", stage_run_id: "s" };
 const TIMELINE = `/api/v1/sessions/${SESSION}/timeline`;
 
 function row(offset: number): Activity {
@@ -147,7 +148,7 @@ describe("live timeline", () => {
       total = o + 1;
       fake.emit("runtime.session.activity.v1", {
         session_id: SESSION,
-        work_item_id: "w",
+        owner: OWNER,
         offset: o,
         kind: "message",
       });
@@ -167,7 +168,7 @@ describe("live timeline", () => {
     startEventStream(client, () => fake.stream);
     fake.emit("runtime.session.activity.v1", {
       session_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344e2",
-      work_item_id: "w",
+      owner: OWNER,
       offset: 9,
       kind: "message",
     });

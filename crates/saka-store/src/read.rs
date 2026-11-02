@@ -3,12 +3,12 @@ use std::collections::{BTreeMap, HashMap};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use saka_core::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
-    RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
+    RepoId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, GateResult, PermissionRequest,
-    PermissionRule, Project, ProjectRepo, Repo, RevisionView, Session, Spec, SpecDependency,
-    StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
+    PermissionRule, Project, ProjectRepo, Repo, RevisionView, RunOwner, Session, Spec,
+    SpecDependency, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SessionState, Stage, Trigger};
@@ -16,7 +16,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::codec::{
-    budget_col, json, opt_json, opt_uuid, opt_vocab, u32_col, u64_col, uuid, vocab,
+    budget_col, json, opt_json, opt_uuid, opt_vocab, run_owner, u32_col, u64_col, uuid, vocab,
 };
 use crate::error::{Result, StoreError};
 use crate::write::{ActionRecord, SecretRow, SpecRevisionRow};
@@ -34,6 +34,42 @@ const SESSION_SELECT: &str = "SELECT s.*,
     (SELECT ifnull(MAX(turn), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_turn,
     (SELECT ifnull(SUM(running_ms), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_running_ms
   FROM session s";
+
+const ENVIRONMENT_SELECT: &str = "SELECT e.*,
+    CASE WHEN e.work_item_id IS NOT NULL THEN e.id END AS stage_run_id
+  FROM environment e";
+
+pub(crate) const PERMISSION_SELECT: &str = "SELECT p.*,
+    (SELECT s.stage_run_id FROM session s WHERE s.id = p.session_id) AS stage_run_id,
+    (SELECT s.spec_draft_attempt_id FROM session s WHERE s.id = p.session_id) AS spec_draft_attempt_id
+  FROM permission_request p";
+
+const ACTIVITY_SELECT: &str = "SELECT a.*,
+    (SELECT s.stage_run_id FROM session s WHERE s.id = a.session_id) AS stage_run_id,
+    (SELECT s.spec_draft_attempt_id FROM session s WHERE s.id = a.session_id) AS spec_draft_attempt_id
+  FROM session_activity a";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunOf {
+    WorkItem(WorkItemId),
+    SpecDraft(SpecDraftId),
+}
+
+impl RunOf {
+    fn column(self) -> &'static str {
+        match self {
+            RunOf::WorkItem(_) => "work_item_id",
+            RunOf::SpecDraft(_) => "spec_draft_id",
+        }
+    }
+
+    fn id(self) -> String {
+        match self {
+            RunOf::WorkItem(id) => id.to_string(),
+            RunOf::SpecDraft(id) => id.to_string(),
+        }
+    }
+}
 
 const WORK_ITEM_COLUMNS: &str = "id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key,
     work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at";
@@ -230,13 +266,13 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for e in rows(
         conn,
-        "SELECT * FROM environment",
+        ENVIRONMENT_SELECT,
         selection,
         "created_at DESC, id DESC",
         b,
         environment,
     )? {
-        if let Some(t) = tasks.get_mut(&e.work_item_id) {
+        if let Some(t) = e.owner.work_item_id().and_then(|id| tasks.get_mut(&id)) {
             t.environment.get_or_insert(e);
         }
     }
@@ -248,10 +284,10 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         b,
         session,
     )? {
-        if let Some(t) = tasks.get_mut(&s.work_item_id) {
+        if let Some(t) = s.owner.work_item_id().and_then(|id| tasks.get_mut(&id)) {
             match (&t.session, &mut t.stage_run) {
                 (None, _) => t.session = Some(s),
-                (Some(_), Some(run)) if s.stage_run_id == run.id => {
+                (Some(_), Some(run)) if s.owner.stage_run_id() == Some(run.id) => {
                     if s.resume_cause == Some(saka_core::vocab::ResumeCause::Lost) {
                         run.resumed_lost = true;
                     }
@@ -263,7 +299,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for t in tasks.values_mut() {
         if let (Some(s), Some(run)) = (&t.session, &mut t.stage_run)
-            && s.stage_run_id == run.id
+            && s.owner.stage_run_id() == Some(run.id)
             && s.resume_cause == Some(saka_core::vocab::ResumeCause::Lost)
         {
             run.resumed_lost = true;
@@ -283,20 +319,20 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             s.running_since = running.get(&s.id).copied();
         }
     }
-    let open_permissions = "SELECT * FROM permission_request";
     for p in rows(
         conn,
-        open_permissions,
+        PERMISSION_SELECT,
         selection,
         "requested_at, id",
         b,
         permission,
     )? {
         let wanted = p.state == saka_core::vocab::PermissionState::Pending
-            || (p.delivered_at.is_none() && saka_core::task::awaits_delivery(&p));
+            || (p.delivered_at.is_none() && saka_core::session::awaits_delivery(&p));
+        let work_item = p.owner.work_item_id();
         if wanted
-            && latest_sessions.get(&p.session_id) == Some(&p.work_item_id)
-            && let Some(t) = tasks.get_mut(&p.work_item_id)
+            && latest_sessions.get(&p.session_id).copied() == work_item
+            && let Some(t) = work_item.and_then(|id| tasks.get_mut(&id))
         {
             t.permissions.push(p);
         }
@@ -308,32 +344,25 @@ pub fn load_task(conn: &Connection, id: WorkItemId) -> Result<Option<Task>> {
     Ok(load_tasks(conn, TaskSet::Ids(&[id]))?.into_iter().next())
 }
 
-pub fn session_work_item(conn: &Connection, session: SessionId) -> Result<Option<WorkItemId>> {
-    owner(conn, "session", session.0)
+pub fn session_owner(conn: &Connection, session: SessionId) -> Result<Option<RunOwner>> {
+    one(
+        conn,
+        "SELECT work_item_id, stage_run_id, spec_draft_id, spec_draft_attempt_id FROM session WHERE id = ?1",
+        &[&session.0.to_string()],
+        run_owner,
+    )
 }
 
-pub fn permission_work_item(
+pub fn permission_owner(
     conn: &Connection,
     request: PermissionRequestId,
-) -> Result<Option<WorkItemId>> {
-    owner(conn, "permission_request", request.0)
-}
-
-fn owner(conn: &Connection, table: &'static str, id: Uuid) -> Result<Option<WorkItemId>> {
-    let found: Option<String> = conn
-        .query_row(
-            &format!("SELECT work_item_id FROM {table} WHERE id = ?1"),
-            [id.to_string()],
-            |r| r.get(0),
-        )
-        .optional()?;
-    found
-        .map(|s| {
-            Uuid::parse_str(&s)
-                .map(WorkItemId)
-                .map_err(|_| StoreError::Corrupt(format!("{table}.work_item_id")))
-        })
-        .transpose()
+) -> Result<Option<RunOwner>> {
+    one(
+        conn,
+        &format!("{PERMISSION_SELECT} WHERE p.id = ?1"),
+        &[&request.0.to_string()],
+        run_owner,
+    )
 }
 
 fn running_since(
@@ -428,7 +457,7 @@ fn change_request(row: &Row<'_>) -> Result<ChangeRequest> {
 fn environment(row: &Row<'_>) -> Result<Environment> {
     Ok(Environment {
         id: EnvironmentId(uuid(row, "id")?),
-        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        owner: run_owner(row)?,
         repo_id: RepoId(uuid(row, "repo_id")?),
         root_path: row.get("root_path")?,
         worktree_path: row.get("worktree_path")?,
@@ -448,8 +477,7 @@ fn environment(row: &Row<'_>) -> Result<Environment> {
 pub(crate) fn session(row: &Row<'_>) -> Result<Session> {
     Ok(Session {
         id: SessionId(uuid(row, "id")?),
-        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
-        stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
+        owner: run_owner(row)?,
         environment_id: EnvironmentId(uuid(row, "environment_id")?),
         cli: row.get("cli")?,
         cli_version: row.get("cli_version")?,
@@ -495,14 +523,15 @@ fn optional_u32(row: &Row<'_>, col: &str) -> Result<u32> {
     u32::try_from(v).map_err(|_| StoreError::Corrupt(format!("{col}: out of range: {v}")))
 }
 
-pub fn sessions(conn: &Connection, work_item: WorkItemId) -> Result<Vec<Session>> {
+pub fn sessions(conn: &Connection, of: RunOf) -> Result<Vec<(Session, ProjectId)>> {
     let mut stmt = conn.prepare(&format!(
-        "{SESSION_SELECT} WHERE s.work_item_id = ?1 ORDER BY s.created_at, s.id"
+        "{SESSION_SELECT} WHERE s.{} = ?1 ORDER BY s.created_at, s.id",
+        of.column()
     ))?;
-    let mut q = stmt.query([work_item.0.to_string()])?;
+    let mut q = stmt.query([of.id()])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
-        out.push(session(row)?);
+        out.push((session(row)?, ProjectId(uuid(row, "project_id")?)));
     }
     Ok(out)
 }
@@ -543,7 +572,7 @@ pub fn timeline(
         TimelineCursor::Tail => ("\"offset\" < ?2 ORDER BY \"offset\" DESC", i64::MAX),
     };
     let mut stmt = conn.prepare(&format!(
-        "SELECT * FROM session_activity WHERE session_id = ?1 AND {sql} LIMIT ?3"
+        "{ACTIVITY_SELECT} WHERE a.session_id = ?1 AND {sql} LIMIT ?3"
     ))?;
     let mut q = stmt.query(params![id, bound, limit])?;
     let mut items = Vec::new();
@@ -581,8 +610,9 @@ pub fn activities_after(
     seq: i64,
     limit: u32,
 ) -> Result<Vec<(i64, saka_core::model::SessionActivity)>> {
-    let mut stmt =
-        conn.prepare("SELECT * FROM session_activity WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
+    let mut stmt = conn.prepare(&format!(
+        "{ACTIVITY_SELECT} WHERE a.seq > ?1 ORDER BY a.seq LIMIT ?2"
+    ))?;
     let mut q = stmt.query(params![seq, limit])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -603,7 +633,7 @@ fn activity(row: &Row<'_>) -> Result<saka_core::model::SessionActivity> {
     Ok(saka_core::model::SessionActivity {
         session_id: SessionId(uuid(row, "session_id")?),
         offset: u64_col(row, "offset")?,
-        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        owner: run_owner(row)?,
         at: ts(row, "at")?,
         kind: row.get("kind")?,
         summary: row.get("summary")?,
@@ -613,25 +643,28 @@ fn activity(row: &Row<'_>) -> Result<saka_core::model::SessionActivity> {
 
 pub fn usage_records(
     conn: &Connection,
-    work_item: Option<WorkItemId>,
+    of: Option<RunOf>,
     session: Option<SessionId>,
 ) -> Result<Vec<(saka_core::model::UsageRecord, ProjectId)>> {
     let mut stmt = conn.prepare(
-        "SELECT * FROM usage_record WHERE (?1 IS NULL OR work_item_id = ?1) AND (?2 IS NULL OR session_id = ?2)
+        "SELECT * FROM usage_record
+          WHERE (?1 IS NULL OR work_item_id = ?1) AND (?2 IS NULL OR spec_draft_id = ?2)
+            AND (?3 IS NULL OR session_id = ?3)
          ORDER BY ended_at, id",
     )?;
-    let mut q = stmt.query(params![
-        work_item.map(|w| w.0.to_string()),
-        session.map(|s| s.0.to_string())
-    ])?;
+    let (work_item, draft) = match of {
+        Some(RunOf::WorkItem(id)) => (Some(id.to_string()), None),
+        Some(RunOf::SpecDraft(id)) => (None, Some(id.to_string())),
+        None => (None, None),
+    };
+    let mut q = stmt.query(params![work_item, draft, session.map(|s| s.0.to_string())])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
         let project = ProjectId(uuid(row, "project_id")?);
         out.push((
             saka_core::model::UsageRecord {
                 id: saka_core::ids::UsageRecordId(uuid(row, "id")?),
-                work_item_id: WorkItemId(uuid(row, "work_item_id")?),
-                stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
+                owner: run_owner(row)?,
                 session_id: SessionId(uuid(row, "session_id")?),
                 account: row.get("account")?,
                 turn: u32_col(row, "turn")?,
@@ -723,7 +756,7 @@ pub fn account_quotas(conn: &Connection) -> Result<Vec<AccountQuota>> {
 pub(crate) fn permission(row: &Row<'_>) -> Result<PermissionRequest> {
     Ok(PermissionRequest {
         id: PermissionRequestId(uuid(row, "id")?),
-        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        owner: run_owner(row)?,
         session_id: SessionId(uuid(row, "session_id")?),
         cli_request_id: row.get("cli_request_id")?,
         tool: row.get("tool")?,

@@ -19,21 +19,24 @@ function Entry({
 }) {
   const t = useT();
   const tasks = useWorkItems(project?.id);
-  const task = tasks.data?.find((w) => w.id === request.work_item_id);
-  const step = task?.step_id;
+  const owner = request.owner;
+  const workItemId = owner.kind === "stage_run" ? owner.work_item_id : null;
+  const step = tasks.data?.find((w) => w.id === workItemId)?.step_id;
   return (
     <li>
       <PermissionCard
         request={request}
         project={project?.name}
         link={
-          <Link
-            to="/delivery/tasks/$workItemId"
-            params={{ workItemId: request.work_item_id }}
-            className={LINK}
-          >
-            {step ? t("task.step", { step }) : t("permission.openTask")}
-          </Link>
+          workItemId === null ? undefined : (
+            <Link
+              to="/delivery/tasks/$workItemId"
+              params={{ workItemId }}
+              className={LINK}
+            >
+              {step ? t("task.step", { step }) : t("permission.openTask")}
+            </Link>
+          )
         }
       />
     </li>

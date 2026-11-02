@@ -120,6 +120,13 @@ pub trait DocSource: Send + Sync {
         max_files: usize,
     ) -> PortResult<DocTree>;
 
+    async fn tree_at(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        project_path: &str,
+    ) -> PortResult<Vec<DocEntry>>;
+
     async fn open(
         &self,
         repo: &RepoRef,

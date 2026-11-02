@@ -19,6 +19,7 @@ use saka_core::policy::{
 };
 use saka_core::react::{phase_jobs, react};
 use saka_core::rejection::Rejection;
+use saka_core::session::SessionInput;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     BlockerCode, BudgetDimension, EnvironmentState, InterruptBy, MergeMethod, PermissionState,
@@ -142,7 +143,7 @@ impl Run {
 
     fn launch(&mut self) -> Vec<Event> {
         self.launches += 1;
-        self.decide(task::TaskInput::SessionLaunched {
+        self.decide(task::TaskInput::Session(SessionInput::Launched {
             session_id: SessionId(Uuid::from_u128(600 + self.launches)),
             cli: "claude".into(),
             cli_version: Some("2.1.0".into()),
@@ -151,7 +152,7 @@ impl Run {
             runner_unit: format!("saka-session-{}", self.launches),
             socket_path: "/run/s.sock".into(),
             log_path: "/data/s/events.ndjson".into(),
-        })
+        }))
     }
 
     fn prepare(&mut self, env: u128) {
@@ -177,38 +178,42 @@ impl Run {
 
     fn initialize(&mut self) {
         let cli = format!("cli-{}", self.launches);
-        self.decide(task::TaskInput::SessionInitialized {
+        self.decide(task::TaskInput::Session(SessionInput::Initialized {
             cli_session_id: cli,
             model: Some("sonnet".into()),
-        });
+        }));
     }
 
     fn accept(&mut self, turn: u32) {
-        self.decide(task::TaskInput::TurnAccepted { turn });
+        self.decide(task::TaskInput::Session(SessionInput::TurnAccepted {
+            turn,
+        }));
     }
 
     fn end_turn(&mut self, turn: u32, status: &str) -> Vec<Event> {
-        self.decide(task::TaskInput::TurnEnded {
+        self.decide(task::TaskInput::Session(SessionInput::TurnEnded {
             turn,
             status: status.into(),
             cost_usd_micros: Some(1_000),
             input_tokens: Some(100),
             output_tokens: Some(50),
-        })
+        }))
     }
 
     fn ask(&mut self, id: u128, command: &str) {
-        self.decide(task::TaskInput::PermissionRequested {
-            permission_request_id: PermissionRequestId(Uuid::from_u128(id)),
-            cli_request_id: format!("req-{id}"),
-            tool: "Bash".into(),
-            summary: command.into(),
-            input: json!({ "command": command }),
-            decision: Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
+        self.decide(task::TaskInput::Session(
+            SessionInput::PermissionRequested {
+                permission_request_id: PermissionRequestId(Uuid::from_u128(id)),
+                cli_request_id: format!("req-{id}"),
+                tool: "Bash".into(),
+                summary: command.into(),
+                input: json!({ "command": command }),
+                decision: Decision {
+                    effect: Effect::Ask,
+                    source: DecisionSource::Default,
+                },
             },
-        });
+        ));
     }
 
     fn answer(
@@ -218,35 +223,37 @@ impl Run {
         remember: bool,
         active: Vec<PermissionRule>,
     ) -> Result<Vec<Event>, Rejection> {
-        self.try_decide(task::TaskInput::AnswerPermission {
+        self.try_decide(task::TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: PermissionRequestId(Uuid::from_u128(id)),
             allow,
             message: None,
             actor: "operator:local".into(),
             remember,
             active_rules: active,
-        })
+        }))
     }
 
     fn steer(&mut self, text: &str) -> Result<Vec<Event>, Rejection> {
         let session_id = self.sid();
-        self.try_decide(task::TaskInput::Steer {
+        self.try_decide(task::TaskInput::Session(SessionInput::Steer {
             session_id,
             text: text.into(),
-        })
+        }))
     }
 
     fn interrupt(&mut self) -> Result<Vec<Event>, Rejection> {
         let session_id = self.sid();
-        self.try_decide(task::TaskInput::Interrupt { session_id })
+        self.try_decide(task::TaskInput::Session(SessionInput::Interrupt {
+            session_id,
+        }))
     }
 
     fn stop(&mut self, reason: &str) -> Result<Vec<Event>, Rejection> {
         let session_id = self.sid();
-        self.try_decide(task::TaskInput::StopSession {
+        self.try_decide(task::TaskInput::Session(SessionInput::Stop {
             session_id,
             reason: reason.into(),
-        })
+        }))
     }
 
     fn start_jobs(&self) -> Vec<Job> {
@@ -275,7 +282,7 @@ fn steer_reaches_a_running_turn_and_starts_a_new_turn_from_idle() {
     assert_eq!(
         events,
         vec![Event::SessionSteered {
-            work_item_id: r.task.item.id,
+            owner: r.session().owner,
             session_id: sid,
             text: "use the existing helper".into(),
             turn: 1,
@@ -424,7 +431,9 @@ fn operator_actions_outside_their_states_are_refused() {
     assert_eq!(r.interrupt(), Err(invalid("idle")));
     let other = SessionId(Uuid::from_u128(4242));
     assert_eq!(
-        r.try_decide(task::TaskInput::Interrupt { session_id: other }),
+        r.try_decide(task::TaskInput::Session(SessionInput::Interrupt {
+            session_id: other
+        })),
         Err(Rejection::NotFound)
     );
 
@@ -489,10 +498,10 @@ fn the_first_loss_resumes_the_session_and_the_second_blocks() {
     let mut r = Run::running(unlimited());
     let first = r.sid();
     let run = r.task.stage_run.as_ref().unwrap().id;
-    r.decide(task::TaskInput::CliExited {
+    r.decide(task::TaskInput::Session(SessionInput::CliExited {
         code: Some(137),
         signal: None,
-    });
+    }));
     assert_eq!(r.session().state, SessionState::Lost);
     assert_eq!(r.blocker(), None);
     assert_eq!(
@@ -536,10 +545,10 @@ fn the_first_loss_resumes_the_session_and_the_second_blocks() {
     assert!(r.task.stage_run.as_ref().unwrap().resumed_lost);
     assert!(r.start_jobs().is_empty());
 
-    r.decide(task::TaskInput::CliExited {
+    r.decide(task::TaskInput::Session(SessionInput::CliExited {
         code: None,
         signal: Some(9),
-    });
+    }));
     assert_eq!(
         r.blocker(),
         Some((
@@ -557,9 +566,9 @@ fn a_session_lost_before_init_restarts_from_the_work_packet() {
     r.prepare(500);
     r.launch();
     let first = r.sid();
-    r.decide(task::TaskInput::SessionGone {
+    r.decide(task::TaskInput::Session(SessionInput::Gone {
         cause: "runner_silent".into(),
-    });
+    }));
     assert_eq!(
         r.start_jobs()[0].payload["resume"]["cli_session_id"],
         Value::Null
@@ -960,17 +969,19 @@ fn remember_makes_an_exact_project_rule_that_never_beats_a_deny() {
     );
 
     let mut file = Run::running(unlimited());
-    file.decide(task::TaskInput::PermissionRequested {
-        permission_request_id: PermissionRequestId(Uuid::from_u128(902)),
-        cli_request_id: "req-902".into(),
-        tool: "Write".into(),
-        summary: "src/a.rs".into(),
-        input: json!({ "file_path": "src/a.rs" }),
-        decision: Decision {
-            effect: Effect::Ask,
-            source: DecisionSource::Default,
+    file.decide(task::TaskInput::Session(
+        SessionInput::PermissionRequested {
+            permission_request_id: PermissionRequestId(Uuid::from_u128(902)),
+            cli_request_id: "req-902".into(),
+            tool: "Write".into(),
+            summary: "src/a.rs".into(),
+            input: json!({ "file_path": "src/a.rs" }),
+            decision: Decision {
+                effect: Effect::Ask,
+                source: DecisionSource::Default,
+            },
         },
-    });
+    ));
     file.answer(902, true, true, vec![]).unwrap();
     assert_eq!(
         (
@@ -1045,13 +1056,13 @@ fn spend_budgets_stop_at_turn_end_after_one_warning() {
     r.steer("more").unwrap();
     r.accept(2);
     let mut r2 = r;
-    let ended = r2.decide(task::TaskInput::TurnEnded {
+    let ended = r2.decide(task::TaskInput::Session(SessionInput::TurnEnded {
         turn: 2,
         status: "success".into(),
         cost_usd_micros: None,
         input_tokens: Some(650),
         output_tokens: Some(0),
-    });
+    }));
     let warned: Vec<&Event> = ended
         .iter()
         .filter(|e| matches!(e, Event::BudgetWarned { .. }))
@@ -1068,13 +1079,13 @@ fn spend_budgets_stop_at_turn_end_after_one_warning() {
     r2.steer("more").unwrap();
     r2.accept(3);
     r2.jobs.clear();
-    let last = r2.decide(task::TaskInput::TurnEnded {
+    let last = r2.decide(task::TaskInput::Session(SessionInput::TurnEnded {
         turn: 3,
         status: "success".into(),
         cost_usd_micros: None,
         input_tokens: Some(150),
         output_tokens: Some(50),
-    });
+    }));
     assert!(!last.iter().any(|e| matches!(e, Event::BudgetWarned { .. })));
     assert_eq!(
         r2.blocker(),
@@ -1125,10 +1136,10 @@ fn the_turn_budget_is_checked_before_the_next_turn_is_sent() {
 fn the_running_budget_counts_every_session_of_the_stage_run() {
     let mut r = Run::running(budget(30, 10, 0, 0));
     r.wait(20 * MINUTE);
-    r.decide(task::TaskInput::CliExited {
+    r.decide(task::TaskInput::Session(SessionInput::CliExited {
         code: Some(1),
         signal: None,
-    });
+    }));
     r.launch();
     r.initialize();
     r.accept(1);
@@ -1155,13 +1166,13 @@ fn the_running_budget_counts_every_session_of_the_stage_run() {
 fn a_zero_limit_never_stops_the_session() {
     let mut r = Run::running(budget(60, 10, 0, 0));
     for turn in 1..=3 {
-        let events = r.decide(task::TaskInput::TurnEnded {
+        let events = r.decide(task::TaskInput::Session(SessionInput::TurnEnded {
             turn,
             status: "success".into(),
             cost_usd_micros: Some(50_000_000),
             input_tokens: Some(9_000_000),
             output_tokens: Some(9_000_000),
-        });
+        }));
         assert!(
             !events
                 .iter()
@@ -1176,12 +1187,14 @@ fn a_zero_limit_never_stops_the_session() {
 #[test]
 fn only_a_refused_rate_limit_stops_the_session_as_quota_exhausted() {
     let mut r = Run::running(unlimited());
-    let observe = |status: &str, refused: bool| task::TaskInput::QuotaObserved {
-        window: "five_hour".into(),
-        utilization: 0.95,
-        status: status.into(),
-        resets_at: Some(Timestamp(99_000_000)),
-        refused,
+    let observe = |status: &str, refused: bool| {
+        task::TaskInput::Session(SessionInput::QuotaObserved {
+            window: "five_hour".into(),
+            utilization: 0.95,
+            status: status.into(),
+            resets_at: Some(Timestamp(99_000_000)),
+            refused,
+        })
     };
     for status in ["allowed_warning", "rejected"] {
         let events = r.decide(observe(status, false));
@@ -1239,16 +1252,22 @@ fn a_busy_account_holds_queued_tasks_until_the_window_resets() {
 fn session_actions_follow_the_state() {
     let mut r = Run::running(unlimited());
     assert_eq!(
-        task::session_actions(r.session()),
+        saka_core::session::session_actions(r.session()),
         vec!["steer", "interrupt", "stop"]
     );
     r.ask(900, "npm install");
-    assert_eq!(task::session_actions(r.session()), vec!["stop"]);
+    assert_eq!(
+        saka_core::session::session_actions(r.session()),
+        vec!["stop"]
+    );
     r.answer(900, true, false, vec![]).unwrap();
     r.end_turn(1, "success");
-    assert_eq!(task::session_actions(r.session()), vec!["steer", "stop"]);
+    assert_eq!(
+        saka_core::session::session_actions(r.session()),
+        vec!["steer", "stop"]
+    );
     r.stop("done").unwrap();
-    assert!(task::session_actions(r.session()).is_empty());
+    assert!(saka_core::session::session_actions(r.session()).is_empty());
 }
 
 #[test]
@@ -1261,7 +1280,12 @@ fn a_turn_that_ends_before_its_send_is_recorded_still_ends_once() {
     r.end_turn(1, "success");
     assert_eq!(r.session().state, SessionState::Idle);
     assert_eq!(r.session().recorded_turn, 1);
-    assert_eq!(r.decide(task::TaskInput::TurnAccepted { turn: 1 }), vec![]);
+    assert_eq!(
+        r.decide(task::TaskInput::Session(SessionInput::TurnAccepted {
+            turn: 1
+        })),
+        vec![]
+    );
     assert_eq!(r.session().state, SessionState::Idle);
     assert_eq!(
         r.end_turn(1, "success"),

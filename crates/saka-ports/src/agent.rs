@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use saka_core::ids::{SessionId, WorkItemId};
+use saka_core::ids::SessionId;
+use saka_core::model::RunOwner;
 use saka_core::time::Timestamp;
 use serde_json::Value;
 
@@ -7,11 +8,19 @@ use crate::PortResult;
 use crate::env::EnvRef;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchProfile {
+    Task,
+    Architect { cwd: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionLaunch {
     pub session_id: SessionId,
-    pub work_item_id: WorkItemId,
+    pub owner: RunOwner,
     pub environment: EnvRef,
     pub resume_cli_session_id: Option<String>,
+    pub profile: LaunchProfile,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

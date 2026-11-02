@@ -1,7 +1,8 @@
 use serde_json::Value;
 
 use crate::ids::SessionId;
-use crate::model::{Coded, Task};
+use crate::model::Coded;
+use crate::session::RunView;
 use crate::vocab::{BlockerCode, ResumeCause, ResumeReason, SessionState, Trigger};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,12 +14,11 @@ pub struct ResumePlan {
     pub retry_of: Option<Coded>,
 }
 
-pub fn plan(task: &Task) -> Option<ResumePlan> {
-    let run = task.stage_run.as_ref()?;
-    let previous = task.session.as_ref().filter(|s| !s.state.is_live())?;
-    let env = task.ready_environment()?;
-    if previous.stage_run_id == run.id {
-        return (previous.state == SessionState::Lost && !run.resumed_lost).then(|| ResumePlan {
+pub fn plan(view: &RunView<'_>) -> Option<ResumePlan> {
+    let previous = view.session.filter(|s| !s.state.is_live())?;
+    let env = view.ready_environment?;
+    if previous.owner == view.owner {
+        return (previous.state == SessionState::Lost && !view.resumed_lost).then(|| ResumePlan {
             from: previous.id,
             cause: ResumeCause::Lost,
             reason: ResumeReason::RunnerLost,
@@ -26,30 +26,32 @@ pub fn plan(task: &Task) -> Option<ResumePlan> {
             retry_of: None,
         });
     }
-    let blocker = task.blocker.as_ref().filter(|b| b.resolution.is_some());
-    if run.trigger != Trigger::Manual || previous.environment_id != env.id {
+    if view.retry.trigger != Trigger::Manual || previous.environment_id != env {
         return None;
     }
     let cli_session_id = previous.cli_session_id.clone()?;
+    let retried = view.retry.retried.as_ref();
     Some(ResumePlan {
         from: previous.id,
         cause: ResumeCause::Retry,
-        reason: blocker.map_or(ResumeReason::Retried, |b| reason_of(b.code, &b.params)),
+        reason: retried.map_or(ResumeReason::Retried, |(code, params)| {
+            reason_of(*code, params)
+        }),
         cli_session_id: Some(cli_session_id),
-        retry_of: blocker.map(|b| Coded {
-            code: b.code.as_str().to_string(),
-            params: b.params.clone(),
+        retry_of: retried.map(|(code, params)| Coded {
+            code: code.as_str().to_string(),
+            params: params.clone(),
         }),
     })
 }
 
-pub fn wants_session(task: &Task) -> bool {
-    let (Some(run), None) = (&task.stage_run, task.live_session()) else {
+pub fn wants_session(view: &RunView<'_>) -> bool {
+    if view.live_session().is_some() {
         return false;
-    };
-    match &task.session {
-        Some(s) if s.stage_run_id == run.id => {
-            plan(task).is_some_and(|p| p.cause == ResumeCause::Lost)
+    }
+    match view.session {
+        Some(s) if s.owner == view.owner => {
+            plan(view).is_some_and(|p| p.cause == ResumeCause::Lost)
         }
         _ => true,
     }

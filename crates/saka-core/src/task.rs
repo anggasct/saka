@@ -5,24 +5,22 @@ use serde_json::{Value, json};
 use crate::Ctx;
 use crate::event::{Event, Prompt};
 use crate::gate::{self, Check, GatePolicy};
-use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    SessionId, StageRunId, UsageRecordId,
-};
-use crate::job::JobKind;
+use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, GateResultId, SessionId, StageRunId};
+use crate::job::{JobKind, exhausted_code};
 use crate::model::{
     AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, EnvironmentSetup, GateResult,
-    PermissionRequest, PermissionRule, Retries, Session, StageRun, Task, ToolchainUse, Usage,
+    PermissionRequest, Retries, RunOwner, Session, StageRun, Task, ToolchainUse, Usage,
     UsageRecord, WorkItem,
 };
-use crate::policy::{Decision, Effect};
 use crate::rejection::Rejection;
-use crate::resume;
+use crate::session::{
+    self, RunRetry, RunView, SessionConfig, SessionInput, SessionOutcome, SessionSignal,
+};
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, BudgetDimension, ChangeState, EnvironmentState, GateOutcome,
-    GateSource, InterruptBy, MergeMethod, PermissionState, ResumeCause, SessionState, Stage,
-    StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome, GateSource,
+    InterruptBy, MergeMethod, PermissionState, ResumeCause, SessionState, Stage, StagePhase,
+    StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,20 +39,22 @@ pub struct LoopConfig {
     pub account: String,
 }
 
-pub const SESSION_ENDED_SOURCE: &str = "system:session_ended";
 pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
 pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
-pub const WAIT_LIMIT_SOURCE: &str = "system:wait_limit";
 pub const MERGED_ON_HOST: &str = "change merged on the host";
-const DENIED_BY_OPERATOR: &str = "Denied by the operator.";
-const PERMISSION_EXPIRED_MESSAGE: &str = "The permission request expired.";
-const BUDGET_DIMENSIONS: [BudgetDimension; 4] = [
-    BudgetDimension::RunningMinutes,
-    BudgetDimension::Turns,
-    BudgetDimension::Tokens,
-    BudgetDimension::CostUsd,
-];
+
+impl LoopConfig {
+    pub fn session(&self) -> SessionConfig {
+        SessionConfig {
+            permission_wait_ms: self.permission_wait_ms,
+            idle_ms: self.idle_ms,
+            budget_warn_percent: self.budget_warn_percent,
+            rate_limit_pause: self.rate_limit_pause,
+            account: self.account.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum Verdict {
@@ -77,86 +77,14 @@ pub enum TaskInput {
         code: BlockerCode,
         params: Value,
     },
-    SessionLaunched {
-        session_id: SessionId,
-        cli: String,
-        cli_version: Option<String>,
-        model: Option<String>,
-        account: String,
-        runner_unit: String,
-        socket_path: String,
-        log_path: String,
-    },
-    SessionInitialized {
-        cli_session_id: String,
-        model: Option<String>,
-    },
-    TurnAccepted {
-        turn: u32,
-    },
-    PermissionRequested {
-        permission_request_id: PermissionRequestId,
-        cli_request_id: String,
-        tool: String,
-        summary: String,
-        input: Value,
-        decision: Decision,
-    },
-    AnswerPermission {
-        permission_request_id: PermissionRequestId,
-        allow: bool,
-        message: Option<String>,
-        actor: String,
-        remember: bool,
-        active_rules: Vec<PermissionRule>,
-    },
-    PermissionDelivered {
-        permission_request_id: PermissionRequestId,
-    },
-    TurnEnded {
-        turn: u32,
-        status: String,
-        cost_usd_micros: Option<i64>,
-        input_tokens: Option<i64>,
-        output_tokens: Option<i64>,
-    },
+    Session(SessionInput),
     WorktreeInspected {
         turn: u32,
         dirty: bool,
         commits_ahead: u32,
         head_sha: String,
     },
-    CliExited {
-        code: Option<i32>,
-        signal: Option<i32>,
-    },
-    SessionGone {
-        cause: String,
-    },
-    SessionReattached {
-        runner_version: String,
-        from_offset: u64,
-    },
-    Steer {
-        session_id: SessionId,
-        text: String,
-    },
-    Interrupt {
-        session_id: SessionId,
-    },
-    StopSession {
-        session_id: SessionId,
-        reason: String,
-    },
-    QuotaObserved {
-        window: String,
-        utilization: f64,
-        status: String,
-        resets_at: Option<Timestamp>,
-        refused: bool,
-    },
     Tick,
-    ServerRestarted,
     BranchPushed {
         sha: String,
     },
@@ -251,120 +179,13 @@ pub fn decide(
             setup,
         } => d.environment_prepared(environment_id, root_path, worktree_path, base_sha, setup),
         I::EnvironmentFailed { code, params } => d.environment_failed(code, params, ctx),
-        I::SessionLaunched {
-            session_id,
-            cli,
-            cli_version,
-            model,
-            account,
-            runner_unit,
-            socket_path,
-            log_path,
-        } => d.session_launched(
-            session_id,
-            cli,
-            cli_version,
-            model,
-            account,
-            runner_unit,
-            socket_path,
-            log_path,
-        ),
-        I::SessionInitialized {
-            cli_session_id,
-            model,
-        } => d.with_live_session(|s| {
-            vec![Event::SessionInitialized {
-                work_item_id: task.item.id,
-                session_id: s.id,
-                cli_session_id,
-                model,
-            }]
-        }),
-        I::TurnAccepted { turn } => d.turn_accepted(turn),
-        I::PermissionRequested {
-            permission_request_id,
-            cli_request_id,
-            tool,
-            summary,
-            input,
-            decision,
-        } => d.permission_requested(
-            permission_request_id,
-            cli_request_id,
-            tool,
-            summary,
-            input,
-            decision,
-        ),
-        I::AnswerPermission {
-            permission_request_id,
-            allow,
-            message,
-            actor,
-            remember,
-            active_rules,
-        } => {
-            return d.answer_permission(
-                permission_request_id,
-                allow,
-                message,
-                &actor,
-                remember.then_some(active_rules.as_slice()),
-                ctx,
-            );
-        }
-        I::PermissionDelivered {
-            permission_request_id,
-        } => d.permission_delivered(permission_request_id),
-        I::TurnEnded {
-            turn,
-            status,
-            cost_usd_micros,
-            input_tokens,
-            output_tokens,
-        } => d.turn_ended(
-            turn,
-            status,
-            cost_usd_micros,
-            input_tokens,
-            output_tokens,
-            ctx,
-        ),
+        I::Session(input) => return d.session(input, ctx),
         I::WorktreeInspected {
             turn,
             dirty,
             commits_ahead,
             head_sha,
         } => d.worktree_inspected(turn, dirty, commits_ahead, head_sha, ctx),
-        I::CliExited { code, signal } => d.session_gone(
-            "runner_exited",
-            json!({ "code": code, "signal": signal }),
-            ctx,
-        ),
-        I::SessionGone { cause } => d.session_gone(&cause, json!({}), ctx),
-        I::ServerRestarted => d.session_gone("server_restart", json!({}), ctx),
-        I::SessionReattached {
-            runner_version,
-            from_offset,
-        } => d.with_live_session(|s| {
-            vec![Event::SessionReattached {
-                work_item_id: task.item.id,
-                session_id: s.id,
-                runner_version,
-                from_offset,
-            }]
-        }),
-        I::Steer { session_id, text } => return d.steer(session_id, text, ctx),
-        I::Interrupt { session_id } => return d.interrupt(session_id),
-        I::StopSession { session_id, reason } => return d.stop(session_id, reason, ctx),
-        I::QuotaObserved {
-            window,
-            utilization,
-            status,
-            resets_at,
-            refused,
-        } => d.quota_observed(window, utilization, status, resets_at, refused, ctx),
         I::Tick => d.tick(ctx),
         I::BranchPushed { sha } => d.branch_pushed(sha, ctx),
         I::PushRejected {
@@ -494,280 +315,45 @@ impl Decider<'_> {
         }
     }
 
-    fn with_live_session(&self, f: impl FnOnce(&Session) -> Vec<Event>) -> Vec<Event> {
-        self.task.live_session().map(f).unwrap_or_default()
+    fn session(&self, input: SessionInput, ctx: &mut Ctx<'_>) -> Result<Vec<Event>, Rejection> {
+        let Some(view) = run_view(self.task) else {
+            return match input {
+                SessionInput::Steer { .. }
+                | SessionInput::Interrupt { .. }
+                | SessionInput::Stop { .. }
+                | SessionInput::AnswerPermission { .. } => Err(Rejection::NotFound),
+                _ => Ok(vec![]),
+            };
+        };
+        if matches!(input, SessionInput::Launched { .. })
+            && !self.task.is_at(Stage::Dev, StagePhase::RunningSession)
+        {
+            return Ok(vec![]);
+        }
+        let outcome = session::decide(&view, input, &self.cfg.session(), ctx)?;
+        Ok(self.settle(outcome, ctx))
     }
 
-    fn session_state(&self, session: &Session, state: SessionState) -> Event {
-        Event::SessionStateChanged {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            state,
-            running_ms: session.running_ms_at(self.now),
+    fn settle(&self, outcome: SessionOutcome, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let mut events = outcome.events;
+        match outcome.signal {
+            // The finished turn's worktree is inspected by the job `react` schedules for it.
+            None | Some(SessionSignal::TurnCompleted { .. }) => {}
+            Some(SessionSignal::Stopped {
+                code: BlockerCode::SessionLost,
+                ..
+            }) if !self.task.is_at(Stage::Dev, StagePhase::RunningSession) => {}
+            Some(SessionSignal::Stopped { code, params }) => {
+                events.extend(self.block(code, params, ctx));
+            }
         }
+        events
     }
 
     fn end_session(&self, state: SessionState, code: &str, params: Value) -> Vec<Event> {
-        self.end_session_except(state, code, params, None)
-    }
-
-    fn end_session_except(
-        &self,
-        state: SessionState,
-        code: &str,
-        params: Value,
-        answered: Option<PermissionRequestId>,
-    ) -> Vec<Event> {
-        let Some(session) = self.task.live_session() else {
-            return vec![];
-        };
-        let mut events = vec![
-            Event::SessionEnded {
-                work_item_id: self.item().id,
-                session_id: session.id,
-                end_reason: Coded {
-                    code: code.to_string(),
-                    params,
-                },
-            },
-            self.session_state(session, state),
-        ];
-        for p in self
-            .task
-            .permissions
-            .iter()
-            .filter(|p| p.state == PermissionState::Pending && Some(p.id) != answered)
-        {
-            events.push(Event::PermissionAnswered {
-                work_item_id: self.item().id,
-                permission_request_id: p.id,
-                state: PermissionState::Expired,
-                answer_source: SESSION_ENDED_SOURCE.to_string(),
-                message: None,
-            });
-        }
-        events
-    }
-
-    fn saka_stop(
-        &self,
-        session: &Session,
-        end_code: &str,
-        blocker: BlockerCode,
-        params: Value,
-        answered: Option<PermissionRequestId>,
-        ctx: &mut Ctx<'_>,
-    ) -> Vec<Event> {
-        let mut events = Vec::new();
-        if matches!(session.state, SessionState::Running | SessionState::Waiting) {
-            events.push(Event::SessionInterruptRequested {
-                work_item_id: self.item().id,
-                session_id: session.id,
-                actor: InterruptBy::Saka,
-                turn: session.turns,
-            });
-        }
-        events.extend(self.end_session_except(
-            SessionState::Failed,
-            end_code,
-            params.clone(),
-            answered,
-        ));
-        events.extend(self.block(blocker, params, ctx));
-        events
-    }
-
-    fn budget(&self) -> Option<(&StageRun, Budget)> {
-        let run = self.task.stage_run.as_ref()?;
-        run.budget.map(|b| (run, b))
-    }
-
-    fn exhausted(&self, usage: &Usage, dimensions: &[BudgetDimension]) -> Option<BudgetDimension> {
-        let (_, budget) = self.budget()?;
-        dimensions.iter().copied().find(|d| {
-            let limit = budget.limit(*d);
-            limit > 0 && usage.used(*d) >= limit
-        })
-    }
-
-    fn budget_stop(
-        &self,
-        session: &Session,
-        dimension: BudgetDimension,
-        usage: &Usage,
-        ctx: &mut Ctx<'_>,
-    ) -> Vec<Event> {
-        let Some((_, budget)) = self.budget() else {
-            return vec![];
-        };
-        let params = json!({
-            "dimension": dimension,
-            "used": budget_value(dimension, usage.used(dimension)),
-            "limit": budget_value(dimension, budget.limit(dimension)),
-        });
-        self.saka_stop(
-            session,
-            "budget_exhausted",
-            BlockerCode::BudgetExhausted,
-            params,
-            None,
-            ctx,
-        )
-    }
-
-    fn budget_warnings(&self, usage: &Usage, dimensions: &[BudgetDimension]) -> Vec<Event> {
-        let Some((run, budget)) = self.budget() else {
-            return vec![];
-        };
-        let percent = i128::from(self.cfg.budget_warn_percent);
-        dimensions
-            .iter()
-            .copied()
-            .filter(|d| !run.budget_warnings.contains(d))
-            .filter_map(|d| {
-                let (used, limit) = (usage.used(d), budget.limit(d));
-                let over = i128::from(used) * 100 >= i128::from(limit) * percent;
-                (limit > 0 && used < limit && over).then(|| Event::BudgetWarned {
-                    work_item_id: self.item().id,
-                    stage_run_id: run.id,
-                    dimension: d,
-                    used: budget_value(d, used),
-                    limit: budget_value(d, limit),
-                })
-            })
-            .collect()
-    }
-
-    fn session_for(&self, id: SessionId) -> Result<&Session, Rejection> {
-        match &self.task.session {
-            Some(s) if s.id == id && s.state.is_live() => Ok(s),
-            Some(s) if s.id == id => Err(Rejection::InvalidState {
-                state: s.state.as_str().to_string(),
-            }),
-            _ => Err(Rejection::NotFound),
-        }
-    }
-
-    fn steer(
-        &self,
-        id: SessionId,
-        text: String,
-        ctx: &mut Ctx<'_>,
-    ) -> Result<Vec<Event>, Rejection> {
-        let session = self.session_for(id)?;
-        let steered = |turn| Event::SessionSteered {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            text: text.clone(),
-            turn,
-            n: session.steers + 1,
-        };
-        match session.state {
-            SessionState::Running => Ok(vec![steered(session.turns)]),
-            SessionState::Idle => {
-                let usage = self.task.stage_usage(self.now);
-                if let Some(d) = self.exhausted(&usage, &[BudgetDimension::Turns]) {
-                    return Ok(self.budget_stop(session, d, &usage, ctx));
-                }
-                Ok(vec![
-                    steered(session.turns + 1),
-                    Event::SessionTurnRequested {
-                        work_item_id: self.item().id,
-                        session_id: session.id,
-                        turn: session.turns + 1,
-                        prompt: Prompt::Steer { text: text.clone() },
-                    },
-                ])
-            }
-            other => Err(Rejection::InvalidState {
-                state: other.as_str().to_string(),
-            }),
-        }
-    }
-
-    fn interrupt(&self, id: SessionId) -> Result<Vec<Event>, Rejection> {
-        let session = self.session_for(id)?;
-        if session.state != SessionState::Running {
-            return Err(Rejection::InvalidState {
-                state: session.state.as_str().to_string(),
-            });
-        }
-        Ok(vec![
-            Event::SessionInterruptRequested {
-                work_item_id: self.item().id,
-                session_id: session.id,
-                actor: InterruptBy::Operator,
-                turn: session.turns,
-            },
-            self.session_state(session, SessionState::Interrupted),
-        ])
-    }
-
-    fn stop(
-        &self,
-        id: SessionId,
-        reason: String,
-        ctx: &mut Ctx<'_>,
-    ) -> Result<Vec<Event>, Rejection> {
-        let session = self.session_for(id)?;
-        let mut events = vec![Event::SessionStopRequested {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            reason: reason.clone(),
-        }];
-        events.extend(self.end_session(
-            SessionState::Failed,
-            "operator_stop",
-            json!({ "reason": reason }),
-        ));
-        events.extend(self.block(
-            BlockerCode::SessionFailed,
-            json!({ "cause": "operator_stop", "reason": reason }),
-            ctx,
-        ));
-        Ok(events)
-    }
-
-    fn quota_observed(
-        &self,
-        window: String,
-        utilization: f64,
-        status: String,
-        resets_at: Option<Timestamp>,
-        refused: bool,
-        ctx: &mut Ctx<'_>,
-    ) -> Vec<Event> {
-        let Some(session) = self.task.live_session() else {
-            return vec![];
-        };
-        let quota = AccountQuota {
-            account: session.qualified_account(),
-            window,
-            utilization,
-            status,
-            resets_at,
-            observed_at: self.now,
-        };
-        let mut events = vec![Event::QuotaObserved {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            account: quota.account.clone(),
-            window: quota.window.clone(),
-            utilization,
-            status: quota.status.clone(),
-            resets_at,
-        }];
-        if refused {
-            events.extend(self.saka_stop(
-                session,
-                "quota_exhausted",
-                BlockerCode::QuotaExhausted,
-                json!({ "account": quota.account, "window": quota.window, "resets_at": resets_at }),
-                None,
-                ctx,
-            ));
-        }
-        events
+        run_view(self.task)
+            .map(|view| session::end(&view, state, code, params, self.now))
+            .unwrap_or_default()
     }
 
     fn block(&self, code: BlockerCode, params: Value, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -821,13 +407,16 @@ impl Decider<'_> {
         if !self.preparing() {
             return vec![];
         }
+        let Some(owner) = self.task.run_owner() else {
+            return vec![];
+        };
         let mut events = vec![Event::EnvironmentPrepared {
-            work_item_id: self.item().id,
+            owner,
             environment_id,
             repo_id: self.item().repo_id,
             root_path,
             worktree_path,
-            branch: self.item().branch.clone(),
+            branch: Some(self.item().branch.clone()),
             base_sha,
             port_start: setup.port_start,
             port_count: setup.port_count,
@@ -861,308 +450,6 @@ impl Decider<'_> {
         self.block(code, params, ctx)
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mirrors the launch result fields one to one"
-    )]
-    fn session_launched(
-        &self,
-        session_id: SessionId,
-        cli: String,
-        cli_version: Option<String>,
-        model: Option<String>,
-        account: String,
-        runner_unit: String,
-        socket_path: String,
-        log_path: String,
-    ) -> Vec<Event> {
-        let (Some(run), Some(env)) = (&self.task.stage_run, self.task.ready_environment()) else {
-            return vec![];
-        };
-        if !self.task.is_at(Stage::Dev, StagePhase::RunningSession)
-            || !resume::wants_session(self.task)
-        {
-            return vec![];
-        }
-        let retry_of = self
-            .task
-            .blocker
-            .as_ref()
-            .filter(|_| run.trigger == Trigger::Manual)
-            .map(|b| Coded {
-                code: b.code.as_str().to_string(),
-                params: b.params.clone(),
-            });
-        let plan = resume::plan(self.task);
-        let mut events = Vec::new();
-        if let (Some(p), Some(previous)) = (&plan, &self.task.session)
-            && p.cause == ResumeCause::Lost
-        {
-            events.push(Event::SessionStateChanged {
-                work_item_id: self.item().id,
-                session_id: previous.id,
-                state: SessionState::Resumed,
-                running_ms: previous.running_ms,
-            });
-        }
-        let prompt = match &plan {
-            Some(p) if p.cli_session_id.is_some() => Prompt::Resume {
-                cause: p.reason,
-                retry_of: p.retry_of.clone(),
-            },
-            _ => Prompt::WorkPacket { retry_of },
-        };
-        events.extend([
-            Event::SessionStarted {
-                work_item_id: self.item().id,
-                session_id,
-                stage_run_id: run.id,
-                environment_id: env.id,
-                cli,
-                cli_version,
-                model,
-                account,
-                runner_unit,
-                socket_path,
-                log_path,
-                resumed_from_session_id: plan.as_ref().map(|p| p.from),
-                resume_cause: plan.as_ref().map(|p| p.cause),
-            },
-            Event::SessionTurnRequested {
-                work_item_id: self.item().id,
-                session_id,
-                turn: 1,
-                prompt,
-            },
-        ]);
-        events
-    }
-
-    fn turn_accepted(&self, turn: u32) -> Vec<Event> {
-        self.with_live_session(|s| {
-            if s.turns == turn
-                && turn > s.recorded_turn
-                && matches!(s.state, SessionState::Starting | SessionState::Idle)
-            {
-                vec![self.session_state(s, SessionState::Running)]
-            } else {
-                vec![]
-            }
-        })
-    }
-
-    fn permission_requested(
-        &self,
-        permission_request_id: PermissionRequestId,
-        cli_request_id: String,
-        tool: String,
-        summary: String,
-        input: Value,
-        decision: Decision,
-    ) -> Vec<Event> {
-        let Some(session) = self.task.live_session() else {
-            return vec![];
-        };
-        if self
-            .task
-            .permissions
-            .iter()
-            .any(|p| p.cli_request_id == cli_request_id)
-        {
-            return vec![];
-        }
-        let mut events = vec![Event::PermissionRequested {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            permission_request_id,
-            cli_request_id,
-            tool,
-            summary,
-            input,
-        }];
-        let answered = match (decision.effect, decision.source.answer_source()) {
-            (Effect::Allow, Some(source)) => Some((PermissionState::Allowed, source, None)),
-            (Effect::Deny, Some(source)) => {
-                let message = format!(
-                    "Denied by Saka policy ({}).",
-                    source.trim_start_matches("policy:")
-                );
-                Some((PermissionState::Denied, source, Some(message)))
-            }
-            _ => None,
-        };
-        match answered {
-            Some((state, answer_source, message)) => events.push(Event::PermissionAnswered {
-                work_item_id: self.item().id,
-                permission_request_id,
-                state,
-                answer_source,
-                message,
-            }),
-            None if session.state == SessionState::Running => {
-                events.push(self.session_state(session, SessionState::Waiting))
-            }
-            None => {}
-        }
-        events
-    }
-
-    fn answer_permission(
-        &self,
-        id: PermissionRequestId,
-        allow: bool,
-        message: Option<String>,
-        actor: &str,
-        remember: Option<&[PermissionRule]>,
-        ctx: &mut Ctx<'_>,
-    ) -> Result<Vec<Event>, Rejection> {
-        let Some(request) = self.task.permissions.iter().find(|p| p.id == id) else {
-            return Err(Rejection::NotFound);
-        };
-        if request.state != PermissionState::Pending {
-            return Err(Rejection::PermissionAlreadyAnswered);
-        }
-        let rule = match remember {
-            Some(_) if !allow => {
-                return Err(Rejection::Invalid {
-                    field: "remember",
-                    code: "allow_only",
-                });
-            }
-            Some(active) => {
-                let (tool, command) = crate::rule::remembered(request)?;
-                let exists = active.iter().any(|r| {
-                    r.revoked_at.is_none()
-                        && r.project_id == self.item().project_id
-                        && r.tool == tool
-                        && r.command == command
-                });
-                (!exists).then(|| Event::PermissionRuleAdded {
-                    rule_id: PermissionRuleId::new(ctx.ids),
-                    project_id: self.item().project_id,
-                    work_item_id: self.item().id,
-                    tool,
-                    command,
-                    permission_request_id: id,
-                    created_by: format!("human:{actor}"),
-                })
-            }
-            None => None,
-        };
-        let mut events = vec![Event::PermissionAnswered {
-            work_item_id: self.item().id,
-            permission_request_id: id,
-            state: if allow {
-                PermissionState::Allowed
-            } else {
-                PermissionState::Denied
-            },
-            answer_source: format!("human:{actor}"),
-            message: if allow {
-                None
-            } else {
-                Some(message.unwrap_or_else(|| DENIED_BY_OPERATOR.to_string()))
-            },
-        }];
-        let others_pending = self
-            .task
-            .permissions
-            .iter()
-            .any(|p| p.id != id && p.state == PermissionState::Pending);
-        if let Some(session) = self.task.live_session()
-            && session.state == SessionState::Waiting
-            && !others_pending
-        {
-            events.push(Event::SessionStateChanged {
-                work_item_id: self.item().id,
-                session_id: session.id,
-                state: SessionState::Running,
-                running_ms: session.running_ms,
-            });
-        }
-        events.extend(rule);
-        Ok(events)
-    }
-
-    fn permission_delivered(&self, id: PermissionRequestId) -> Vec<Event> {
-        match self.task.permissions.iter().find(|p| p.id == id) {
-            Some(p) if p.delivered_at.is_none() && awaits_delivery(p) => {
-                vec![Event::PermissionDelivered {
-                    work_item_id: self.item().id,
-                    permission_request_id: id,
-                }]
-            }
-            _ => vec![],
-        }
-    }
-
-    fn turn_ended(
-        &self,
-        turn: u32,
-        status: String,
-        cost_usd_micros: Option<i64>,
-        input_tokens: Option<i64>,
-        output_tokens: Option<i64>,
-        ctx: &mut Ctx<'_>,
-    ) -> Vec<Event> {
-        let Some(session) = self.task.session.as_ref() else {
-            return vec![];
-        };
-        let live = session.state.is_live();
-        if session.turns != turn || turn <= session.recorded_turn {
-            return vec![];
-        }
-        let running = if live {
-            session.running_ms_at(self.now)
-        } else {
-            session.running_ms
-        };
-        let mut events = vec![Event::SessionTurnEnded {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            turn,
-            status: status.clone(),
-            cost_usd_micros,
-            input_tokens,
-            output_tokens,
-            running_ms: (running - session.recorded_running_ms).max(0),
-            account: session.qualified_account(),
-            usage_record_id: UsageRecordId::new(ctx.ids),
-        }];
-        if !live {
-            return events;
-        }
-        let mut usage = self.task.stage_usage(self.now);
-        usage.tokens += input_tokens.unwrap_or(0) + output_tokens.unwrap_or(0);
-        usage.cost_usd_micros += cost_usd_micros.unwrap_or(0);
-        let interrupted = session.interrupt_requested == Some(InterruptBy::Operator);
-        if !interrupted && status != "success" {
-            events.extend(self.end_session(
-                SessionState::Failed,
-                "session_failed",
-                json!({ "subtype": status }),
-            ));
-            events.extend(self.block(
-                BlockerCode::SessionFailed,
-                json!({ "subtype": status }),
-                ctx,
-            ));
-            return events;
-        }
-        let spend = [BudgetDimension::Tokens, BudgetDimension::CostUsd];
-        if let Some(d) = self.exhausted(&usage, &spend) {
-            let idle = Session {
-                state: SessionState::Idle,
-                ..session.clone()
-            };
-            events.extend(self.budget_stop(&idle, d, &usage, ctx));
-            return events;
-        }
-        events.push(self.session_state(session, SessionState::Idle));
-        events.extend(self.budget_warnings(&usage, &spend));
-        events
-    }
-
     fn worktree_inspected(
         &self,
         turn: u32,
@@ -1187,19 +474,16 @@ impl Decider<'_> {
             return events;
         }
         if session.followups < self.cfg.max_followup_turns {
-            let usage = self.task.stage_usage(self.now);
-            if let Some(d) = self.exhausted(&usage, &[BudgetDimension::Turns]) {
-                return self.budget_stop(session, d, &usage, ctx);
-            }
-            return vec![Event::SessionTurnRequested {
-                work_item_id: self.item().id,
-                session_id: session.id,
-                turn: turn + 1,
-                prompt: Prompt::Uncommitted {
-                    dirty,
-                    commits_ahead,
-                },
-            }];
+            let Some(view) = run_view(self.task) else {
+                return vec![];
+            };
+            let prompt = Prompt::Uncommitted {
+                dirty,
+                commits_ahead,
+            };
+            let outcome =
+                session::next_turn(&view, turn + 1, prompt, &self.cfg.session(), self.now);
+            return self.settle(outcome, ctx);
         }
         let params = json!({ "dirty": dirty, "commits": commits_ahead });
         let mut events = self.end_session(SessionState::Ended, "no_changes", params.clone());
@@ -1207,37 +491,9 @@ impl Decider<'_> {
         events
     }
 
-    fn session_gone(&self, cause: &str, params: Value, ctx: &mut Ctx<'_>) -> Vec<Event> {
-        let Some(session) = self.task.live_session() else {
-            return vec![];
-        };
-        let mut events = vec![Event::SessionLost {
-            work_item_id: self.item().id,
-            session_id: session.id,
-            cause: cause.to_string(),
-        }];
-        let mut end = self.end_session(
-            SessionState::Lost,
-            "session_lost",
-            json!({ "cause": cause, "detail": params }),
-        );
-        // `end_session` starts with `SessionEnded`; keep it, after the loss itself.
-        events.append(&mut end);
-        let resumable = self.task.ready_environment().is_some()
-            && self
-                .task
-                .stage_run
-                .as_ref()
-                .is_some_and(|r| r.id == session.stage_run_id && !r.resumed_lost);
-        if self.task.is_at(Stage::Dev, StagePhase::RunningSession) && !resumable {
-            events.extend(self.block(BlockerCode::SessionLost, json!({ "cause": cause }), ctx));
-        }
-        events
-    }
-
     fn tick(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
-        if let Some(session) = self.task.live_session() {
-            let events = self.session_tick(session, ctx);
+        if self.task.live_session().is_some() {
+            let events = self.session(SessionInput::Tick, ctx).unwrap_or_default();
             if !events.is_empty() {
                 return events;
             }
@@ -1524,55 +780,6 @@ impl Decider<'_> {
             ));
         }
         events
-    }
-
-    fn session_tick(&self, session: &Session, ctx: &mut Ctx<'_>) -> Vec<Event> {
-        let wait = self.cfg.permission_wait_ms;
-        if let Some(p) =
-            self.task.permissions.iter().find(|p| {
-                p.state == PermissionState::Pending && self.now.since(p.requested_at) > wait
-            })
-        {
-            let mut events = vec![Event::PermissionAnswered {
-                work_item_id: self.item().id,
-                permission_request_id: p.id,
-                state: PermissionState::Expired,
-                answer_source: WAIT_LIMIT_SOURCE.to_string(),
-                message: Some(PERMISSION_EXPIRED_MESSAGE.to_string()),
-            }];
-            events.extend(self.saka_stop(
-                session,
-                "permission_expired",
-                BlockerCode::PermissionExpired,
-                json!({ "tool": p.tool, "summary": p.summary, "hours": wait / 3_600_000 }),
-                Some(p.id),
-                ctx,
-            ));
-            return events;
-        }
-        if session.state == SessionState::Idle
-            && session
-                .idle_since
-                .is_some_and(|since| self.now.since(since) > self.cfg.idle_ms)
-        {
-            let params = json!({ "cause": "idle", "minutes": self.cfg.idle_ms / 60_000 });
-            let mut events =
-                self.end_session(SessionState::Failed, "session_timeout", params.clone());
-            events.extend(self.block(BlockerCode::SessionTimeout, params, ctx));
-            return events;
-        }
-        if matches!(
-            session.state,
-            SessionState::Running | SessionState::Waiting | SessionState::Interrupted
-        ) {
-            let usage = self.task.stage_usage(self.now);
-            let running = [BudgetDimension::RunningMinutes];
-            if let Some(d) = self.exhausted(&usage, &running) {
-                return self.budget_stop(session, d, &usage, ctx);
-            }
-            return self.budget_warnings(&usage, &running);
-        }
-        vec![]
     }
 
     fn branch_pushed(&self, sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -1910,7 +1117,7 @@ impl Decider<'_> {
             return vec![];
         };
         let mut events = vec![Event::EnvironmentTornDown {
-            work_item_id: self.item().id,
+            owner: env.owner,
             environment_id: env.id,
             teardown_failures,
         }];
@@ -1928,7 +1135,7 @@ impl Decider<'_> {
             return vec![];
         };
         let mut events = vec![Event::EnvironmentTeardownFailed {
-            work_item_id: self.item().id,
+            owner: env.owner,
             environment_id: env.id,
             error,
         }];
@@ -2088,7 +1295,10 @@ impl Decider<'_> {
             return self.teardown_failed(error);
         }
         if kind == JobKind::SessionReattach {
-            return self.session_gone("runner_silent", json!({}), ctx);
+            let gone = SessionInput::Gone {
+                cause: "runner_silent".to_string(),
+            };
+            return self.session(gone, ctx).unwrap_or_default();
         }
         // A toolchain download that kept failing names the tool, not the job.
         if kind == JobKind::EnvPrepare && error.code == "toolchain_unavailable" {
@@ -2104,7 +1314,7 @@ impl Decider<'_> {
                 ctx,
             );
         }
-        let Some((code, mut params)) = kind.exhausted_blocker() else {
+        let Some((code, mut params)) = exhausted_code(kind) else {
             return vec![];
         };
         if let Value::Object(map) = &mut params {
@@ -2120,19 +1330,9 @@ impl Decider<'_> {
                 | JobKind::SessionDeliverPermissionAnswer
                 | JobKind::SessionInterrupt
                 | JobKind::SessionSteer
-        ) {
-            if let Some(session) = self.task.live_session() {
-                events.push(Event::SessionLost {
-                    work_item_id: self.item().id,
-                    session_id: session.id,
-                    cause: "runner_unreachable".to_string(),
-                });
-            }
-            events.extend(self.end_session(
-                SessionState::Lost,
-                "session_lost",
-                json!({ "cause": "runner_unreachable" }),
-            ));
+        ) && let Some(view) = run_view(self.task)
+        {
+            events.extend(session::lose(&view, "runner_unreachable", self.now));
         }
         events.extend(self.block(code, params, ctx));
         events
@@ -2462,6 +1662,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             t.item.done_at = Some(now);
         }
         E::EnvironmentPrepared {
+            owner,
             environment_id,
             repo_id,
             root_path,
@@ -2477,7 +1678,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         } => {
             t.environment = Some(Environment {
                 id: *environment_id,
-                work_item_id: t.item.id,
+                owner: *owner,
                 repo_id: *repo_id,
                 root_path: root_path.clone(),
                 worktree_path: worktree_path.clone(),
@@ -2512,8 +1713,8 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::SessionStarted {
+            owner,
             session_id,
-            stage_run_id,
             environment_id,
             cli,
             cli_version,
@@ -2528,20 +1729,22 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         } => {
             t.permissions.clear();
             if let Some(old) = t.session.take() {
-                if old.stage_run_id == *stage_run_id {
+                if old.owner == *owner {
                     t.prior_usage.add(old.usage_at(now));
                 }
                 t.retired_sessions.push(old);
             }
             if *resume_cause == Some(ResumeCause::Lost)
-                && let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
+                && let Some(run) = t
+                    .stage_run
+                    .as_mut()
+                    .filter(|r| owner.stage_run_id() == Some(r.id))
             {
                 run.resumed_lost = true;
             }
             t.session = Some(Session {
                 id: *session_id,
-                work_item_id: t.item.id,
-                stage_run_id: *stage_run_id,
+                owner: *owner,
                 environment_id: *environment_id,
                 cli: cli.clone(),
                 cli_version: cli_version.clone(),
@@ -2637,14 +1840,12 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             usage_record_id,
             ..
         } => {
-            let work_item_id = t.item.id;
             if let Some(s) = session_mut(t, *session_id, now) {
                 s.recorded_turn = *turn;
                 s.recorded_running_ms += running_ms;
                 let record = UsageRecord {
                     id: *usage_record_id,
-                    work_item_id,
-                    stage_run_id: s.stage_run_id,
+                    owner: s.owner,
                     session_id: s.id,
                     account: account.clone(),
                     turn: *turn,
@@ -2679,11 +1880,12 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::BudgetWarned {
-            stage_run_id,
-            dimension,
-            ..
+            owner, dimension, ..
         } => {
-            if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
+            if let Some(run) = t
+                .stage_run
+                .as_mut()
+                .filter(|r| owner.stage_run_id() == Some(r.id))
                 && !run.budget_warnings.contains(dimension)
             {
                 run.budget_warnings.push(*dimension);
@@ -2723,6 +1925,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         }
         E::SessionLost { .. } => {}
         E::PermissionRequested {
+            owner,
             session_id,
             permission_request_id,
             cli_request_id,
@@ -2733,7 +1936,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         } => {
             t.permissions.push(PermissionRequest {
                 id: *permission_request_id,
-                work_item_id: t.item.id,
+                owner: *owner,
                 session_id: *session_id,
                 cli_request_id: cli_request_id.clone(),
                 tool: tool.clone(),
@@ -2899,15 +2102,6 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
     actions
 }
 
-pub fn session_actions(session: &Session) -> Vec<&'static str> {
-    match session.state {
-        SessionState::Running => vec!["steer", "interrupt", "stop"],
-        SessionState::Idle => vec!["steer", "stop"],
-        SessionState::Starting | SessionState::Waiting | SessionState::Interrupted => vec!["stop"],
-        _ => vec![],
-    }
-}
-
 pub fn count_retry(
     retries: &mut BTreeMap<Stage, Retries>,
     stage: Stage,
@@ -2991,28 +2185,38 @@ pub fn needs_tick(task: &Task, cfg: &LoopConfig, now: Timestamp) -> bool {
     decide(task, TaskInput::Tick, cfg, &mut ctx).is_ok_and(|events| !events.is_empty())
 }
 
-pub fn budget_value(dimension: BudgetDimension, value: i64) -> Value {
-    match dimension {
-        BudgetDimension::RunningMinutes => json!(value / 60_000),
-        BudgetDimension::CostUsd => json!(format!(
-            "{}.{:06}",
-            value.div_euclid(1_000_000),
-            value.rem_euclid(1_000_000)
-        )),
-        BudgetDimension::Turns | BudgetDimension::Tokens => json!(value),
-    }
-}
-
-pub fn budget_dimensions() -> &'static [BudgetDimension] {
-    &BUDGET_DIMENSIONS
-}
-
-pub fn awaits_delivery(p: &PermissionRequest) -> bool {
-    match p.state {
-        PermissionState::Allowed | PermissionState::Denied => true,
-        PermissionState::Expired => p.answer_source.as_deref() == Some(WAIT_LIMIT_SOURCE),
-        PermissionState::Pending => false,
-    }
+pub fn run_view(task: &Task) -> Option<RunView<'_>> {
+    let run = task.stage_run.as_ref()?;
+    let blocker = task.blocker.as_ref();
+    let coded = |b: &Blocker| Coded {
+        code: b.code.as_str().to_string(),
+        params: b.params.clone(),
+    };
+    Some(RunView {
+        owner: RunOwner::StageRun {
+            work_item_id: task.item.id,
+            stage_run_id: run.id,
+        },
+        project_id: task.item.project_id,
+        session: task.session.as_ref(),
+        permissions: &task.permissions,
+        prior_usage: task.prior_usage,
+        budget: run.budget,
+        budget_warnings: &run.budget_warnings,
+        resumed_lost: run.resumed_lost,
+        ready_environment: task.ready_environment().map(|e| e.id),
+        retry: RunRetry {
+            trigger: run.trigger,
+            retried: blocker
+                .filter(|b| b.resolution.is_some())
+                .map(|b| (b.code, b.params.clone())),
+        },
+        packet: Prompt::WorkPacket {
+            retry_of: blocker
+                .filter(|_| run.trigger == Trigger::Manual)
+                .map(coded),
+        },
+    })
 }
 
 #[cfg(test)]

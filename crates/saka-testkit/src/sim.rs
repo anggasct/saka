@@ -453,8 +453,11 @@ impl Sim {
         let id = self.task(step).item.id;
         self.engine()
             .store()
-            .read(|c| read::sessions(c, id))
+            .read(|c| read::sessions(c, read::RunOf::WorkItem(id)))
             .unwrap()
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect()
     }
 
     pub fn timeline(
@@ -472,7 +475,7 @@ impl Sim {
         let id = self.task(step).item.id;
         self.engine()
             .store()
-            .read(|c| read::usage_records(c, Some(id), None))
+            .read(|c| read::usage_records(c, Some(read::RunOf::WorkItem(id)), None))
             .unwrap()
             .into_iter()
             .map(|(u, _)| u)

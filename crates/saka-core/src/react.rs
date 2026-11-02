@@ -5,35 +5,23 @@ use crate::gate::GatePolicy;
 use crate::job::{Job, JobKind};
 use crate::model::Task;
 use crate::resume;
-use crate::task::{LoopConfig, WAIT_LIMIT_SOURCE, watches_change};
+use crate::session;
+use crate::task::{LoopConfig, run_view, watches_change};
 use crate::time::Timestamp;
 use crate::vocab::{
-    EnvironmentState, GateOutcome, GateSource, InterruptBy, PermissionState, SessionState, Stage,
-    StagePhase, WorkItemState,
+    EnvironmentState, GateOutcome, GateSource, PermissionState, Stage, StagePhase, WorkItemState,
 };
 
 const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
-const SAKA_INTERRUPT_GRACE_MS: i64 = 5_000;
 
 pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     use Event as E;
-    let id = task.item.id;
     match event {
         E::StageRunCreated { .. } | E::StagePhaseChanged { .. } | E::WorkItemCancelled { .. } => {
             phase_jobs(task, cfg, now)
         }
-        E::SessionTurnRequested {
-            session_id,
-            turn,
-            prompt,
-            ..
-        } => vec![Job::new(
-            JobKind::SessionSendTurn,
-            format!("{session_id}:{turn}"),
-            json!({ "work_item_id": id, "session_id": session_id, "turn": turn, "prompt": prompt }),
-            now,
-        )],
         E::SessionTurnEnded {
+            owner,
             session_id,
             turn,
             status,
@@ -46,66 +34,10 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             vec![Job::new(
                 JobKind::EnvInspectWorktree,
                 format!("{session_id}:{turn}"),
-                json!({ "work_item_id": id, "session_id": session_id, "turn": turn, "environment_id": task.environment.as_ref().map(|e| e.id) }),
+                json!({ "owner": owner, "session_id": session_id, "turn": turn, "environment_id": task.environment.as_ref().map(|e| e.id) }),
                 now,
             )]
         }
-        E::SessionSteered {
-            session_id,
-            text,
-            n,
-            ..
-        } if task
-            .live_session()
-            .is_some_and(|s| s.id == *session_id && s.state == SessionState::Running) =>
-        {
-            vec![Job::new(
-                JobKind::SessionSteer,
-                format!("{session_id}:{n}"),
-                json!({ "work_item_id": id, "session_id": session_id, "n": n, "text": text }),
-                now,
-            )]
-        }
-        E::SessionInterruptRequested {
-            session_id, turn, ..
-        } => vec![Job::new(
-            JobKind::SessionInterrupt,
-            format!("{session_id}:{turn}"),
-            json!({ "work_item_id": id, "session_id": session_id }),
-            now,
-        )],
-        E::SessionEnded { session_id, .. } => {
-            let interrupted = task.session.as_ref().is_some_and(|s| {
-                s.id == *session_id && s.interrupt_requested == Some(InterruptBy::Saka)
-            });
-            let at = if interrupted {
-                now.plus_ms(SAKA_INTERRUPT_GRACE_MS)
-            } else {
-                now
-            };
-            vec![stop(task, *session_id, at)]
-        }
-        E::PermissionAnswered {
-            permission_request_id,
-            state: PermissionState::Expired,
-            answer_source,
-            ..
-        } if answer_source == WAIT_LIMIT_SOURCE => task
-            .permissions
-            .iter()
-            .filter(|p| p.id == *permission_request_id)
-            .map(|p| deliver(task, p.id, now))
-            .collect(),
-        E::PermissionAnswered {
-            permission_request_id,
-            state: PermissionState::Allowed | PermissionState::Denied,
-            ..
-        } => task
-            .permissions
-            .iter()
-            .filter(|p| p.id == *permission_request_id)
-            .map(|p| deliver(task, p.id, now))
-            .collect(),
         E::GateStarted {
             gate_result_id,
             source: GateSource::Saka,
@@ -119,7 +51,9 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             .into_iter()
             .chain(phase_jobs(task, cfg, now))
             .collect(),
-        _ => vec![],
+        _ => run_view(task)
+            .map(|view| session::react(&view, event, now))
+            .unwrap_or_default(),
     }
 }
 
@@ -166,44 +100,6 @@ fn report_status(
     ))
 }
 
-fn stop(task: &Task, session_id: crate::ids::SessionId, now: Timestamp) -> Job {
-    let unit = task
-        .session
-        .as_ref()
-        .filter(|s| s.id == session_id)
-        .map(|s| s.runner_unit.clone());
-    Job::new(
-        JobKind::SessionStop,
-        session_id,
-        json!({ "work_item_id": task.item.id, "session_id": session_id, "runner_unit": unit }),
-        now,
-    )
-}
-
-fn deliver(
-    task: &Task,
-    permission_request_id: crate::ids::PermissionRequestId,
-    now: Timestamp,
-) -> Job {
-    let p = task
-        .permissions
-        .iter()
-        .find(|p| p.id == permission_request_id);
-    Job::new(
-        JobKind::SessionDeliverPermissionAnswer,
-        permission_request_id,
-        json!({
-            "work_item_id": task.item.id,
-            "session_id": p.map(|p| p.session_id),
-            "permission_request_id": permission_request_id,
-            "cli_request_id": p.map(|p| p.cli_request_id.clone()),
-            "behavior": if p.is_some_and(|p| p.state == PermissionState::Allowed) { "allow" } else { "deny" },
-            "message": p.and_then(|p| p.message.clone()),
-        }),
-        now,
-    )
-}
-
 pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     let item = &task.item;
     let id = item.id;
@@ -216,7 +112,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
 
     if item.state.is_terminal() || item.state == WorkItemState::Blocked {
         if let Some(s) = task.live_session().filter(|_| item.state.is_terminal()) {
-            jobs.push(stop(task, s.id, now));
+            jobs.push(session::stop_job(s, now));
         }
         match task.environment.as_ref() {
             Some(env)
@@ -226,7 +122,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 jobs.push(Job::new(
                     JobKind::EnvTeardown,
                     format!("{}:{hour}", env.id),
-                    json!({ "work_item_id": id, "environment_id": env.id }),
+                    json!({ "owner": env.owner, "environment_id": env.id }),
                     now,
                 ));
             }
@@ -237,7 +133,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 jobs.push(Job::new(
                     JobKind::EnvTeardown,
                     env.id,
-                    json!({ "work_item_id": id, "environment_id": env.id }),
+                    json!({ "owner": env.owner, "environment_id": env.id }),
                     now,
                 ));
             }
@@ -247,11 +143,11 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     }
 
     if item.state == WorkItemState::Admitted && task.ready_environment().is_none() {
-        if let Some(run_id) = run_id {
+        if let (Some(run_id), Some(owner)) = (run_id, task.run_owner()) {
             jobs.push(Job::new(
                 JobKind::EnvPrepare,
                 run_id,
-                json!({ "work_item_id": id, "stage_run_id": run_id, "repo_id": item.repo_id, "branch": item.branch }),
+                json!({ "owner": owner, "repo_id": item.repo_id, "branch": item.branch }),
                 now,
             ));
         }
@@ -264,8 +160,11 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     let cr = task.change_request.as_ref();
     match (stage, phase) {
         (Stage::Dev, StagePhase::RunningSession) => {
-            if let Some(run_id) = run_id.filter(|_| resume::wants_session(task)) {
-                let plan = resume::plan(task);
+            let view = run_view(task);
+            if let (Some(run_id), Some(view)) =
+                (run_id, view.as_ref().filter(|v| resume::wants_session(v)))
+            {
+                let plan = resume::plan(view);
                 let key = match plan
                     .as_ref()
                     .filter(|p| p.cause == crate::vocab::ResumeCause::Lost)
@@ -277,9 +176,8 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                     JobKind::SessionStart,
                     key,
                     json!({
-                        "work_item_id": id,
-                        "stage_run_id": run_id,
-                        "environment_id": task.ready_environment().map(|e| e.id),
+                        "owner": view.owner,
+                        "environment_id": view.ready_environment,
                         "resume": plan.map(|p| json!({
                             "session_id": p.from,
                             "cause": p.cause,
@@ -293,7 +191,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 if matches!(p.state, PermissionState::Allowed | PermissionState::Denied)
                     && p.delivered_at.is_none()
                 {
-                    jobs.push(deliver(task, p.id, now));
+                    jobs.push(session::deliver_job(p, now));
                 }
             }
         }
@@ -414,7 +312,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 jobs.push(Job::new(
                     JobKind::EnvTeardown,
                     env.id,
-                    json!({ "work_item_id": id, "environment_id": env.id }),
+                    json!({ "owner": env.owner, "environment_id": env.id }),
                     now,
                 ));
             }

@@ -4,6 +4,15 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const HEARTBEAT_MS: u64 = 10_000;
+pub const ARCHITECT_TOOLS: &str = "Read,Glob,Grep,LS,TodoWrite,Write,Edit,MultiEdit";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchOptions<'a> {
+    pub cwd: &'a Path,
+    pub tools: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub resume: Option<&'a str>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchSpec {
@@ -137,7 +146,7 @@ pub fn claude(
     session_id: &str,
     paths: &SessionPaths,
     known_values: Vec<String>,
-    resume: Option<&str>,
+    options: &LaunchOptions<'_>,
 ) -> Result<LaunchSpec, UnsupportedPath> {
     let mut args: Vec<String> = [
         "-p",
@@ -159,10 +168,17 @@ pub fn claude(
     .map(String::from)
     .to_vec();
     args.push(session_settings(&paths.worktree)?);
-    if let Some(model) = settings.model.as_ref().filter(|m| !m.is_empty()) {
-        args.extend(["--model".to_string(), model.clone()]);
+    if let Some(tools) = options.tools {
+        args.extend(["--tools".to_string(), tools.to_string()]);
     }
-    if let Some(cli_session_id) = resume {
+    let model = options
+        .model
+        .filter(|m| !m.is_empty())
+        .or(settings.model.as_deref().filter(|m| !m.is_empty()));
+    if let Some(model) = model {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(cli_session_id) = options.resume {
         args.extend(["--resume".to_string(), cli_session_id.to_string()]);
     }
     let env: BTreeMap<String, String> = [
@@ -185,13 +201,13 @@ pub fn claude(
         socket_path: s(&paths.socket_path),
         log_path: s(&paths.session_dir.join("events.ndjson")),
         stderr_path: s(&paths.session_dir.join("cli.stderr")),
-        cwd: s(&paths.worktree),
+        cwd: s(options.cwd),
         program: s(program),
         args,
         env,
         redaction: Redaction { known_values },
         secrets_path: None,
-        resumed: resume.is_some(),
+        resumed: options.resume.is_some(),
         heartbeat_ms: HEARTBEAT_MS,
     })
 }
@@ -236,7 +252,12 @@ mod tests {
             "s-1",
             &paths(),
             vec![],
-            None,
+            &LaunchOptions {
+                cwd: &paths().worktree,
+                tools: None,
+                model: None,
+                resume: None,
+            },
         )
         .unwrap();
         assert_eq!(
@@ -281,7 +302,12 @@ mod tests {
             "s-2",
             &paths(),
             vec![],
-            Some("cli-abc"),
+            &LaunchOptions {
+                cwd: &paths().worktree,
+                tools: None,
+                model: None,
+                resume: Some("cli-abc"),
+            },
         )
         .unwrap();
         assert_eq!(
@@ -300,7 +326,12 @@ mod tests {
                 "s-1",
                 &paths(),
                 vec![],
-                None,
+                &LaunchOptions {
+                    cwd: &paths().worktree,
+                    tools: None,
+                    model: None,
+                    resume: None,
+                },
             )
             .unwrap();
             let keys: Vec<&str> = spec.env.keys().map(String::as_str).collect();
@@ -390,7 +421,12 @@ mod tests {
                 "s-1",
                 &paths,
                 vec![],
-                None
+                &LaunchOptions {
+                    cwd: &paths.worktree,
+                    tools: None,
+                    model: None,
+                    resume: None
+                },
             ),
             Err(UnsupportedPath(PathBuf::from("/data/[envs]/e-1/worktree")))
         );
