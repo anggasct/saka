@@ -92,35 +92,67 @@ fn reset_ms(v: &Value) -> Option<Timestamp> {
     (0.0..9.0e15).contains(&ms).then_some(Timestamp(ms as i64))
 }
 
-fn window(name: &str, w: &Value) -> Option<TaskInput> {
+fn window(name: &str, w: &Value, refused: bool) -> Option<TaskInput> {
     let utilization = w.get("utilization").and_then(Value::as_f64)?;
     Some(TaskInput::QuotaObserved {
         window: name.to_string(),
         utilization: utilization.max(0.0),
-        status: w
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("allowed")
-            .to_string(),
-        resets_at: w
-            .get("resets_at")
-            .or_else(|| w.get("resetsAt"))
-            .and_then(reset_ms),
+        status: if refused {
+            "rejected"
+        } else {
+            w.get("status").and_then(Value::as_str).unwrap_or("allowed")
+        }
+        .to_string(),
+        resets_at: resets_at(w),
+        refused,
     })
 }
 
+fn resets_at(w: &Value) -> Option<Timestamp> {
+    w.get("resetsAt")
+        .or_else(|| w.get("resets_at"))
+        .and_then(reset_ms)
+}
+
+// Only the top-level status says whether requests are refused; a window's own status
+// is informational, so the block always lands on the limiting window, `rateLimitType`.
 pub(crate) fn quota_windows(info: &Value) -> Vec<TaskInput> {
-    if let Some(windows) = info.get("unifiedWindows").and_then(Value::as_object) {
-        return windows
-            .iter()
-            .filter_map(|(name, w)| window(name, w))
-            .collect();
-    }
-    info.get("rateLimitType")
+    let refused = info.get("status").and_then(Value::as_str) == Some("rejected");
+    let limiting = info
+        .get("rateLimitType")
         .and_then(Value::as_str)
-        .and_then(|name| window(name, info))
-        .into_iter()
-        .collect()
+        .unwrap_or("unknown");
+    let mut observed: Vec<TaskInput> = match info.get("unifiedWindows").and_then(Value::as_object) {
+        Some(windows) => windows
+            .iter()
+            .filter_map(|(name, w)| window(name, w, refused && name == limiting))
+            .collect(),
+        None if info.get("rateLimitType").is_some() => {
+            window(limiting, info, refused).into_iter().collect()
+        }
+        None => vec![],
+    };
+    let blocked = observed
+        .iter()
+        .any(|o| matches!(o, TaskInput::QuotaObserved { refused: true, .. }));
+    if refused && !blocked {
+        let reset = info
+            .get("unifiedWindows")
+            .and_then(|w| w.get(limiting))
+            .and_then(resets_at);
+        observed.push(TaskInput::QuotaObserved {
+            window: limiting.to_string(),
+            utilization: info
+                .get("utilization")
+                .and_then(Value::as_f64)
+                .unwrap_or(1.0)
+                .max(0.0),
+            status: "rejected".to_string(),
+            resets_at: resets_at(info).or(reset),
+            refused: true,
+        });
+    }
+    observed
 }
 
 #[cfg(test)]
@@ -249,31 +281,107 @@ mod tests {
         );
     }
 
+    fn observed(
+        window: &str,
+        utilization: f64,
+        status: &str,
+        reset_s: i64,
+        refused: bool,
+    ) -> TaskInput {
+        TaskInput::QuotaObserved {
+            window: window.into(),
+            utilization,
+            status: status.into(),
+            resets_at: Some(Timestamp(reset_s * 1000)),
+            refused,
+        }
+    }
+
     #[test]
-    fn rate_limit_info_gives_one_observation_per_window() {
-        let unified = json!({ "unifiedWindows": {
-            "five_hour": { "utilization": 0.5, "status": "allowed", "resets_at": 1_800_000_000 },
-            "seven_day": { "utilization": 0.95, "status": "rejected", "resets_at": 1_800_000_000_000_i64 },
-        }});
+    fn a_rate_limit_event_from_claude_code_gives_its_windows() {
+        let sample = json!({
+            "status": "allowed", "resetsAt": 1_793_786_400_i64, "rateLimitType": "seven_day",
+            "overageStatus": "rejected", "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": false,
+            "unifiedWindows": {
+                "seven_day": { "utilization": 0.58, "resetsAt": 1_793_786_400_i64, "status": "allowed" },
+            },
+        });
         assert_eq!(
-            quota_windows(&unified),
+            quota_windows(&sample),
+            vec![observed("seven_day", 0.58, "allowed", 1_793_786_400, false)]
+        );
+    }
+
+    #[test]
+    fn only_the_top_level_status_refuses_and_only_on_the_limiting_window() {
+        let windows = json!({
+            "five_hour": { "utilization": 1.0, "resetsAt": 1_800_000_000, "status": "rejected" },
+            "seven_day": { "utilization": 0.4, "resetsAt": 1_800_500_000, "status": "allowed" },
+        });
+        let allowed =
+            json!({ "status": "allowed", "rateLimitType": "five_hour", "unifiedWindows": windows });
+        assert_eq!(
+            quota_windows(&allowed),
             vec![
-                TaskInput::QuotaObserved {
-                    window: "five_hour".into(),
-                    utilization: 0.5,
-                    status: "allowed".into(),
-                    resets_at: Some(Timestamp(1_800_000_000_000)),
-                },
-                TaskInput::QuotaObserved {
-                    window: "seven_day".into(),
-                    utilization: 0.95,
-                    status: "rejected".into(),
-                    resets_at: Some(Timestamp(1_800_000_000_000)),
-                },
+                observed("five_hour", 1.0, "rejected", 1_800_000_000, false),
+                observed("seven_day", 0.4, "allowed", 1_800_500_000, false),
             ]
         );
-        let single = json!({ "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.81, "resetsAt": 1_800_000_000 });
-        assert_eq!(quota_windows(&single).len(), 1);
+        let rejected = json!({ "status": "rejected", "rateLimitType": "seven_day", "unifiedWindows": windows });
+        assert_eq!(
+            quota_windows(&rejected),
+            vec![
+                observed("five_hour", 1.0, "rejected", 1_800_000_000, false),
+                observed("seven_day", 0.4, "rejected", 1_800_500_000, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_top_level_refusal_is_never_lost() {
+        let bare = json!({ "status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1_800_000_000 });
+        assert_eq!(
+            quota_windows(&bare),
+            vec![observed("five_hour", 1.0, "rejected", 1_800_000_000, true)]
+        );
+        let elsewhere = json!({
+            "status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1_800_000_000,
+            "unifiedWindows": { "seven_day": { "utilization": 0.4, "resetsAt": 1_800_500_000 } },
+        });
+        assert_eq!(
+            quota_windows(&elsewhere),
+            vec![
+                observed("seven_day", 0.4, "allowed", 1_800_500_000, false),
+                observed("five_hour", 1.0, "rejected", 1_800_000_000, true),
+            ]
+        );
+        assert_eq!(
+            quota_windows(&json!({ "status": "rejected", "utilization": 0.97 })),
+            vec![TaskInput::QuotaObserved {
+                window: "unknown".into(),
+                utilization: 0.97,
+                status: "rejected".into(),
+                resets_at: None,
+                refused: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_without_numbers_observes_nothing() {
         assert!(quota_windows(&json!({ "status": "allowed" })).is_empty());
+        assert!(quota_windows(&json!({ "status": "allowed", "utilization": 0.5 })).is_empty());
+        let single = json!({ "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.81, "resetsAt": 1_800_000_000 });
+        assert_eq!(
+            quota_windows(&single),
+            vec![observed(
+                "seven_day",
+                0.81,
+                "allowed_warning",
+                1_800_000_000,
+                false
+            )]
+        );
     }
 }

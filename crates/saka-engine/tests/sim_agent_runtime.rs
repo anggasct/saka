@@ -380,11 +380,21 @@ fn a_stage_run_keeps_the_budget_it_started_with() {
     assert_eq!(params["limit"], json!(10));
 }
 
-fn rate_limited(status: &str, utilization: f64, resets_in_ms: i64, now: i64) -> AgentScript {
+fn rate_limited(
+    top: &str,
+    window: &str,
+    utilization: f64,
+    resets_in_ms: i64,
+    now: i64,
+) -> AgentScript {
+    let resets_at = (now + resets_in_ms) / 1000;
     AgentScript {
-        rate_limit: Some(json!({ "unifiedWindows": {
-            "five_hour": { "utilization": utilization, "status": status, "resets_at": now + resets_in_ms },
-        }})),
+        rate_limit: Some(json!({
+            "status": top, "rateLimitType": "five_hour", "resetsAt": resets_at,
+            "unifiedWindows": {
+                "five_hour": { "utilization": utilization, "status": window, "resetsAt": resets_at },
+            },
+        })),
         ..AgentScript::default()
     }
 }
@@ -393,8 +403,13 @@ fn rate_limited(status: &str, utilization: f64, resets_in_ms: i64, now: i64) -> 
 fn a_busy_account_holds_new_tasks_until_its_window_resets() {
     let mut sim = sim(AgentScript::default());
     let now = sim.engine().now().0;
-    sim.world
-        .set_script(rate_limited("allowed_warning", 0.95, 3 * 3_600_000, now));
+    sim.world.set_script(rate_limited(
+        "allowed_warning",
+        "allowed_warning",
+        0.95,
+        3 * 3_600_000,
+        now,
+    ));
     assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Done));
     let accounts = sim.engine().agent_accounts().unwrap();
     assert_eq!(accounts.len(), 1);
@@ -426,16 +441,29 @@ fn a_busy_account_holds_new_tasks_until_its_window_resets() {
 }
 
 #[test]
-fn a_rejected_window_blocks_the_running_task_as_quota_exhausted() {
+fn a_rejected_window_alone_lets_the_task_finish() {
     let mut sim = sim(AgentScript::default());
     let now = sim.engine().now().0;
     sim.world
-        .set_script(rate_limited("rejected", 1.0, 3_600_000, now));
+        .set_script(rate_limited("allowed", "rejected", 0.5, 3_600_000, now));
+    assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Done));
+    assert!(sim.task(1).blocker.is_none());
+    let accounts = sim.engine().agent_accounts().unwrap();
+    assert_eq!(accounts[0].windows[0].status, "rejected");
+}
+
+#[test]
+fn a_refused_rate_limit_blocks_the_running_task_as_quota_exhausted() {
+    let mut sim = sim(AgentScript::default());
+    let now = sim.engine().now().0;
+    sim.world
+        .set_script(rate_limited("rejected", "allowed", 1.0, 3_600_000, now));
     let (code, params) = run_to_blocked(&mut sim);
     assert_eq!(code, BlockerCode::QuotaExhausted);
+    let resets_at = (now + 3_600_000) / 1000 * 1000;
     assert_eq!(
         params,
-        json!({ "account": "claude:default", "window": "five_hour", "resets_at": now + 3_600_000 })
+        json!({ "account": "claude:default", "window": "five_hour", "resets_at": resets_at })
     );
 }
 

@@ -254,12 +254,6 @@ pub struct AccountQuota {
     pub observed_at: Timestamp,
 }
 
-impl AccountQuota {
-    pub fn rejected(&self) -> bool {
-        !matches!(self.status.as_str(), "allowed" | "allowed_warning")
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionRule {
     pub id: PermissionRuleId,

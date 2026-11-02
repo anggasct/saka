@@ -1171,21 +1171,26 @@ fn a_zero_limit_never_stops_the_session() {
 }
 
 #[test]
-fn a_rejected_rate_limit_window_stops_the_session_as_quota_exhausted() {
+fn only_a_refused_rate_limit_stops_the_session_as_quota_exhausted() {
     let mut r = Run::running(unlimited());
-    let observe = |status: &str| task::TaskInput::QuotaObserved {
+    let observe = |status: &str, refused: bool| task::TaskInput::QuotaObserved {
         window: "five_hour".into(),
         utilization: 0.95,
         status: status.into(),
         resets_at: Some(Timestamp(99_000_000)),
+        refused,
     };
-    let events = r.decide(observe("allowed_warning"));
-    assert!(
-        matches!(&events[..], [Event::QuotaObserved { account, .. }] if account == "claude:default")
-    );
-    assert_eq!(r.task.quota_observations.len(), 1);
-    assert_eq!(r.blocker(), None);
-    r.decide(observe("rejected"));
+    for status in ["allowed_warning", "rejected"] {
+        let events = r.decide(observe(status, false));
+        assert!(
+            matches!(&events[..], [Event::QuotaObserved { account, .. }] if account == "claude:default"),
+            "{status}"
+        );
+        assert_eq!(r.blocker(), None);
+        assert_eq!(r.session().interrupt_requested, None);
+    }
+    assert_eq!(r.task.quota_observations.len(), 2);
+    r.decide(observe("rejected", true));
     assert_eq!(
         r.blocker(),
         Some((

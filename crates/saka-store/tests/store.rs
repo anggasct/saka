@@ -1180,6 +1180,7 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
             utilization: 0.4,
             status: "allowed".into(),
             resets_at: Some(Timestamp(9_000_000)),
+            refused: false,
         },
     );
     w.tick(30_000);
