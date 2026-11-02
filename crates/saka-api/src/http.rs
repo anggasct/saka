@@ -43,6 +43,11 @@ fn etag(body: &Value) -> Option<HeaderValue> {
     if let Some(id) = body.pointer("/revision/id").and_then(Value::as_str) {
         return HeaderValue::from_str(&format!("\"{id}\"")).ok();
     }
+    if body.get("path").is_some()
+        && let Some(blob) = body.get("blob").and_then(Value::as_str)
+    {
+        return HeaderValue::from_str(&format!("\"{blob}\"")).ok();
+    }
     if body.get("task_key").is_some()
         && let Some(v) = body.get("version").and_then(Value::as_u64)
     {

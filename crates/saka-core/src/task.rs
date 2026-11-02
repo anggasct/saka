@@ -2842,6 +2842,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::ProjectRegistered { .. }
         | E::SecretSet { .. }
         | E::SecretRemoved { .. }
+        | E::DocCommitted { .. }
         | E::SpecRegistered { .. }
         | E::SpecRevisionRecorded { .. }
         | E::SpecApproved { .. }

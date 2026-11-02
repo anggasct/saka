@@ -4,6 +4,7 @@ use saka_store::{ActionRecord, Batch, read};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::docs::DocWriteView;
 use crate::views::{PermissionView, ProjectView, SpecView};
 use crate::{Cause, Engine, Result};
 
@@ -21,6 +22,7 @@ pub enum Produced<'a> {
     Permission(&'a PermissionView),
     Session(&'a Session),
     Rule(&'a PermissionRule),
+    Doc(&'a DocWriteView),
     Nothing,
 }
 

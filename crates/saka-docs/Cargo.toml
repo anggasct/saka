@@ -1,6 +1,6 @@
 [package]
 name = "saka-docs"
-description = "Workspace docs source over git: byte-exact reads at a commit."
+description = "Workspace docs source over git: byte-exact reads and one-file commits on the base branch."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,10 +12,10 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+saka-core = { path = "../saka-core" }
 saka-ports = { path = "../saka-ports" }
 serde_json.workspace = true
 
 [dev-dependencies]
-saka-core = { path = "../saka-core" }
 tokio = { workspace = true, features = ["macros", "rt"] }
 uuid.workspace = true

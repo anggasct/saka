@@ -226,6 +226,10 @@ impl Sim {
                 provider: "github".into(),
                 web_url: "https://github.com".into(),
             }],
+            docs_author: saka_ports::CommitIdentity {
+                name: "Saka Agent".into(),
+                email: "agent@saka.invalid".into(),
+            },
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

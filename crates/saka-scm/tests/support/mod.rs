@@ -12,7 +12,10 @@ use async_trait::async_trait;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use saka_core::ids::RepoId;
 use saka_core::time::Timestamp;
-use saka_ports::{Blob, Clock, PortResult, PushOutcome, PushRequest, RepoRef, Repos};
+use saka_ports::{
+    Blob, Clock, CommitOne, CommitPush, PortError, PortResult, PushCommit, PushOutcome,
+    PushRequest, RepoRef, Repos, TreeEntry,
+};
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -61,6 +64,21 @@ impl Repos for NoRepos {
         Ok(PushOutcome::Pushed {
             sha: request.local_sha.clone(),
         })
+    }
+    async fn list_tree(&self, _r: &RepoRef, _c: &str, _d: &str) -> PortResult<Vec<TreeEntry>> {
+        Ok(Vec::new())
+    }
+    async fn entries(&self, _r: &RepoRef, _c: &str, _p: &[String]) -> PortResult<Vec<TreeEntry>> {
+        Ok(Vec::new())
+    }
+    async fn write_blob(&self, _r: &RepoRef, _b: &[u8]) -> PortResult<String> {
+        Err(PortError::permanent("unused", json!({})))
+    }
+    async fn commit_one(&self, _request: &CommitOne) -> PortResult<String> {
+        Err(PortError::permanent("unused", json!({})))
+    }
+    async fn push_commit(&self, _request: &PushCommit) -> PortResult<CommitPush> {
+        Err(PortError::permanent("unused", json!({})))
     }
 }
 

@@ -10,13 +10,14 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    Blob, CommandUnit, EnvRef, Environments, GitAccess, GitRemote, PortError, PortResult,
-    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, RecipeCommand,
-    RecipeCommandOutcome, RepoRef, Repos, Supervisor, UnitLimits, WorktreeState,
+    Blob, CommandUnit, CommitOne, CommitPush, EntryKind, EnvRef, Environments, GitAccess,
+    GitRemote, PortError, PortResult, PrepareRequest, PreparedEnvironment, PushCommit, PushOutcome,
+    PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor, TreeEntry,
+    UnitLimits, WorktreeState,
 };
 use serde_json::json;
 
-use crate::git::{Git, GitOutput, auth_refused, failed};
+use crate::git::{Extra, Git, GitOutput, auth_refused, failed};
 
 const FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
 const BASE_FILE: &str = "base-sha";
@@ -115,6 +116,52 @@ fn make_dirs_writable(root: &Path) -> std::io::Result<()> {
 
 fn is_sha(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn sha_arg(value: &str, field: &str) -> PortResult<()> {
+    if is_sha(value) {
+        Ok(())
+    } else {
+        Err(PortError::permanent(
+            "git_argument_invalid",
+            json!({ "field": field }),
+        ))
+    }
+}
+
+const LITERAL_PATHS: [(&str, &str); 1] = [("GIT_LITERAL_PATHSPECS", "1")];
+
+fn tree_entries(out: &GitOutput) -> PortResult<Vec<TreeEntry>> {
+    let invalid = || PortError::retryable("git_output_invalid", json!({ "op": "ls_tree" }));
+    let mut entries = Vec::new();
+    for record in out.stdout.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let tab = record
+            .iter()
+            .position(|b| *b == b'\t')
+            .ok_or_else(invalid)?;
+        let meta = std::str::from_utf8(&record[..tab]).map_err(|_| invalid())?;
+        let path = String::from_utf8(record[tab + 1..].to_vec()).map_err(|_| invalid())?;
+        let mut fields = meta.split_whitespace();
+        let (Some(mode), Some(kind), Some(object), Some(size)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            return Err(invalid());
+        };
+        let kind = match kind {
+            "blob" => EntryKind::Blob,
+            "tree" => EntryKind::Tree,
+            "commit" => EntryKind::Commit,
+            _ => return Err(invalid()),
+        };
+        entries.push(TreeEntry {
+            path,
+            mode: mode.to_string(),
+            kind,
+            object: object.to_string(),
+            bytes: size.parse().ok(),
+        });
+    }
+    Ok(entries)
 }
 
 fn arg(value: &str, field: &str) -> PortResult<()> {
@@ -346,6 +393,66 @@ struct Push<'a> {
     request: &'a PushRequest,
 }
 
+struct PushOne<'a> {
+    request: &'a PushCommit,
+}
+
+#[async_trait]
+impl AsyncStep<CommitPush> for PushOne<'_> {
+    async fn run(
+        &mut self,
+        repos: &GitRepos,
+        bare: &Path,
+        remote: &GitRemote,
+    ) -> PortResult<Step<CommitPush>> {
+        let req = self.request;
+        let refname = format!("refs/heads/{}", req.branch);
+        let git = &repos.cfg.git;
+        // The lease turns the update into compare-and-swap on the remote: it lands only while the
+        // branch is still at `expected`, and `commit` is a child of it, so it is a fast-forward.
+        let lease = format!("--force-with-lease={refname}:{}", req.expected);
+        let spec = format!("{}:{refname}", req.commit);
+        let out = git
+            .remote(
+                bare,
+                &["push", "--porcelain", "--quiet", &lease, "origin", &spec],
+                remote,
+            )
+            .await?;
+        // Porcelain marks a refused ref with a leading `!` status line. A failure without one never
+        // reached a decision on the remote, for example when the network is down.
+        let refused = out
+            .stdout
+            .split(|b| *b == b'\n')
+            .any(|line| line.starts_with(b"!\t"));
+        if !out.ok() && !refused {
+            return Ok(Step::Failed(out));
+        }
+        let pushed = if out.ok() {
+            true
+        } else {
+            let ls = git
+                .remote(bare, &["ls-remote", "origin", &refname], remote)
+                .await?;
+            if !ls.ok() {
+                return Ok(Step::Failed(ls));
+            }
+            match remote_sha(&ls, &refname) {
+                Some(sha) if sha == req.commit => true,
+                Some(sha) if sha == req.expected => return Ok(Step::Done(CommitPush::Rejected)),
+                remote_sha => return Ok(Step::Done(CommitPush::Moved { remote_sha })),
+            }
+        };
+        if pushed {
+            let tracking = format!("refs/remotes/origin/{}", req.branch);
+            // A fetch may already have moved the tracking ref; the next fetch corrects it anyway.
+            git.local(bare, &["update-ref", &tracking, &req.commit, &req.expected])
+                .await?;
+        }
+        Ok(Step::Done(CommitPush::Pushed))
+    }
+}
+
 fn remote_sha(out: &GitOutput, refname: &str) -> Option<String> {
     String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -550,6 +657,175 @@ impl Repos for GitRepos {
         let lock = self.lock(request.repo.repo_id);
         let _guard = lock.lock().await;
         self.with_remote(&request.repo, "push", Push { request })
+            .await
+    }
+
+    async fn list_tree(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        dir: &str,
+    ) -> PortResult<Vec<TreeEntry>> {
+        sha_arg(commit, "commit")?;
+        let bare = self.mirror_path(repo.repo_id);
+        let mut args = vec!["ls-tree", "-r", "-l", "-z", "--full-tree", commit];
+        match dir.trim_matches('/') {
+            "" | "." => {}
+            dir => {
+                arg(dir, "dir")?;
+                args.extend(["--", dir]);
+            }
+        }
+        let extra = Extra {
+            env: &LITERAL_PATHS,
+            input: None,
+        };
+        let out = self.cfg.git.local_with(&bare, &args, extra).await?;
+        if !out.ok() {
+            return Err(failed("ls_tree", &out));
+        }
+        tree_entries(&out)
+    }
+
+    async fn entries(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        paths: &[String],
+    ) -> PortResult<Vec<TreeEntry>> {
+        sha_arg(commit, "commit")?;
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        for path in paths {
+            arg(path, "path")?;
+        }
+        let bare = self.mirror_path(repo.repo_id);
+        let mut args = vec!["ls-tree", "-l", "-z", "--full-tree", commit, "--"];
+        args.extend(paths.iter().map(String::as_str));
+        let extra = Extra {
+            env: &LITERAL_PATHS,
+            input: None,
+        };
+        let out = self.cfg.git.local_with(&bare, &args, extra).await?;
+        if !out.ok() {
+            return Err(failed("ls_tree", &out));
+        }
+        tree_entries(&out)
+    }
+
+    async fn write_blob(&self, repo: &RepoRef, bytes: &[u8]) -> PortResult<String> {
+        let bare = self.mirror_path(repo.repo_id);
+        let extra = Extra {
+            env: &[],
+            input: Some(bytes),
+        };
+        let out = self
+            .cfg
+            .git
+            .local_with(
+                &bare,
+                &["hash-object", "-w", "--no-filters", "--stdin"],
+                extra,
+            )
+            .await?;
+        if !out.ok() {
+            return Err(failed("hash_object", &out));
+        }
+        let blob = out.text();
+        sha_arg(&blob, "blob").map_err(|_| {
+            PortError::retryable("git_output_invalid", json!({ "op": "hash_object" }))
+        })?;
+        Ok(blob)
+    }
+
+    async fn commit_one(&self, request: &CommitOne) -> PortResult<String> {
+        sha_arg(&request.parent, "parent")?;
+        sha_arg(&request.blob, "blob")?;
+        arg(&request.path, "path")?;
+        if !matches!(
+            request.mode.as_str(),
+            TreeEntry::REGULAR | TreeEntry::EXECUTABLE
+        ) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "mode" }),
+            ));
+        }
+        let bare = self.mirror_path(request.repo.repo_id);
+        let bare = bare.as_path();
+        let scratch = tempfile::Builder::new()
+            .prefix("index-")
+            .tempdir_in(&self.cfg.repos_dir)
+            .map_err(|e| io("index_dir", &e))?;
+        let index = scratch.path().join("index");
+        let index = index.to_string_lossy();
+        let date = format!("@{} +0000", request.at.0.div_euclid(1000));
+        let env = [
+            ("GIT_INDEX_FILE", index.as_ref()),
+            ("GIT_AUTHOR_NAME", request.author.name.as_str()),
+            ("GIT_AUTHOR_EMAIL", request.author.email.as_str()),
+            ("GIT_AUTHOR_DATE", date.as_str()),
+            ("GIT_COMMITTER_NAME", request.author.name.as_str()),
+            ("GIT_COMMITTER_EMAIL", request.author.email.as_str()),
+            ("GIT_COMMITTER_DATE", date.as_str()),
+        ];
+        let git = &self.cfg.git;
+        let extra = Extra {
+            env: &env,
+            input: None,
+        };
+        let run = |args: Vec<String>, op: &'static str| async move {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = git.local_with(bare, &args, extra).await?;
+            if out.ok() {
+                Ok(out.text())
+            } else {
+                Err(failed(op, &out))
+            }
+        };
+        run(
+            vec!["read-tree".into(), request.parent.clone()],
+            "read_tree",
+        )
+        .await?;
+        let info = format!("{},{},{}", request.mode, request.blob, request.path);
+        run(
+            vec![
+                "update-index".into(),
+                "--add".into(),
+                "--cacheinfo".into(),
+                info,
+            ],
+            "update_index",
+        )
+        .await?;
+        let tree = run(vec!["write-tree".into()], "write_tree").await?;
+        let commit = run(
+            vec![
+                "commit-tree".into(),
+                tree,
+                "-p".into(),
+                request.parent.clone(),
+                "-m".into(),
+                request.message.clone(),
+            ],
+            "commit_tree",
+        )
+        .await?;
+        sha_arg(&commit, "commit").map_err(|_| {
+            PortError::retryable("git_output_invalid", json!({ "op": "commit_tree" }))
+        })?;
+        Ok(commit)
+    }
+
+    async fn push_commit(&self, request: &PushCommit) -> PortResult<CommitPush> {
+        arg(&request.branch, "branch")?;
+        sha_arg(&request.commit, "commit")?;
+        sha_arg(&request.expected, "expected")?;
+        let lock = self.lock(request.repo.repo_id);
+        let _guard = lock.lock().await;
+        self.with_remote(&request.repo, "push", PushOne { request })
             .await
     }
 }

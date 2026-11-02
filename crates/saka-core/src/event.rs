@@ -56,6 +56,16 @@ pub enum Event {
     SecretSet { project_id: ProjectId, name: String },
     #[serde(rename = "workspace.secret.removed")]
     SecretRemoved { project_id: ProjectId, name: String },
+    #[serde(rename = "workspace.doc.committed")]
+    DocCommitted {
+        project_id: ProjectId,
+        path: String,
+        commit: String,
+        parent: String,
+        blob: String,
+        bytes: u64,
+        created: bool,
+    },
     #[serde(rename = "spec.spec.registered")]
     SpecRegistered {
         spec_id: SpecId,
@@ -516,7 +526,8 @@ impl Event {
             E::RepoRegistered { repo_id, .. } => Stream::Repo(*repo_id),
             E::ProjectRegistered { project_id, .. }
             | E::SecretSet { project_id, .. }
-            | E::SecretRemoved { project_id, .. } => Stream::Project(*project_id),
+            | E::SecretRemoved { project_id, .. }
+            | E::DocCommitted { project_id, .. } => Stream::Project(*project_id),
             E::SpecRegistered { spec_id, .. }
             | E::SpecRevisionRecorded { spec_id, .. }
             | E::SpecApproved { spec_id, .. }

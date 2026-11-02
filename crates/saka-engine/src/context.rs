@@ -5,8 +5,7 @@ use saka_ports::{Blob, RepoRef};
 use saka_spec::context::{
     self, Context, Fetch, Fetched, MAX_ALWAYS_CANDIDATES, MAX_CONTEXT_DOC_BYTES, Status,
 };
-use saka_spec::{LintIssue, Parsed};
-use sha2::{Digest, Sha256};
+use saka_spec::{LintIssue, Parsed, content_hash};
 
 use crate::{Engine, Result};
 
@@ -18,14 +17,12 @@ pub(crate) struct PinnedContext {
     pub issues: Vec<LintIssue>,
 }
 
-pub(crate) fn sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("sha256:{hex}")
-}
-
 pub(crate) fn pin(context: Context) -> PinnedContext {
-    let hashes: Vec<String> = context.docs.iter().map(|d| sha256(&d.content)).collect();
+    let hashes: Vec<String> = context
+        .docs
+        .iter()
+        .map(|d| content_hash(&d.content))
+        .collect();
     let mut identity = String::new();
     for reference in &context.references {
         let status = match &reference.status {
@@ -59,7 +56,7 @@ pub(crate) fn pin(context: Context) -> PinnedContext {
     PinnedContext {
         refs,
         blobs,
-        hash: sha256(identity.as_bytes()),
+        hash: content_hash(identity.as_bytes()),
         issues: context.issues,
     }
 }
@@ -173,10 +170,10 @@ mod tests {
             issues: Vec::new(),
         };
         let first = pin(doc(b"# A\n"));
-        let content = sha256(b"# A\n");
+        let content = content_hash(b"# A\n");
         assert_eq!(
             first.hash,
-            sha256(
+            content_hash(
                 format!("link\tdocs/a.md\t{content}\nlink\tdocs/gone.md\treference_missing\n")
                     .as_bytes()
             )

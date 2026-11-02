@@ -39,7 +39,7 @@ const spec = {
     content_hash: "h",
     created_at: "2026-10-31T10:00:00.000Z",
   },
-  approved_revision_id: "r",
+  approved_revision: { id: "r", source_commit: "c", content_hash: "h" },
   lint: { ok: true, issues: [] },
   steps: [],
   approved_at: null,

@@ -70,14 +70,14 @@ fn branch_ok(branch: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
 }
 
-fn invalid(field: &'static str, code: &str) -> EngineError {
+pub(crate) fn invalid(field: &'static str, code: &str) -> EngineError {
     EngineError::Invalid {
         field,
         code: code.to_string(),
     }
 }
 
-fn path_code(issue: PathIssue) -> &'static str {
+pub(crate) fn path_code(issue: PathIssue) -> &'static str {
     match issue {
         PathIssue::Invalid => "invalid",
         PathIssue::OutsideProject => "outside_project",

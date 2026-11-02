@@ -574,6 +574,10 @@ async fn run(
             worker_id: format!("serve-{}", std::process::id()),
             integrations,
             env: env_cfg,
+            docs_author: saka_ports::CommitIdentity {
+                name: cfg.git.author_name.clone(),
+                email: cfg.git.author_email.clone(),
+            },
         },
     ));
     match engine.recover() {

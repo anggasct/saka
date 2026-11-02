@@ -13,8 +13,8 @@ use saka_core::ids::{
 };
 use saka_core::secret::SecretText;
 use saka_engine::{
-    AddProject, EngineError, PermissionFilter, Produced, Reply, SessionCommand, SessionView,
-    StoredEvent, TimelineCursor, WorkItemFilter,
+    AddProject, EngineError, PermissionFilter, Precondition, Produced, Reply, SessionCommand,
+    SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -342,9 +342,19 @@ pub async fn list_specs(
         return ApiError::not_found().into_response();
     }
     let wanted = tri!(states(q.state.as_deref(), SPEC_STATES));
-    let filter = format!("specs:{project}:{}", wanted.join(","));
+    if q.path
+        .as_ref()
+        .is_some_and(|p| p.len() > saka_core::paths::MAX_PATH_BYTES)
+    {
+        return ApiError::validation("path", "too_long").into_response();
+    }
+    let filter = format!(
+        "specs:{project}:{}:{}",
+        wanted.join(","),
+        q.path.as_deref().unwrap_or_default()
+    );
     let p = tri!(page(q.cursor.as_deref(), q.limit, &filter));
-    let paged = tri!(engine.specs(project, &wanted, &p));
+    let paged = tri!(engine.specs(project, &wanted, q.path.as_deref(), &p));
     ok(
         StatusCode::OK,
         &dto::Page {
@@ -370,6 +380,160 @@ pub async fn get_spec(State(s): State<AppState>, Path(id): Path<String>) -> Resp
         Some(v) => ok(StatusCode::OK, &dto::Spec::from_view(&v, true)),
         None => ApiError::not_found().into_response(),
     }
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/files", tag = "files",
+    params(("project_id" = uuid::Uuid, Path)),
+    responses(
+        (status = 200, body = dto::FileTree),
+        (status = 404, body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn list_files(State(s): State<AppState>, Path(project): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let project = ProjectId(tri!(path_id(&project)));
+    let tree = tri!(engine.doc_tree(project).await);
+    ok(StatusCode::OK, &dto::FileTree::from_view(&tree))
+}
+
+fn file_path(q: &dto::FileQuery) -> Result<&str, ApiError> {
+    let path = q
+        .path
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| ApiError::validation("path", "required"))?;
+    // Checked against the project folder once the project is known.
+    match saka_core::paths::check_doc_path(".", path) {
+        Ok(()) => Ok(path),
+        Err(saka_core::paths::PathIssue::NotMarkdown) => {
+            Err(ApiError::validation("path", "not_markdown"))
+        }
+        Err(_) => Err(ApiError::validation("path", "invalid")),
+    }
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/file", tag = "files",
+    params(("project_id" = uuid::Uuid, Path), dto::FileQuery),
+    responses(
+        (status = 200, body = dto::FileContent, headers(("ETag" = String, description = "\"<blob>\""))),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn get_file(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    Query(q): Query<dto::FileQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let project = ProjectId(tri!(path_id(&project)));
+    let path = tri!(file_path(&q));
+    let file = tri!(engine.read_doc(project, path).await);
+    ok(StatusCode::OK, &dto::FileContent::from_view(&file))
+}
+
+fn precondition(headers: &HeaderMap) -> Result<Precondition, ApiError> {
+    let text = |name| {
+        headers
+            .get(name)
+            .map(|v| v.to_str().map(str::trim).map_err(|_| ()))
+    };
+    let if_match = text(axum::http::header::IF_MATCH);
+    let if_none = text(axum::http::header::IF_NONE_MATCH);
+    match (if_match, if_none) {
+        (Some(_), Some(_)) => Err(ApiError::validation("If-None-Match", "exclusive")),
+        (None, None) => Err(ApiError::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "precondition_required",
+            serde_json::json!({}),
+        )),
+        (None, Some(Ok("*"))) => Ok(Precondition::Absent),
+        (None, Some(_)) => Err(ApiError::validation("If-None-Match", "invalid")),
+        (Some(Ok("*")), None) => Ok(Precondition::Exists),
+        (Some(Ok(tag)), None) => {
+            // A weak tag never matches under the strong comparison If-Match uses.
+            let weak = tag.strip_prefix("W/").is_some();
+            let tag = tag.strip_prefix("W/").unwrap_or(tag);
+            match tag.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+                Some(blob) if !weak => Ok(Precondition::Blob(blob.to_string())),
+                Some(_) => Ok(Precondition::Blob(String::new())),
+                None => Err(ApiError::validation("If-Match", "invalid")),
+            }
+        }
+        (Some(Err(())), None) => Err(ApiError::validation("If-Match", "invalid")),
+    }
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/projects/{project_id}/file", tag = "files",
+    params(
+        ("project_id" = uuid::Uuid, Path), dto::FileQuery,
+        ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters"),
+        ("If-Match" = Option<String>, Header, description = "\"<blob>\" of the file being replaced, or * for any existing file"),
+        ("If-None-Match" = Option<String>, Header, description = "* to create a file that must not exist yet"),
+    ),
+    request_body = dto::WriteFileBody,
+    responses(
+        (status = 201, body = dto::FileWrite, description = "A new file", headers(("ETag" = String, description = "\"<blob>\""))),
+        (status = 200, body = dto::FileWrite, description = "An existing file, changed or already equal", headers(("ETag" = String, description = "\"<blob>\""))),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn put_file(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    Query(q): Query<dto::FileQuery>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let path = tri!(file_path(&q)).to_string();
+    let req: dto::WriteFileBody = tri!(body(&raw));
+    let pre = tri!(precondition(&headers));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Doc(v) => reply(
+            if v.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            &dto::FileWrite::from_view(v),
+        ),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "doc.write",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    // The file path lives in the query, so the request hash covers it too.
+    let keyed = format!("{}?{}", uri.path(), uri.query().unwrap_or_default());
+    mutate(
+        &s,
+        key,
+        &method,
+        &keyed,
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .write_doc(project, &path, req.content, pre, &cause, Some(&action))
+                .await
+                .map(|_| Some(project))
+                .map_err(|e| (e, Some(project)))
+        },
+    )
+    .await
 }
 
 #[utoipa::path(

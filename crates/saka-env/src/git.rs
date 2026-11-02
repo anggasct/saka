@@ -4,11 +4,29 @@ use std::time::Duration;
 
 use saka_ports::{GitRemote, PortError};
 use serde_json::json;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(60);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
 const STDERR_MAX: usize = 500;
+
+pub const EXTRA_ENV: [&str; 8] = [
+    "GIT_INDEX_FILE",
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_DATE",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_DATE",
+    "GIT_LITERAL_PATHSPECS",
+];
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Extra<'a> {
+    pub env: &'a [(&'a str, &'a str)],
+    pub input: Option<&'a [u8]>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Git {
@@ -55,7 +73,17 @@ impl Git {
     }
 
     pub async fn local(&self, dir: &Path, args: &[&str]) -> Result<GitOutput, PortError> {
-        self.run(dir, args, None, LOCAL_TIMEOUT).await
+        self.run(dir, args, None, Extra::default(), LOCAL_TIMEOUT)
+            .await
+    }
+
+    pub async fn local_with(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        extra: Extra<'_>,
+    ) -> Result<GitOutput, PortError> {
+        self.run(dir, args, None, extra, LOCAL_TIMEOUT).await
     }
 
     pub async fn remote(
@@ -64,7 +92,8 @@ impl Git {
         args: &[&str],
         remote: &GitRemote,
     ) -> Result<GitOutput, PortError> {
-        self.run(dir, args, Some(remote), NETWORK_TIMEOUT).await
+        self.run(dir, args, Some(remote), Extra::default(), NETWORK_TIMEOUT)
+            .await
     }
 
     async fn run(
@@ -72,8 +101,16 @@ impl Git {
         dir: &Path,
         args: &[&str],
         remote: Option<&GitRemote>,
+        extra: Extra<'_>,
         timeout: Duration,
     ) -> Result<GitOutput, PortError> {
+        let op = args.first().copied().unwrap_or("git");
+        if let Some((name, _)) = extra.env.iter().find(|(n, _)| !EXTRA_ENV.contains(n)) {
+            return Err(PortError::permanent(
+                "git_env_refused",
+                json!({ "op": op, "name": name }),
+            ));
+        }
         let mut cmd = Command::new(&self.program);
         cmd.arg("-C")
             .arg(dir)
@@ -87,7 +124,12 @@ impl Git {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "")
             .env("SSH_ASKPASS", "")
-            .stdin(Stdio::null())
+            .envs(extra.env.iter().copied())
+            .stdin(if extra.input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -98,8 +140,7 @@ impl Git {
                     .env(format!("GIT_CONFIG_VALUE_{i}"), value);
             }
         }
-        let op = args.first().copied().unwrap_or("git");
-        let output = tokio::time::timeout(timeout, cmd.output())
+        let output = tokio::time::timeout(timeout, output_of(cmd, extra.input))
             .await
             .map_err(|_| {
                 PortError::retryable(
@@ -118,6 +159,28 @@ impl Git {
             stdout: output.stdout,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
+    }
+}
+
+async fn output_of(
+    mut cmd: Command,
+    input: Option<&[u8]>,
+) -> std::io::Result<std::process::Output> {
+    let mut child = cmd.spawn()?;
+    let stdin = child.stdin.take();
+    // Feed stdin while the output is drained, so neither pipe can fill up and stall the child.
+    let feed = async move {
+        if let (Some(mut stdin), Some(bytes)) = (stdin, input) {
+            stdin.write_all(bytes).await?;
+            stdin.shutdown().await?;
+        }
+        Ok::<(), std::io::Error>(())
+    };
+    let (fed, output) = tokio::join!(feed, child.wait_with_output());
+    let output = output?;
+    match fed {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(e),
+        _ => Ok(output),
     }
 }
 

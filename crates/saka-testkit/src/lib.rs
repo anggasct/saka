@@ -19,5 +19,5 @@ pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step};
 pub use world::{
     AgentOutcome, AgentScript, CiScript, CommandScript, FAKE_CAPABILITIES, FAKE_INTEGRATION,
     FAKE_SIGNATURE_HEADER, FakeWorld, Launch, RecipeRun, SIM_RUNNER_VERSION, Stats,
-    ToolchainScript, TurnUsage, fake_signature,
+    ToolchainScript, TurnUsage, fake_signature, git_blob,
 };

@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use saka_core::model::ContextRef;
 use saka_core::vocab::{ContextOrigin, Tool};
 
-use crate::context::sha256;
+use saka_spec::content_hash;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacketStep {
@@ -81,7 +81,7 @@ pub fn render(input: &PacketInput) -> Packet {
         path: spec.path.clone(),
         origin: None,
         bytes: spec.content.len() as u64,
-        content_hash: sha256(&spec.content),
+        content_hash: content_hash(&spec.content),
     }];
     for (index, (doc, content)) in (2u32..).zip(&input.context) {
         push_document(&mut text, index, &doc.path, &spec.source_commit, content);
@@ -158,7 +158,7 @@ pub fn render(input: &PacketInput) -> Packet {
          - Commit all your changes with a Conventional Commits message before you finish.\n\
          - Do not push. Saka pushes the branch and opens the pull request.\n",
     );
-    let sha256 = sha256(text.as_bytes());
+    let sha256 = content_hash(text.as_bytes());
     Packet {
         text,
         source_commit: spec.source_commit.clone(),
@@ -198,7 +198,7 @@ mod tests {
                 origin: ContextOrigin::Link,
                 line: 3,
                 bytes: content.len() as u64,
-                content_hash: sha256(content),
+                content_hash: content_hash(content),
             },
             content.to_vec(),
         )
@@ -218,7 +218,7 @@ mod tests {
             "- Ports: none\n- Toolchains: none\n- Secrets available as environment variables: none\n"
         ));
         assert_eq!(packet.documents.len(), 1);
-        assert_eq!(packet.sha256, sha256(packet.text.as_bytes()));
+        assert_eq!(packet.sha256, content_hash(packet.text.as_bytes()));
     }
 
     #[test]

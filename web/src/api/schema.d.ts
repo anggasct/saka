@@ -132,6 +132,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/file": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_file"];
+    put: operations["put_file"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/files": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_files"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/permission-rules": {
     parameters: {
       query?: never;
@@ -601,6 +633,49 @@ export interface components {
       code: string;
       params: unknown;
     };
+    FileContent: {
+      /** @description Git blob sha of the file; also the strong `ETag`. */
+      blob: string;
+      /** Format: int64 */
+      bytes: number;
+      /** @description Tip of the base branch the file was read at. */
+      commit: string;
+      /** @description The exact file content (a leading BOM is U+FEFF; line endings are kept as they are). */
+      content: string;
+      path: string;
+    };
+    FileEntry: {
+      /** @description Git blob sha of the file at the tip. */
+      blob: string;
+      /** Format: int64 */
+      bytes: number;
+      /** @description Path relative to the workspace repo root. */
+      path: string;
+    };
+    /** @description Markdown files of the project folder at the tip of the base branch. */
+    FileTree: {
+      base_branch: string;
+      /** @description Tip of the base branch the list was read at. */
+      commit: string;
+      /** @description Regular `.md`/`.markdown` files under the project folder, sorted by path bytes. */
+      files: components["schemas"]["FileEntry"][];
+      project_path: string;
+      /** @description More than 5000 files exist; `files` holds the first 5000. */
+      truncated: boolean;
+    };
+    FileWrite: {
+      /** @description Git blob sha of the file; also the strong `ETag`. */
+      blob: string;
+      /** Format: int64 */
+      bytes: number;
+      /** @description The new commit, or the tip when the content was already there (`committed: false`). */
+      commit: string;
+      /** @description False when the content equals the file at the tip: no commit was made. */
+      committed: boolean;
+      path: string;
+      spec?: components["schemas"]["Spec"] | null;
+      spec_problem?: components["schemas"]["SpecProblem"] | null;
+    };
     Gate: {
       checks: components["schemas"]["GateCheck"][];
       head_sha: string;
@@ -701,8 +776,7 @@ export interface components {
         acceptance_criteria?:
           components["schemas"]["AcceptanceCriterion"][] | null;
         approved_at?: string | null;
-        /** Format: uuid */
-        approved_revision_id?: string | null;
+        approved_revision?: components["schemas"]["RevisionRef"] | null;
         created_at: string;
         /** @description Specs that must ship before this one starts, resolved in the project. */
         depends_on: components["schemas"]["SpecDependency"][];
@@ -959,6 +1033,14 @@ export interface components {
       /** Format: uuid */
       to_revision_id: string;
     };
+    RevisionRef: {
+      /** @description `sha256:<hex>` over the raw bytes of the spec file. */
+      content_hash: string;
+      /** Format: uuid */
+      id: string;
+      /** @description Commit of the workspace repo the revision was read at. */
+      source_commit: string;
+    };
     /** @description The secrets of a project, ordered by name. At most 200, so there is no paging. */
     SecretList: {
       items: components["schemas"]["SecretName"][];
@@ -1039,8 +1121,7 @@ export interface components {
       acceptance_criteria?:
         components["schemas"]["AcceptanceCriterion"][] | null;
       approved_at?: string | null;
-      /** Format: uuid */
-      approved_revision_id?: string | null;
+      approved_revision?: components["schemas"]["RevisionRef"] | null;
       created_at: string;
       /** @description Specs that must ship before this one starts, resolved in the project. */
       depends_on: components["schemas"]["SpecDependency"][];
@@ -1071,6 +1152,11 @@ export interface components {
        */
       spec_id?: string | null;
       state?: string | null;
+    };
+    SpecProblem: {
+      /** @description Same codes as registering a spec: `spec_slug_conflict`, `validation_failed`, `scm_unavailable`. */
+      code: string;
+      params: unknown;
     };
     SpecTemplate: {
       /** @description Markdown that parses without issues as `example-spec.md`. */
@@ -1311,6 +1397,10 @@ export interface components {
       project_path: string;
       /** Format: uuid */
       repo_id: string;
+    };
+    WriteFileBody: {
+      /** @description The exact new file content, at most 1 MiB as UTF-8. */
+      content: string;
     };
   };
   responses: never;
@@ -1600,6 +1690,150 @@ export interface operations {
       };
     };
   };
+  get_file: {
+    parameters: {
+      query?: {
+        /** @description Path of the file relative to the workspace repo root, inside the project folder. */
+        path?: string;
+      };
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          /** @description "<blob>" */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FileContent"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  put_file: {
+    parameters: {
+      query?: {
+        /** @description Path of the file relative to the workspace repo root, inside the project folder. */
+        path?: string;
+      };
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+        /** @description "<blob>" of the file being replaced, or * for any existing file */
+        "If-Match"?: string | null;
+        /** @description * to create a file that must not exist yet */
+        "If-None-Match"?: string | null;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WriteFileBody"];
+      };
+    };
+    responses: {
+      /** @description An existing file, changed or already equal */
+      200: {
+        headers: {
+          /** @description "<blob>" */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FileWrite"];
+        };
+      };
+      /** @description A new file */
+      201: {
+        headers: {
+          /** @description "<blob>" */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FileWrite"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_files: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FileTree"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   list_permission_rules: {
     parameters: {
       query?: never;
@@ -1731,6 +1965,8 @@ export interface operations {
       query?: {
         /** @description One or more of `draft, ready, approved, shipped, withdrawn`, comma-separated. */
         state?: string;
+        /** @description Only the spec registered at exactly this path (at most 1024 bytes). */
+        path?: string;
         cursor?: string;
         limit?: number;
       };

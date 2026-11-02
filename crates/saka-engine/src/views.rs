@@ -58,9 +58,17 @@ impl From<&SpecRevisionRow> for RevisionInfo {
 pub struct SpecView {
     pub spec: Spec,
     pub revision: RevisionInfo,
+    pub approved_revision: Option<RevisionRef>,
     pub work_items: Vec<(String, WorkItemId)>,
     pub depends_on: Vec<DependencyView>,
     pub revision_plan: Option<RevisionPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionRef {
+    pub id: SpecRevisionId,
+    pub source_commit: String,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,13 +206,27 @@ impl Engine {
         revision: RevisionInfo,
         work_items: Vec<(String, WorkItemId)>,
     ) -> Result<SpecView> {
-        let declared = match spec.approved_revision_id {
-            Some(id) if id != revision.id => self
-                .store
-                .read(|c| read::load_revision(c, id))?
-                .map(|r| r.model)
-                .unwrap_or_default(),
-            _ => revision.model.clone(),
+        let (approved_revision, declared) = match spec.approved_revision_id {
+            Some(id) if id != revision.id => {
+                let row = self.store.read(|c| read::load_revision(c, id))?;
+                (
+                    row.as_ref().map(|r| RevisionRef {
+                        id,
+                        source_commit: r.source_commit.clone(),
+                        content_hash: r.content_hash.clone(),
+                    }),
+                    row.map(|r| r.model).unwrap_or_default(),
+                )
+            }
+            Some(id) => (
+                Some(RevisionRef {
+                    id,
+                    source_commit: revision.source_commit.clone(),
+                    content_hash: revision.content_hash.clone(),
+                }),
+                revision.model.clone(),
+            ),
+            None => (None, revision.model.clone()),
         };
         let slugs: Vec<String> = declared
             .get("depends_on")
@@ -228,6 +250,7 @@ impl Engine {
         Ok(SpecView {
             spec,
             revision,
+            approved_revision,
             work_items,
             depends_on,
             revision_plan,
@@ -457,11 +480,12 @@ impl Engine {
         &self,
         project: ProjectId,
         states: &[String],
+        path: Option<&str>,
         page: &Page,
     ) -> Result<Paged<SpecView>> {
         let rows = self
             .store
-            .read(|c| list::specs(c, project, states, &probe(page)))?;
+            .read(|c| list::specs(c, project, states, path, &probe(page)))?;
         let paged = paged(rows, page, |s| (s.updated_at.0, s.id.0));
         Ok(Paged {
             items: paged
