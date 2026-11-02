@@ -14,6 +14,8 @@ export type Gate = components["schemas"]["Gate"];
 export type StageRun = components["schemas"]["StageRunItem"];
 export type Blocker = components["schemas"]["Blocker"];
 export type Session = components["schemas"]["Session"];
+export type PermissionRequest = components["schemas"]["PermissionRequest"];
+export type Decision = components["schemas"]["Decision"];
 
 const LIMIT = 200;
 
@@ -27,6 +29,8 @@ export const deliveryKeys = {
   workPacket: (id: string) => [QUERY_ROOTS.workItems, "packet", id] as const,
   sessions: (workItemId: string) => [QUERY_ROOTS.sessions, workItemId] as const,
   pendingPermissions: () => [QUERY_ROOTS.permissions, "pending"] as const,
+  taskPermissions: (workItemId: string) =>
+    [QUERY_ROOTS.permissions, "pending", workItemId] as const,
 };
 
 export function useProjects() {
@@ -74,16 +78,43 @@ export function useWorkItems(projectId: string | undefined) {
   });
 }
 
-export function usePendingPermissionCount() {
+function byRequestedAt(items: PermissionRequest[]): PermissionRequest[] {
+  return items.toSorted((a, b) => a.requested_at.localeCompare(b.requested_at));
+}
+
+export function usePendingPermissions() {
   return useQuery({
     queryKey: deliveryKeys.pendingPermissions(),
     queryFn: async ({ signal }) =>
-      unwrap(
-        await api.GET("/api/v1/permission-requests", {
-          params: { query: { state: "pending", limit: LIMIT } },
-          signal,
-        }),
-      ).items.length,
+      byRequestedAt(
+        unwrap(
+          await api.GET("/api/v1/permission-requests", {
+            params: { query: { state: "pending", limit: LIMIT } },
+            signal,
+          }),
+        ).items,
+      ),
+  });
+}
+
+export function useTaskPermissions(workItemId: string) {
+  return useQuery({
+    queryKey: deliveryKeys.taskPermissions(workItemId),
+    queryFn: async ({ signal }) =>
+      byRequestedAt(
+        unwrap(
+          await api.GET("/api/v1/permission-requests", {
+            params: {
+              query: {
+                state: "pending",
+                work_item_id: workItemId,
+                limit: LIMIT,
+              },
+            },
+            signal,
+          }),
+        ).items,
+      ),
   });
 }
 
@@ -214,5 +245,73 @@ export async function stopSession(
       },
       body: { reason },
     }),
+  );
+}
+
+export async function mergeTask(
+  workItemId: string,
+  version: number,
+  reason: string | null,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/merge", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: { ...headers(idempotencyKey), "If-Match": `W/"${version}"` },
+      },
+      body: { reason },
+    }),
+  );
+}
+
+export async function retryTask(
+  workItemId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/retry", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
+}
+
+export async function cancelTask(
+  workItemId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/cancel", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
+}
+
+export async function answerPermission(
+  permissionRequestId: string,
+  answer: { decision: Decision; message: string | null; remember: boolean },
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST(
+      "/api/v1/permission-requests/{permission_request_id}/answer",
+      {
+        params: {
+          path: { permission_request_id: permissionRequestId },
+          header: headers(idempotencyKey),
+        },
+        body: answer,
+      },
+    ),
   );
 }

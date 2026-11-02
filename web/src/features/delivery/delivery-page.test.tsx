@@ -27,7 +27,7 @@ function readyRoutes() {
     [PROJECTS]: { body: page([project]) },
     [SPECS]: { body: page([spec]) },
     [WORK_ITEMS]: { body: page([queuedTask, blockedTask]) },
-    [PERMISSIONS]: { body: page([{ id: "p" }, { id: "q" }]) },
+    [PERMISSIONS]: { body: page([]) },
   };
 }
 
@@ -100,9 +100,6 @@ describe("DeliveryPage", () => {
       "https://github.com/acme/tasks/pull/12",
     );
     expect(within(second).getByText("Queued")).toBeInTheDocument();
-    expect(
-      screen.getByText("2 permission requests waiting"),
-    ).toBeInTheDocument();
   });
 
   it("renders the same blocker through the Indonesian catalog", async () => {
@@ -112,7 +109,6 @@ describe("DeliveryPage", () => {
       await screen.findByText("CI gagal: test, lint."),
     ).toBeInTheDocument();
     expect(screen.getByText("Terhenti")).toBeInTheDocument();
-    expect(screen.getByText("2 permintaan izin menunggu")).toBeInTheDocument();
   });
 
   it("labels a superseded task from the catalog", async () => {

@@ -1,4 +1,5 @@
 import type {
+  PermissionRequest,
   ProjectItem,
   SpecItem,
   WorkItem,
@@ -135,5 +136,26 @@ export function specWithSteps(steps: [string, string[]][]): SpecItem {
       after,
       work_item_id: null,
     })),
+  };
+}
+
+export function permission(
+  n: number,
+  extra: Partial<PermissionRequest> = {},
+): PermissionRequest {
+  return {
+    id: `0193f0c4-1b2a-7c3d-9e8f-0011223344a${n}`,
+    project_id: PROJECT_ID,
+    work_item_id: task(1, {}).id,
+    session_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344f1",
+    tool: "Bash",
+    summary: "npm install left-pad",
+    input: { command: "npm install left-pad" },
+    state: "pending",
+    requested_at: `2026-10-31T10:0${n}:00.000Z`,
+    answer_source: null,
+    answered_at: null,
+    message: null,
+    ...extra,
   };
 }

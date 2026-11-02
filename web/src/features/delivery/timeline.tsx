@@ -10,6 +10,8 @@ import { Button } from "@/ui/button";
 import { Skeleton } from "@/ui/skeleton";
 
 import { useFormat } from "./format";
+import { PermissionCard } from "./permission-card";
+import type { PermissionRequest } from "./queries";
 import { useTimeline } from "./queries";
 import { label, record, text } from "./text";
 import type { T } from "./text";
@@ -22,7 +24,12 @@ function systemText(t: T, activity: Activity): string {
   return code !== "" && named !== code ? named : activity.summary;
 }
 
-function Body({ activity }: { activity: Activity }) {
+type Asking = {
+  project: string | undefined;
+  permissions: readonly PermissionRequest[];
+};
+
+function Body({ activity, asking }: { activity: Activity; asking: Asking }) {
   const t = useT();
   const data = record(activity.data);
   switch (activity.kind) {
@@ -51,7 +58,13 @@ function Body({ activity }: { activity: Activity }) {
           {activity.summary}
         </pre>
       );
-    case "permission":
+    case "permission": {
+      const request = asking.permissions.find(
+        (p) => p.id === data.permission_request_id,
+      );
+      if (request !== undefined) {
+        return <PermissionCard request={request} project={asking.project} />;
+      }
       return (
         <p className="flex flex-wrap items-center gap-2">
           <code className="break-all">{activity.summary}</code>
@@ -60,6 +73,7 @@ function Body({ activity }: { activity: Activity }) {
           </Badge>
         </p>
       );
+    }
     case "result":
       return (
         <div className="space-y-1">
@@ -89,7 +103,7 @@ function Body({ activity }: { activity: Activity }) {
   }
 }
 
-function Row({ activity }: { activity: Activity }) {
+function Row({ activity, asking }: { activity: Activity; asking: Asking }) {
   const t = useT();
   const format = useFormat();
   return (
@@ -100,12 +114,20 @@ function Row({ activity }: { activity: Activity }) {
         </time>
         <span>{label(t, "timeline.kind", activity.kind)}</span>
       </p>
-      <Body activity={activity} />
+      <Body activity={activity} asking={asking} />
     </li>
   );
 }
 
-export function Timeline({ sessionId }: { sessionId: string }) {
+export function Timeline({
+  sessionId,
+  project,
+  permissions,
+}: {
+  sessionId: string;
+  project: string | undefined;
+  permissions: readonly PermissionRequest[];
+}) {
   const t = useT();
   const queryClient = useQueryClient();
   const timeline = useTimeline(sessionId);
@@ -222,7 +244,11 @@ export function Timeline({ sessionId }: { sessionId: string }) {
         ) : (
           <ol>
             {items.map((activity) => (
-              <Row key={activity.offset} activity={activity} />
+              <Row
+                key={activity.offset}
+                activity={activity}
+                asking={{ project, permissions }}
+              />
             ))}
           </ol>
         )}

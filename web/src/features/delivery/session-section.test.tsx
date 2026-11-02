@@ -120,7 +120,9 @@ describe("SessionSection", () => {
         [`/api/v1/sessions/${FIRST}/timeline`]: timelineRoute(260, 200),
       }),
     );
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     const log = await screen.findByRole("log", { name: "Session timeline" });
     expect(await within(log).findByText("row 259")).toBeInTheDocument();
     expect(within(log).queryByText("row 59")).not.toBeInTheDocument();
@@ -143,7 +145,9 @@ describe("SessionSection", () => {
 
   it("renders every kind of activity", async () => {
     fakeApi(routes([session(FIRST)]));
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     const log = await screen.findByRole("log");
     expect(
       await within(log).findByText("The agent session is ready."),
@@ -163,7 +167,9 @@ describe("SessionSection", () => {
 
   it("summarises the session", async () => {
     fakeApi(routes([session(FIRST)]));
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     expect(await screen.findByText("claude 2.1.0")).toBeInTheDocument();
     expect(screen.getByText("opus")).toBeInTheDocument();
     expect(screen.getByText("2 minutes")).toBeInTheDocument();
@@ -185,7 +191,9 @@ describe("SessionSection", () => {
         session(SECOND, { resumed_from_session_id: FIRST }),
       ]),
     );
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     const picker = await screen.findByRole("combobox", { name: "Session" });
     expect(picker).toHaveValue(SECOND);
     await waitFor(() => {
@@ -217,7 +225,9 @@ describe("SessionSection", () => {
       fakeApi(
         routes([session(FIRST, { state, available_actions: [...actions] })]),
       );
-      renderWithProviders(<SessionSection task={item} />);
+      renderWithProviders(
+        <SessionSection task={item} project="tasks" permissions={[]} />,
+      );
       await screen.findByRole("log");
       const has = (name: string) =>
         screen.queryByRole("button", { name }) !== null;
@@ -236,7 +246,9 @@ describe("SessionSection", () => {
         },
       }),
     );
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     const field = await screen.findByRole("textbox", {
       name: "Steer the agent",
     });
@@ -261,7 +273,9 @@ describe("SessionSection", () => {
         },
       }),
     );
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     await userEvent.click(
       await screen.findByRole("button", { name: "Interrupt" }),
     );
@@ -283,7 +297,9 @@ describe("SessionSection", () => {
             : { status: 202, body: session(FIRST, { state: "failed" }) },
       }),
     );
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     const trigger = await screen.findByRole("button", { name: "Stop" });
     await userEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", {
@@ -326,7 +342,9 @@ describe("SessionSection", () => {
         },
       ),
     );
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     await userEvent.type(
       await screen.findByRole("textbox", { name: "Steer the agent" }),
       "go on",
@@ -347,7 +365,9 @@ describe("SessionSection", () => {
 
   it("keeps focus inside the dialog and returns it on Escape", async () => {
     fakeApi(routes([session(FIRST)]));
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     const trigger = await screen.findByRole("button", { name: "Stop" });
     await userEvent.click(trigger);
     const dialog = await screen.findByRole("dialog");
@@ -365,7 +385,9 @@ describe("SessionSection", () => {
 
   it("says when there is no session yet", async () => {
     fakeApi({ "/api/v1/sessions": { body: { items: [] } } });
-    renderWithProviders(<SessionSection task={item} />);
+    renderWithProviders(
+      <SessionSection task={item} project="tasks" permissions={[]} />,
+    );
     expect(
       await screen.findByText("No agent session yet."),
     ).toBeInTheDocument();

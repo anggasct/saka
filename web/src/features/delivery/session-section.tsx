@@ -4,7 +4,7 @@ import { useT } from "@/i18n/use-t";
 import { Skeleton } from "@/ui/skeleton";
 
 import { useFormat } from "./format";
-import type { Session, WorkItem } from "./queries";
+import type { PermissionRequest, Session, WorkItem } from "./queries";
 import { useSessions } from "./queries";
 import { Section } from "./section";
 import { SessionControls } from "./session-controls";
@@ -81,7 +81,15 @@ function Summary({ session }: { session: Session }) {
   );
 }
 
-export function SessionSection({ task }: { task: WorkItem }) {
+export function SessionSection({
+  task,
+  project,
+  permissions,
+}: {
+  task: WorkItem;
+  project: string | undefined;
+  permissions: readonly PermissionRequest[];
+}) {
   const t = useT();
   const format = useFormat();
   const sessions = useSessions(task.id);
@@ -131,7 +139,12 @@ export function SessionSection({ task }: { task: WorkItem }) {
           )}
           <Summary session={session} />
           <SessionControls key={`controls-${session.id}`} session={session} />
-          <Timeline key={`timeline-${session.id}`} sessionId={session.id} />
+          <Timeline
+            key={`timeline-${session.id}`}
+            sessionId={session.id}
+            project={project}
+            permissions={permissions}
+          />
         </>
       )}
     </Section>
