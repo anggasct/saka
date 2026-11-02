@@ -5,7 +5,7 @@ use crate::gate::GatePolicy;
 use crate::job::{Job, JobKind};
 use crate::model::Task;
 use crate::resume;
-use crate::task::{LoopConfig, WAIT_LIMIT_SOURCE};
+use crate::task::{LoopConfig, WAIT_LIMIT_SOURCE, watches_change};
 use crate::time::Timestamp;
 use crate::vocab::{
     EnvironmentState, GateOutcome, GateSource, InterruptBy, PermissionState, SessionState, Stage,
@@ -210,6 +210,9 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     let run = task.stage_run.as_ref();
     let run_id = run.map(|r| r.id);
     let mut jobs = Vec::new();
+    if watches_change(task) {
+        jobs.extend(poll_job(task, cfg, now));
+    }
 
     if item.state.is_terminal() || item.state == WorkItemState::Blocked {
         if let Some(s) = task.live_session().filter(|_| item.state.is_terminal()) {
@@ -327,13 +330,6 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
         }
         (Stage::Merge, StagePhase::AwaitingCi | StagePhase::AwaitingMerge) => {
             if let Some(cr) = cr {
-                let bucket = now.0 / cfg.poll_interval_ms.max(1);
-                jobs.push(Job::new(
-                    JobKind::ScmPollChangeRequest,
-                    format!("{}:{bucket}", cr.id),
-                    json!({ "work_item_id": id, "change_request_id": cr.id, "repo_id": cr.repo_id, "number": cr.number }),
-                    now,
-                ));
                 let policy = GatePolicy::from_recipe(
                     task.environment.as_ref().and_then(|e| e.recipe.as_ref()),
                 );
@@ -407,4 +403,15 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
         _ => {}
     }
     jobs
+}
+
+fn poll_job(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Option<Job> {
+    let cr = task.change_request.as_ref()?;
+    let bucket = now.0 / cfg.poll_interval_ms.max(1);
+    Some(Job::new(
+        JobKind::ScmPollChangeRequest,
+        format!("{}:{bucket}", cr.id),
+        json!({ "work_item_id": task.item.id, "change_request_id": cr.id, "repo_id": cr.repo_id, "number": cr.number }),
+        now,
+    ))
 }

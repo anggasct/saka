@@ -373,6 +373,7 @@ pub struct ChangeRequest {
     pub head_sha: String,
     pub base_branch: String,
     pub merge_commit_sha: Option<String>,
+    pub merged_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -652,6 +653,7 @@ impl WorkItem {
                 head_sha: c.head_sha.clone(),
                 base_branch: c.base_branch.clone(),
                 merge_commit_sha: c.merge_commit_sha.clone(),
+                merged_at: opt_time(c.merged_at),
             }),
             gates: gates_at_head(t),
             blocker: t.open_blocker().map(|b| Blocker {

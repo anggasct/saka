@@ -523,10 +523,19 @@ fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
         })
         .collect();
     assert_eq!(sources, [("scm", "passed", true), ("saka", "passed", true)]);
+    assert_eq!(detail.body["change_request"]["merged_at"], Value::Null);
     let etag = detail.headers["etag"].to_str().unwrap().to_string();
     let r = api.post(&merge, &[("if-match", &etag)], json!({ "reason": null }));
     assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
     assert_eq!(r.body["stage_phase"], "merging");
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| s.task(1).item.stage == Some(Stage::Sync)
+                || s.task(1).item.state == WorkItemState::Done)
+    );
+    let merged = api.get(&format!("/api/v1/work-items/{id}"));
+    let merged_at = merged.body["change_request"]["merged_at"].as_str().unwrap();
+    assert!(merged_at.ends_with('Z'), "{merged_at}");
 
     let retry = format!("/api/v1/work-items/{id}/actions/retry");
     let r = api.post(&retry, &[], json!({}));
@@ -817,6 +826,7 @@ fn ops_endpoints_report_health_readiness_and_metrics() {
         "saka_usage_tokens_total",
         "saka_usage_cost_usd_micros_total",
         "saka_account_utilization",
+        "saka_step_advance_seconds",
     ] {
         assert!(
             text.contains(&format!("# TYPE {family} ")),

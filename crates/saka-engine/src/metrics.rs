@@ -20,6 +20,7 @@ pub struct Counters {
     gate_runs: Mutex<BTreeMap<(String, String), u64>>,
     auto_retries: Mutex<BTreeMap<(String, String), u64>>,
     gate_seconds: Mutex<SecondsHistogram>,
+    advance_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -52,12 +53,32 @@ fn adapter(kind: JobKind) -> &'static str {
 }
 
 pub const GATE_SECONDS_BUCKETS: [f64; 7] = [1.0, 10.0, 60.0, 300.0, 900.0, 1800.0, 3600.0];
+pub const ADVANCE_SECONDS_BUCKETS: [f64; 8] = [5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0];
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SecondsHistogram {
     pub buckets: Vec<(f64, u64)>,
     pub count: u64,
     pub sum: f64,
+}
+
+fn observe(histogram: &Mutex<SecondsHistogram>, bounds: &[f64], seconds: f64) {
+    if let Ok(mut h) = histogram.lock() {
+        if h.buckets.is_empty() {
+            h.buckets = bounds.iter().map(|b| (*b, 0)).collect();
+        }
+        for (bound, n) in &mut h.buckets {
+            if seconds <= *bound {
+                *n += 1;
+            }
+        }
+        h.count += 1;
+        h.sum += seconds;
+    }
+}
+
+fn snapshot_of(histogram: &Mutex<SecondsHistogram>) -> SecondsHistogram {
+    histogram.lock().map(|h| h.clone()).unwrap_or_default()
 }
 
 pub const PACKET_BYTE_BUCKETS: [u64; 6] = [4_096, 16_384, 65_536, 131_072, 262_144, 524_288];
@@ -76,18 +97,11 @@ impl Counters {
 
     pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
         bump(&self.gate_runs, source, outcome);
-        if let Ok(mut h) = self.gate_seconds.lock() {
-            if h.buckets.is_empty() {
-                h.buckets = GATE_SECONDS_BUCKETS.iter().map(|b| (*b, 0)).collect();
-            }
-            for (bound, n) in &mut h.buckets {
-                if seconds <= *bound {
-                    *n += 1;
-                }
-            }
-            h.count += 1;
-            h.sum += seconds;
-        }
+        observe(&self.gate_seconds, &GATE_SECONDS_BUCKETS, seconds);
+    }
+
+    pub(crate) fn step_advance(&self, seconds: f64) {
+        observe(&self.advance_seconds, &ADVANCE_SECONDS_BUCKETS, seconds);
     }
 
     pub(crate) fn webhook(&self, integration: &str, event: &str, outcome: &str) {
@@ -231,6 +245,7 @@ pub struct MetricsSnapshot {
     pub gate_runs: Vec<(String, String, u64)>,
     pub auto_retries: Vec<(String, u64)>,
     pub gate_seconds: SecondsHistogram,
+    pub advance_seconds: SecondsHistogram,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,12 +304,8 @@ impl Engine {
                 .into_iter()
                 .map(|(code, _, n)| (code, n))
                 .collect(),
-            gate_seconds: self
-                .counters
-                .gate_seconds
-                .lock()
-                .map(|h| h.clone())
-                .unwrap_or_default(),
+            gate_seconds: snapshot_of(&self.counters.gate_seconds),
+            advance_seconds: snapshot_of(&self.counters.advance_seconds),
         })
     }
 

@@ -91,6 +91,7 @@ const tasks = [
       head_sha: "a",
       base_branch: "main",
       merge_commit_sha: null,
+      merged_at: null,
     },
     blocker: {
       id: "b",

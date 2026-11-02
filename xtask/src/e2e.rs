@@ -23,6 +23,7 @@ const STOP_LIMIT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_secs(1);
 const DEFAULT_MODEL: &str = "haiku";
 const SLOW_COMMAND: &str = "sleep 30";
+const ADVANCE_LIMIT: Duration = Duration::from_secs(5 * 60);
 const DENY_MESSAGE: &str = "Not allowed in this run. Use one command per call, without &&, ;, |, or redirects. The Done when commands are allowed exactly as written in the spec.";
 
 struct Settings {
@@ -528,10 +529,43 @@ fn deliver(
             if !packet_checked {
                 bail!("S1 shipped before its work packet was checked");
             }
+            check_advance(api, spec)?;
             return check_runtime(api, first.as_deref().unwrap_or_default());
         }
         std::thread::sleep(POLL);
     }
+}
+
+fn timestamp(value: &Value, what: &str) -> Result<jiff::Timestamp> {
+    value
+        .as_str()
+        .with_context(|| format!("{what} is missing"))?
+        .parse()
+        .with_context(|| format!("{what} is not a timestamp"))
+}
+
+fn check_advance(api: &Api, spec: &str) -> Result<()> {
+    let tasks = api.get(&format!("/api/v1/work-items?spec_id={spec}&limit=200"))?;
+    let step = |id: &str| {
+        tasks["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| t["step_id"] == id)
+            .with_context(|| format!("{id} is missing"))
+    };
+    let merged = timestamp(&step("S1")?["change_request"]["merged_at"], "S1 merged_at")?;
+    let admitted = timestamp(&step("S2")?["admitted_at"], "S2 admitted_at")?;
+    let waited = Duration::try_from(admitted.duration_since(merged)).unwrap_or_default();
+    println!("  S2 admitted {}s after S1 merged", waited.as_secs());
+    if waited > ADVANCE_LIMIT {
+        bail!(
+            "S2 was admitted {}s after S1 merged (limit {}s)",
+            waited.as_secs(),
+            ADVANCE_LIMIT.as_secs()
+        );
+    }
+    Ok(())
 }
 
 fn verify(github: &GitHub, base: &str) -> Result<()> {

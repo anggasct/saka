@@ -833,7 +833,10 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
         (run.stage, run.attempt, run.trigger),
         (Stage::Dev, 2, Trigger::Manual)
     );
-    assert_eq!(w.take_jobs(), vec![JobKind::SessionStart]);
+    assert_eq!(
+        w.take_jobs(),
+        vec![JobKind::ScmPollChangeRequest, JobKind::SessionStart]
+    );
     let launch = TaskInput::SessionLaunched {
         session_id: SessionId(Uuid::from_u128(650)),
         cli: "claude".into(),
@@ -1243,6 +1246,94 @@ fn reconcile_recreates_the_job_of_the_current_phase() {
         })
         .collect();
     assert_eq!(again, polls);
+}
+
+fn polls(w: &World) -> usize {
+    w.reconcile()
+        .into_iter()
+        .filter(|a| matches!(a, Action::Enqueue(j) if j.kind == JobKind::ScmPollChangeRequest))
+        .count()
+}
+
+#[test]
+fn an_open_change_is_polled_in_every_state_until_sync() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    assert_eq!(polls(&w), 1, "merge/awaiting_ci");
+
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Failure))]),
+    );
+    assert_eq!(w.task(1).item.state, WorkItemState::Blocked);
+    assert_eq!(polls(&w), 1, "blocked");
+
+    w.decide(
+        1,
+        TaskInput::Retry {
+            reason: "fix the test".into(),
+        },
+    );
+    assert_eq!(w.place(1).1, Some(Stage::Dev));
+    assert_eq!(polls(&w), 1, "dev/running_session");
+
+    w.decide(
+        1,
+        TaskInput::ChangeObserved {
+            state: ChangeState::Merged,
+            head_sha: sha('b'),
+            merge_commit_sha: Some(sha('m')),
+            merged_at: None,
+            checks: vec![],
+        },
+    );
+    assert_eq!(
+        w.place(1),
+        (
+            WorkItemState::InStage,
+            Some(Stage::Sync),
+            Some(StagePhase::Verifying)
+        )
+    );
+    assert_eq!(polls(&w), 0, "sync");
+}
+
+#[test]
+fn a_change_being_merged_by_saka_is_not_polled() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Success))]),
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingMerge));
+    assert_eq!(polls(&w), 1, "merge/awaiting_merge");
+    let version = w.task(1).item.version;
+    w.decide(
+        1,
+        TaskInput::RequestMerge {
+            expected_version: version,
+            reason: None,
+        },
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::Merging));
+    assert_eq!(polls(&w), 0);
+}
+
+#[test]
+fn a_cancelled_task_is_not_polled() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        TaskInput::Cancel {
+            reason: "not needed".into(),
+        },
+    );
+    assert_eq!(polls(&w), 0);
 }
 
 #[test]

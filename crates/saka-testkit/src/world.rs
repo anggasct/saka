@@ -164,6 +164,7 @@ struct State {
     statuses: Vec<(String, StatusReport)>,
     statuses_refused: bool,
     push_outages: u32,
+    change_reads_fail: bool,
     launches: Vec<Launch>,
     repo_files: BTreeMap<String, String>,
     toolchain_scripts: HashMap<Tool, VecDeque<ToolchainScript>>,
@@ -246,6 +247,7 @@ impl FakeWorld {
                 statuses: Vec::new(),
                 statuses_refused: false,
                 push_outages: 0,
+                change_reads_fail: false,
                 launches: Vec::new(),
                 repo_files: BTreeMap::new(),
                 toolchain_scripts: HashMap::new(),
@@ -423,6 +425,10 @@ impl FakeWorld {
 
     pub fn fail_pushes(&self, times: u32) {
         self.state().push_outages = times;
+    }
+
+    pub fn fail_change_reads(&self, fail: bool) {
+        self.state().change_reads_fail = fail;
     }
 
     pub fn command_output(&self, command: &str, output: &str) {
@@ -1007,6 +1013,9 @@ impl Scm for FakeWorld {
 
     async fn change_request(&self, _repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot> {
         let s = self.state();
+        if s.change_reads_fail {
+            return Err(PortError::retryable("scm_unavailable", json!({})));
+        }
         let pr = s
             .prs
             .iter()

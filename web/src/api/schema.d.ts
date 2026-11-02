@@ -573,6 +573,7 @@ export interface components {
       /** Format: uuid */
       id: string;
       merge_commit_sha?: string | null;
+      merged_at?: string | null;
       /** Format: int64 */
       number: number;
       state: string;
