@@ -72,7 +72,7 @@ The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/pac
 
 - a user systemd instance (`systemctl --user is-system-running` says `running` or `degraded`), `git`, and the `claude` CLI;
 - a test repository you own, with a `docs/saka.toml` naming the repository itself, a Go module in `cli/`, and a CI workflow that runs on `pull_request` for any base branch;
-- a GitHub App installed on that repository with these repository permissions: Contents read and write, Pull requests read and write, Checks read, Commit statuses read, Metadata read (no webhook needed). Download a private key and `chmod 600` it;
+- a GitHub App installed on that repository with these repository permissions: Contents read and write, Pull requests read and write, Checks read, Commit statuses read and write (for the `saka/verify` status), Metadata read (no webhook needed). Download a private key and `chmod 600` it;
 - a Claude Code account directory that is already logged in: `CLAUDE_CONFIG_DIR=<dir> claude`, then `/login`.
 
 | Variable | Value |
