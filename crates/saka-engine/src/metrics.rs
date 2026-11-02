@@ -16,6 +16,7 @@ pub struct Counters {
     adapter_requests: Mutex<BTreeMap<(String, String), u64>>,
     waiting: Mutex<BTreeMap<WorkItemId, Vec<Waiting>>>,
     packet_bytes: Mutex<Vec<u64>>,
+    webhooks: Mutex<BTreeMap<(String, String, String), u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -57,6 +58,28 @@ pub struct PacketBytes {
 }
 
 impl Counters {
+    pub(crate) fn webhook(&self, integration: &str, event: &str, outcome: &str) {
+        if let Ok(mut m) = self.webhooks.lock() {
+            *m.entry((
+                integration.to_string(),
+                event.to_string(),
+                outcome.to_string(),
+            ))
+            .or_default() += 1;
+        }
+    }
+
+    fn webhook_counts(&self) -> Vec<(String, String, String, u64)> {
+        self.webhooks
+            .lock()
+            .map(|m| {
+                m.iter()
+                    .map(|((i, e, o), n)| (i.clone(), e.clone(), o.clone(), *n))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn work_packet(&self, bytes: u64) {
         if let Ok(mut counts) = self.packet_bytes.lock() {
             if counts.is_empty() {
@@ -172,6 +195,7 @@ pub struct MetricsSnapshot {
     pub usage: Vec<(String, i64, i64)>,
     pub account_utilization: Vec<(String, String, f64)>,
     pub work_packet_bytes: PacketBytes,
+    pub webhook_deliveries: Vec<(String, String, String, u64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +248,7 @@ impl Engine {
             adapter_requests: copy(&self.counters.adapter_requests),
             admission_waiting: self.counters.waiting_counts(),
             work_packet_bytes: self.counters.packet_bytes(),
+            webhook_deliveries: self.counters.webhook_counts(),
         })
     }
 

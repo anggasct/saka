@@ -23,6 +23,8 @@ A spec's context is pinned with it. Saka reads two kinds of markdown doc at the 
 
 A changed doc makes a new revision. Approving it again repins the steps that have not started. A link to a missing doc, or context over 32 docs or 256 KiB, is a lint error that blocks approve. Each task's first turn puts these documents first, the spec as document 1 and its context after it. The step, its acceptance criteria, its Done when commands, and the environment's ports, toolchains, and session secret names follow. `GET /api/v1/work-items/<id>/work-packet` returns that turn exactly as the agent received it.
 
+Saka polls each open pull request, so it needs no inbound connection. To react to CI sooner, set `[hooks] listen` and give the integration a `webhook_secret_file`. Then point the GitHub App webhook at `https://<public host>/hooks/<scm id>` through a reverse proxy or tunnel. Subscribe it to pull requests, check runs, check suites, and statuses. That listener serves only `POST /hooks/{id}`, and the control API stays on loopback. A delivery must carry a valid `X-Hub-Signature-256`, and each delivery ID is handled once. A delivery never changes state by itself: it makes Saka read the pull request again from the API.
+
 Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
 
 ## Development

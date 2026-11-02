@@ -2347,6 +2347,7 @@ dependencies = [
  "rust-embed",
  "saka-core",
  "saka-engine",
+ "saka-ports",
  "saka-spec",
  "saka-testkit",
  "serde",
@@ -2449,6 +2450,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "hmac",
  "jiff",
  "jsonwebtoken",
  "reqwest",
@@ -2456,11 +2458,13 @@ dependencies = [
  "saka-ports",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
  "uuid",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
@@ -2502,6 +2506,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

@@ -68,6 +68,7 @@ impl Engine {
                 }
             }
         }
+        self.push_job(&mut jobs, crate::webhooks::prune_job(now), None, &cause);
         for job in self.monitor(&snapshot.tasks) {
             let project = project_of(&snapshot.tasks, &job);
             self.push_job(&mut jobs, job, project, &cause);

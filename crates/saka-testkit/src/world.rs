@@ -17,9 +17,11 @@ use saka_ports::{
     Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
     RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, Sealed,
-    SecretStore, SessionLaunch, SessionRef, Toolchains, WorktreeState,
+    SecretStore, SessionLaunch, SessionRef, Toolchains, WebhookDelivery, WebhookTarget,
+    WorktreeState,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::clock::FakeClock;
 
@@ -163,6 +165,7 @@ struct State {
     toolchain_scripts: HashMap<Tool, VecDeque<ToolchainScript>>,
     toolchain_installs: Vec<(Tool, String, bool)>,
     secrets_unreadable: bool,
+    webhook_secret: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +242,7 @@ impl FakeWorld {
                 toolchain_scripts: HashMap::new(),
                 toolchain_installs: Vec::new(),
                 secrets_unreadable: false,
+                webhook_secret: None,
                 next_sha: 1,
                 parents,
                 remote,
@@ -366,6 +370,10 @@ impl FakeWorld {
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
         commit
+    }
+
+    pub fn set_webhook_secret(&self, secret: &[u8]) {
+        self.state().webhook_secret = Some(secret.to_vec());
     }
 
     pub fn make_inaccessible(&self, full_name: &str) {
@@ -988,6 +996,70 @@ impl Scm for FakeWorld {
         }
         Ok(())
     }
+
+    fn webhook_configured(&self, integration_id: &str) -> PortResult<bool> {
+        if integration_id != FAKE_INTEGRATION {
+            return Err(PortError::permanent(
+                "scm_integration_unknown",
+                json!({ "integration_id": integration_id }),
+            ));
+        }
+        Ok(self.state().webhook_secret.is_some())
+    }
+
+    fn parse_webhook(
+        &self,
+        integration_id: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> PortResult<WebhookDelivery> {
+        if !self.webhook_configured(integration_id)? {
+            return Err(PortError::permanent("webhook_not_configured", json!({})));
+        }
+        let secret = self.state().webhook_secret.clone().unwrap_or_default();
+        let signed = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(FAKE_SIGNATURE_HEADER))
+            .map(|(_, v)| v.as_str());
+        if signed != Some(fake_signature(&secret, body).as_str()) {
+            return Err(PortError::permanent("webhook_signature_invalid", json!({})));
+        }
+        let malformed = || PortError::permanent("webhook_malformed", json!({ "field": "body" }));
+        let v: Value = serde_json::from_slice(body).map_err(|_| malformed())?;
+        let targets = v["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| match (t["change"].as_u64(), t["head"].as_str()) {
+                (Some(number), _) => Some(WebhookTarget::Change { number }),
+                (None, Some(sha)) => Some(WebhookTarget::Head {
+                    sha: sha.to_string(),
+                }),
+                _ => None,
+            })
+            .collect();
+        Ok(WebhookDelivery {
+            delivery_id: v["delivery_id"].as_str().ok_or_else(malformed)?.to_string(),
+            event: v["event"].as_str().unwrap_or("ping").to_string(),
+            action: v["action"].as_str().map(String::from),
+            repo_full_name: v["repo"].as_str().map(String::from),
+            targets,
+        })
+    }
+}
+
+pub const FAKE_INTEGRATION: &str = "github";
+pub const FAKE_SIGNATURE_HEADER: &str = "x-fake-signature";
+
+pub fn fake_signature(secret: &[u8], body: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(secret);
+    digest.update(body);
+    digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[async_trait]

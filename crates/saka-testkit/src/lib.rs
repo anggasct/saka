@@ -7,6 +7,7 @@
 mod clock;
 pub mod fake_claude;
 pub mod fixtures;
+pub mod logs;
 mod sim;
 mod world;
 
@@ -16,6 +17,7 @@ pub use fixtures::{
 };
 pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step};
 pub use world::{
-    AgentOutcome, AgentScript, CiScript, CommandScript, FakeWorld, Launch, RecipeRun,
-    SIM_RUNNER_VERSION, Stats, ToolchainScript, TurnUsage,
+    AgentOutcome, AgentScript, CiScript, CommandScript, FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER,
+    FakeWorld, Launch, RecipeRun, SIM_RUNNER_VERSION, Stats, ToolchainScript, TurnUsage,
+    fake_signature,
 };

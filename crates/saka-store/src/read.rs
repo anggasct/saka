@@ -1103,3 +1103,49 @@ pub fn attempts(conn: &Connection, id: WorkItemId) -> Result<BTreeMap<Stage, u32
     }
     Ok(out)
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookCandidate {
+    pub change_request_id: ChangeRequestId,
+    pub work_item_id: WorkItemId,
+    pub project_id: ProjectId,
+    pub repo_id: RepoId,
+    pub number: u64,
+    pub head_sha: String,
+}
+
+pub fn webhook_delivery_seen(
+    conn: &Connection,
+    integration_id: &str,
+    delivery_id: &str,
+) -> Result<Option<u32>> {
+    one(
+        conn,
+        "SELECT change_requests FROM webhook_delivery WHERE integration_id = ?1 AND delivery_id = ?2",
+        &[&integration_id, &delivery_id],
+        |row| u32_col(row, "change_requests"),
+    )
+}
+
+pub fn hook_candidates(conn: &Connection, repo: RepoId) -> Result<Vec<HookCandidate>> {
+    let mut stmt = conn.prepare(
+        "SELECT cr.id, cr.work_item_id, cr.project_id, cr.repo_id, cr.number, cr.head_sha
+         FROM change_request cr JOIN work_item w ON w.id = cr.work_item_id
+         WHERE cr.repo_id = ?1 AND cr.state = 'open' AND w.state = 'in_stage' AND w.stage = 'merge'
+           AND w.stage_phase IN ('awaiting_ci', 'awaiting_merge')
+         ORDER BY cr.number",
+    )?;
+    let mut rows = stmt.query([repo.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(HookCandidate {
+            change_request_id: ChangeRequestId(uuid(row, "id")?),
+            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+            project_id: ProjectId(uuid(row, "project_id")?),
+            repo_id: RepoId(uuid(row, "repo_id")?),
+            number: u64_col(row, "number")?,
+            head_sha: row.get("head_sha")?,
+        });
+    }
+    Ok(out)
+}

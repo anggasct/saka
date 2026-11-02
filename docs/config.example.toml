@@ -10,6 +10,9 @@ data_dir = "~/.local/share/saka"   # default $XDG_DATA_HOME/saka; no * ? [ ] { }
 [scheduler]
 max_active_tasks = 2               # 1..=16
 
+# [hooks]                          # optional: a listener that only serves POST /hooks/{scm.id}
+# listen = "127.0.0.1:7421"        # must differ from server.listen; put TLS and a public URL in front of it
+
 [[scm]]
 id = "github"                      # ^[a-z0-9-]{1,32}$, unique
 provider = "github"
@@ -20,6 +23,7 @@ private_key_file = "~/.config/saka/github-app.pem"   # mode 0600, owned by you (
 poll_interval_secs = 15            # 5..=300
 ci_appear_timeout_secs = 600       # 60..=3600
 merge_method = "squash"            # merge | squash | rebase
+# webhook_secret_file = "~/.config/saka/github-webhook.secret"   # the GitHub App webhook secret; 0600, 32..=1024 bytes
 
 [agent]
 cli = "claude"

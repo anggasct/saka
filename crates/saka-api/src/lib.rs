@@ -1,5 +1,6 @@
 pub mod dto;
 mod guard;
+mod hooks;
 mod http;
 mod ops;
 pub mod problem;
@@ -13,6 +14,7 @@ use axum::routing::{get, post, put};
 use utoipa::OpenApi;
 
 pub use guard::loopback_host;
+pub use hooks::{MAX_WEBHOOK_BYTES, hooks_router};
 pub use state::{ApiConfig, AppState};
 
 #[derive(OpenApi)]

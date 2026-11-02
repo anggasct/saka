@@ -20,7 +20,7 @@ pub use migrate::MigrationReport;
 pub use read::{StoredEvent, TaskSet};
 pub use write::{
     ActionRecord, Batch, ContextBlobRow, EventRecord, JobOutcome, NewJob, SecretRow,
-    SpecRevisionRow,
+    SpecRevisionRow, WebhookDeliveryRow,
 };
 
 pub struct Store {
