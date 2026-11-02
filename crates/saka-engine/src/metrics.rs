@@ -83,6 +83,7 @@ impl Counters {
                     Waiting::Quota {
                         account, window, ..
                     } => format!("{account}:{window}"),
+                    Waiting::PortBlock => "port_block".to_string(),
                 })
                 .collect();
             tracing::info!(

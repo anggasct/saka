@@ -16,6 +16,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../migrations/0004_environment_teardown_failed.sql"),
     ),
     (5, include_str!("../migrations/0005_agent_runtime.sql")),
+    (6, include_str!("../migrations/0006_task_environment.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -557,7 +558,7 @@ mod tests {
             ids(&conn, permissions),
         );
 
-        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..5], &backups, Timestamp(3)).unwrap();
         assert_eq!(report.applied, vec![5]);
         assert!(report.backup.is_some());
         assert_eq!(
@@ -670,6 +671,62 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_task_environment_migration_keeps_rows_and_guards_port_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V2_DATA).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..5], &backups, Timestamp(2)).unwrap();
+        conn.execute_batch(
+            "INSERT INTO blocker VALUES ('b1', 'w5', NULL, 'p1', 'env_setup_failed', '{}', 'open', NULL, 3, NULL),
+               ('b2', 'w5', NULL, 'p1', 'ci_red', '{\"checks\":[]}', 'resolved', 'retried', 2, 3);",
+        )
+        .unwrap();
+        let blockers = "SELECT id || ':' || code || ':' || params || ':' || state || ':' \
+                        || ifnull(resolution, '-') FROM blocker ORDER BY id";
+        let environments = "SELECT id || ':' || state || ':' || ifnull(base_sha, '-') FROM environment ORDER BY id";
+        let before = (ids(&conn, blockers), ids(&conn, environments));
+
+        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        assert_eq!(report.applied, vec![6]);
+        assert_eq!((ids(&conn, blockers), ids(&conn, environments)), before);
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT ifnull(port_start, '-') || ':' || toolchains_json FROM environment"
+            ),
+            vec!["-:[]"]
+        );
+        let broken: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(broken, None);
+
+        conn.execute_batch(
+            "UPDATE blocker SET state = 'resolved', resolution = 'retried', resolved_at = 4 WHERE id = 'b1';
+             INSERT INTO blocker VALUES ('b3', 'w5', NULL, 'p1', 'env_recipe_invalid', '{}', 'open', NULL, 4, NULL);
+             UPDATE environment SET port_start = 41000, port_count = 10 WHERE id = 'e1';",
+        )
+        .unwrap();
+        let refused = [
+            "INSERT INTO blocker VALUES ('b4', 'w5', NULL, 'p1', 'env_recipe_invalid', '{}', 'open', NULL, 5, NULL)",
+            "INSERT INTO blocker VALUES ('b5', 'w4', NULL, 'p1', 'mystery', '{}', 'open', NULL, 5, NULL)",
+            "UPDATE environment SET port_start = 80 WHERE id = 'e1'",
+            "UPDATE environment SET port_count = 0 WHERE id = 'e1'",
+            "UPDATE environment SET recipe_sha256 = 'abc' WHERE id = 'e1'",
+            "INSERT INTO environment (id, project_id, work_item_id, repo_id, root_path, worktree_path, branch,
+               state, created_at, updated_at, port_start, port_count)
+             VALUES ('e9', 'p1', 'w3', 'r1', '/r9', '/r9/wt', 'saka/a/s3', 'preparing', 5, 5, 41000, 10)",
+        ];
+        for sql in refused {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
     }
 
     #[test]

@@ -31,6 +31,13 @@ export function blockerText(
     return t("blocker.unknown", { code });
   }
   const number = (value: unknown) => (typeof value === "number" ? value : 0);
+  const record = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const error = record(params.error);
+  const errorParams = record(error.params);
+  const field = text(params.field);
   const values: Record<string, string | number> = {
     reason: text(params.reason) || "failed",
     checks: text(params.checks),
@@ -44,6 +51,11 @@ export function blockerText(
     summary: text(params.summary),
     account: text(params.account),
     window: text(params.window),
+    error: text(error.code) || "other",
+    command: number(errorParams.command_index) + 1,
+    timed_out: errorParams.timed_out === true ? "yes" : "no",
+    issue: field ? `${text(params.code)} ${field}` : text(params.code),
+    line: text(params.line) || "none",
   };
   return t(key, values);
 }

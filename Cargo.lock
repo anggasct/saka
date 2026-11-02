@@ -2234,7 +2234,6 @@ name = "saka-agents"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "regex",
  "rustix",
  "saka-core",
  "saka-ports",
@@ -2275,6 +2274,7 @@ version = "0.1.0"
 dependencies = [
  "globset",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",

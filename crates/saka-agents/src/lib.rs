@@ -3,7 +3,7 @@ pub mod claude;
 pub mod client;
 pub mod launch;
 pub mod protocol;
-pub mod redact;
+pub use saka_core::redact;
 pub mod runner;
 
 pub use adapter::{AgentsConfig, ClaudeAgents, unit_name};

@@ -2,6 +2,7 @@ mod action;
 mod commands;
 mod metrics;
 mod project_config;
+pub mod recipe;
 mod reconciler;
 mod register;
 mod runner;
@@ -49,6 +50,27 @@ pub struct EngineConfig {
     pub policy: Policy,
     pub worker_id: String,
     pub integrations: Vec<Integration>,
+    pub env: EnvConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvConfig {
+    pub port_first: u16,
+    pub port_last: u16,
+    pub ports_per_env: u16,
+}
+
+impl EnvConfig {
+    pub fn port_blocks(&self) -> usize {
+        let span = usize::from(self.port_last.saturating_sub(self.port_first)) + 1;
+        span / usize::from(self.ports_per_env.max(1))
+    }
+
+    pub fn block_start(&self, index: usize) -> Option<u16> {
+        (index < self.port_blocks())
+            .then(|| u32::from(self.port_first) + index as u32 * u32::from(self.ports_per_env))
+            .and_then(|start| u16::try_from(start).ok())
+    }
 }
 
 #[derive(Clone)]
@@ -117,6 +139,7 @@ pub struct Engine {
     changed: Notify,
     counters: metrics::Counters,
     boot: Uuid,
+    ports_in_flight: Mutex<std::collections::BTreeMap<saka_core::ids::EnvironmentId, u16>>,
 }
 
 impl Engine {
@@ -130,6 +153,7 @@ impl Engine {
             lock: Mutex::new(()),
             changed: Notify::new(),
             counters: metrics::Counters::default(),
+            ports_in_flight: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 

@@ -158,6 +158,7 @@ impl Run {
             root_path: "/envs/1".into(),
             worktree_path: "/envs/1/worktree".into(),
             base_sha: "a".repeat(40),
+            setup: Default::default(),
         });
     }
 

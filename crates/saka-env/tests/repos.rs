@@ -12,10 +12,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use saka_core::ids::{EnvironmentId, RepoId, WorkItemId};
-use saka_env::{Git, GitRepos, ReposConfig};
+use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
     EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest, PushOutcome,
-    PushRequest, RepoRef, Repos,
+    PushRequest, RecipeCommand, RecipePhase, RepoRef, Repos, UnitLimits,
 };
 use uuid::Uuid;
 
@@ -132,6 +132,17 @@ impl World {
                 repos_dir: root.join("data/repos"),
                 envs_dir: root.join("data/envs"),
                 git: Git::new(&wrapper, "/usr/local/bin:/usr/bin:/bin"),
+                recipe: RecipeRunner {
+                    supervisor: Arc::new(DirectSupervisor::new(root.join("data/units"))),
+                    limits: UnitLimits {
+                        memory_max: "1G".into(),
+                        cpu_quota: "100%".into(),
+                        tasks_max: 64,
+                    },
+                    timeout: std::time::Duration::from_secs(2),
+                    logs_dir: root.join("data/logs/environments"),
+                    path: vec!["/usr/local/bin".into(), "/usr/bin".into(), "/bin".into()],
+                },
             },
             access,
         );
@@ -186,7 +197,27 @@ impl World {
             branch: BRANCH.into(),
             root_path: prepared.root_path,
             worktree_path: prepared.worktree_path,
+            vars: std::collections::BTreeMap::from([("APP_ENV".to_string(), "test".to_string())]),
         }
+    }
+
+    async fn run(
+        &self,
+        env: &EnvRef,
+        index: usize,
+        command: &str,
+    ) -> saka_ports::RecipeCommandOutcome {
+        self.repos
+            .run_recipe_command(
+                env,
+                &RecipeCommand {
+                    phase: RecipePhase::Setup,
+                    index,
+                    command: command.into(),
+                },
+            )
+            .await
+            .unwrap()
     }
 
     async fn push(&self, local: &str, expected: Option<&str>) -> PushOutcome {
@@ -536,4 +567,97 @@ async fn teardown_never_follows_a_symlink_out_of_the_environment() {
         "keep"
     );
     set_mode(&locked, 0o755);
+}
+
+#[tokio::test]
+async fn the_recipe_comes_from_the_default_branch_commit_and_not_from_the_task_branch() {
+    let w = World::new();
+    std::fs::create_dir_all(w.other.join(".saka")).unwrap();
+    commit(
+        &w.other,
+        ".saka/environment.toml",
+        "[setup]\ncommands = [\"echo default > marker\"]\n",
+    );
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    git(&w.other, &["checkout", "-q", "-b", BRANCH]);
+    commit(
+        &w.other,
+        ".saka/environment.toml",
+        "[setup]\ncommands = [\"echo task > marker\"]\n",
+    );
+    git(&w.other, &["push", "-q", "origin", BRANCH]);
+
+    w.repos.fetch(&w.repo).await.unwrap();
+    let env = w.prepare(5).await;
+    let base = git(Path::new(&env.worktree_path), &["rev-parse", "HEAD"]);
+    let recipe = w.repos.read_recipe(&w.repo, &base).await.unwrap().unwrap();
+    assert!(recipe.contains("echo default"), "{recipe}");
+    assert!(!recipe.contains("echo task"), "{recipe}");
+
+    let first = git(&w.other, &["rev-list", "--max-parents=0", "HEAD"]);
+    assert_eq!(w.repos.read_recipe(&w.repo, &first).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_recipe_command_runs_in_the_worktree_with_only_the_minimal_environment() {
+    let w = World::new();
+    w.repos.fetch(&w.repo).await.unwrap();
+    let env = w.prepare(6).await;
+    let outcome = w
+        .run(
+            &env,
+            0,
+            "pwd > where; env | sort > vars; echo token ghp_aB1caB1caB1caB1caB1caB1caB1caB1caB1c",
+        )
+        .await;
+    assert!(outcome.succeeded(), "{outcome:?}");
+    let wt = Path::new(&env.worktree_path);
+    assert_eq!(
+        std::fs::read_to_string(wt.join("where")).unwrap().trim(),
+        env.worktree_path
+    );
+    let vars = std::fs::read_to_string(wt.join("vars")).unwrap();
+    let names: Vec<&str> = vars
+        .lines()
+        .filter_map(|l| l.split('=').next())
+        .filter(|n| !["PWD", "SHLVL", "_", "OLDPWD"].contains(n))
+        .collect();
+    assert_eq!(
+        names,
+        ["APP_ENV", "HOME", "LANG", "PATH", "TERM", "TMPDIR"],
+        "{vars}"
+    );
+    assert!(
+        vars.contains(&format!("HOME={}/home", env.root_path)),
+        "{vars}"
+    );
+
+    let log = std::fs::read_to_string(&outcome.log_path).unwrap();
+    assert!(log.contains("token «secret:github_token»"), "{log}");
+    assert!(!log.contains("ghp_aB1c"), "{log}");
+    let mode = std::fs::metadata(&outcome.log_path)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[tokio::test]
+async fn a_failing_or_slow_recipe_command_is_reported_and_killed() {
+    let w = World::new();
+    w.repos.fetch(&w.repo).await.unwrap();
+    let env = w.prepare(7).await;
+    let failed = w.run(&env, 1, "echo nope; exit 3").await;
+    assert_eq!(failed.exit_code, Some(3));
+    assert!(!failed.timed_out && !failed.succeeded());
+
+    let started = std::time::Instant::now();
+    let slow = w
+        .run(&env, 2, "(sleep 30; touch survived) & sleep 30")
+        .await;
+    assert!(slow.timed_out, "{slow:?}");
+    assert_eq!(slow.exit_code, None);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!Path::new(&env.worktree_path).join("survived").exists());
 }

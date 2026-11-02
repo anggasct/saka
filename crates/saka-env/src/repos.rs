@@ -2,13 +2,16 @@ use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use saka_core::ids::RepoId;
 use saka_core::policy::RequestPath;
+use saka_core::redact::Redactor;
 use saka_ports::{
-    EnvRef, Environments, GitAccess, GitRemote, PortError, PortResult, PrepareRequest,
-    PreparedEnvironment, PushOutcome, PushRequest, RepoRef, Repos, WorktreeState,
+    CommandUnit, EnvRef, Environments, GitAccess, GitRemote, PortError, PortResult, PrepareRequest,
+    PreparedEnvironment, PushOutcome, PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef,
+    Repos, Supervisor, UnitLimits, WorktreeState,
 };
 use serde_json::json;
 
@@ -16,12 +19,59 @@ use crate::git::{Git, GitOutput, auth_refused, failed};
 
 const FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
 const BASE_FILE: &str = "base-sha";
+const RECIPE_PATH: &str = ".saka/environment.toml";
+const RECIPE_MAX_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReposConfig {
     pub repos_dir: PathBuf,
     pub envs_dir: PathBuf,
     pub git: Git,
+    pub recipe: RecipeRunner,
+}
+
+#[derive(Clone)]
+pub struct RecipeRunner {
+    pub supervisor: Arc<dyn Supervisor>,
+    pub limits: UnitLimits,
+    pub timeout: Duration,
+    pub logs_dir: PathBuf,
+    pub path: Vec<String>,
+}
+
+fn recipe_env(env: &EnvRef, path: &[String]) -> std::collections::BTreeMap<String, String> {
+    let root = Path::new(&env.root_path);
+    let mut vars = env.vars.clone();
+    vars.insert("PATH".into(), path.join(":"));
+    vars.insert(
+        "HOME".into(),
+        root.join("home").to_string_lossy().into_owned(),
+    );
+    vars.insert(
+        "TMPDIR".into(),
+        root.join("tmp").to_string_lossy().into_owned(),
+    );
+    vars.insert("LANG".into(), "C.UTF-8".into());
+    vars.insert("TERM".into(), "dumb".into());
+    vars
+}
+
+fn write_log(path: &Path, text: &str, truncated: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    if truncated {
+        file.write_all(b"[output truncated: only the last 8 MiB is kept]\n")?;
+    }
+    file.write_all(text.as_bytes())
 }
 
 pub struct GitRepos {
@@ -552,6 +602,76 @@ impl Environments for GitRepos {
             std::fs::remove_dir_all(&root).map_err(|e| io("remove_env_root", &e))?;
         }
         Ok(())
+    }
+
+    async fn read_recipe(&self, repo: &RepoRef, commit: &str) -> PortResult<Option<String>> {
+        if !is_sha(commit) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "commit" }),
+            ));
+        }
+        let bare = self.mirror_path(repo.repo_id);
+        let listed = self
+            .git_ok(&bare, &["ls-tree", commit, "--", RECIPE_PATH], "ls_tree")
+            .await?;
+        if listed.stdout.is_empty() {
+            return Ok(None);
+        }
+        let spec = format!("{commit}:{RECIPE_PATH}");
+        let blob = self
+            .git_ok(&bare, &["cat-file", "blob", &spec], "cat_file")
+            .await?;
+        if blob.stdout.len() > RECIPE_MAX_BYTES {
+            return Err(PortError::permanent(
+                "env_recipe_too_large",
+                json!({ "bytes": blob.stdout.len(), "max": RECIPE_MAX_BYTES }),
+            ));
+        }
+        String::from_utf8(blob.stdout).map(Some).map_err(|_| {
+            PortError::permanent("env_recipe_not_utf8", json!({ "path": RECIPE_PATH }))
+        })
+    }
+
+    async fn run_recipe_command(
+        &self,
+        env: &EnvRef,
+        command: &RecipeCommand,
+    ) -> PortResult<RecipeCommandOutcome> {
+        let runner = &self.cfg.recipe;
+        let root = self.env_root(env.environment_id);
+        if !self.inside_envs(&root) || !Path::new(&env.worktree_path).is_dir() {
+            return Err(PortError::permanent("worktree_missing", json!({})));
+        }
+        for dir in ["home", "tmp"] {
+            std::fs::create_dir_all(root.join(dir)).map_err(|e| io("create_env_dir", &e))?;
+        }
+        let phase = command.phase.as_str();
+        let unit = CommandUnit {
+            name: format!("saka-env-{}-{phase}-{}", env.environment_id, command.index),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), command.command.clone()],
+            cwd: env.worktree_path.clone(),
+            env: recipe_env(env, &runner.path),
+            limits: runner.limits.clone(),
+            timeout: runner.timeout,
+        };
+        let started = Instant::now();
+        let outcome = runner.supervisor.run(&unit).await?;
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let text = String::from_utf8_lossy(&outcome.output);
+        let redacted = Redactor::new(&[]).text(&text).into_owned();
+        let log = runner
+            .logs_dir
+            .join(env.environment_id.to_string())
+            .join(format!("{phase}-{}.log", command.index));
+        write_log(&log, &redacted, outcome.truncated).map_err(|e| io("write_recipe_log", &e))?;
+        Ok(RecipeCommandOutcome {
+            exit_code: outcome.exit_code,
+            timed_out: outcome.timed_out,
+            duration_ms,
+            log_path: log.to_string_lossy().into_owned(),
+        })
     }
 
     fn resolve_path(&self, env: &EnvRef, raw: &str) -> RequestPath {

@@ -37,6 +37,63 @@ pub struct Config {
     pub git: Git,
     #[serde(default)]
     pub permission: Permission,
+    #[serde(default)]
+    pub env: Env,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Env {
+    #[serde(default = "port_range")]
+    pub port_range: String,
+    #[serde(default = "ten_u16")]
+    pub ports_per_env: u16,
+    #[serde(default = "fifteen_minutes")]
+    pub setup_timeout_minutes: u32,
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+impl Default for Env {
+    fn default() -> Env {
+        Env {
+            port_range: port_range(),
+            ports_per_env: ten_u16(),
+            setup_timeout_minutes: fifteen_minutes(),
+            limits: Limits::default(),
+        }
+    }
+}
+
+fn port_range() -> String {
+    "41000-48999".into()
+}
+fn ten_u16() -> u16 {
+    10
+}
+fn fifteen_minutes() -> u32 {
+    15
+}
+
+impl Env {
+    pub fn ports(&self) -> Result<(u16, u16), ConfigError> {
+        let invalid = || {
+            err(
+                "config_invalid",
+                format!(
+                    "env.port_range {:?} must be FIRST-LAST within 1024..=65535",
+                    self.port_range
+                ),
+            )
+        };
+        let (first, last) = self.port_range.split_once('-').ok_or_else(invalid)?;
+        let first: u16 = first.trim().parse().map_err(|_| invalid())?;
+        let last: u16 = last.trim().parse().map_err(|_| invalid())?;
+        if first < 1024 || first >= last {
+            return Err(invalid());
+        }
+        Ok((first, last))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -435,6 +492,27 @@ impl Config {
         if let Some((_, message)) = checks.iter().find(|(ok, _)| !ok) {
             return Err(err("config_invalid", *message));
         }
+        let e = &self.env;
+        if !(1..=100).contains(&e.ports_per_env) {
+            return Err(err("config_invalid", "env.ports_per_env must be 1..=100"));
+        }
+        if !(1..=240).contains(&e.setup_timeout_minutes) {
+            return Err(err(
+                "config_invalid",
+                "env.setup_timeout_minutes must be 1..=240",
+            ));
+        }
+        let (first, last) = e.ports()?;
+        let span = usize::from(last - first) + 1;
+        let needed = usize::from(e.ports_per_env) * self.scheduler.max_active_tasks;
+        if span < needed {
+            return Err(err(
+                "config_port_range_too_small",
+                format!(
+                    "env.port_range holds {span} ports; env.ports_per_env x scheduler.max_active_tasks needs {needed}"
+                ),
+            ));
+        }
         Ok(())
     }
 
@@ -563,11 +641,47 @@ mod tests {
     }
 
     #[test]
+    fn the_port_range_must_fit_every_active_task() {
+        let cfg = Config::parse("").unwrap();
+        assert_eq!(cfg.env.ports().unwrap(), (41000, 48999));
+        assert_eq!(
+            (cfg.env.ports_per_env, cfg.env.setup_timeout_minutes),
+            (10, 15)
+        );
+        assert_eq!(
+            Config::parse(
+                "[env]\nport_range = \"41000-41009\"\n[scheduler]\nmax_active_tasks = 2\n"
+            )
+            .unwrap_err()
+            .code,
+            "config_port_range_too_small"
+        );
+        assert!(Config::parse("[env]\nport_range = \"41000-41019\"\n").is_ok());
+        for bad in [
+            "[env]\nport_range = \"80-9000\"\n",
+            "[env]\nport_range = \"42000-41000\"\n",
+            "[env]\nport_range = \"41000\"\n",
+            "[env]\nport_range = \"41000-70000\"\n",
+            "[env]\nports_per_env = 0\n",
+            "[env]\nports_per_env = 101\n",
+            "[env]\nsetup_timeout_minutes = 0\n",
+        ] {
+            assert_eq!(
+                Config::parse(bad).unwrap_err().code,
+                "config_invalid",
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn the_example_config_parses_with_every_field_set() {
         let cfg = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
         assert_eq!(cfg.scm.len(), 1);
         assert_eq!(cfg.scm[0].app_id, 123456);
         assert_eq!(cfg.agent.limits.cpu_quota, "200%");
         assert_eq!(cfg.permission.rule.len(), 3);
+        assert_eq!(cfg.env.ports_per_env, 10);
+        assert_eq!(cfg.env.limits.tasks_max, 512);
     }
 }

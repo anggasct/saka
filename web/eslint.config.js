@@ -27,6 +27,7 @@ export default tseslint.config(
       "node_modules/**",
       "playwright-report/**",
       "test-results/**",
+      ".playwright-browsers/**",
       "src/routeTree.gen.ts",
       "src/api/schema.d.ts",
       // Linted on purpose by scripts/eslint-fixtures.test.ts.

@@ -1,18 +1,23 @@
 use saka_core::event::{Event, Prompt};
 use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId, WorkItemId};
 use saka_core::job::{Job, JobKind};
-use saka_core::model::{Coded, Environment, Task};
+use std::collections::BTreeMap;
+
+use saka_core::model::{Coded, Environment, EnvironmentSetup, Task};
 use saka_core::task::TaskInput;
-use saka_core::vocab::{ChangeState, EnvironmentState, PermissionState, Stage, StagePhase};
+use saka_core::vocab::{
+    BlockerCode, ChangeState, EnvironmentState, PermissionState, Stage, StagePhase,
+};
 use saka_ports::{
     EnvRef, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PrepareRequest, PushOutcome,
-    PushRequest, RepoRef, SessionLaunch, SessionRef,
+    PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::Instrument;
 
+use crate::recipe::{self, Recipe};
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, text};
 
 pub const VERIFY_ROUNDS: u32 = 3;
@@ -292,6 +297,18 @@ impl Engine {
                 .map(|_| ()),
             None => self.commit_outcome_only(extra),
         };
+        // A prepare that will run again keeps its block; any other end frees the reservation,
+        // since a committed environment row now holds the block in the store.
+        let rerun = match &committed {
+            Ok(()) => matches!(result, JobResult::Retrying { .. }),
+            Err(e) => matches!(e, EngineError::Store(StoreError::LeaseLost { .. })),
+        };
+        if job.kind == JobKind::EnvPrepare
+            && !rerun
+            && let Ok(run) = field::<StageRunId>(&job.payload, "stage_run_id")
+        {
+            self.release_ports(EnvironmentId(run.0));
+        }
         let result = match committed {
             Ok(()) => result,
             Err(EngineError::Store(StoreError::LeaseLost { .. })) => JobResult::LeaseLost,
@@ -348,13 +365,105 @@ impl Engine {
     }
 
     fn env_ref(&self, task: &Task, env: &Environment) -> std::result::Result<EnvRef, PortError> {
+        let recipe = env
+            .recipe
+            .as_ref()
+            .map(Recipe::from_json)
+            .unwrap_or_default();
         Ok(EnvRef {
             environment_id: env.id,
             repo: self.repo_ref(task)?,
             branch: env.branch.clone(),
             root_path: env.root_path.clone(),
             worktree_path: env.worktree_path.clone(),
+            vars: self.env_vars(task, env.id, env.port_start, &recipe),
         })
+    }
+
+    fn env_vars(
+        &self,
+        task: &Task,
+        environment_id: EnvironmentId,
+        port_start: Option<u16>,
+        recipe: &Recipe,
+    ) -> BTreeMap<String, String> {
+        let mut vars = recipe.env.clone();
+        vars.insert("SAKA_TASK_KEY".into(), task.item.task_key.clone());
+        vars.insert("SAKA_ENVIRONMENT_ID".into(), environment_id.to_string());
+        let wanted = recipe.ports_or(self.cfg.env.ports_per_env);
+        if let Some(start) = port_start.filter(|_| wanted > 0) {
+            vars.insert("SAKA_PORT_BASE".into(), start.to_string());
+            vars.insert("SAKA_PORT_COUNT".into(), wanted.to_string());
+            vars.insert("PORT".into(), start.to_string());
+        }
+        vars
+    }
+
+    fn reserve_ports(&self, environment_id: EnvironmentId) -> std::result::Result<u16, PortError> {
+        let live = self
+            .store
+            .read(read::live_port_blocks)
+            .map_err(|e| internal(e.into()))?;
+        let mut in_flight = self
+            .ports_in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(start) = in_flight.get(&environment_id) {
+            return Ok(*start);
+        }
+        let taken = |start: u16| {
+            live.iter().any(|(s, _)| *s == start) || in_flight.values().any(|s| *s == start)
+        };
+        let start = (0..self.cfg.env.port_blocks())
+            .filter_map(|i| self.cfg.env.block_start(i))
+            .find(|s| !taken(*s))
+            .ok_or_else(|| {
+                PortError::retryable(
+                    "port_block_unavailable",
+                    json!({ "blocks": self.cfg.env.port_blocks() }),
+                )
+            })?;
+        in_flight.insert(environment_id, start);
+        Ok(start)
+    }
+
+    fn release_ports(&self, environment_id: EnvironmentId) {
+        self.ports_in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&environment_id);
+    }
+
+    async fn run_teardown_commands(&self, env: &EnvRef, recipe: &Recipe) -> Vec<Value> {
+        let mut failures = Vec::new();
+        for (index, command) in recipe.teardown.iter().enumerate() {
+            let run = RecipeCommand {
+                phase: RecipePhase::Teardown,
+                index,
+                command: command.clone(),
+            };
+            match self.ports.env.run_recipe_command(env, &run).await {
+                Ok(o) if o.succeeded() => {}
+                Ok(o) if o.timed_out => {
+                    failures.push(json!({ "command_index": index, "timed_out": true }));
+                }
+                Ok(o) => failures.push(json!({ "command_index": index, "exit_code": o.exit_code })),
+                Err(e) => failures.push(json!({ "command_index": index, "error": e.code })),
+            }
+        }
+        failures
+    }
+
+    async fn abandon_environment(
+        &self,
+        env: &EnvRef,
+        recipe: &Recipe,
+        code: BlockerCode,
+        params: Value,
+    ) -> Execution {
+        let _ = self.run_teardown_commands(env, recipe).await;
+        self.ports.env.teardown(env).await?;
+        Ok(Effect::Fact(TaskInput::EnvironmentFailed { code, params }))
     }
 
     fn stopping_ref(&self, task: &Task, id: SessionId) -> Option<SessionRef> {
@@ -389,22 +498,107 @@ impl Engine {
         }
         // One environment per stage run: a repeated job finds the one it made.
         let environment_id = EnvironmentId(run.0);
+        let repo = self.repo_ref(task)?;
         let prepared = self
             .ports
             .env
             .prepare(&PrepareRequest {
                 environment_id,
                 work_item_id: task.item.id,
-                repo: self.repo_ref(task)?,
+                repo: repo.clone(),
                 branch: task.item.branch.clone(),
                 base_branch: self.base_branch(task)?,
             })
             .await?;
+        let mut env = EnvRef {
+            environment_id,
+            repo: repo.clone(),
+            branch: task.item.branch.clone(),
+            root_path: prepared.root_path.clone(),
+            worktree_path: prepared.worktree_path.clone(),
+            vars: BTreeMap::new(),
+        };
+        let text = match self.ports.env.read_recipe(&repo, &prepared.base_sha).await {
+            Ok(text) => text,
+            Err(e) if !e.retryable => {
+                let params = json!({ "code": e.code, "field": null, "line": null });
+                return self
+                    .abandon_environment(
+                        &env,
+                        &Recipe::default(),
+                        BlockerCode::EnvRecipeInvalid,
+                        params,
+                    )
+                    .await;
+            }
+            Err(e) => return Err(e),
+        };
+        let parsed = match text.as_deref() {
+            None => Ok(Recipe::default()),
+            Some(t) => recipe::parse(t, self.cfg.env.ports_per_env),
+        };
+        let recipe = match parsed {
+            Ok(r) => r,
+            Err(issues) => {
+                let first = issues.first();
+                let params = json!({
+                    "code": first.map(|i| i.code),
+                    "field": first.and_then(|i| i.field.clone()),
+                    "line": first.and_then(|i| i.line),
+                    "issues": issues.iter().map(|i| i.to_json()).collect::<Vec<_>>(),
+                });
+                return self
+                    .abandon_environment(
+                        &env,
+                        &Recipe::default(),
+                        BlockerCode::EnvRecipeInvalid,
+                        params,
+                    )
+                    .await;
+            }
+        };
+        let port_start = self.reserve_ports(environment_id)?;
+        env.vars = self.env_vars(task, environment_id, Some(port_start), &recipe);
+        let mut setup = Vec::new();
+        for (index, command) in recipe.setup.iter().enumerate() {
+            let run = RecipeCommand {
+                phase: RecipePhase::Setup,
+                index,
+                command: command.clone(),
+            };
+            let outcome = self.ports.env.run_recipe_command(&env, &run).await?;
+            setup.push(json!({
+                "command_index": index,
+                "exit_code": outcome.exit_code,
+                "timed_out": outcome.timed_out,
+                "duration_ms": outcome.duration_ms,
+            }));
+            if !outcome.succeeded() {
+                let mut failed = json!({ "command_index": index, "log": outcome.log_path });
+                if outcome.timed_out {
+                    failed["timed_out"] = json!(true);
+                } else {
+                    failed["exit_code"] = json!(outcome.exit_code);
+                }
+                let params =
+                    json!({ "error": { "code": "setup_command_failed", "params": failed } });
+                return self
+                    .abandon_environment(&env, &recipe, BlockerCode::EnvSetupFailed, params)
+                    .await;
+            }
+        }
         Ok(Effect::Fact(TaskInput::EnvironmentPrepared {
             environment_id,
             root_path: prepared.root_path,
             worktree_path: prepared.worktree_path,
             base_sha: prepared.base_sha,
+            setup: EnvironmentSetup {
+                port_start: Some(port_start),
+                port_count: Some(self.cfg.env.ports_per_env),
+                recipe: text.as_ref().map(|_| recipe.to_json()),
+                recipe_sha256: text.as_deref().map(recipe::sha256),
+                setup,
+            },
         }))
     }
 
@@ -711,7 +905,21 @@ impl Engine {
         else {
             return Ok(Effect::Skipped);
         };
-        self.ports.env.teardown(&self.env_ref(task, env)?).await?;
-        Ok(Effect::Fact(TaskInput::EnvironmentTornDown))
+        let env_ref = self.env_ref(task, env)?;
+        // A cleanup retry after teardown_failed must not run the repo's teardown commands again.
+        let failures = if env.state == EnvironmentState::TeardownFailed {
+            Vec::new()
+        } else {
+            let recipe = env
+                .recipe
+                .as_ref()
+                .map(Recipe::from_json)
+                .unwrap_or_default();
+            self.run_teardown_commands(&env_ref, &recipe).await
+        };
+        self.ports.env.teardown(&env_ref).await?;
+        Ok(Effect::Fact(TaskInput::EnvironmentTornDown {
+            teardown_failures: failures,
+        }))
     }
 }

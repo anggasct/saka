@@ -22,6 +22,7 @@ pub enum Waiting {
         utilization: f64,
         resets_at: Option<Timestamp>,
     },
+    PortBlock,
 }
 
 impl Waiting {
@@ -30,6 +31,7 @@ impl Waiting {
             Waiting::Step { .. } => "step",
             Waiting::Spec { .. } => "spec",
             Waiting::Quota { .. } => "quota",
+            Waiting::PortBlock => "port_block",
         }
     }
 }

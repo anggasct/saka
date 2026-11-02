@@ -15,13 +15,18 @@ pub use agent::{
     SessionRef,
 };
 pub use docs::{DocFile, DocSource};
-pub use env::{EnvRef, Environments, PrepareRequest, PreparedEnvironment, WorktreeState};
+pub use env::{
+    EnvRef, Environments, PrepareRequest, PreparedEnvironment, RecipeCommand, RecipeCommandOutcome,
+    RecipePhase, WorktreeState,
+};
 pub use git::{GitAccess, GitRemote, Repos};
 pub use scm::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome,
     PushRequest, RepoInfo, RepoRef, Scm,
 };
-pub use supervisor::{RunnerUnit, Supervisor, UnitLimits};
+pub use supervisor::{
+    COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, RunnerUnit, Supervisor, UnitLimits,
+};
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;

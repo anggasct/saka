@@ -11,7 +11,7 @@ use crate::ids::{
 };
 use crate::job::JobKind;
 use crate::model::{
-    AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, GateResult,
+    AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, EnvironmentSetup, GateResult,
     PermissionRequest, PermissionRule, Session, StageRun, Task, Usage, UsageRecord, WorkItem,
 };
 use crate::policy::{Decision, Effect};
@@ -57,6 +57,11 @@ pub enum TaskInput {
         root_path: String,
         worktree_path: String,
         base_sha: String,
+        setup: EnvironmentSetup,
+    },
+    EnvironmentFailed {
+        code: BlockerCode,
+        params: Value,
     },
     SessionLaunched {
         session_id: SessionId,
@@ -173,7 +178,9 @@ pub enum TaskInput {
     MergeVerified {
         found: bool,
     },
-    EnvironmentTornDown,
+    EnvironmentTornDown {
+        teardown_failures: Vec<Value>,
+    },
     Retry {
         reason: String,
     },
@@ -213,7 +220,9 @@ pub fn decide(
             root_path,
             worktree_path,
             base_sha,
-        } => d.environment_prepared(environment_id, root_path, worktree_path, base_sha),
+            setup,
+        } => d.environment_prepared(environment_id, root_path, worktree_path, base_sha, setup),
+        I::EnvironmentFailed { code, params } => d.environment_failed(code, params, ctx),
         I::SessionLaunched {
             session_id,
             cli,
@@ -385,7 +394,7 @@ pub fn decide(
             }
         }
         I::MergeVerified { found } => d.merge_verified(found, ctx),
-        I::EnvironmentTornDown => d.environment_torn_down(),
+        I::EnvironmentTornDown { teardown_failures } => d.environment_torn_down(teardown_failures),
         I::Retry { reason } => return d.retry(reason, ctx),
         I::Cancel { reason } => return d.cancel(reason),
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
@@ -769,14 +778,9 @@ impl Decider<'_> {
         root_path: String,
         worktree_path: String,
         base_sha: String,
+        setup: EnvironmentSetup,
     ) -> Vec<Event> {
-        let waiting = self.item().state == WorkItemState::Admitted
-            && self
-                .task
-                .stage_run
-                .as_ref()
-                .is_some_and(|r| r.state == StageRunState::Pending);
-        if !waiting {
+        if !self.preparing() {
             return vec![];
         }
         let mut events = vec![Event::EnvironmentPrepared {
@@ -787,9 +791,35 @@ impl Decider<'_> {
             worktree_path,
             branch: self.item().branch.clone(),
             base_sha,
+            port_start: setup.port_start,
+            port_count: setup.port_count,
+            recipe: setup.recipe,
+            recipe_sha256: setup.recipe_sha256,
+            setup: setup.setup,
         }];
         events.extend(self.phase(StagePhase::RunningSession, None));
         events
+    }
+
+    fn preparing(&self) -> bool {
+        self.item().state == WorkItemState::Admitted
+            && self
+                .task
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.state == StageRunState::Pending)
+    }
+
+    fn environment_failed(
+        &self,
+        code: BlockerCode,
+        params: Value,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        if !self.preparing() {
+            return vec![];
+        }
+        self.block(code, params, ctx)
     }
 
     #[allow(
@@ -1509,7 +1539,7 @@ impl Decider<'_> {
         )
     }
 
-    fn environment_torn_down(&self) -> Vec<Event> {
+    fn environment_torn_down(&self, teardown_failures: Vec<Value>) -> Vec<Event> {
         let Some(env) = self
             .task
             .environment
@@ -1521,6 +1551,7 @@ impl Decider<'_> {
         let mut events = vec![Event::EnvironmentTornDown {
             work_item_id: self.item().id,
             environment_id: env.id,
+            teardown_failures,
         }];
         events.extend(self.finish_sync());
         events
@@ -1688,7 +1719,7 @@ impl Decider<'_> {
 pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
     use BlockerCode as B;
     Some(match code {
-        B::EnvSetupFailed => (Stage::Dev, StagePhase::PreparingEnvironment),
+        B::EnvSetupFailed | B::EnvRecipeInvalid => (Stage::Dev, StagePhase::PreparingEnvironment),
         B::SessionFailed
         | B::SessionLost
         | B::SessionTimeout
@@ -1963,6 +1994,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             worktree_path,
             branch,
             base_sha,
+            port_start,
+            port_count,
+            recipe,
+            recipe_sha256,
             ..
         } => {
             t.environment = Some(Environment {
@@ -1976,6 +2011,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 state: EnvironmentState::Ready,
                 created_at: now,
                 updated_at: now,
+                port_start: *port_start,
+                port_count: *port_count,
+                recipe: recipe.clone(),
+                recipe_sha256: recipe_sha256.clone(),
             });
         }
         E::EnvironmentTornDown { environment_id, .. } => {

@@ -20,8 +20,8 @@ use saka_agents::{AgentsConfig, ClaudeAgents, client::RunnerConnection};
 use saka_core::ids::{EnvironmentId, RepoId, SessionId, WorkItemId};
 use saka_env::{DirectSupervisor, SystemdSupervisor};
 use saka_ports::{
-    Agents, EnvRef, RepoRef, RunnerEvent, RunnerEventKind, SessionLaunch, SessionRef, Supervisor,
-    UnitLimits,
+    Agents, CommandUnit, EnvRef, RepoRef, RunnerEvent, RunnerEventKind, SessionLaunch, SessionRef,
+    Supervisor, UnitLimits,
 };
 use saka_testkit::fake_claude;
 use tokio::process::{Child, Command};
@@ -89,6 +89,10 @@ fn main() -> ExitCode {
         (
             "systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing",
             systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing,
+        ),
+        (
+            "systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env",
+            systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env,
         ),
     ];
     let mut failed = Vec::new();
@@ -687,6 +691,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
             branch: "saka/x/s1".into(),
             root_path: root.to_string_lossy().into_owned(),
             worktree_path: root.join("worktree").to_string_lossy().into_owned(),
+            vars: Default::default(),
         },
         resume_cli_session_id: None,
     }
@@ -833,6 +838,92 @@ fn systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing() {
         agents.stop(fx.session, Some(&unit)).await.unwrap();
         assert!(!SystemdSupervisor::is_active(&unit).await);
         assert!(SystemdSupervisor::processes(&unit).await.is_empty());
+        for pid in processes {
+            assert!(
+                !Path::new(&format!("/proc/{pid}")).exists(),
+                "process {pid} survived"
+            );
+        }
+    });
+}
+
+fn systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env() {
+    if std::env::var("SAKA_TEST_SYSTEMD").as_deref() != Ok("1") {
+        println!("  (skipped: set SAKA_TEST_SYSTEMD=1, or run `cargo xtask test-systemd`)");
+        return;
+    }
+    block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let name = format!("saka-env-test-{}", std::process::id());
+        let unit = |script: &str, timeout: Duration| CommandUnit {
+            name: name.clone(),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            cwd: cwd.clone(),
+            env: BTreeMap::from([
+                ("APP_ENV".to_string(), "test".to_string()),
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ]),
+            limits: UnitLimits {
+                memory_max: "1G".into(),
+                cpu_quota: "50%".into(),
+                tasks_max: 64,
+            },
+            timeout,
+        };
+        let supervisor = Arc::new(SystemdSupervisor);
+
+        let done = supervisor
+            .run(&unit(
+                "env; pwd; echo oops >&2; exit 3",
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        assert_eq!((done.exit_code, done.timed_out), (Some(3), false));
+        let output = String::from_utf8_lossy(&done.output).into_owned();
+        let mut names: Vec<&str> = output
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+            .filter(|k| !matches!(*k, "PWD" | "SHLVL" | "_" | "OLDPWD"))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["APP_ENV", "PATH"], "{output}");
+        assert!(output.contains(&cwd) && output.contains("oops"), "{output}");
+
+        let slow = {
+            let supervisor = supervisor.clone();
+            let unit = unit("(sleep 60) & sleep 60", Duration::from_secs(3));
+            tokio::spawn(async move { supervisor.run(&unit).await })
+        };
+        let mut processes = Vec::new();
+        for _ in 0..50 {
+            processes = SystemdSupervisor::processes(&name).await;
+            if processes.len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(processes.len() >= 2, "{processes:?}");
+        for (property, value) in [
+            ("MemoryMax", "1073741824"),
+            ("CPUQuotaPerSecUSec", "500ms"),
+            ("TasksMax", "64"),
+            ("RuntimeMaxUSec", "33s"),
+            ("Environment", ""),
+        ] {
+            assert_eq!(
+                SystemdSupervisor::property(&name, property)
+                    .await
+                    .as_deref(),
+                Some(value),
+                "{property}"
+            );
+        }
+        let timed_out = slow.await.unwrap().unwrap();
+        assert!(timed_out.timed_out && timed_out.exit_code.is_none());
+        assert!(!SystemdSupervisor::is_active(&name).await);
         for pid in processes {
             assert!(
                 !Path::new(&format!("/proc/{pid}")).exists(),

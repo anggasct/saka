@@ -703,6 +703,7 @@ export interface components {
         change_request?: components["schemas"]["ChangeRequest"] | null;
         created_at: string;
         done_at?: string | null;
+        environment?: components["schemas"]["WorkItemEnvironment"] | null;
         gate?: components["schemas"]["Gate"] | null;
         /** Format: uuid */
         id: string;
@@ -787,6 +788,18 @@ export interface components {
       step_id: string;
       /** Format: uuid */
       work_item_id?: string | null;
+    };
+    PortBlock: {
+      /**
+       * Format: int32
+       * @description Ports the recipe asked for, starting at `start`.
+       */
+      count: number;
+      /**
+       * Format: int32
+       * @description First port of the block.
+       */
+      start: number;
     };
     /** @description RFC 9457 problem details. */
     Problem: {
@@ -1032,6 +1045,11 @@ export interface components {
        */
       next_after?: number | null;
     };
+    Toolchain: {
+      /** @description `go`, `node` or `pnpm`. */
+      tool: string;
+      version: string;
+    };
     UsageRecord: {
       /** @description `<cli>:<account name>` */
       account: string;
@@ -1082,6 +1100,10 @@ export interface components {
           /** Format: double */
           utilization: number;
           window: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: "port_block";
         };
     WorkItem: {
       admitted_at?: string | null;
@@ -1093,6 +1115,7 @@ export interface components {
       change_request?: components["schemas"]["ChangeRequest"] | null;
       created_at: string;
       done_at?: string | null;
+      environment?: components["schemas"]["WorkItemEnvironment"] | null;
       gate?: components["schemas"]["Gate"] | null;
       /** Format: uuid */
       id: string;
@@ -1139,6 +1162,17 @@ export interface components {
     };
     WorkItemDetail: components["schemas"]["WorkItem"] & {
       stage_runs: components["schemas"]["StageRunItem"][];
+    };
+    WorkItemEnvironment: {
+      /** Format: uuid */
+      id: string;
+      ports?: components["schemas"]["PortBlock"] | null;
+      /** @description SHA-256 of `.saka/environment.toml` at the base commit; `null` when the repo has no recipe. */
+      recipe_sha256?: string | null;
+      /** @description `preparing`, `ready`, `failed`, `teardown_failed` or `torn_down`. */
+      state: string;
+      /** @description Toolchains on `PATH`; empty when the repo declares no versions. */
+      toolchains: components["schemas"]["Toolchain"][];
     };
     Workspace: {
       base_branch: string;
