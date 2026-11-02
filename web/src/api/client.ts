@@ -48,3 +48,7 @@ export function unwrap<T>(result: {
   }
   throw toApiError(result.response.status, result.error);
 }
+
+export function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}

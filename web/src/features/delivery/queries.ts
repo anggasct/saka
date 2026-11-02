@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { api, unwrap } from "@/api/client";
-import { QUERY_ROOTS } from "@/api/events";
+import { fetchTail, QUERY_ROOTS, timelineKey } from "@/api/events";
 import type { components } from "@/api/schema";
 
 export type ProjectItem = components["schemas"]["Project"];
@@ -13,6 +13,7 @@ export type WaitingOn = components["schemas"]["WaitingOn"];
 export type Gate = components["schemas"]["Gate"];
 export type StageRun = components["schemas"]["StageRunItem"];
 export type Blocker = components["schemas"]["Blocker"];
+export type Session = components["schemas"]["Session"];
 
 const LIMIT = 200;
 
@@ -24,6 +25,7 @@ export const deliveryKeys = {
   workItems: (projectId: string) => [QUERY_ROOTS.workItems, projectId] as const,
   workItem: (id: string) => [QUERY_ROOTS.workItems, "detail", id] as const,
   workPacket: (id: string) => [QUERY_ROOTS.workItems, "packet", id] as const,
+  sessions: (workItemId: string) => [QUERY_ROOTS.sessions, workItemId] as const,
   pendingPermissions: () => [QUERY_ROOTS.permissions, "pending"] as const,
 };
 
@@ -140,4 +142,77 @@ export function useWorkPacket(id: string, enabled: boolean) {
         }),
       ),
   });
+}
+
+export function useSessions(workItemId: string) {
+  return useQuery({
+    queryKey: deliveryKeys.sessions(workItemId),
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/v1/sessions", {
+          params: { query: { work_item_id: workItemId } },
+          signal,
+        }),
+      ).items,
+  });
+}
+
+export function useTimeline(sessionId: string) {
+  return useQuery({
+    queryKey: timelineKey(sessionId),
+    queryFn: ({ signal }) => fetchTail(sessionId, signal),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+function headers(idempotencyKey: string) {
+  return { "Idempotency-Key": idempotencyKey };
+}
+
+export async function steerSession(
+  sessionId: string,
+  text: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/sessions/{session_id}/steer", {
+      params: {
+        path: { session_id: sessionId },
+        header: headers(idempotencyKey),
+      },
+      body: { text },
+    }),
+  );
+}
+
+export async function interruptSession(
+  sessionId: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/sessions/{session_id}/interrupt", {
+      params: {
+        path: { session_id: sessionId },
+        header: headers(idempotencyKey),
+      },
+      body: {},
+    }),
+  );
+}
+
+export async function stopSession(
+  sessionId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/sessions/{session_id}/stop", {
+      params: {
+        path: { session_id: sessionId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
 }

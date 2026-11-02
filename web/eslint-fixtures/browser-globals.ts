@@ -7,4 +7,5 @@ export const all = [
   location,
   navigator,
   Notification,
+  IntersectionObserver,
 ];

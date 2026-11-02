@@ -507,23 +507,73 @@ pub fn sessions(conn: &Connection, work_item: WorkItemId) -> Result<Vec<Session>
     Ok(out)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelineCursor {
+    Start,
+    After(u64),
+    Before(u64),
+    Tail,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelinePage {
+    pub items: Vec<saka_core::model::SessionActivity>,
+    pub prev_before: Option<u64>,
+    pub next_after: Option<u64>,
+}
+
+fn sql_offset(offset: u64) -> i64 {
+    i64::try_from(offset).unwrap_or(i64::MAX)
+}
+
 pub fn timeline(
     conn: &Connection,
     session: SessionId,
-    after: Option<u64>,
+    cursor: TimelineCursor,
     limit: u32,
-) -> Result<Vec<saka_core::model::SessionActivity>> {
-    let after = after.map_or(-1, |a| i64::try_from(a).unwrap_or(i64::MAX));
-    let mut stmt = conn.prepare(
-        "SELECT * FROM session_activity WHERE session_id = ?1 AND \"offset\" > ?2
-         ORDER BY \"offset\" LIMIT ?3",
-    )?;
-    let mut q = stmt.query(params![session.0.to_string(), after, limit])?;
-    let mut out = Vec::new();
+) -> Result<TimelinePage> {
+    let id = session.0.to_string();
+    let (sql, bound) = match cursor {
+        TimelineCursor::Start => ("\"offset\" > ?2 ORDER BY \"offset\"", -1),
+        TimelineCursor::After(after) => ("\"offset\" > ?2 ORDER BY \"offset\"", sql_offset(after)),
+        TimelineCursor::Before(before) => (
+            "\"offset\" < ?2 ORDER BY \"offset\" DESC",
+            sql_offset(before),
+        ),
+        TimelineCursor::Tail => ("\"offset\" < ?2 ORDER BY \"offset\" DESC", i64::MAX),
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT * FROM session_activity WHERE session_id = ?1 AND {sql} LIMIT ?3"
+    ))?;
+    let mut q = stmt.query(params![id, bound, limit])?;
+    let mut items = Vec::new();
     while let Some(row) = q.next()? {
-        out.push(activity(row)?);
+        items.push(activity(row)?);
     }
-    Ok(out)
+    if matches!(cursor, TimelineCursor::Before(_) | TimelineCursor::Tail) {
+        items.reverse();
+    }
+    let exists = |cmp: &str, offset: u64| -> Result<bool> {
+        Ok(conn.query_row(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM session_activity WHERE session_id = ?1 AND \"offset\" {cmp} ?2)"
+            ),
+            params![id, sql_offset(offset)],
+            |r| r.get(0),
+        )?)
+    };
+    let (prev_before, next_after) = match (items.first(), items.last()) {
+        (Some(first), Some(last)) => (
+            exists("<", first.offset)?.then_some(first.offset),
+            exists(">", last.offset)?.then_some(last.offset),
+        ),
+        _ => (None, None),
+    };
+    Ok(TimelinePage {
+        items,
+        prev_before,
+        next_after,
+    })
 }
 
 pub fn activities_after(

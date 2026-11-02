@@ -20,6 +20,7 @@ export type Platform = {
   rootElement: () => HTMLElement | null;
   preferences: Preferences;
   setDocumentLanguage: (locale: string) => void;
+  observeVisible: (element: Element, onVisible: () => void) => () => void;
 };
 
 export const platform: Platform = webPlatform;

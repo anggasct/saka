@@ -11,6 +11,7 @@ use saka_core::spec as core_spec;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SpecState, WorkItemState};
 use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
+use saka_store::read::{TimelineCursor, TimelinePage};
 use saka_store::{SpecRevisionRow, StoredEvent, TaskSet, read};
 use serde_json::Value;
 
@@ -365,15 +366,15 @@ impl Engine {
     pub fn timeline(
         &self,
         session: SessionId,
-        after: Option<u64>,
+        cursor: TimelineCursor,
         limit: u32,
-    ) -> Result<Option<Vec<SessionActivity>>> {
+    ) -> Result<Option<TimelinePage>> {
         if self.session(session)?.is_none() {
             return Ok(None);
         }
         Ok(Some(
             self.store
-                .read(|c| read::timeline(c, session, after, limit))?,
+                .read(|c| read::timeline(c, session, cursor, limit))?,
         ))
     }
 

@@ -14,7 +14,7 @@ use saka_core::ids::{
 use saka_core::secret::SecretText;
 use saka_engine::{
     AddProject, EngineError, PermissionFilter, Produced, Reply, SessionCommand, SessionView,
-    StoredEvent, WorkItemFilter,
+    StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -861,20 +861,27 @@ pub async fn get_timeline(
     if !(1..=TIMELINE_MAX).contains(&limit) {
         return ApiError::validation("limit", "out_of_range").into_response();
     }
-    let Some(mut rows) = tri!(engine.timeline(id, q.after, limit + 1)) else {
+    let tail = match q.tail.as_deref() {
+        None => false,
+        Some("true") => true,
+        Some(_) => return ApiError::validation("tail", "invalid").into_response(),
+    };
+    let cursor = match (q.after, q.before, tail) {
+        (None, None, false) => TimelineCursor::Start,
+        (Some(after), None, false) => TimelineCursor::After(after),
+        (None, Some(before), false) => TimelineCursor::Before(before),
+        (None, None, true) => TimelineCursor::Tail,
+        _ => return ApiError::validation("before", "exclusive").into_response(),
+    };
+    let Some(page) = tri!(engine.timeline(id, cursor, limit)) else {
         return ApiError::not_found().into_response();
     };
-    let more = rows.len() > limit as usize;
-    rows.truncate(limit as usize);
     ok(
         StatusCode::OK,
         &dto::Timeline {
-            next_after: if more {
-                rows.last().map(|r| r.offset)
-            } else {
-                None
-            },
-            items: rows.iter().map(dto::SessionActivity::from).collect(),
+            items: page.items.iter().map(dto::SessionActivity::from).collect(),
+            next_after: page.next_after,
+            prev_before: page.prev_before,
         },
     )
 }

@@ -2518,3 +2518,85 @@ fn a_fourth_manual_retry_in_a_stage_is_refused_and_cancel_still_works() {
     );
     assert_eq!(cancel.status, StatusCode::ACCEPTED, "{}", cancel.body);
 }
+
+#[test]
+fn a_timeline_is_read_from_its_end_and_backwards() {
+    let mut api = Api::new(SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    });
+    let (_, sid) = running_session(&mut api);
+    let session = saka_core::ids::SessionId(sid.parse().unwrap());
+    let engine = api.sim.engine();
+    let base = api.sim.world.session_log(session).len() as u64;
+    for i in 0..450 {
+        engine
+            .on_runner_event(saka_engine::RunnerEvent {
+                session_id: session,
+                offset: base + i,
+                at: engine.now(),
+                kind: saka_engine::RunnerEventKind::Activity {
+                    category: "text".into(),
+                    summary: format!("row {i}"),
+                    tool: None,
+                    is_error: None,
+                },
+            })
+            .unwrap();
+    }
+    let url = format!("/api/v1/sessions/{sid}/timeline");
+    let offsets = |body: &Value| -> Vec<u64> {
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["offset"].as_u64().unwrap())
+            .collect()
+    };
+    let all = offsets(&api.get(&format!("{url}?limit=500")).body);
+    assert!(all.len() >= 450, "{}", all.len());
+    let n = all.len();
+
+    let tail = api.get(&format!("{url}?tail=true&limit=200"));
+    assert_eq!(tail.status, StatusCode::OK);
+    assert_eq!(offsets(&tail.body), all[n - 200..]);
+    assert_eq!(tail.body["prev_before"], json!(all[n - 200]));
+    assert_eq!(tail.body["next_after"], Value::Null);
+
+    let before = api.get(&format!("{url}?before={}&limit=200", all[n - 200]));
+    assert_eq!(offsets(&before.body), all[n - 400..n - 200]);
+    assert_eq!(before.body["prev_before"], json!(all[n - 400]));
+    assert_eq!(before.body["next_after"], json!(all[n - 201]));
+
+    let after = api.get(&format!("{url}?after={}&limit=10", all[n - 400]));
+    assert_eq!(offsets(&after.body), all[n - 399..n - 389]);
+    assert_eq!(after.body["prev_before"], json!(all[n - 399]));
+    assert_eq!(after.body["next_after"], json!(all[n - 390]));
+
+    let first = api.get(&format!("{url}?limit=5"));
+    assert_eq!(offsets(&first.body), all[..5]);
+    assert_eq!(first.body["prev_before"], Value::Null);
+
+    let empty = api.get(&format!("{url}?before={}", all[0]));
+    assert_eq!(
+        (
+            &empty.body["items"],
+            &empty.body["prev_before"],
+            &empty.body["next_after"]
+        ),
+        (&json!([]), &Value::Null, &Value::Null)
+    );
+
+    let both = api.get(&format!("{url}?after=1&tail=true"));
+    problem(&both, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(
+        both.body["params"],
+        json!({ "errors": [{ "field": "before", "code": "exclusive" }] })
+    );
+    let bad = api.get(&format!("{url}?tail=yes"));
+    problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(
+        bad.body["params"],
+        json!({ "errors": [{ "field": "tail", "code": "invalid" }] })
+    );
+}

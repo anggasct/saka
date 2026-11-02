@@ -15,6 +15,7 @@ const BROWSER_GLOBALS = [
   "location",
   "navigator",
   "Notification",
+  "IntersectionObserver",
 ].map((name) => ({
   name,
   message: "Use the platform layer (src/platform/) instead.",
@@ -71,6 +72,11 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       ...jsxA11y.flatConfigs.strict.rules,
+      // A scrollable log must take keyboard focus so it can be scrolled without a pointer.
+      "jsx-a11y/no-noninteractive-tabindex": [
+        "error",
+        { tags: [], roles: ["tabpanel", "log"] },
+      ],
       "formatjs/no-literal-string-in-jsx": "error",
     },
   },

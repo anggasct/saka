@@ -71,6 +71,12 @@ export function useFormat() {
     relative: (iso: string) => relativeTime(intl, iso, now),
     absolute: (iso: string) =>
       intl.formatDate(iso, { dateStyle: "medium", timeStyle: "medium" }),
+    clock: (iso: string) =>
+      intl.formatTime(iso, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
     duration: (ms: number) => duration(intl, ms),
     percent: (value: number) =>
       intl.formatNumber(value, { style: "percent", maximumFractionDigits: 0 }),

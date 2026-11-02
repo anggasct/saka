@@ -25,4 +25,18 @@ export const webPlatform: Platform = {
   setDocumentLanguage: (locale) => {
     document.documentElement.lang = locale;
   },
+  observeVisible: (element, onVisible) => {
+    if (typeof IntersectionObserver === "undefined") {
+      return () => undefined;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        onVisible();
+      }
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  },
 };

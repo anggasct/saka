@@ -459,8 +459,9 @@ impl Sim {
     ) -> Vec<saka_core::model::SessionActivity> {
         self.engine()
             .store()
-            .read(|c| read::timeline(c, session, None, 10_000))
+            .read(|c| read::timeline(c, session, read::TimelineCursor::Start, 10_000))
             .unwrap()
+            .items
     }
 
     pub fn usage(&self, step: u32) -> Vec<saka_core::model::UsageRecord> {
