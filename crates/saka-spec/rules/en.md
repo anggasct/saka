@@ -1,0 +1,108 @@
+# Saka spec format (parser 4)
+
+A spec is one markdown file. Saka reads its structure exactly as written here; anything else in the file is free prose for people and agents.
+
+## File and frontmatter
+
+- The file name without `.md` is the spec slug: lowercase letters, digits, and `-`, starting with a letter or digit, at most 63 characters. The slug is also the task key, so it never changes.
+- The file starts with a YAML frontmatter block between two `---` lines. It must contain `saka: spec`; without it the file is not a spec.
+- Optional keys: `priority` (integer from -1000 to 1000, higher starts first, default 0) and `depends_on` (a list of slugs of other specs in the same project that must ship before this one starts). Any other top-level key is ignored; nested lines belong to the key above them.
+- The file is UTF-8 and at most 256 KiB.
+
+## Title
+
+- The first level 1 heading (`# …`) is the title. It must not be empty.
+
+## Acceptance criteria
+
+- A level 2 heading `## Acceptance criteria` holds the criteria as a list.
+- Each criterion is one list item that starts with the bold id and a colon: `- **AC-01**: one observable result.` Ids are `AC-` followed by two or three digits and are unique in the spec.
+- Write each criterion so a command can check it. List items that do not start with a bold `AC-` id are prose.
+
+## Steps
+
+- A level 2 heading `## Steps` holds one table with the columns `Step`, `Work`, `AC`, and `Done when` (in any order), plus the optional column `After`.
+- Rows are numbered `S1`, `S2`, … in order, at most 50 rows.
+- `Work` says what the step builds. `AC` lists the criteria ids the step delivers, separated by commas; every id must exist. Every criterion should be covered by at least one step.
+- `Done when` lists the commands that must pass before the step is done, each in backticks: `` `make test` `make lint` ``. Every step needs at least one command.
+- Without an `After` column the steps run in order. With it, each cell lists the steps that step waits for (`S1` or `S1, S2`); an empty cell means it waits for nothing. Only the first step should start with nothing to wait for unless steps really run in parallel. Waiting must not form a cycle.
+
+## Done when
+
+- A small change can replace the Steps section with a level 2 heading `## Done when` and a list. Each item holds exactly one command in backticks. The spec is then a single step `S1` that delivers every criterion.
+- A spec has either a Steps table or a Done when list, never both.
+
+## Context links
+
+- Markdown links to other docs in the repository (relative paths, `#anchor` and `?query` are ignored) become the spec's context. The linked file is read at the same commit and given to the agent with the spec.
+- Links must stay inside the workspace and point at text markdown files. External links (`https://…`, `mailto:`) are not context.
+- At most 256 links are read. The context (linked docs plus docs the project marks with `context: always`) is at most 32 documents and 256 KiB; each document at most 256 KiB.
+
+## Decisions
+
+- An optional level 2 heading `## Decisions` lists the technical questions the spec leaves to the operator. Another level 1 or level 2 heading ends the section.
+- Each decision is a level 3 heading `### Q<n>: <question>`, with `<n>` from 1 to 99 and no leading zero, for example `### Q1: Where are uploaded files stored?`. Ids are unique; at most 20 decisions.
+- Under the heading, optional prose explains the context. The first list under the heading holds the options: two or three items, each starting with an unchecked box `[ ]`. Headings of levels 4 to 6 are part of the decision.
+- The first option is the recommended one and contains `(recommended)`; no other option contains it.
+- The operator answers by checking exactly one box (`[x]`). An unanswered decision keeps the spec from being approved.
+
+```markdown
+## Decisions
+
+### Q1: Where are uploaded files stored?
+
+Uploads are user avatars, at most 2 MB each.
+
+- [ ] **Local disk** (recommended) — one node only; nothing to configure.
+- [ ] **S3-compatible storage** — scales out; needs credentials and a bucket.
+```
+
+## Lint codes
+
+Each line is one code Saka can report, when it is reported, and its level. Any error keeps the spec from being approved; warnings do not.
+
+- `not_a_spec` — the file has no frontmatter with `saka: spec`, or Saka cannot read it as a spec. Error.
+- `file_too_large` — the file is larger than 256 KiB. Error.
+- `invalid_utf8` — the file is not valid UTF-8. Error.
+- `slug_invalid` — the file name is not a valid slug. Error.
+- `title_missing` — there is no level 1 heading, or it is empty. Error.
+- `ac_section_missing` — there is no Acceptance criteria section. Error.
+- `ac_id_invalid` — a bold id starts with `AC-` but is not two or three digits. Error.
+- `ac_id_duplicate` — a criterion id is used twice. Error.
+- `steps_missing` — there is neither a Steps table with rows nor a Done when list. Error.
+- `steps_column_missing` — the Steps table lacks one of the required columns. Error.
+- `steps_column_unsupported` — the Steps table has a column this parser does not support. Error.
+- `step_id_invalid` — a row is not numbered in order (`S1`, `S2`, …). Error.
+- `step_limit_exceeded` — the Steps table has more than 50 rows. Error.
+- `step_ac_empty` — a step lists no criteria. Error.
+- `step_ac_unknown` — a step lists a criterion id that does not exist. Error.
+- `step_command_missing` — a step has no command in Done when. Error.
+- `frontmatter_invalid` — a frontmatter line is not a key, or a known key appears twice. Error.
+- `priority_invalid` — priority is not an integer from -1000 to 1000. Error.
+- `depends_on_invalid` — a depends_on entry is not a valid slug. Error.
+- `depends_on_self` — depends_on names this spec. Error.
+- `step_after_unknown` — an After cell names a step that does not exist. Error.
+- `step_after_cycle` — steps wait for each other in a cycle. Error.
+- `done_when_with_steps` — the spec has both a Steps table and a Done when section. Error.
+- `done_when_item_invalid` — a Done when item does not hold exactly one command. Error.
+- `ac_uncovered` — no step delivers a criterion. Warning.
+- `step_work_empty` — a step has an empty Work cell. Warning.
+- `step_command_duplicate` — a step lists the same command twice. Warning.
+- `step_parallel_start` — with an After column, a step other than the first waits for nothing. Warning.
+- `depends_on_unknown` — no spec in the project has a slug named in depends_on. Error.
+- `depends_on_withdrawn` — a spec named in depends_on is withdrawn. Error.
+- `depends_on_cycle` — specs depend on each other in a cycle. Error.
+- `links_limit_exceeded` — the spec has more than 256 links; the rest are not read. Warning.
+- `reference_outside_workspace` — a link points outside the workspace. Error.
+- `reference_not_doc` — a link points at a file that is not markdown, so it is not context. Warning.
+- `reference_missing` — a linked doc does not exist at the commit. Error.
+- `reference_not_text` — a linked doc is not valid UTF-8 text. Error.
+- `reference_too_large` — a linked doc is larger than 256 KiB. Error.
+- `context_too_large` — the context is more than 32 documents or 256 KiB, or the project marks too many docs as always relevant. Error.
+- `decision_id_invalid` — a level 3 heading under Decisions is not `Q<n>: <question>`. Error.
+- `decision_id_duplicate` — a decision id is used twice. Error.
+- `decision_limit_exceeded` — the spec has more than 20 decisions. Error.
+- `decision_options_invalid` — a decision has no options list, not two or three options, or an option without a checkbox. Error.
+- `decision_recommendation_invalid` — the first option lacks `(recommended)`, or another option has it. Error.
+- `decision_answer_multiple` — more than one option of a decision is checked. Error.
+- `decision_unanswered` — no option of a decision is checked yet; the operator still has to answer it. Error.

@@ -59,10 +59,17 @@ pub enum LintCode {
     ReferenceNotText,
     ReferenceTooLarge,
     ContextTooLarge,
+    DecisionIdInvalid,
+    DecisionIdDuplicate,
+    DecisionLimitExceeded,
+    DecisionOptionsInvalid,
+    DecisionRecommendationInvalid,
+    DecisionAnswerMultiple,
+    DecisionUnanswered,
 }
 
 impl LintCode {
-    pub const ALL: [LintCode; 38] = [
+    pub const ALL: [LintCode; 45] = [
         LintCode::NotASpec,
         LintCode::FileTooLarge,
         LintCode::InvalidUtf8,
@@ -101,6 +108,13 @@ impl LintCode {
         LintCode::ReferenceNotText,
         LintCode::ReferenceTooLarge,
         LintCode::ContextTooLarge,
+        LintCode::DecisionIdInvalid,
+        LintCode::DecisionIdDuplicate,
+        LintCode::DecisionLimitExceeded,
+        LintCode::DecisionOptionsInvalid,
+        LintCode::DecisionRecommendationInvalid,
+        LintCode::DecisionAnswerMultiple,
+        LintCode::DecisionUnanswered,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -143,6 +157,13 @@ impl LintCode {
             LintCode::ReferenceNotText => "reference_not_text",
             LintCode::ReferenceTooLarge => "reference_too_large",
             LintCode::ContextTooLarge => "context_too_large",
+            LintCode::DecisionIdInvalid => "decision_id_invalid",
+            LintCode::DecisionIdDuplicate => "decision_id_duplicate",
+            LintCode::DecisionLimitExceeded => "decision_limit_exceeded",
+            LintCode::DecisionOptionsInvalid => "decision_options_invalid",
+            LintCode::DecisionRecommendationInvalid => "decision_recommendation_invalid",
+            LintCode::DecisionAnswerMultiple => "decision_answer_multiple",
+            LintCode::DecisionUnanswered => "decision_unanswered",
         }
     }
 
@@ -185,7 +206,14 @@ impl LintCode {
             | LintCode::ReferenceMissing
             | LintCode::ReferenceNotText
             | LintCode::ReferenceTooLarge
-            | LintCode::ContextTooLarge => Severity::Error,
+            | LintCode::ContextTooLarge
+            | LintCode::DecisionIdInvalid
+            | LintCode::DecisionIdDuplicate
+            | LintCode::DecisionLimitExceeded
+            | LintCode::DecisionOptionsInvalid
+            | LintCode::DecisionRecommendationInvalid
+            | LintCode::DecisionAnswerMultiple
+            | LintCode::DecisionUnanswered => Severity::Error,
         }
     }
 }

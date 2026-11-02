@@ -2793,6 +2793,7 @@
                 "revision",
                 "lint",
                 "steps",
+                "decisions",
                 "created_at",
                 "updated_at"
               ],
@@ -2826,6 +2827,13 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "decisions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SpecDecision"
+                  },
+                  "description": "Decisions in the latest revision, in written order; empty in list items."
                 },
                 "depends_on": {
                   "type": "array",
@@ -3984,6 +3992,7 @@
           "revision",
           "lint",
           "steps",
+          "decisions",
           "created_at",
           "updated_at"
         ],
@@ -4017,6 +4026,13 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecDecision"
+            },
+            "description": "Decisions in the latest revision, in written order; empty in list items."
           },
           "depends_on": {
             "type": "array",
@@ -4084,6 +4100,74 @@
           },
           "updated_at": {
             "type": "string"
+          }
+        }
+      },
+      "SpecDecision": {
+        "type": "object",
+        "description": "One question from the spec's `## Decisions` section.",
+        "required": [
+          "id",
+          "question",
+          "line",
+          "options"
+        ],
+        "properties": {
+          "chosen": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1-based number of the checked option; null while the decision is open.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "`Q<n>`, unique in the spec."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Line of the `### Q<n>:` heading.",
+            "minimum": 0
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecDecisionOption"
+            }
+          },
+          "question": {
+            "type": "string"
+          }
+        }
+      },
+      "SpecDecisionOption": {
+        "type": "object",
+        "required": [
+          "text",
+          "line",
+          "recommended",
+          "chosen"
+        ],
+        "properties": {
+          "chosen": {
+            "type": "boolean",
+            "description": "The checkbox is checked (`[x]` or `[X]`)."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "recommended": {
+            "type": "boolean",
+            "description": "The option text contains `(recommended)`."
+          },
+          "text": {
+            "type": "string",
+            "description": "Markdown source after the checkbox, trimmed, at most 500 characters (cut with `…`)."
           }
         }
       },

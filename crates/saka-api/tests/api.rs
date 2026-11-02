@@ -1029,7 +1029,7 @@ fn a_spec_shows_priority_dependencies_effective_steps_and_severities() {
         .map(|s| &s["after"])
         .collect();
     assert_eq!(after, [&json!([]), &json!(["S1"]), &json!([])]);
-    assert_eq!(b["revision"]["parser_version"], 3);
+    assert_eq!(b["revision"]["parser_version"], 4);
     assert_eq!(b["lint"]["ok"], true);
     assert_eq!(
         b["lint"]["issues"],
@@ -1127,7 +1127,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
     let again = api.register_doc("docs/specs/kept.md", &text);
     assert_eq!(again.body["id"], spec.0.to_string());
     assert_ne!(again.body["revision"]["id"], old.0.to_string());
-    assert_eq!(again.body["revision"]["parser_version"], 3);
+    assert_eq!(again.body["revision"]["parser_version"], 4);
     let versions: Vec<i64> = api
         .sim
         .engine()
@@ -1140,8 +1140,65 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
             Ok(rows.collect::<Result<Vec<i64>, _>>()?)
         })
         .unwrap();
-    assert_eq!(versions, vec![1, 3]);
+    assert_eq!(versions, vec![1, 4]);
     assert_eq!(api.approve_reply(&again).status, StatusCode::OK);
+}
+
+#[test]
+fn an_open_decision_blocks_approve_until_one_option_is_checked() {
+    let mut api = Api::new(SimConfig::default());
+    let open = format!(
+        "{}\n## Decisions\n\n### Q1: Where are uploads stored?\n\n- [ ] **Local disk** (recommended) — one node.\n- [ ] **Object storage** — scales out.\n",
+        one_step_spec("Uploads", "")
+    );
+    let path = "docs/specs/uploads.md";
+    let spec = api.register_doc(path, &open);
+    assert_eq!(spec.body["state"], "draft");
+    assert_eq!(spec.body["lint"]["ok"], false);
+    let issues = spec.body["lint"]["issues"].as_array().unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["code"], "decision_unanswered");
+    assert_eq!(issues[0]["params"], json!({"id": "Q1"}));
+    assert_eq!(spec.body["decisions"][0]["chosen"], Value::Null);
+
+    let before = api.last_seq();
+    let refused = api.approve_reply(&spec);
+    problem(&refused, StatusCode::UNPROCESSABLE_ENTITY, "spec_not_ready");
+    assert_eq!(
+        refused.body["params"]["issues"][0]["code"],
+        "decision_unanswered"
+    );
+    assert_eq!(api.last_seq(), before);
+
+    let answered = open.replacen("- [ ] **Local disk**", "- [x] **Local disk**", 1);
+    assert_eq!(answered.len(), open.len());
+    let spec = api.register_doc(path, &answered);
+    assert_eq!(spec.body["state"], "ready");
+    assert_eq!(spec.body["lint"]["ok"], true);
+    assert_eq!(
+        spec.body["decisions"],
+        json!([{
+            "id": "Q1",
+            "question": "Where are uploads stored?",
+            "line": 16,
+            "options": [
+                {"text": "**Local disk** (recommended) — one node.", "line": 18, "recommended": true, "chosen": true},
+                {"text": "**Object storage** — scales out.", "line": 19, "recommended": false, "chosen": false},
+            ],
+            "chosen": 1,
+        }])
+    );
+    let id = spec.body["id"].as_str().unwrap().to_string();
+    let listed = api.get(&format!("/api/v1/projects/{}/specs", api.sim.project_id.0));
+    let item = listed.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(item["decisions"], json!([]));
+    assert_eq!(api.approve_reply(&spec).status, StatusCode::OK);
 }
 
 #[test]
@@ -1150,7 +1207,7 @@ fn the_spec_template_comes_in_english_and_indonesian() {
     let en = api.get("/api/v1/spec-template");
     assert_eq!(en.status, StatusCode::OK);
     assert_eq!(en.body["locale"], "en");
-    assert_eq!(en.body["parser_version"], 3);
+    assert_eq!(en.body["parser_version"], 4);
     let id = api.get("/api/v1/spec-template?locale=id");
     assert_eq!(id.body["locale"], "id");
     assert_ne!(id.body["content"], en.body["content"]);

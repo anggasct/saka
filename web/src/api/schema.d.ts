@@ -778,6 +778,8 @@ export interface components {
         approved_at?: string | null;
         approved_revision?: components["schemas"]["RevisionRef"] | null;
         created_at: string;
+        /** @description Decisions in the latest revision, in written order; empty in list items. */
+        decisions: components["schemas"]["SpecDecision"][];
         /** @description Specs that must ship before this one starts, resolved in the project. */
         depends_on: components["schemas"]["SpecDependency"][];
         /** Format: uuid */
@@ -1123,6 +1125,8 @@ export interface components {
       approved_at?: string | null;
       approved_revision?: components["schemas"]["RevisionRef"] | null;
       created_at: string;
+      /** @description Decisions in the latest revision, in written order; empty in list items. */
+      decisions: components["schemas"]["SpecDecision"][];
       /** @description Specs that must ship before this one starts, resolved in the project. */
       depends_on: components["schemas"]["SpecDependency"][];
       /** Format: uuid */
@@ -1143,6 +1147,33 @@ export interface components {
       steps: components["schemas"]["Step"][];
       title: string;
       updated_at: string;
+    };
+    /** @description One question from the spec's `## Decisions` section. */
+    SpecDecision: {
+      /**
+       * Format: int32
+       * @description 1-based number of the checked option; null while the decision is open.
+       */
+      chosen?: number | null;
+      /** @description `Q<n>`, unique in the spec. */
+      id: string;
+      /**
+       * Format: int32
+       * @description Line of the `### Q<n>:` heading.
+       */
+      line: number;
+      options: components["schemas"]["SpecDecisionOption"][];
+      question: string;
+    };
+    SpecDecisionOption: {
+      /** @description The checkbox is checked (`[x]` or `[X]`). */
+      chosen: boolean;
+      /** Format: int32 */
+      line: number;
+      /** @description The option text contains `(recommended)`. */
+      recommended: boolean;
+      /** @description Markdown source after the checkbox, trimmed, at most 500 characters (cut with `…`). */
+      text: string;
     };
     SpecDependency: {
       slug: string;

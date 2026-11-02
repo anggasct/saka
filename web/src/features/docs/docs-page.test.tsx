@@ -523,7 +523,7 @@ describe("specs in the editor", () => {
           body: {
             content: `---\nsaka: spec\n---\n# Template ${r.search.get("locale") ?? ""}\n`,
             locale: r.search.get("locale"),
-            parser_version: 3,
+            parser_version: 4,
           },
         }),
         [FILE]: (r: Recorded): Route =>
