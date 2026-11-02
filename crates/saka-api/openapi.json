@@ -1644,6 +1644,54 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/work-packet": {
+      "get": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "get_work_packet",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkPacket"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -4321,6 +4369,97 @@
               "$ref": "#/components/schemas/Toolchain"
             },
             "description": "Toolchains on `PATH`; empty when the repo declares no versions."
+          }
+        }
+      },
+      "WorkPacket": {
+        "type": "object",
+        "required": [
+          "work_item_id",
+          "revision_id",
+          "source_commit",
+          "environment_id",
+          "bytes",
+          "sha256",
+          "documents",
+          "text"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "UTF-8 length of `text`.",
+            "minimum": 0
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkPacketDocument"
+            }
+          },
+          "environment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `ready` environment whose ports, toolchains, and session secret names are in the packet."
+          },
+          "revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Revision the task is pinned to."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "`sha256:<hex>` of `text`."
+          },
+          "source_commit": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "The first turn exactly as the session receives it, without a CI retry paragraph."
+          },
+          "work_item_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkPacketDocument": {
+        "type": "object",
+        "required": [
+          "index",
+          "kind",
+          "path",
+          "bytes",
+          "content_hash"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "`spec` for document 1, `context` for the rest."
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`link` or `always`; `null` for the spec."
+          },
+          "path": {
+            "type": "string"
           }
         }
       },

@@ -8,13 +8,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
 use crate::metadata;
 use github::GitHub;
 
 const TEMPLATE: &str = include_str!("e2e/fixture-spec.md.tmpl");
+const CONTEXT_TEMPLATE: &str = "# End-to-end context {run_id}\n\ncontext-marker: {run_id}\n";
 const RUN_LIMIT: Duration = Duration::from_secs(30 * 60);
 const READY_LIMIT: Duration = Duration::from_secs(60);
 const CLEANUP_LIMIT: Duration = Duration::from_secs(3 * 60);
@@ -423,14 +424,57 @@ fn check_runtime(api: &Api, task: &str) -> Result<()> {
     Ok(())
 }
 
+struct ContextDoc {
+    path: String,
+    marker: String,
+}
+
+fn check_packet(api: &Api, task: &str, spec: &str, context: &ContextDoc) -> Result<()> {
+    let packet = api.get(&format!("/api/v1/work-items/{task}/work-packet"))?;
+    let spec = api.get(&format!("/api/v1/specs/{spec}"))?;
+    let pinned = spec["revision"]["context"]
+        .as_array()
+        .and_then(|c| c.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let doc = packet["documents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|d| d["path"] == context.path.as_str())
+        .ok_or_else(|| anyhow!("the S1 work packet has no {}", context.path))?;
+    if doc["origin"] != "link" || doc["content_hash"] != pinned["content_hash"] {
+        bail!(
+            "the S1 work packet does not carry the pinned {}: {doc}",
+            context.path
+        );
+    }
+    let source = format!("<source>{} @ ", context.path);
+    let content = text(&packet["text"])
+        .split_once(&source)
+        .and_then(|(_, rest)| rest.split_once("</document_content>"))
+        .map(|(content, _)| content)
+        .unwrap_or_default();
+    if !content.contains(&context.marker) {
+        bail!("the S1 work packet has {} without its marker", context.path);
+    }
+    println!(
+        "  S1 work packet carries {} ({} bytes)",
+        context.path, packet["bytes"]
+    );
+    Ok(())
+}
+
 fn deliver(
     api: &Api,
     cli: &Cli<'_>,
     project: &str,
     spec: &str,
     allowed: &BTreeSet<String>,
+    context: &ContextDoc,
     restart: &mut dyn FnMut() -> Result<()>,
 ) -> Result<()> {
+    let mut packet_checked = false;
     let started = Instant::now();
     let mut merged = BTreeSet::new();
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
@@ -454,6 +498,10 @@ fn deliver(
             }
             if task["step_id"] == "S1" {
                 first.get_or_insert_with(|| id.clone());
+                if !packet_checked && text(&task["stage_phase"]) == "running_session" {
+                    check_packet(api, &id, spec, context)?;
+                    packet_checked = true;
+                }
                 if stage != Scenario::Done && text(&task["stage_phase"]) == "running_session" {
                     exercise(&mut stage, task, cli, api, restart)?;
                 }
@@ -476,6 +524,9 @@ fn deliver(
         if text(&api.get(&format!("/api/v1/specs/{spec}"))?["state"]) == "shipped" {
             if stage != Scenario::Done {
                 bail!("S1 finished before the runtime scenario did ({stage:?})");
+            }
+            if !packet_checked {
+                bail!("S1 shipped before its work packet was checked");
             }
             return check_runtime(api, first.as_deref().unwrap_or_default());
         }
@@ -527,6 +578,7 @@ struct Run<'a> {
     base: String,
     spec_path: String,
     spec: String,
+    context: ContextDoc,
 }
 
 fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
@@ -590,6 +642,7 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
             .into_iter()
             .chain([SLOW_COMMAND.to_string()])
             .collect(),
+        &run.context,
         &mut restart,
     )?;
     println!("  spec shipped");
@@ -618,6 +671,10 @@ pub fn run() -> Result<()> {
     let base = format!("e2e/{run_id}");
     let spec_path = format!("docs/specs/e2e-{run_id}.md");
     let spec = TEMPLATE.replace("{run_id}", &run_id);
+    let context = ContextDoc {
+        path: format!("docs/e2e-context-{run_id}.md"),
+        marker: format!("context-marker: {run_id}"),
+    };
     println!(
         "==> end-to-end run {run_id} on {} (model {})",
         settings.repo, settings.model
@@ -625,6 +682,12 @@ pub fn run() -> Result<()> {
 
     let github = GitHub::connect(settings.app_id, &settings.key_file, &settings.repo)?;
     github.create_branch(&base, &github.default_branch_sha()?)?;
+    github.put_file(
+        &base,
+        &context.path,
+        &CONTEXT_TEMPLATE.replace("{run_id}", &run_id),
+        "docs: add end-to-end context",
+    )?;
     github.put_file(&base, &spec_path, &spec, "docs: add an end-to-end spec")?;
     println!("  base branch {base} with {spec_path}");
 
@@ -635,6 +698,7 @@ pub fn run() -> Result<()> {
         base,
         spec_path,
         spec,
+        context,
     };
     match drive(&run, &github) {
         Ok(()) => {
@@ -662,6 +726,8 @@ mod tests {
     fn the_fixture_spec_names_its_done_when_commands() {
         let spec = TEMPLATE.replace("{run_id}", "r1");
         assert!(!spec.contains("{run_id}"));
+        assert!(spec.contains("](../e2e-context-r1.md)"));
+        assert!(!spec.contains("context-marker"));
         assert_eq!(
             done_when_commands(&spec),
             BTreeSet::from([

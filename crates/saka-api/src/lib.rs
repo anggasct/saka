@@ -23,7 +23,7 @@ pub use state::{ApiConfig, AppState};
         routes::set_secret, routes::list_secrets, routes::remove_secret,
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
         routes::spec_template,
-        routes::list_work_items, routes::get_work_item, routes::merge, routes::retry, routes::cancel,
+        routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::merge, routes::retry, routes::cancel,
         routes::list_permissions, routes::answer_permission, routes::get_session,
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
         routes::list_permission_rules, routes::revoke_rule, routes::list_agent_accounts,
@@ -78,6 +78,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/work-items/{work_item_id}",
             get(routes::get_work_item),
+        )
+        .route(
+            "/api/v1/work-items/{work_item_id}/work-packet",
+            get(routes::get_work_packet),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/merge",

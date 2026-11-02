@@ -103,7 +103,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::PermissionAlreadyAnswered
         | R::ProjectExists { .. }
         | R::SpecSlugConflict { .. }
-        | R::TaskBranchConflict { .. } => StatusCode::CONFLICT,
+        | R::TaskBranchConflict { .. }
+        | R::WorkPacketUnavailable { .. } => StatusCode::CONFLICT,
     }
 }
 

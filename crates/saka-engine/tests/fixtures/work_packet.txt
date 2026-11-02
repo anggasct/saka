@@ -1,0 +1,53 @@
+<documents>
+<document index="1">
+<source>docs/specs/tasks-done.md @ 9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c</source>
+<document_content>
+---
+saka: spec
+---
+# Mark tasks as done
+
+See [the architecture](../architecture.md).
+</document_content>
+</document>
+<document index="2">
+<source>docs/architecture.md @ 9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c</source>
+<document_content>
+# Architecture
+
+The CLI keeps tasks in one JSON file.
+</document_content>
+</document>
+<document index="3">
+<source>docs/conventions.md @ 9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c</source>
+<document_content>
+---
+context: always
+---
+# Conventions
+
+Exit codes: 0 ok, 2 usage.
+</document_content>
+</document>
+</documents>
+
+You are implementing one step of an approved spec in this git repository.
+Document 1 is the spec (pinned revision 0193f0c4-1b2a-7c3d-9e8f-001122334455). Documents 2–3 are the docs it links to and the docs the project marks as always relevant, read at the same commit. Use the documents as context; the step below defines the work.
+
+Task: tasks-done/s1 — Add a `done` command to the CLI store
+Acceptance criteria for this step:
+- AC-01: `tasks done <id>` marks the task done.
+- AC-02: Unknown ids exit with code 2.
+Done when (run these and make them pass before you finish):
+- `cd cli && go test ./...`
+- `make lint`
+
+Environment:
+- Ports: 41000–41002 (SAKA_PORT_BASE, SAKA_PORT_COUNT, PORT)
+- Toolchains: go 1.26.2, node 26.13.0
+- Secrets available as environment variables: TEST_API_KEY
+
+Rules:
+- Work only inside this repository.
+- Commit all your changes with a Conventional Commits message before you finish.
+- Do not push. Saka pushes the branch and opens the pull request.

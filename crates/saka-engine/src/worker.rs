@@ -772,7 +772,24 @@ impl Engine {
         let Some(session) = self.session_ref(task, session) else {
             return Ok(Effect::Skipped);
         };
-        let body = self.turn_text(task, &prompt).map_err(internal)?;
+        let body = match &prompt {
+            Prompt::WorkPacket { retry_of } => {
+                let retry = retry_of.as_ref().and_then(crate::text::ci_failure);
+                let packet = self.packet_of(task, retry).map_err(internal)?;
+                let bytes = packet.text.len() as u64;
+                self.counters.work_packet(bytes);
+                tracing::info!(
+                    work_item_id = %task.item.id,
+                    session_id = %session.session_id,
+                    bytes,
+                    sha256 = %packet.sha256,
+                    documents = packet.documents.len(),
+                    "session.work_packet"
+                );
+                packet.text
+            }
+            other => self.turn_text(task, other).map_err(internal)?,
+        };
         self.ports.agents.send_turn(&session, turn, &body).await?;
         Ok(Effect::Fact(TaskInput::TurnAccepted { turn }))
     }

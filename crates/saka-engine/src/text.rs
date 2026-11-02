@@ -1,9 +1,14 @@
 use saka_core::event::Prompt;
-use saka_core::model::{Coded, Task};
+use saka_core::ids::{SpecRevisionId, WorkItemId};
+use saka_core::model::{Coded, Environment, Task};
+use saka_core::rejection::Rejection;
+use saka_core::vocab::SecretPurpose;
 use saka_spec::{SpecModel, Step};
 use saka_store::{SpecRevisionRow, read};
 use serde_json::Value;
 
+use crate::packet::{self, EnvironmentFacts, Packet, PacketInput, PacketSpec, PacketStep};
+use crate::recipe::Recipe;
 use crate::{Engine, EngineError, Result};
 
 const TITLE_MAX: usize = 72;
@@ -66,12 +71,8 @@ impl Engine {
                  Commit all changes now with a Conventional Commits message. Do not push."
             )),
             Prompt::WorkPacket { retry_of } => {
-                let pinned = self.pinned(task)?;
-                let mut text = work_packet(task, &pinned);
-                if let Some(ci) = retry_of.as_ref().and_then(ci_failure) {
-                    text = format!("{ci}\n\n{text}");
-                }
-                Ok(text)
+                let retry = retry_of.as_ref().and_then(ci_failure);
+                Ok(self.packet_of(task, retry)?.text)
             }
             Prompt::Resume { cause, retry_of } => {
                 let text = saka_core::resume::text(*cause);
@@ -82,6 +83,75 @@ impl Engine {
             }
             Prompt::Steer { text } => Ok(text.clone()),
         }
+    }
+
+    pub(crate) fn packet_of(&self, task: &Task, retry: Option<String>) -> Result<Packet> {
+        let pinned = self.pinned(task)?;
+        let revision = SpecRevisionId(pinned.revision.id);
+        let context = self.store.read(|c| read::context_contents(c, revision))?;
+        let environment = task
+            .ready_environment()
+            .map(|env| self.environment_facts(env))
+            .unwrap_or_default();
+        Ok(packet::render(&PacketInput {
+            step: packet_step(task, &pinned),
+            spec: PacketSpec {
+                revision_id: revision.to_string(),
+                path: pinned.path.clone(),
+                source_commit: pinned.revision.source_commit.clone(),
+                content: pinned.revision.content.clone(),
+            },
+            context,
+            environment,
+            retry,
+        }))
+    }
+
+    fn environment_facts(&self, env: &Environment) -> EnvironmentFacts {
+        let recipe = env
+            .recipe
+            .as_ref()
+            .map(Recipe::from_json)
+            .unwrap_or_default();
+        let count = recipe.ports_or(self.cfg.env.ports_per_env);
+        EnvironmentFacts {
+            ports: env
+                .port_start
+                .filter(|_| count > 0)
+                .map(|start| (start, count)),
+            toolchains: env
+                .toolchains
+                .iter()
+                .map(|t| (t.tool, t.version.clone()))
+                .collect(),
+            session_secrets: recipe
+                .secrets
+                .iter()
+                .filter(|(_, purposes)| purposes.contains(&SecretPurpose::Session))
+                .map(|(name, _)| name.clone())
+                .collect(),
+        }
+    }
+
+    pub fn work_packet(&self, id: WorkItemId) -> Result<(Task, Packet)> {
+        let task = self
+            .store
+            .read(|c| read::load_task(c, id))?
+            .ok_or(Rejection::NotFound)?;
+        if task.item.spec_revision_id.is_none() {
+            return Err(Rejection::WorkPacketUnavailable {
+                reason: "not_a_spec_task",
+            }
+            .into());
+        }
+        if task.ready_environment().is_none() {
+            return Err(Rejection::WorkPacketUnavailable {
+                reason: "environment_not_ready",
+            }
+            .into());
+        }
+        let packet = self.packet_of(&task, None)?;
+        Ok((task, packet))
     }
 
     pub(crate) fn change_text(&self, task: &Task) -> Result<(String, String)> {
@@ -103,9 +173,9 @@ impl Engine {
     }
 }
 
-fn work_packet(task: &Task, pinned: &Pinned) -> String {
+fn packet_step(task: &Task, pinned: &Pinned) -> PacketStep {
     let step = pinned.step(task);
-    let criteria: String = step
+    let criteria = step
         .map(|s| {
             s.ac.iter()
                 .filter_map(|id| {
@@ -115,31 +185,19 @@ fn work_packet(task: &Task, pinned: &Pinned) -> String {
                         .iter()
                         .find(|a| &a.id == id)
                 })
-                .map(|a| format!("- {}: {}\n", a.id, a.text))
+                .map(|a| (a.id.clone(), a.text.clone()))
                 .collect()
         })
         .unwrap_or_default();
-    let commands: String = step
-        .map(|s| s.commands.iter().map(|c| format!("- `{c}`\n")).collect())
-        .unwrap_or_default();
-    let content = String::from_utf8_lossy(&pinned.revision.content);
-    format!(
-        "You are implementing one step of an approved spec in this git repository.\n\n\
-         Task: {key} — {work}\n\
-         Acceptance criteria for this step:\n{criteria}\
-         Done when (run these and make them pass before you finish):\n{commands}\n\
-         Rules:\n\
-         - Work only inside this repository.\n\
-         - Commit all your changes with a Conventional Commits message before you finish.\n\
-         - Do not push. Saka pushes the branch and opens the pull request.\n\n\
-         The full spec (pinned revision {revision}) follows.\n---\n{content}",
-        key = task.item.task_key,
-        work = task.item.work,
-        revision = pinned.revision.id,
-    )
+    PacketStep {
+        task_key: task.item.task_key.clone(),
+        work: task.item.work.clone(),
+        criteria,
+        commands: step.map(|s| s.commands.clone()).unwrap_or_default(),
+    }
 }
 
-fn ci_failure(retry_of: &Coded) -> Option<String> {
+pub(crate) fn ci_failure(retry_of: &Coded) -> Option<String> {
     if retry_of.code != "ci_red" {
         return None;
     }
