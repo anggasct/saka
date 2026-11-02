@@ -358,6 +358,40 @@ impl World {
         self.step(
             id,
             TaskInput::ChangeObserved {
+                state: ChangeState::Open,
+                head_sha: sha('b'),
+                merge_commit_sha: None,
+                merged_at: None,
+                checks: vec![Check {
+                    name: "test".into(),
+                    kind: CheckKind::CheckRun,
+                    status: CheckStatus::Completed,
+                    conclusion: Some(CheckConclusion::Success),
+                    url: None,
+                }],
+            },
+        );
+        self.step(
+            id,
+            TaskInput::SakaGateObserved {
+                head_sha: sha('b'),
+                checks: vec![Check {
+                    name: "make test".into(),
+                    kind: CheckKind::Command,
+                    ..Check {
+                        name: "test".into(),
+                        kind: CheckKind::CheckRun,
+                        status: CheckStatus::Completed,
+                        conclusion: Some(CheckConclusion::Success),
+                        url: None,
+                    }
+                }],
+                failure: None,
+            },
+        );
+        self.step(
+            id,
+            TaskInput::ChangeObserved {
                 state: ChangeState::Merged,
                 head_sha: sha('b'),
                 merge_commit_sha: Some(sha('c')),
@@ -365,7 +399,13 @@ impl World {
                 checks: vec![],
             },
         );
-        self.step(id, TaskInput::MergeVerified { found: true });
+        self.step(
+            id,
+            TaskInput::MergeVerified {
+                found: true,
+                base_tip: None,
+            },
+        );
     }
 }
 
@@ -540,7 +580,13 @@ fn a_whole_task_round_trips_through_the_schema() {
             merged_at: Some(Timestamp(5)),
         },
     );
-    w.step(id, TaskInput::MergeVerified { found: true });
+    w.step(
+        id,
+        TaskInput::MergeVerified {
+            found: true,
+            base_tip: None,
+        },
+    );
     w.step(
         id,
         TaskInput::EnvironmentTornDown {

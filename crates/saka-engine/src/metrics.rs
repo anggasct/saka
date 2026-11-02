@@ -3,8 +3,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use saka_core::admission::Waiting;
+use saka_core::event::Event;
+use saka_core::gate::GatePolicy;
 use saka_core::ids::WorkItemId;
 use saka_core::job::JobKind;
+use saka_core::model::Task;
+use saka_core::vocab::{BlockerCode, GateSource, Stage, StagePhase};
 use saka_store::list;
 
 use crate::worker::JobResult;
@@ -21,6 +25,7 @@ pub struct Counters {
     auto_retries: Mutex<BTreeMap<(String, String), u64>>,
     gate_seconds: Mutex<SecondsHistogram>,
     advance_seconds: Mutex<SecondsHistogram>,
+    dod: Mutex<BTreeMap<(String, String), u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -98,6 +103,10 @@ impl Counters {
     pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
         bump(&self.gate_runs, source, outcome);
         observe(&self.gate_seconds, &GATE_SECONDS_BUCKETS, seconds);
+    }
+
+    pub(crate) fn dod(&self, outcome: &str) {
+        bump(&self.dod, outcome, "");
     }
 
     pub(crate) fn step_advance(&self, seconds: f64) {
@@ -246,6 +255,63 @@ pub struct MetricsSnapshot {
     pub auto_retries: Vec<(String, u64)>,
     pub gate_seconds: SecondsHistogram,
     pub advance_seconds: SecondsHistogram,
+    pub dod_verifications: Vec<(String, u64)>,
+}
+
+pub(crate) enum DodVerification {
+    Outcome(&'static str),
+    Started {
+        head_sha: String,
+        sources: Vec<&'static str>,
+    },
+}
+
+pub(crate) fn dod_verification(events: &[Event], after: &Task) -> Option<DodVerification> {
+    let target = after
+        .stage_run
+        .as_ref()
+        .filter(|r| r.stage == Stage::Sync)
+        .and_then(|r| r.head_sha.clone());
+    events.iter().find_map(|e| match e {
+        Event::StagePhaseChanged {
+            phase: StagePhase::TearingDown,
+            ..
+        } => Some(DodVerification::Outcome(if target.is_some() {
+            "passed"
+        } else {
+            "proven"
+        })),
+        Event::StagePhaseChanged {
+            phase: StagePhase::Verifying,
+            head_sha: Some(head_sha),
+            ..
+        } => {
+            let policy =
+                GatePolicy::from_recipe(after.environment.as_ref().and_then(|e| e.recipe.as_ref()));
+            let sources = [GateSource::Scm, GateSource::Saka]
+                .into_iter()
+                .filter(|s| policy.uses(*s))
+                .map(GateSource::as_str)
+                .collect();
+            Some(DodVerification::Started {
+                head_sha: head_sha.clone(),
+                sources,
+            })
+        }
+        Event::WorkItemBlocked {
+            code: BlockerCode::DodFailed,
+            params,
+            ..
+        } => {
+            let reason = params.get("reason").and_then(serde_json::Value::as_str);
+            matches!(
+                reason,
+                Some("verify_failed" | "no_checks" | "required_missing")
+            )
+            .then_some(DodVerification::Outcome("failed"))
+        }
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +372,10 @@ impl Engine {
                 .collect(),
             gate_seconds: snapshot_of(&self.counters.gate_seconds),
             advance_seconds: snapshot_of(&self.counters.advance_seconds),
+            dod_verifications: copy(&self.counters.dod)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
         })
     }
 

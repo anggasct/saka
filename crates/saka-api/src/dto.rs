@@ -1356,6 +1356,12 @@ fn gates_at_head(t: &saka_core::model::Task) -> Vec<Gate> {
     let Some(cr) = &t.change_request else {
         return Vec::new();
     };
+    let target = t
+        .stage_run
+        .as_ref()
+        .filter(|r| r.stage == saka_core::vocab::Stage::Sync)
+        .and_then(|r| r.head_sha.as_deref());
+    let head = target.unwrap_or(&cr.head_sha);
     let policy = saka_core::gate::GatePolicy::from_recipe(
         t.environment.as_ref().and_then(|e| e.recipe.as_ref()),
     );
@@ -1364,7 +1370,7 @@ fn gates_at_head(t: &saka_core::model::Task) -> Vec<Gate> {
         saka_core::vocab::GateSource::Saka,
     ]
     .into_iter()
-    .filter_map(|source| t.gate_for(source, &cr.head_sha))
+    .filter_map(|source| t.gate_for(source, head))
     .map(|g| Gate {
         source: g.source.as_str().to_string(),
         required: policy.required(g.source, &g.checks),

@@ -42,6 +42,8 @@ timeout_minutes = 30        # per command
 
 Saka reports its result on the pull request as the `saka/verify` status when the GitHub App may write commit statuses. A failing command blocks the task with `ci_red`, and a retry hands the agent the failed command and the last lines of its output.
 
+A task is done only when its merge is proven. If every required gate source passed at the pull request's head that was merged, the task finishes right away. If not, for example because the pull request was merged on GitHub before its gate passed, Saka checks the merge commit with the same sources: it runs the Done when and gate commands in the task's worktree at that commit, and reads CI on that commit. A failure blocks the task with `dod_failed`, and the next step waits. After you fix the base branch, `retry` checks the tip of the base branch. `saka_dod_verifications_total{outcome}` counts proven, passed, and failed checks.
+
 Saka retries some blockers by itself, at most twice per stage, after 1 and then 5 minutes. These are blockers a person has nothing to decide on: a lost session, an unreachable SCM, an environment that failed for reasons other than its setup commands, a head that moved during merge, or a gate runner that crashed. A manual `retry` needs a reason and is allowed three times per stage. After that, only `cancel` remains.
 
 Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.

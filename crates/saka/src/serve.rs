@@ -87,6 +87,15 @@ impl Scm for ScmRouter {
             .change_request(repo, number)
             .await
     }
+    async fn commit_checks(
+        &self,
+        repo: &RepoRef,
+        sha: &str,
+    ) -> PortResult<Vec<saka_core::gate::Check>> {
+        self.get(&repo.integration_id)?
+            .commit_checks(repo, sha)
+            .await
+    }
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         self.get(&request.repo.integration_id)?.merge(request).await
     }

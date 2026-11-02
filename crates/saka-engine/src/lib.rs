@@ -277,10 +277,18 @@ impl Engine {
             };
             batch.action = Some(action.record(self, cause, project, Some(id.0), reply));
         }
+        let verification = metrics::dod_verification(&events, &after);
         if !events.is_empty() {
             batch.tasks.push(after);
         }
         self.commit(&batch)?;
+        match verification {
+            Some(metrics::DodVerification::Outcome(outcome)) => self.counters.dod(outcome),
+            Some(metrics::DodVerification::Started { head_sha, sources }) => {
+                tracing::info!(work_item_id = %id, head_sha, sources = ?sources, "delivery.dod.verify");
+            }
+            None => {}
+        }
         Ok(events)
     }
 

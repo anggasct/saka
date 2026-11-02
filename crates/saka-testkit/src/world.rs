@@ -141,6 +141,9 @@ struct FakeSession {
 struct State {
     script: AgentScript,
     ci: CiScript,
+    commit_ci: CiScript,
+    commit_reads_fail: bool,
+    checkouts: Vec<(EnvironmentId, String)>,
     lose_merges: bool,
     refuse_teardowns: bool,
     next_sha: u64,
@@ -238,6 +241,9 @@ impl FakeWorld {
             state: Mutex::new(State {
                 script,
                 ci,
+                commit_ci: CiScript::Silent,
+                commit_reads_fail: false,
+                checkouts: Vec::new(),
                 lose_merges: false,
                 refuse_teardowns: false,
                 recipe: None,
@@ -427,6 +433,26 @@ impl FakeWorld {
         self.state().push_outages = times;
     }
 
+    pub fn set_commit_ci(&self, ci: CiScript) {
+        self.state().commit_ci = ci;
+    }
+
+    pub fn fail_commit_reads(&self, fail: bool) {
+        self.state().commit_reads_fail = fail;
+    }
+
+    pub fn checkouts(&self) -> Vec<(EnvironmentId, String)> {
+        self.state().checkouts.clone()
+    }
+
+    pub fn push_to_base(&self) -> String {
+        let mut s = self.state();
+        let base = s.remote.get(BASE_BRANCH).cloned().unwrap_or_default();
+        let commit = s.new_commit(vec![base]);
+        s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
+        commit
+    }
+
     pub fn fail_change_reads(&self, fail: bool) {
         self.state().change_reads_fail = fail;
     }
@@ -493,6 +519,24 @@ impl FakeWorld {
     }
 }
 
+fn script_checks(ci: &CiScript) -> Vec<Check> {
+    let check = |name: &str, conclusion| Check {
+        name: name.to_string(),
+        kind: CheckKind::CheckRun,
+        status: CheckStatus::Completed,
+        conclusion: Some(conclusion),
+        url: None,
+    };
+    match ci {
+        CiScript::Pass => vec![check("test", CheckConclusion::Success)],
+        CiScript::Fail(names) => names
+            .iter()
+            .map(|n| check(n, CheckConclusion::Failure))
+            .collect(),
+        CiScript::Silent => Vec::new(),
+    }
+}
+
 fn sha(n: u64) -> String {
     format!("{n:040x}")
 }
@@ -533,21 +577,7 @@ impl State {
     }
 
     fn checks(&self) -> Vec<Check> {
-        let check = |name: &str, conclusion| Check {
-            name: name.to_string(),
-            kind: CheckKind::CheckRun,
-            status: CheckStatus::Completed,
-            conclusion: Some(conclusion),
-            url: None,
-        };
-        match &self.ci {
-            CiScript::Pass => vec![check("test", CheckConclusion::Success)],
-            CiScript::Fail(names) => names
-                .iter()
-                .map(|n| check(n, CheckConclusion::Failure))
-                .collect(),
-            CiScript::Silent => Vec::new(),
-        }
+        script_checks(&self.ci)
     }
 
     fn merge(&mut self, number: u64, expected_head: Option<&str>) -> MergeOutcome {
@@ -747,15 +777,34 @@ impl Environments for FakeWorld {
         })
     }
 
-    async fn is_merged(
+    async fn contains_commit(
         &self,
         _repo: &RepoRef,
         commit: &str,
         base_branch: &str,
-    ) -> PortResult<bool> {
+    ) -> PortResult<Option<String>> {
         let s = self.state();
         let base = s.remote.get(base_branch).cloned().unwrap_or_default();
-        Ok(s.is_ancestor(commit, &base))
+        Ok(s.is_ancestor(commit, &base).then_some(base))
+    }
+
+    async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()> {
+        let mut s = self.state();
+        if !s.parents.contains_key(commit) {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": commit }),
+            ));
+        }
+        let w = s
+            .worktrees
+            .get_mut(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        w.head = commit.to_string();
+        w.dirty = false;
+        s.checkouts.push((env.environment_id, commit.to_string()));
+        Ok(())
     }
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()> {
@@ -1009,6 +1058,14 @@ impl Scm for FakeWorld {
             url: url(number),
             head_sha: head,
         })
+    }
+
+    async fn commit_checks(&self, _repo: &RepoRef, _sha: &str) -> PortResult<Vec<Check>> {
+        let s = self.state();
+        if s.commit_reads_fail {
+            return Err(PortError::retryable("scm_unavailable", json!({})));
+        }
+        Ok(script_checks(&s.commit_ci))
     }
 
     async fn change_request(&self, _repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot> {

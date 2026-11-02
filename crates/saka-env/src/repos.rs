@@ -655,9 +655,14 @@ impl Environments for GitRepos {
         })
     }
 
-    async fn is_merged(&self, repo: &RepoRef, commit: &str, base_branch: &str) -> PortResult<bool> {
+    async fn contains_commit(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        base_branch: &str,
+    ) -> PortResult<Option<String>> {
         if !is_sha(commit) {
-            return Ok(false);
+            return Ok(None);
         }
         arg(base_branch, "base_branch")?;
         let lock = self.lock(repo.repo_id);
@@ -671,11 +676,63 @@ impl Environments for GitRepos {
             .local(&bare, &["merge-base", "--is-ancestor", commit, &base])
             .await?;
         match out.code {
-            Some(0) => Ok(true),
+            Some(0) => self.tip_locked(repo, base_branch).await,
             // 1: not an ancestor; 128: the commit is not in the mirror at all.
-            Some(1 | 128) => Ok(false),
+            Some(1 | 128) => Ok(None),
             _ => Err(failed("merge_base", &out)),
         }
+    }
+
+    async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()> {
+        if !is_sha(commit) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "commit" }),
+            ));
+        }
+        let wt = PathBuf::from(&env.worktree_path);
+        if !wt.join(".git").exists() {
+            return Err(PortError::permanent(
+                "worktree_missing",
+                json!({ "environment_id": env.environment_id }),
+            ));
+        }
+        let lock = self.lock(env.repo.repo_id);
+        let _guard = lock.lock().await;
+        let bare = self.mirror_path(env.repo.repo_id);
+        let object = format!("{commit}^{{commit}}");
+        let present = |out: &GitOutput| out.code == Some(0);
+        let mut found = present(
+            &self
+                .cfg
+                .git
+                .local(&bare, &["cat-file", "-e", &object])
+                .await?,
+        );
+        if !found {
+            self.fetch_locked(&env.repo).await?;
+            found = present(
+                &self
+                    .cfg
+                    .git
+                    .local(&bare, &["cat-file", "-e", &object])
+                    .await?,
+            );
+        }
+        if !found {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": commit }),
+            ));
+        }
+        self.git_ok(
+            &wt,
+            &["checkout", "--detach", "--force", commit],
+            "checkout",
+        )
+        .await?;
+        self.git_ok(&wt, &["clean", "-fd"], "clean").await?;
+        Ok(())
     }
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()> {

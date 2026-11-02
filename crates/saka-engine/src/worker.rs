@@ -221,6 +221,7 @@ impl Engine {
                     .await
             }
             JobKind::ScmReportStatus => self.report_status(&task, p).await,
+            JobKind::ScmPollCommit => self.poll_commit(&task, field(p, "sha")?).await,
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;
@@ -868,12 +869,21 @@ impl Engine {
     async fn gate_verify(&self, task: &Task, run: StageRunId, head: String) -> Execution {
         let in_gate = task.is_at(Stage::Merge, StagePhase::AwaitingCi)
             || task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
-        let current = task.stage_run.as_ref().is_some_and(|r| r.id == run)
-            && task
-                .change_request
-                .as_ref()
-                .is_some_and(|c| c.head_sha == head);
-        let Some(env) = task.ready_environment().filter(|_| in_gate && current) else {
+        let in_sync = task.is_at(Stage::Sync, StagePhase::Verifying);
+        let current = task.stage_run.as_ref().is_some_and(|r| {
+            r.id == run
+                && if in_sync {
+                    r.head_sha.as_deref() == Some(head.as_str())
+                } else {
+                    task.change_request
+                        .as_ref()
+                        .is_some_and(|c| c.head_sha == head)
+                }
+        });
+        let Some(env) = task
+            .ready_environment()
+            .filter(|_| (in_gate || in_sync) && current)
+        else {
             return Ok(Effect::Skipped);
         };
         let cause = self.cause("system:gate");
@@ -890,6 +900,9 @@ impl Engine {
         let env_ref = self
             .env_ref_with_secrets(task, env)
             .map_err(Refusal::into_error)?;
+        if in_sync {
+            self.ports.env.check_out(&env_ref, &head).await?;
+        }
         let base = env.base_sha.clone().unwrap_or_default();
         let worktree = self.ports.env.inspect(&env_ref, &base).await?;
         if worktree.head_sha != head || worktree.dirty {
@@ -1072,6 +1085,26 @@ impl Engine {
         }))
     }
 
+    async fn poll_commit(&self, task: &Task, sha: String) -> Execution {
+        let targeted = task.is_at(Stage::Sync, StagePhase::Verifying)
+            && task
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.head_sha.as_deref() == Some(sha.as_str()));
+        if !targeted {
+            return Ok(Effect::Skipped);
+        }
+        let checks = self
+            .ports
+            .scm
+            .commit_checks(&self.repo_ref(task)?, &sha)
+            .await?;
+        Ok(Effect::Fact(TaskInput::CommitChecksObserved {
+            head_sha: sha,
+            checks,
+        }))
+    }
+
     async fn merge(&self, task: &Task, head_sha: String) -> Execution {
         let Some(change) = task
             .change_request
@@ -1144,17 +1177,18 @@ impl Engine {
             .next()
             .and_then(|n| n.parse().ok())
             .unwrap_or(1);
-        let found = match &change.merge_commit_sha {
+        let base_tip = match &change.merge_commit_sha {
             Some(sha) => {
                 self.ports
                     .env
-                    .is_merged(&self.repo_ref(task)?, sha, &change.base_branch)
+                    .contains_commit(&self.repo_ref(task)?, sha, &change.base_branch)
                     .await?
             }
-            None => false,
+            None => None,
         };
+        let found = base_tip.is_some();
         if found || round >= VERIFY_ROUNDS {
-            return Ok(Effect::Fact(TaskInput::MergeVerified { found }));
+            return Ok(Effect::Fact(TaskInput::MergeVerified { found, base_tip }));
         }
         let run = task.stage_run.as_ref().map(|r| r.id);
         let mut payload = job.payload.clone();

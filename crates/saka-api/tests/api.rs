@@ -14,7 +14,8 @@ use saka_api::{ApiConfig, AppState, router};
 use saka_core::vocab::{Stage, StagePhase, WorkItemState};
 use saka_testkit::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
 use saka_testkit::{
-    AgentOutcome, AgentScript, CiScript, Sim, SimConfig, approval_spec, one_step_spec,
+    AgentOutcome, AgentScript, CiScript, CommandScript, Sim, SimConfig, approval_spec,
+    one_step_spec,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -467,6 +468,47 @@ fn a_repeated_key_replays_the_response_and_a_reused_key_is_refused() {
 }
 
 #[test]
+fn a_failed_check_at_the_merge_commit_shows_the_gate_of_that_commit() {
+    let mut cfg = SimConfig {
+        ci: CiScript::Silent,
+        ..SimConfig::default()
+    };
+    cfg.operator.merge = false;
+    cfg.operator.retry = vec![];
+    let mut api = Api::new(cfg);
+    api.sim
+        .world
+        .set_recipe(Some("[gate]\nsource = \"saka\"\n"));
+    for _ in 0..2 {
+        api.sim
+            .world
+            .script_command("cd cli && go test ./...", CommandScript::Exit(1));
+    }
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).item.state == WorkItemState::Blocked
+    }));
+    let number = api.sim.task(1).change_request.unwrap().number;
+    api.sim.world.merge_outside(number);
+    let merge_commit = api.sim.world.base_head();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1)
+            .open_blocker()
+            .is_some_and(|b| b.code.as_str() == "dod_failed")
+    }));
+    let id = api.sim.task(1).item.id.0;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["blocker"]["code"], "dod_failed");
+    assert_eq!(detail.body["blocker"]["params"]["reason"], "verify_failed");
+    let gates = detail.body["gates"].as_array().unwrap();
+    assert_eq!(gates.len(), 1, "{}", detail.body);
+    assert_eq!(gates[0]["source"], "saka");
+    assert_eq!(gates[0]["head_sha"], merge_commit.as_str());
+    assert_eq!(gates[0]["outcome"], "failed");
+    assert_eq!(detail.body["available_actions"], json!(["retry", "cancel"]));
+}
+
+#[test]
 fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     let cfg = SimConfig {
         ci: CiScript::Silent,
@@ -827,6 +869,7 @@ fn ops_endpoints_report_health_readiness_and_metrics() {
         "saka_usage_cost_usd_micros_total",
         "saka_account_utilization",
         "saka_step_advance_seconds",
+        "saka_dod_verifications_total",
     ] {
         assert!(
             text.contains(&format!("# TYPE {family} ")),

@@ -140,6 +140,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     let b = bind.as_slice();
 
     let mut history: BTreeMap<WorkItemId, Vec<(Stage, Trigger, Option<String>)>> = BTreeMap::new();
+    let mut previous: HashMap<WorkItemId, StageRunId> = HashMap::new();
     for run in rows(
         conn,
         "SELECT * FROM stage_run",
@@ -158,6 +159,8 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             ));
             if t.stage_run.is_none() {
                 t.stage_run = Some(run);
+            } else {
+                previous.entry(run.work_item_id).or_insert(run.id);
             }
         }
     }
@@ -166,22 +169,6 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             for (stage, trigger, reason) in runs.into_iter().rev() {
                 saka_core::task::count_retry(&mut t.retries, stage, trigger, reason.as_deref());
             }
-        }
-    }
-    for g in rows(
-        conn,
-        "SELECT * FROM gate_result",
-        selection,
-        "observed_at DESC, id DESC",
-        b,
-        gate,
-    )? {
-        if let Some(t) = tasks.get_mut(&g.work_item_id)
-            && !t.gates.iter().any(|x| x.source == g.source)
-            && t.stage_run.as_ref().is_some_and(|r| r.id == g.stage_run_id)
-        {
-            let at = t.gates.partition_point(|x| x.source < g.source);
-            t.gates.insert(at, g);
         }
     }
     for x in rows(
@@ -208,6 +195,37 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     )? {
         if let Some(t) = tasks.get_mut(&c.work_item_id) {
             t.change_request.get_or_insert(c);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for g in rows(
+        conn,
+        "SELECT * FROM gate_result",
+        selection,
+        "observed_at DESC, id DESC",
+        b,
+        gate,
+    )? {
+        let Some(t) = tasks.get_mut(&g.work_item_id) else {
+            continue;
+        };
+        // A sync run that has no verification target yet still carries the evidence it merged on.
+        let carried = t
+            .stage_run
+            .as_ref()
+            .is_some_and(|r| r.stage == Stage::Sync && r.head_sha.is_none());
+        let owner = if carried {
+            previous.get(&g.work_item_id).copied()
+        } else {
+            t.stage_run.as_ref().map(|r| r.id)
+        };
+        if owner != Some(g.stage_run_id) || !seen.insert((g.work_item_id, g.source)) {
+            continue;
+        }
+        let merged_head = t.change_request.as_ref().map(|c| c.head_sha.as_str());
+        if !carried || merged_head == Some(g.head_sha.as_str()) {
+            let at = t.gates.partition_point(|x| x.source < g.source);
+            t.gates.insert(at, g);
         }
     }
     for e in rows(

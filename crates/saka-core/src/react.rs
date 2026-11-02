@@ -364,7 +364,34 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
             }
         }
         (Stage::Sync, StagePhase::Verifying) => {
-            if let (Some(run_id), Some(cr)) = (run_id, cr) {
+            if let (Some(run), Some(cr), Some(target)) =
+                (run, cr, run.and_then(|r| r.head_sha.as_ref()))
+            {
+                let policy = GatePolicy::from_recipe(
+                    task.environment.as_ref().and_then(|e| e.recipe.as_ref()),
+                );
+                let unsettled = |source| {
+                    task.gate_for(source, target)
+                        .is_none_or(|g| g.outcome == GateOutcome::Pending)
+                };
+                if policy.runs_saka() && unsettled(GateSource::Saka) {
+                    jobs.push(Job::new(
+                        JobKind::GateVerify,
+                        format!("{}:{target}", run.id),
+                        json!({ "work_item_id": id, "stage_run_id": run.id, "head_sha": target }),
+                        now,
+                    ));
+                }
+                if policy.uses(GateSource::Scm) && unsettled(GateSource::Scm) {
+                    let bucket = now.0 / cfg.poll_interval_ms.max(1);
+                    jobs.push(Job::new(
+                        JobKind::ScmPollCommit,
+                        format!("{}:{target}:{bucket}", run.id),
+                        json!({ "work_item_id": id, "stage_run_id": run.id, "repo_id": cr.repo_id, "sha": target }),
+                        now,
+                    ));
+                }
+            } else if let (Some(run_id), Some(cr)) = (run_id, cr) {
                 jobs.push(Job::new(
                     JobKind::EnvVerifyMerged,
                     format!("{run_id}:1"),
