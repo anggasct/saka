@@ -5,6 +5,9 @@ node_modules/
 
 /spikes/*/web/dist/
 
+# Built by `cargo xtask wasm`
+/web/src/wasm/pkg/
+
 # Local bridges to the Obsidian vault; do not commit
 project-docs
 AGENTS.md

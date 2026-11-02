@@ -8,7 +8,12 @@ use regex::Regex;
 
 const MAX_COMMENT_LINES: usize = 3;
 
-const SKIPPED_PREFIXES: &[&str] = &["spikes/", "xtask/fixtures/", "web/eslint-fixtures/"];
+const SKIPPED_PREFIXES: &[&str] = &[
+    "spikes/",
+    "xtask/fixtures/",
+    "web/eslint-fixtures/",
+    "web/src/wasm/pkg/",
+];
 const SKIPPED_FILES: &[&str] = &[
     ".gitignore",
     "Cargo.lock",

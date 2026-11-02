@@ -1,0 +1,108 @@
+export type LintSeverity = "error" | "warning";
+
+export type LintIssue = {
+  code: string;
+  severity: LintSeverity;
+  line: number;
+  params: Record<string, unknown>;
+};
+
+export type StepLine = {
+  id: string;
+  line: number;
+};
+
+export type LintReport = {
+  isSpec: boolean;
+  parserVersion: number;
+  issues: LintIssue[];
+  steps: StepLine[];
+};
+
+export type LintCodeInfo = {
+  code: string;
+  severity: LintSeverity;
+};
+
+export type SpecTools = {
+  lint(fileName: string, text: string): LintReport;
+  contentHash(text: string): string;
+  lintCodes(): LintCodeInfo[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSeverity(value: unknown): value is LintSeverity {
+  return value === "error" || value === "warning";
+}
+
+function isLine(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function isIssue(value: unknown): value is LintIssue {
+  return (
+    isRecord(value) &&
+    typeof value.code === "string" &&
+    isSeverity(value.severity) &&
+    isLine(value.line) &&
+    isRecord(value.params)
+  );
+}
+
+function isStep(value: unknown): value is StepLine {
+  return isRecord(value) && typeof value.id === "string" && isLine(value.line);
+}
+
+function isCodeInfo(value: unknown): value is LintCodeInfo {
+  return (
+    isRecord(value) &&
+    typeof value.code === "string" &&
+    isSeverity(value.severity)
+  );
+}
+
+function invalid(what: string): never {
+  throw new Error(`saka-wasm returned an invalid ${what}`);
+}
+
+export function parseLintReport(json: string): LintReport {
+  const value: unknown = JSON.parse(json);
+  if (
+    !isRecord(value) ||
+    typeof value.is_spec !== "boolean" ||
+    typeof value.parser_version !== "number" ||
+    !Array.isArray(value.issues) ||
+    !value.issues.every(isIssue) ||
+    !Array.isArray(value.steps) ||
+    !value.steps.every(isStep)
+  ) {
+    return invalid("lint report");
+  }
+  return {
+    isSpec: value.is_spec,
+    parserVersion: value.parser_version,
+    issues: value.issues,
+    steps: value.steps,
+  };
+}
+
+export function parseLintCodes(json: string): LintCodeInfo[] {
+  const value: unknown = JSON.parse(json);
+  if (!Array.isArray(value) || !value.every(isCodeInfo)) {
+    return invalid("lint code list");
+  }
+  return value;
+}
+
+export async function loadSpecTools(): Promise<SpecTools> {
+  const wasm = await import("./pkg/saka_wasm");
+  await wasm.default();
+  return {
+    lint: (fileName, text) => parseLintReport(wasm.lint(fileName, text)),
+    contentHash: (text) => wasm.content_hash(text),
+    lintCodes: () => parseLintCodes(wasm.lint_codes()),
+  };
+}

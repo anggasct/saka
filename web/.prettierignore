@@ -5,3 +5,4 @@ src/routeTree.gen.ts
 playwright-report
 test-results
 .playwright-browsers
+src/wasm/pkg

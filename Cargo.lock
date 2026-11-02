@@ -2513,6 +2513,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "saka-wasm"
+version = "0.1.0"
+dependencies = [
+ "saka-spec",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

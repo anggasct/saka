@@ -5,6 +5,7 @@ mod e2e;
 mod hygiene;
 mod metadata;
 mod systemd;
+mod wasm;
 
 use std::process::ExitCode;
 
@@ -17,9 +18,10 @@ fn main() -> ExitCode {
         Some("hygiene") => metadata::workspace_root().and_then(|root| hygiene::run(&root)),
         Some("test-systemd") => systemd::run(),
         Some("test-claude-memory") => claude_memory::run(),
+        Some("wasm") => wasm::run(),
         _ => {
             eprintln!(
-                "usage: cargo xtask <check|deps|e2e|hygiene|test-systemd|test-claude-memory>"
+                "usage: cargo xtask <check|deps|e2e|hygiene|test-systemd|test-claude-memory|wasm>"
             );
             return ExitCode::from(2);
         }
