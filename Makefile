@@ -3,7 +3,7 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps e2e test-systemd
+.PHONY: check deps e2e test-systemd test-claude-memory
 
 check:
 	$(LIMITED) cargo xtask check
@@ -15,6 +15,10 @@ deps:
 test-systemd:
 	$(LIMITED) cargo xtask test-systemd
 
+# Needs the `claude` CLI on PATH; talks only to a local fake API. Part of `make e2e`.
+test-claude-memory:
+	$(LIMITED) cargo xtask test-claude-memory
+
 # Opt-in: a real loop against a test repository with real credentials (see README).
-e2e: test-systemd
+e2e: test-systemd test-claude-memory
 	$(LIMITED) cargo xtask e2e

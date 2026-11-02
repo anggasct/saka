@@ -1,4 +1,5 @@
 mod check;
+mod claude_memory;
 mod deps;
 mod e2e;
 mod hygiene;
@@ -15,8 +16,11 @@ fn main() -> ExitCode {
         Some("e2e") => e2e::run(),
         Some("hygiene") => metadata::workspace_root().and_then(|root| hygiene::run(&root)),
         Some("test-systemd") => systemd::run(),
+        Some("test-claude-memory") => claude_memory::run(),
         _ => {
-            eprintln!("usage: cargo xtask <check|deps|e2e|hygiene|test-systemd>");
+            eprintln!(
+                "usage: cargo xtask <check|deps|e2e|hygiene|test-systemd|test-claude-memory>"
+            );
             return ExitCode::from(2);
         }
     };

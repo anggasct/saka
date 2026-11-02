@@ -79,6 +79,14 @@ fn main() -> ExitCode {
             the_adapter_starts_drives_and_stops_a_session,
         ),
         (
+            "the_adapter_launches_in_the_physical_worktree_and_scopes_memory_to_it",
+            the_adapter_launches_in_the_physical_worktree_and_scopes_memory_to_it,
+        ),
+        (
+            "a_worktree_the_cli_would_read_as_a_glob_is_never_launched",
+            a_worktree_the_cli_would_read_as_a_glob_is_never_launched,
+        ),
+        (
             "systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing",
             systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing,
         ),
@@ -660,7 +668,10 @@ fn adapter(
 }
 
 fn launch_for(fx: &Fixture) -> SessionLaunch {
-    let root = fx.path("env");
+    launch_in(fx, &fx.path("env"))
+}
+
+fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
     std::fs::create_dir_all(root.join("worktree")).unwrap();
     SessionLaunch {
         session_id: fx.session,
@@ -731,6 +742,45 @@ fn the_adapter_starts_drives_and_stops_a_session() {
             "the runner is gone"
         );
         assert!(agents.send_turn(&session, 2, "more").await.is_err());
+    });
+}
+
+fn settings_arg(spec: &LaunchSpec) -> serde_json::Value {
+    let at = spec.args.iter().position(|a| a == "--settings").unwrap();
+    serde_json::from_str(&spec.args[at + 1]).unwrap()
+}
+
+fn the_adapter_launches_in_the_physical_worktree_and_scopes_memory_to_it() {
+    let fx = Fixture::new();
+    std::fs::create_dir_all(fx.path("real data")).unwrap();
+    std::os::unix::fs::symlink(fx.path("real data"), fx.path("link")).unwrap();
+    let (agents, _rx) = adapter(&fx, Arc::new(DirectSupervisor::new(fx.path("logs"))), "");
+    let launch = launch_in(&fx, &fx.path("link/env"));
+    let (spec, _) = agents
+        .launch_spec(Path::new("/usr/bin/claude"), &launch)
+        .unwrap();
+    let physical = std::fs::canonicalize(fx.path("real data/env/worktree")).unwrap();
+    assert_eq!(spec.cwd, physical.to_string_lossy());
+    assert_eq!(
+        settings_arg(&spec)["claudeMdExcludes"],
+        serde_json::json!([format!("!{}/**", physical.display())])
+    );
+    assert_eq!(spec.env["HOME"], fx.path("link/env/home").to_string_lossy());
+}
+
+fn a_worktree_the_cli_would_read_as_a_glob_is_never_launched() {
+    block_on(async {
+        let fx = Fixture::new();
+        let supervisor = Arc::new(DirectSupervisor::new(fx.path("logs")));
+        let (agents, _rx) = adapter(&fx, supervisor.clone(), "");
+        let launch = launch_in(&fx, &fx.path("en[v]s/e-1"));
+        let err = agents.start(&launch).await.unwrap_err();
+        let physical = std::fs::canonicalize(fx.path("en[v]s/e-1/worktree")).unwrap();
+        assert_eq!(err.code, "envs_dir_unsupported");
+        assert!(!err.retryable);
+        assert_eq!(err.params["path"], physical.to_string_lossy().as_ref());
+        assert!(!fx.path(&format!("sessions/{}", fx.session)).exists());
+        assert_eq!(supervisor.pid(&saka_agents::unit_name(fx.session)), None);
     });
 }
 
