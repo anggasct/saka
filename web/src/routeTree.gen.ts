@@ -11,6 +11,8 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
+import { Route as DocsIndexRouteImport } from './routes/docs.index'
+import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
 import { Route as DeliveryTasksWorkItemIdRouteImport } from './routes/delivery.tasks.$workItemId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +25,16 @@ const DeliveryIndexRoute = DeliveryIndexRouteImport.update({
   path: '/delivery/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/docs/',
+  path: '/docs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsProjectIdRoute = DocsProjectIdRouteImport.update({
+  id: '/docs/$projectId',
+  path: '/docs/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeliveryTasksWorkItemIdRoute = DeliveryTasksWorkItemIdRouteImport.update({
   id: '/delivery/tasks/$workItemId',
   path: '/delivery/tasks/$workItemId',
@@ -31,31 +43,55 @@ const DeliveryTasksWorkItemIdRoute = DeliveryTasksWorkItemIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/docs/$projectId': typeof DocsProjectIdRoute
   '/delivery/': typeof DeliveryIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/docs/$projectId': typeof DocsProjectIdRoute
   '/delivery': typeof DeliveryIndexRoute
+  '/docs': typeof DocsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/docs/$projectId': typeof DocsProjectIdRoute
   '/delivery/': typeof DeliveryIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/delivery/' | '/delivery/tasks/$workItemId'
+  fullPaths:
+    | '/'
+    | '/docs/$projectId'
+    | '/delivery/'
+    | '/docs/'
+    | '/delivery/tasks/$workItemId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/delivery' | '/delivery/tasks/$workItemId'
-  id: '__root__' | '/' | '/delivery/' | '/delivery/tasks/$workItemId'
+  to:
+    | '/'
+    | '/docs/$projectId'
+    | '/delivery'
+    | '/docs'
+    | '/delivery/tasks/$workItemId'
+  id:
+    | '__root__'
+    | '/'
+    | '/docs/$projectId'
+    | '/delivery/'
+    | '/docs/'
+    | '/delivery/tasks/$workItemId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DocsProjectIdRoute: typeof DocsProjectIdRoute
   DeliveryIndexRoute: typeof DeliveryIndexRoute
+  DocsIndexRoute: typeof DocsIndexRoute
   DeliveryTasksWorkItemIdRoute: typeof DeliveryTasksWorkItemIdRoute
 }
 
@@ -75,6 +111,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DeliveryIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/': {
+      id: '/docs/'
+      path: '/docs'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/$projectId': {
+      id: '/docs/$projectId'
+      path: '/docs/$projectId'
+      fullPath: '/docs/$projectId'
+      preLoaderRoute: typeof DocsProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/delivery/tasks/$workItemId': {
       id: '/delivery/tasks/$workItemId'
       path: '/delivery/tasks/$workItemId'
@@ -87,7 +137,9 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DocsProjectIdRoute: DocsProjectIdRoute,
   DeliveryIndexRoute: DeliveryIndexRoute,
+  DocsIndexRoute: DocsIndexRoute,
   DeliveryTasksWorkItemIdRoute: DeliveryTasksWorkItemIdRoute,
 }
 export const routeTree = rootRouteImport

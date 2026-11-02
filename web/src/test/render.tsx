@@ -6,6 +6,8 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
+
+import { routeTree } from "@/routeTree.gen";
 import type { ReactElement } from "react";
 
 import type { Locale } from "@/i18n/messages";
@@ -24,5 +26,18 @@ export function renderWithProviders(ui: ReactElement, locale: Locale = "en") {
       <RouterProvider router={router} />
     </Providers>,
   );
+  return { ...result, queryClient, router };
+}
+
+export function renderApp(url: string) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: [url] }),
+    context: { queryClient },
+  });
+  const result = render(<RouterProvider router={router} />);
   return { ...result, queryClient, router };
 }

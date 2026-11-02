@@ -70,3 +70,96 @@ body {
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
+
+.docs-editor .cm-editor {
+  min-height: 50dvh;
+  font-size: 0.9375rem;
+}
+
+.docs-editor .cm-editor.cm-focused {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.docs-editor .cm-content {
+  padding: 0.75rem;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  caret-color: var(--foreground);
+}
+
+.docs-editor .cm-h {
+  font-weight: 600;
+}
+
+.docs-editor .cm-h1 {
+  font-size: 1.5rem;
+}
+
+.docs-editor .cm-h2 {
+  font-size: 1.25rem;
+}
+
+.docs-editor .cm-h3 {
+  font-size: 1.125rem;
+}
+
+.docs-editor .cm-link {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.docs-editor .cm-codeblock {
+  background: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+
+.docs-editor .cm-quote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.docs-editor .cm-task {
+  width: 1rem;
+  height: 1rem;
+  vertical-align: middle;
+}
+
+.docs-editor .cm-chip,
+.chip-done,
+.chip-blocked,
+.chip-active,
+.chip-waiting {
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.docs-editor .cm-chip {
+  margin-left: 0.5rem;
+  padding: 0 0.5rem;
+}
+
+.docs-editor .cm-chip-done,
+.chip-done {
+  background: var(--success);
+  color: var(--success-foreground);
+}
+
+.docs-editor .cm-chip-blocked,
+.chip-blocked {
+  background: var(--danger);
+  color: var(--danger-foreground);
+}
+
+.docs-editor .cm-chip-active,
+.chip-active {
+  background: var(--info);
+  color: var(--info-foreground);
+}
+
+.docs-editor .cm-chip-waiting,
+.chip-waiting {
+  background: var(--muted);
+  color: var(--foreground);
+}
