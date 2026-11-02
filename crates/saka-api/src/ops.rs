@@ -219,6 +219,23 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     }
 
     t.family(
+        "saka_webhook_deliveries_total",
+        "counter",
+        "Webhook deliveries by integration, event, and outcome.",
+    );
+    for (integration, event, outcome, n) in &m.webhook_deliveries {
+        t.sample(
+            "saka_webhook_deliveries_total",
+            &[
+                ("integration", integration),
+                ("event", event),
+                ("outcome", outcome),
+            ],
+            n,
+        );
+    }
+
+    t.family(
         "saka_work_packet_bytes",
         "histogram",
         "Size of work packets sent as the first turn of a session.",

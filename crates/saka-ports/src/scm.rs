@@ -93,4 +93,30 @@ pub trait Scm: Send + Sync {
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()>;
+
+    fn webhook_configured(&self, integration_id: &str) -> PortResult<bool>;
+
+    fn parse_webhook(
+        &self,
+        integration_id: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> PortResult<WebhookDelivery>;
+}
+
+pub const MAX_WEBHOOK_TARGETS: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum WebhookTarget {
+    Change { number: u64 },
+    Head { sha: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookDelivery {
+    pub delivery_id: String,
+    pub event: String,
+    pub action: Option<String>,
+    pub repo_full_name: Option<String>,
+    pub targets: Vec<WebhookTarget>,
 }

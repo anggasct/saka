@@ -1332,3 +1332,22 @@ impl WorkPacket {
         }
     }
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WebhookAccepted {
+    pub delivery_id: String,
+    /// `refreshed`, `ignored`, or `duplicate`.
+    pub outcome: String,
+    /// Change requests refreshed by this delivery; for `duplicate`, the count from the first receipt.
+    pub change_requests: u32,
+}
+
+impl WebhookAccepted {
+    pub fn from_accepted(a: &saka_engine::webhooks::AcceptedWebhook) -> WebhookAccepted {
+        WebhookAccepted {
+            delivery_id: a.delivery_id.clone(),
+            outcome: a.outcome.as_str().to_string(),
+            change_requests: a.change_requests,
+        }
+    }
+}

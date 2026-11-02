@@ -46,6 +46,7 @@ job_kinds! {
     EnvVerifyMerged => "env.verify_merged", 3;
     ScmDeleteBranch => "scm.delete_branch", 5;
     EnvTeardown => "env.teardown", 5;
+    ScmWebhookPrune => "scm.webhook_prune", 3;
 }
 
 impl JobKind {
@@ -75,7 +76,8 @@ impl JobKind {
             JobKind::SessionStop
             | JobKind::SessionReattach
             | JobKind::ScmDeleteBranch
-            | JobKind::EnvTeardown => None,
+            | JobKind::EnvTeardown
+            | JobKind::ScmWebhookPrune => None,
         }
     }
 }
@@ -126,5 +128,6 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::EnvVerifyMerged => "sync.verify",
         JobKind::ScmDeleteBranch => "scm.delete_branch",
         JobKind::EnvTeardown => "env.teardown",
+        JobKind::ScmWebhookPrune => "scm.webhook_prune",
     }
 }

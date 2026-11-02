@@ -70,6 +70,18 @@ pub struct ContextBlobRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookDeliveryRow {
+    pub id: Uuid,
+    pub integration_id: String,
+    pub delivery_id: String,
+    pub event: String,
+    pub action: Option<String>,
+    pub repo_id: Option<saka_core::ids::RepoId>,
+    pub refreshed: u32,
+    pub received_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRow {
     pub project_id: ProjectId,
     pub name: String,
@@ -129,6 +141,8 @@ pub struct Batch {
     pub jobs: Vec<NewJob>,
     pub secrets: Vec<SecretRow>,
     pub removed_secrets: Vec<(ProjectId, String)>,
+    pub webhook_deliveries: Vec<WebhookDeliveryRow>,
+    pub prune_webhook_deliveries_before: Option<Timestamp>,
 }
 
 impl Batch {
@@ -219,6 +233,30 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for s in &b.specs {
         spec(tx, s)?;
+    }
+    for d in &b.webhook_deliveries {
+        tx.execute(
+            "INSERT INTO webhook_delivery (id, integration_id, delivery_id, event, action, repo_id, outcome,
+               change_requests, received_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                d.id.to_string(),
+                d.integration_id,
+                d.delivery_id,
+                d.event,
+                d.action,
+                d.repo_id.map(|r| r.0.to_string()),
+                if d.refreshed > 0 { "refreshed" } else { "ignored" },
+                d.refreshed,
+                d.received_at.0,
+            ],
+        )?;
+    }
+    if let Some(before) = b.prune_webhook_deliveries_before {
+        tx.execute(
+            "DELETE FROM webhook_delivery WHERE received_at < ?1",
+            [before.0],
+        )?;
     }
     for blob in &b.context_blobs {
         tx.execute(

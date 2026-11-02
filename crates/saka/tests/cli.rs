@@ -788,3 +788,163 @@ fn serve_refuses_a_secret_key_that_is_not_0600() {
     );
     assert!(!dir.path().join("data").join("saka.db").exists());
 }
+
+fn private_file(path: &Path, bytes: &[u8], mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, bytes).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn webhook_config(
+    dir: &Path,
+    listen: &str,
+    hooks: &str,
+    secret: Option<&Path>,
+) -> std::path::PathBuf {
+    let key = dir.join("app.pem");
+    private_file(&key, b"not a real key", 0o600);
+    let secret_line = secret.map_or(String::new(), |s| {
+        format!("webhook_secret_file = \"{}\"\n", s.display())
+    });
+    write_config(
+        dir,
+        &format!(
+            "listen = \"{listen}\"\n\n[hooks]\nlisten = \"{hooks}\"\n\n[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"{}\"\n{secret_line}",
+            key.display()
+        ),
+    )
+}
+
+#[test]
+fn serve_refuses_webhook_settings_it_cannot_use_safely() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("hook.secret");
+    private_file(&secret, &[b'k'; 40], 0o600);
+    let cases = [
+        (
+            "127.0.0.1:7420",
+            "127.0.0.1:7420",
+            Some(&secret),
+            "config_invalid",
+        ),
+        ("127.0.0.1:7420", "nope", Some(&secret), "config_invalid"),
+        ("127.0.0.1:7420", "127.0.0.1:7421", None, "config_invalid"),
+    ];
+    for (listen, hooks, secret, expected) in cases {
+        let config = webhook_config(dir.path(), listen, hooks, secret.map(|p| p.as_path()));
+        let out = run_saka(&config, &["serve"]);
+        assert_eq!(code(&out), 2, "{hooks}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(expected), "{hooks}: {stderr}");
+    }
+    private_file(&secret, &[b'k'; 40], 0o644);
+    let config = webhook_config(
+        dir.path(),
+        "127.0.0.1:7420",
+        "127.0.0.1:7421",
+        Some(&secret),
+    );
+    let stderr = String::from_utf8_lossy(&run_saka(&config, &["serve"]).stderr).to_string();
+    assert!(
+        stderr.contains("\"code\":\"config_key_file_mode\""),
+        "{stderr}"
+    );
+    private_file(&secret, b"short\n", 0o600);
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"code\":\"config_webhook_secret_invalid\""),
+        "{stderr}"
+    );
+    assert!(!dir.path().join("data").join("saka.db").exists());
+}
+
+fn http_post(port: u16, path: &str, body: &str) -> Option<(u16, String)> {
+    use std::io::Write;
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    write!(
+        s,
+        "POST {path} HTTP/1.1\r\nHost: hooks.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .ok()?;
+    let mut text = String::new();
+    s.read_to_string(&mut text).ok()?;
+    let status = text.split_whitespace().nth(1)?.parse().ok()?;
+    let body = text
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+    Some((status, body))
+}
+
+#[test]
+fn serve_opens_a_webhook_listener_that_only_serves_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, hooks) = (free_port(), free_port());
+    let secret_value = "a-webhook-secret-that-is-long-enough-1234";
+    let secret = dir.path().join("hook.secret");
+    private_file(&secret, format!("{secret_value}\n").as_bytes(), 0o600);
+    let config = webhook_config(
+        dir.path(),
+        &format!("127.0.0.1:{api}"),
+        &format!("127.0.0.1:{hooks}"),
+        Some(&secret),
+    );
+    let mut child = Command::new(SAKA)
+        .arg("serve")
+        .env("SAKA_CONFIG", &config)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline && http_get(api, "/readyz").map(|r| r.0) != Some(200) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        http_get(api, "/readyz").map(|r| r.0),
+        Some(200),
+        "never ready"
+    );
+    assert_eq!(http_get(hooks, "/api/v1/meta").map(|r| r.0), Some(404));
+    assert_eq!(http_get(hooks, "/readyz").map(|r| r.0), Some(404));
+    assert_eq!(http_get(hooks, "/hooks/github").map(|r| r.0), Some(405));
+    let unsigned = http_post(hooks, "/hooks/github", "{}").unwrap();
+    assert_eq!(unsigned.0, 401, "{}", unsigned.1);
+    assert!(
+        unsigned.1.contains("webhook_signature_invalid"),
+        "{}",
+        unsigned.1
+    );
+    assert_eq!(
+        http_post(hooks, "/hooks/elsewhere", "{}").map(|r| r.0),
+        Some(404)
+    );
+
+    let pid = child.id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(child.wait().unwrap().success());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(stderr.contains("listening for webhooks"), "{stderr}");
+    assert!(stderr.contains("scm.webhook.rejected"), "{stderr}");
+    assert!(
+        !stderr.contains(secret_value),
+        "the secret reached the logs"
+    );
+}

@@ -133,6 +133,10 @@ impl Engine {
                 json!({ "attempts": job.attempts }),
             ));
         }
+        if job.kind == JobKind::ScmWebhookPrune {
+            self.prune_webhooks().map_err(internal)?;
+            return Ok(Effect::Nothing);
+        }
         let id: WorkItemId = field(&job.payload, "work_item_id")?;
         let Some(task) = self
             .store
@@ -198,6 +202,7 @@ impl Engine {
             JobKind::ScmMerge => self.merge(&task, field(p, "head_sha")?).await,
             JobKind::EnvVerifyMerged => self.verify(&task, job).await,
             JobKind::EnvTeardown => self.teardown(&task, field(p, "environment_id")?).await,
+            JobKind::ScmWebhookPrune => Ok(Effect::Skipped),
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;

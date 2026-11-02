@@ -41,7 +41,18 @@ pub struct Config {
     pub env: Env,
     #[serde(default)]
     pub toolchain: Toolchain,
+    #[serde(default)]
+    pub hooks: Option<Hooks>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hooks {
+    pub listen: String,
+}
+
+pub const WEBHOOK_SECRET_MIN: usize = 32;
+pub const WEBHOOK_SECRET_MAX: usize = 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -205,6 +216,8 @@ pub struct ScmEntry {
     pub ci_appear_timeout_secs: u64,
     #[serde(default = "squash")]
     pub merge_method: MergeMethod,
+    #[serde(default)]
+    pub webhook_secret_file: Option<String>,
 }
 
 fn github_api() -> String {
@@ -455,6 +468,21 @@ impl Config {
 
     fn validate(&self) -> Result<(), ConfigError> {
         self.listen()?;
+        if let Some(hooks) = &self.hooks {
+            let at = self.hooks_listen()?;
+            if Some(at) == self.listen().ok() || hooks.listen.trim() == self.server.listen.trim() {
+                return Err(err(
+                    "config_invalid",
+                    "hooks.listen must differ from server.listen",
+                ));
+            }
+            if self.scm.iter().all(|s| s.webhook_secret_file.is_none()) {
+                return Err(err(
+                    "config_invalid",
+                    "hooks needs at least one scm.webhook_secret_file",
+                ));
+            }
+        }
         if !(1..=16).contains(&self.scheduler.max_active_tasks) {
             return Err(err(
                 "config_invalid",
@@ -626,23 +654,62 @@ impl Config {
         }
     }
 
-    pub fn check_key_files(&self) -> Result<(), ConfigError> {
+    pub fn hooks_listen(&self) -> Result<SocketAddr, ConfigError> {
+        let listen = self.hooks.as_ref().map_or("", |h| h.listen.as_str());
+        listen
+            .parse()
+            .map_err(|_| err("config_invalid", format!("hooks.listen {listen:?}")))
+    }
+
+    pub fn webhook_secrets(&self) -> Result<Vec<(String, Vec<u8>)>, ConfigError> {
+        let mut out = Vec::new();
         for s in &self.scm {
-            let path = expand(&s.private_key_file);
-            let meta = std::fs::metadata(&path).map_err(|e| {
+            let Some(file) = &s.webhook_secret_file else {
+                continue;
+            };
+            let path = expand(file);
+            check_private_file(&path)?;
+            let mut bytes = std::fs::read(&path).map_err(|e| {
                 err(
                     "config_key_file_unreadable",
                     format!("{}: {e}", path.display()),
                 )
             })?;
-            let mine =
-                std::os::unix::fs::MetadataExt::uid(&meta) == rustix::process::getuid().as_raw();
-            if !meta.is_file() || meta.permissions().mode() & 0o777 != 0o600 || !mine {
-                return Err(err("config_key_file_mode", path.display().to_string()));
+            while bytes.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                bytes.pop();
             }
+            let fits = (WEBHOOK_SECRET_MIN..=WEBHOOK_SECRET_MAX).contains(&bytes.len());
+            if !fits || bytes.contains(&0) {
+                return Err(err(
+                    "config_webhook_secret_invalid",
+                    path.display().to_string(),
+                ));
+            }
+            out.push((s.id.clone(), bytes));
+        }
+        Ok(out)
+    }
+
+    pub fn check_key_files(&self) -> Result<(), ConfigError> {
+        for s in &self.scm {
+            check_private_file(&expand(&s.private_key_file))?;
         }
         Ok(())
     }
+}
+
+fn check_private_file(path: &std::path::Path) -> Result<(), ConfigError> {
+    let meta = std::fs::metadata(path).map_err(|e| {
+        err(
+            "config_key_file_unreadable",
+            format!("{}: {e}", path.display()),
+        )
+    })?;
+    let mine = std::os::unix::fs::MetadataExt::uid(&meta) == rustix::process::getuid().as_raw();
+    if !meta.is_file() || meta.permissions().mode() & 0o777 != 0o600 || !mine {
+        return Err(err("config_key_file_mode", path.display().to_string()));
+    }
+    Ok(())
 }
 
 pub fn is_loopback(addr: &SocketAddr) -> bool {

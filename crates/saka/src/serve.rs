@@ -22,7 +22,7 @@ use saka_env::{
 use saka_ports::{
     ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
     OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
-    RepoRef, Scm, UnitLimits,
+    RepoRef, Scm, UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
 use saka_store::{Store, StoreError};
@@ -94,6 +94,18 @@ impl Scm for ScmRouter {
         self.get(&repo.integration_id)?
             .delete_branch(repo, branch)
             .await
+    }
+    fn webhook_configured(&self, integration_id: &str) -> PortResult<bool> {
+        self.get(integration_id)?.webhook_configured(integration_id)
+    }
+    fn parse_webhook(
+        &self,
+        integration_id: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> PortResult<WebhookDelivery> {
+        self.get(integration_id)?
+            .parse_webhook(integration_id, headers, body)
     }
 }
 
@@ -256,6 +268,14 @@ pub fn serve(cfg: &Config) -> ExitCode {
     if let Err(e) = cfg.check_key_files() {
         return refuse(&e);
     }
+    let hooks = match cfg.hooks.as_ref().map(|_| cfg.hooks_listen()).transpose() {
+        Ok(h) => h,
+        Err(e) => return refuse(&e),
+    };
+    let webhook_secrets = match cfg.webhook_secrets() {
+        Ok(s) => s,
+        Err(e) => return refuse(&e),
+    };
     let policy = match Policy::compile(&cfg.permission.rule) {
         Ok(p) => p,
         Err(e) => {
@@ -290,7 +310,16 @@ pub fn serve(cfg: &Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    runtime.block_on(run(cfg, listen, policy, secrets))
+    let webhooks = Webhooks {
+        listen: hooks,
+        secrets: webhook_secrets.into_iter().collect(),
+    };
+    runtime.block_on(run(cfg, listen, policy, secrets, webhooks))
+}
+
+struct Webhooks {
+    listen: Option<std::net::SocketAddr>,
+    secrets: HashMap<String, Vec<u8>>,
 }
 
 async fn run(
@@ -298,6 +327,7 @@ async fn run(
     listen: std::net::SocketAddr,
     policy: Policy,
     secrets: Arc<AeadSecrets>,
+    mut webhooks: Webhooks,
 ) -> ExitCode {
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(l) => l,
@@ -322,6 +352,28 @@ async fn run(
             .into_future(),
     );
     tracing::info!(listen = %listen, version = VERSION, "listening");
+    let hooks_http = match webhooks.listen {
+        Some(at) => match tokio::net::TcpListener::bind(at).await {
+            Ok(l) => {
+                let mut hooks_stop = stopped.clone();
+                tracing::info!(listen = %at, "listening for webhooks");
+                Some(tokio::spawn(
+                    axum::serve(l, saka_api::hooks_router(state.clone()))
+                        .with_graceful_shutdown(async move {
+                            let _ = hooks_stop.wait_for(|s| *s).await;
+                        })
+                        .into_future(),
+                ))
+            }
+            Err(e) => {
+                tracing::error!(code = "listen_failed", error = %e, listen = %at, "cannot listen for webhooks");
+                let _ = stop.send(true);
+                let _ = http.await;
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let data_dir = cfg.data_dir();
@@ -412,10 +464,12 @@ async fn run(
     let scm = ScmRouter(
         apps.iter()
             .map(|(id, app)| {
-                (
-                    id.clone(),
-                    Arc::new(GitHub::new(app.clone(), repos.clone())),
-                )
+                let github = GitHub::new(app.clone(), repos.clone());
+                let github = match webhooks.secrets.remove(id) {
+                    Some(secret) => github.with_webhook_secret(secret),
+                    None => github,
+                };
+                (id.clone(), Arc::new(github))
             })
             .collect(),
     );
@@ -488,6 +542,9 @@ async fn run(
     let _ = stop.send(true);
     let _ = tokio::time::timeout(Duration::from_secs(30), running).await;
     let _ = http.await;
+    if let Some(hooks) = hooks_http {
+        let _ = hooks.await;
+    }
     forwarder.abort();
     ExitCode::SUCCESS
 }

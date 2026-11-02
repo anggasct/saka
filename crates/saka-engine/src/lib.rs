@@ -13,6 +13,7 @@ mod text;
 mod timeline;
 pub mod toolchain;
 mod views;
+pub mod webhooks;
 mod worker;
 
 use std::sync::{Arc, Mutex, MutexGuard};

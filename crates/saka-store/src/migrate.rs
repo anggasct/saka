@@ -20,6 +20,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (7, include_str!("../migrations/0007_toolchain_blockers.sql")),
     (8, include_str!("../migrations/0008_secrets.sql")),
     (9, include_str!("../migrations/0009_spec_context.sql")),
+    (10, include_str!("../migrations/0010_webhook_delivery.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -874,6 +875,37 @@ mod tests {
             [],
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn the_webhook_delivery_table_dedupes_per_integration() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..10], &backups, Timestamp(1)).unwrap();
+        assert_eq!(report.applied.last(), Some(&10));
+        conn.execute_batch(
+            "INSERT INTO webhook_delivery VALUES ('w1', 'github', 'd-1', 'ping', NULL, NULL, 'ignored', 0, 1);
+             INSERT INTO webhook_delivery VALUES ('w2', 'other', 'd-1', 'ping', NULL, NULL, 'ignored', 0, 1);",
+        )
+        .unwrap();
+        for sql in [
+            "INSERT INTO webhook_delivery VALUES ('w3', 'github', 'd-1', 'ping', NULL, NULL, 'ignored', 0, 2)",
+            "INSERT INTO webhook_delivery VALUES ('w4', 'github', 'd-2', 'ping', NULL, NULL, 'refreshed', 0, 2)",
+            "INSERT INTO webhook_delivery VALUES ('w5', 'github', 'd-3', 'ping', NULL, NULL, 'ignored', 1, 2)",
+            "INSERT INTO webhook_delivery VALUES ('w6', 'github', 'd-4', 'ping', NULL, 'missing', 'ignored', 0, 2)",
+            "INSERT INTO webhook_delivery VALUES ('w7', 'github', '', 'ping', NULL, NULL, 'ignored', 0, 2)",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('webhook_delivery_received_idx', 'change_request_head_idx') ORDER BY name"
+            ),
+            vec!["change_request_head_idx", "webhook_delivery_received_idx"]
+        );
     }
 
     #[test]

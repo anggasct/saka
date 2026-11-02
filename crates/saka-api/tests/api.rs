@@ -34,38 +34,9 @@ struct Reply {
     body: Value,
 }
 
-struct EveryCallsite;
-
-impl tracing::Subscriber for EveryCallsite {
-    fn register_callsite(
-        &self,
-        _: &'static tracing::Metadata<'static>,
-    ) -> tracing::subscriber::Interest {
-        tracing::subscriber::Interest::sometimes()
-    }
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        false
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, _: &tracing::Event<'_>) {}
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
-static GLOBAL_SUBSCRIBER: std::sync::Once = std::sync::Once::new();
-
 impl Api {
     fn new(cfg: SimConfig) -> Api {
-        // A callsite first hit on another thread while a test subscriber registers can stay
-        // cached as disabled; a global subscriber that answers "sometimes" keeps every callsite
-        // checked against the subscriber of the thread that emits it.
-        GLOBAL_SUBSCRIBER.call_once(|| {
-            let _ = tracing::subscriber::set_global_default(EveryCallsite);
-        });
+        saka_testkit::logs::check_callsites_per_thread();
         let sim = Sim::new(cfg);
         let mut api_cfg = ApiConfig::new("0.1.0-test");
         api_cfg.keep_alive = Duration::from_millis(200);

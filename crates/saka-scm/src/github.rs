@@ -1,5 +1,6 @@
 pub mod app;
 pub mod ci;
+mod webhook;
 
 use std::sync::Arc;
 
@@ -8,9 +9,10 @@ use reqwest::{Method, StatusCode};
 use saka_core::vocab::ChangeState;
 use saka_ports::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
-    PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm,
+    PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, WebhookDelivery,
 };
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 pub use app::{API_VERSION, GitHubApp, GitHubConfig};
 use app::{Reply, inaccessible, parse_time, split_repo};
@@ -18,6 +20,7 @@ use app::{Reply, inaccessible, parse_time, split_repo};
 pub struct GitHub {
     app: Arc<GitHubApp>,
     repos: Arc<dyn Repos>,
+    webhook_secret: Option<Zeroizing<Vec<u8>>>,
 }
 
 fn opened(pr: &Value) -> PortResult<OpenedChange> {
@@ -38,7 +41,17 @@ fn opened(pr: &Value) -> PortResult<OpenedChange> {
 
 impl GitHub {
     pub fn new(app: Arc<GitHubApp>, repos: Arc<dyn Repos>) -> GitHub {
-        GitHub { app, repos }
+        GitHub {
+            app,
+            repos,
+            webhook_secret: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_webhook_secret(mut self, secret: Vec<u8>) -> GitHub {
+        self.webhook_secret = Some(Zeroizing::new(secret));
+        self
     }
 
     pub fn app(&self) -> &Arc<GitHubApp> {
@@ -265,5 +278,22 @@ impl Scm for GitHub {
             StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => Ok(()),
             _ => Err(self.app.unexpected("delete_branch", &reply)),
         }
+    }
+
+    fn webhook_configured(&self, _integration_id: &str) -> PortResult<bool> {
+        Ok(self.webhook_secret.is_some())
+    }
+
+    fn parse_webhook(
+        &self,
+        _integration_id: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> PortResult<WebhookDelivery> {
+        let secret = self
+            .webhook_secret
+            .as_ref()
+            .ok_or_else(|| PortError::permanent("webhook_not_configured", json!({})))?;
+        webhook::parse(secret, headers, body)
     }
 }
