@@ -43,7 +43,10 @@ use uuid::Uuid;
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewProject, RegisteredSpec, SessionCommand};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
-pub use draft::{DraftView, NewSpecDraft};
+pub use draft::{
+    DraftBudgetView, DraftContentView, DraftPacketDocument, DraftPacketView, DraftView,
+    NewSpecDraft,
+};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};

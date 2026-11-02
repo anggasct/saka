@@ -334,6 +334,37 @@ pub fn last_written(conn: &Connection, id: SpecDraftId) -> Result<Option<(u32, L
     )
 }
 
+pub fn last_round(conn: &Connection, id: SpecDraftId) -> Result<Option<(u32, LintRound)>> {
+    one(
+        conn,
+        &format!(
+            "SELECT a.attempt AS attempt_number, {ROUND_COLUMNS} FROM spec_draft_lint_round r
+             JOIN spec_draft_attempt a ON a.id = r.attempt_id
+             WHERE r.spec_draft_id = ?1
+             ORDER BY a.attempt DESC, r.round DESC LIMIT 1"
+        ),
+        &[&id.0.to_string()],
+        |row| Ok((u32_col(row, "attempt_number")?, round(row)?)),
+    )
+}
+
+pub fn packet_rendered(
+    conn: &Connection,
+    id: SpecDraftId,
+    attempt: SpecDraftAttemptId,
+) -> Result<Option<Value>> {
+    one(
+        conn,
+        "SELECT payload FROM event
+         WHERE stream_type = 'spec_draft' AND stream_id = ?1
+           AND kind = 'spec.draft.packet_rendered'
+           AND json_extract(payload, '$.attempt_id') = ?2
+         ORDER BY seq DESC LIMIT 1",
+        params![id.0.to_string(), attempt.0.to_string()],
+        |row| json(row, "payload"),
+    )
+}
+
 pub fn last_round_of(conn: &Connection, attempt: SpecDraftAttemptId) -> Result<Option<LintRound>> {
     one(
         conn,

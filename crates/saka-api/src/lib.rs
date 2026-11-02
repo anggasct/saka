@@ -32,13 +32,16 @@ pub use state::{ApiConfig, AppState};
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
         routes::list_permission_rules, routes::revoke_rule, routes::list_agent_accounts,
         routes::list_usage_records,
+        routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
+        routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
+        routes::retry_spec_draft, routes::cancel_spec_draft,
         routes::meta, routes::events,
         ops::healthz, ops::readyz, ops::metrics,
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
-        (name = "projects"), (name = "specs"), (name = "files"), (name = "delivery"), (name = "runtime"),
-        (name = "system"), (name = "ops"),
+        (name = "projects"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"),
+        (name = "spec-drafts"), (name = "system"), (name = "ops"),
     )
 )]
 pub struct ApiDoc;
@@ -135,6 +138,34 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/permission-rules/{rule_id}/revoke",
             post(routes::revoke_rule),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/spec-drafts",
+            post(routes::create_spec_draft).get(routes::list_spec_drafts),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}",
+            get(routes::get_spec_draft),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds",
+            get(routes::list_spec_draft_rounds),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/content",
+            get(routes::get_spec_draft_content),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/packet",
+            get(routes::get_spec_draft_packet),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/actions/retry",
+            post(routes::retry_spec_draft),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel",
+            post(routes::cancel_spec_draft),
         )
         .route("/api/v1/agent-accounts", get(routes::list_agent_accounts))
         .route("/api/v1/usage-records", get(routes::list_usage_records))

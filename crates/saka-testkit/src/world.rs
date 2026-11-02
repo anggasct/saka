@@ -153,6 +153,7 @@ struct State {
     ci: CiScript,
     commit_ci: CiScript,
     commit_reads_fail: bool,
+    doc_opens_fail: bool,
     checkouts: Vec<(EnvironmentId, String)>,
     lose_merges: bool,
     refuse_teardowns: bool,
@@ -260,6 +261,7 @@ impl FakeWorld {
                 ci,
                 commit_ci: CiScript::Silent,
                 commit_reads_fail: false,
+                doc_opens_fail: false,
                 checkouts: Vec::new(),
                 lose_merges: false,
                 refuse_teardowns: false,
@@ -511,6 +513,10 @@ impl FakeWorld {
 
     pub fn fail_commit_reads(&self, fail: bool) {
         self.state().commit_reads_fail = fail;
+    }
+
+    pub fn fail_doc_opens(&self, fail: bool) {
+        self.state().doc_opens_fail = fail;
     }
 
     pub fn checkouts(&self) -> Vec<(EnvironmentId, String)> {
@@ -1230,6 +1236,12 @@ impl DocSource for FakeWorld {
         max_bytes: u64,
     ) -> PortResult<DocOpened> {
         let s = self.state();
+        if s.doc_opens_fail {
+            return Err(PortError::retryable(
+                "scm_unavailable",
+                json!({ "status": 503 }),
+            ));
+        }
         let commit = s.remote.get(branch).cloned().ok_or_else(|| {
             PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
         })?;

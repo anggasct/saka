@@ -948,3 +948,328 @@ fn serve_opens_a_webhook_listener_that_only_serves_hooks() {
         "the secret reached the logs"
     );
 }
+
+const DRAFT_PATH: &str = "docs/specs/export.md";
+
+fn draft_spec(valid: bool) -> Vec<u8> {
+    let criteria = if valid {
+        "## Acceptance criteria\n\n- **AC-01**: `tasks export` writes a CSV file.\n\n"
+    } else {
+        ""
+    };
+    format!("---\nsaka: spec\n---\n# Export tasks\n\n{criteria}## Done when\n\n- `make test`\n")
+        .into_bytes()
+}
+
+fn draft_write(path: &str, valid: bool) -> saka_testkit::DraftTurn {
+    saka_testkit::DraftTurn::Write {
+        path: path.into(),
+        bytes: draft_spec(valid),
+    }
+}
+
+struct Waiting {
+    child: std::process::Child,
+    id: saka_core::ids::SpecDraftId,
+}
+
+fn spawn_wait(server: &str, path: &str) -> Waiting {
+    use std::io::BufRead;
+    let mut child = Command::new(SAKA)
+        .arg("--server")
+        .arg(server)
+        .args([
+            "spec",
+            "draft",
+            "tasks",
+            path,
+            "--idea",
+            "Export tasks as CSV.",
+            "--wait",
+        ])
+        .env_remove("SAKA_CONFIG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.as_mut().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let id = saka_core::ids::SpecDraftId(line.trim().parse().unwrap_or_else(|_| {
+        let mut e = String::new();
+        child.stderr.take().unwrap().read_to_string(&mut e).unwrap();
+        panic!("no draft id: {line:?} {e}")
+    }));
+    Waiting { child, id }
+}
+
+fn drive(sim: &mut Sim, mut done: impl FnMut(&Sim) -> bool) {
+    let started = Instant::now();
+    while !done(sim) {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the sim did not get there"
+        );
+        if matches!(sim.step(), saka_testkit::Step::Idle) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+fn finished(w: Waiting) -> (i32, String, String) {
+    let out = w.child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn draft_state(sim: &Sim, id: saka_core::ids::SpecDraftId) -> saka_core::vocab::SpecDraftState {
+    sim.draft(id).draft.state
+}
+
+#[test]
+fn spec_draft_and_draft_commands_drive_drafts_through_the_api() {
+    use saka_core::vocab::{SessionState, SpecDraftState};
+    use saka_testkit::{AgentOutcome, AgentScript, DraftTurn};
+
+    let mut sim = Sim::new(SimConfig::default());
+    sim.world.put_doc("docs/prd.md", b"# PRD\n");
+    let server = serve(&sim);
+    let err = |o: &Output| String::from_utf8_lossy(&o.stderr).into_owned();
+
+    let both = saka(
+        &server,
+        &[
+            "spec",
+            "draft",
+            "tasks",
+            DRAFT_PATH,
+            "--idea",
+            "x",
+            "--idea-file",
+            "idea.txt",
+        ],
+    );
+    assert_eq!(code(&both), 2, "--idea and --idea-file together");
+    assert_eq!(
+        code(&saka(&server, &["spec", "draft", "tasks", DRAFT_PATH])),
+        2,
+        "an idea is required"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("none.txt");
+    assert_eq!(
+        code(&saka(
+            &server,
+            &[
+                "spec",
+                "draft",
+                "tasks",
+                DRAFT_PATH,
+                "--idea-file",
+                missing.to_str().unwrap()
+            ]
+        )),
+        1
+    );
+
+    sim.world.script_draft(vec![draft_write(DRAFT_PATH, true)]);
+    let idea = dir.path().join("idea.txt");
+    std::fs::write(&idea, "Export tasks as CSV.\n").unwrap();
+    let created = saka(
+        &server,
+        &[
+            "spec",
+            "draft",
+            "tasks",
+            DRAFT_PATH,
+            "--idea-file",
+            idea.to_str().unwrap(),
+            "--context",
+            "docs/prd.md",
+            "--locale",
+            "id",
+        ],
+    );
+    assert_eq!(code(&created), 0, "{}", err(&created));
+    let id = saka_core::ids::SpecDraftId(stdout(&created).trim().parse().unwrap());
+    let d = sim.draft(id).draft;
+    assert_eq!(d.context_paths, ["docs/prd.md"]);
+    assert_eq!(d.idea, "Export tasks as CSV.\n");
+    assert_eq!(d.locale.as_str(), "id");
+    let taken = saka(
+        &server,
+        &["spec", "draft", "tasks", DRAFT_PATH, "--idea", "Again."],
+    );
+    assert_eq!(code(&taken), 4, "409 spec_draft_target_taken");
+    assert!(
+        err(&taken).contains("spec_draft_target_taken"),
+        "{}",
+        err(&taken)
+    );
+    let invalid = saka(
+        &server,
+        &["spec", "draft", "tasks", "docs/x.txt", "--idea", "x"],
+    );
+    assert_eq!(code(&invalid), 1, "422 validation_failed");
+    drive(&mut sim, |s| {
+        draft_state(s, id) == SpecDraftState::Succeeded
+    });
+    let shown = saka(&server, &["draft", "show", &id.0.to_string()]);
+    assert_eq!(code(&shown), 0, "{}", err(&shown));
+    assert!(stdout(&shown).contains("succeeded"), "{}", stdout(&shown));
+    assert!(stdout(&shown).contains("spec "), "{}", stdout(&shown));
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["draft", "cancel", &id.0.to_string(), "--reason", "x"]
+        )),
+        4
+    );
+
+    sim.world
+        .script_draft(vec![draft_write("docs/specs/ok.md", true)]);
+    let ok = spawn_wait(&server, "docs/specs/ok.md");
+    drive(&mut sim, |s| draft_state(s, ok.id).is_finished());
+    let spec_id = sim.draft(ok.id).draft.spec_id.unwrap();
+    let (c, out, e) = finished(ok);
+    assert_eq!(c, 0, "{e}");
+    assert!(
+        out.contains(&format!("succeeded spec {}", spec_id.0)),
+        "{out}"
+    );
+
+    sim.world.script_draft(vec![
+        draft_write("docs/specs/lint.md", false),
+        DraftTurn::Nothing,
+        DraftTurn::Nothing,
+        DraftTurn::Nothing,
+    ]);
+    let lint = spawn_wait(&server, "docs/specs/lint.md");
+    let lint_id = lint.id;
+    drive(&mut sim, |s| draft_state(s, lint.id).is_finished());
+    let (c, out, e) = finished(lint);
+    assert_eq!(c, 3, "{e}");
+    assert!(out.lines().skip(1).all(|l| l.starts_with("line ")), "{out}");
+    assert!(out.contains("ac_section_missing"), "{out}");
+    assert!(e.contains("lint_rounds_exhausted"), "{e}");
+
+    let lint_draft = lint_id.0.to_string();
+    let listed = saka(&server, &["draft", "list", "tasks", "--state", "all"]);
+    assert_eq!(code(&listed), 0, "{}", err(&listed));
+    assert_eq!(stdout(&listed).lines().count(), 3, "{}", stdout(&listed));
+    let active = saka(&server, &["draft", "list", "tasks"]);
+    assert_eq!(
+        stdout(&active).trim(),
+        format!("{lint_draft}  docs/specs/lint.md  failed lint_rounds_exhausted")
+    );
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["draft", "list", "tasks", "--state", "done"]
+        )),
+        2
+    );
+    let timeline = saka(&server, &["draft", "timeline", &lint_draft]);
+    assert_eq!(code(&timeline), 0, "{}", err(&timeline));
+    let session = sim.draft(lint_id).session.unwrap().id;
+    assert_eq!(
+        stdout(&timeline).lines().count(),
+        sim.timeline(session).len()
+    );
+    assert_eq!(
+        code(&saka(&server, &["draft", "steer", &lint_draft, "more"])),
+        4
+    );
+    assert_eq!(
+        code(&saka(&server, &["draft", "interrupt", &lint_draft])),
+        4
+    );
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["draft", "stop", &lint_draft, "--reason", "x"]
+        )),
+        4
+    );
+    let retried = saka(
+        &server,
+        &[
+            "draft",
+            "retry",
+            &lint_draft,
+            "--reason",
+            "again",
+            "--note",
+            "Add criteria.",
+        ],
+    );
+    assert_eq!(code(&retried), 0, "{}", err(&retried));
+    assert_eq!(stdout(&retried).trim(), format!("{lint_draft} queued"));
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["draft", "retry", &lint_draft, "--reason", "again"]
+        )),
+        4,
+        "409 invalid_state while queued"
+    );
+    let cancelled = saka(
+        &server,
+        &["draft", "cancel", &lint_draft, "--reason", "enough"],
+    );
+    assert_eq!(code(&cancelled), 0, "{}", err(&cancelled));
+    assert_eq!(stdout(&cancelled).trim(), format!("{lint_draft} cancelled"));
+
+    sim.world.set_script(AgentScript {
+        outcome: AgentOutcome::Hang,
+        ..AgentScript::default()
+    });
+    sim.world
+        .script_draft(vec![draft_write("docs/specs/hang.md", true)]);
+    let hang = spawn_wait(&server, "docs/specs/hang.md");
+    let hang_id = hang.id;
+    let running = |s: &Sim| {
+        s.draft(hang_id)
+            .session
+            .is_some_and(|x| x.state == SessionState::Running)
+    };
+    drive(&mut sim, running);
+    let hang_draft = hang_id.0.to_string();
+    let steered = saka(&server, &["draft", "steer", &hang_draft, "keep it short"]);
+    assert_eq!(code(&steered), 0, "{}", err(&steered));
+    assert!(
+        stdout(&steered).trim().ends_with("running"),
+        "{}",
+        stdout(&steered)
+    );
+    let interrupted = saka(&server, &["draft", "interrupt", &hang_draft]);
+    assert_eq!(code(&interrupted), 0, "{}", err(&interrupted));
+    drive(&mut sim, |s| {
+        s.draft(hang_id)
+            .session
+            .is_some_and(|x| x.state == SessionState::Idle)
+    });
+    let stopped = saka(
+        &server,
+        &["draft", "stop", &hang_draft, "--reason", "wrong idea"],
+    );
+    assert_eq!(code(&stopped), 0, "{}", err(&stopped));
+    drive(&mut sim, |s| draft_state(s, hang_id).is_finished());
+    let (c, _, e) = finished(hang);
+    assert_eq!(c, 1, "{e}");
+    assert!(e.contains("session_failed"), "{e}");
+
+    let gone = spawn_wait(&server, "docs/specs/gone.md");
+    let gone_draft = gone.id.0.to_string();
+    let cancelled = saka(
+        &server,
+        &["draft", "cancel", &gone_draft, "--reason", "not needed"],
+    );
+    assert_eq!(code(&cancelled), 0, "{}", err(&cancelled));
+    let (c, _, e) = finished(gone);
+    assert_eq!(c, 4, "{e}");
+}

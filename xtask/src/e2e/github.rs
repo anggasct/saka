@@ -190,6 +190,22 @@ impl GitHub {
         }
     }
 
+    pub fn last_commit_touching(&self, branch: &str, path: &str) -> Result<Option<String>> {
+        let list = self.send(
+            Method::GET,
+            &format!(
+                "/repos/{}/commits?sha={branch}&path={path}&per_page=1",
+                self.repo
+            ),
+            None,
+        )?;
+        Ok(list
+            .as_array()
+            .and_then(|c| c.first())
+            .and_then(|c| c["sha"].as_str())
+            .map(String::from))
+    }
+
     pub fn pull_requests(&self, base: &str) -> Result<Vec<PullRequest>> {
         let list = self.send(
             Method::GET,

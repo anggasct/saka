@@ -212,6 +212,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/spec-drafts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_spec_drafts"];
+    put?: never;
+    post: operations["create_spec_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/specs": {
     parameters: {
       query?: never;
@@ -316,6 +332,102 @@ export interface paths {
       cookie?: never;
     };
     get: operations["get_timeline"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_spec_draft"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["cancel_spec_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}/actions/retry": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["retry_spec_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}/content": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_spec_draft_content"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_spec_draft_rounds"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}/packet": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_spec_draft_packet"];
     put?: never;
     post?: never;
     delete?: never;
@@ -625,6 +737,16 @@ export interface components {
       /** @description Path relative to the workspace repo root. */
       path: string;
     };
+    CreateSpecDraftBody: {
+      /** @description Up to 16 distinct docs in the project folder the architect reads first. */
+      context_paths?: string[];
+      /** @description 1 to 8000 characters after trimming; stored as written. */
+      idea: string;
+      /** @description `en` (default) or `id`: the template and the language of the prose. */
+      locale?: string | null;
+      /** @description The new spec file from the repo root, inside the project folder, ending in `.md`. */
+      path: string;
+    };
     /** @enum {string} */
     Decision: "allow" | "deny";
     EmptyBody: Record<string, never>;
@@ -798,6 +920,55 @@ export interface components {
         steps: components["schemas"]["Step"][];
         title: string;
         updated_at: string;
+      }[];
+      next_cursor?: string | null;
+    };
+    /** @description A list page. */
+    Page_SpecDraft: {
+      items: {
+        attempt?: components["schemas"]["SpecDraftAttempt"] | null;
+        /** @description Subset of `retry`, `cancel`. */
+        available_actions: string[];
+        budget?: components["schemas"]["SpecDraftBudget"] | null;
+        /** @description The docs commit once `succeeded`, and for `failed` with `register_failed`. */
+        commit?: string | null;
+        context_paths: string[];
+        created_at: string;
+        failure?: components["schemas"]["Failure"] | null;
+        finished_at?: string | null;
+        /** Format: uuid */
+        id: string;
+        /** @description As the operator wrote it; `null` in lists. */
+        idea?: string | null;
+        last_round?: components["schemas"]["SpecDraftLastRound"] | null;
+        /** @description `en | id` */
+        locale: string;
+        /** @description The new spec file, from the repo root. */
+        path: string;
+        /** @description `retry | open_written | open_file`; `null` unless `failed`. */
+        primary_action?: string | null;
+        /** Format: uuid */
+        project_id: string;
+        /**
+         * Format: int32
+         * @description Manual retries so far, at most 3.
+         */
+        retries: number;
+        session?: components["schemas"]["SessionBrief"] | null;
+        /** @description The file name without its extension. */
+        slug: string;
+        /**
+         * Format: uuid
+         * @description The registered spec once `succeeded`.
+         */
+        spec_id?: string | null;
+        /** @description `queued | preparing | drafting | committing | succeeded | failed | cancelled` */
+        state: string;
+        updated_at: string;
+        /** Format: int64 */
+        version: number;
+        /** @description Only while `queued`: an architect slot or an agent account window. Empty in action responses. */
+        waiting_on: components["schemas"]["WaitingOn"][];
       }[];
       next_cursor?: string | null;
     };
@@ -1003,6 +1174,12 @@ export interface components {
     RequiredReason: {
       reason: string;
     };
+    RetrySpecDraftBody: {
+      /** @description 1 to 4000 characters, sent to the architect in the packet of the new attempt. */
+      note?: string | null;
+      /** @description 1 to 500 characters. */
+      reason: string;
+    };
     Revision: {
       content_hash: string;
       /** @description Context documents pinned with this revision, in work packet order (`link` first, then `always`). */
@@ -1192,6 +1369,177 @@ export interface components {
        */
       spec_id?: string | null;
       state?: string | null;
+    };
+    /** @description A spec that the architect drafts from an idea, until Saka's lint passes and the file is committed. */
+    SpecDraft: {
+      attempt?: components["schemas"]["SpecDraftAttempt"] | null;
+      /** @description Subset of `retry`, `cancel`. */
+      available_actions: string[];
+      budget?: components["schemas"]["SpecDraftBudget"] | null;
+      /** @description The docs commit once `succeeded`, and for `failed` with `register_failed`. */
+      commit?: string | null;
+      context_paths: string[];
+      created_at: string;
+      failure?: components["schemas"]["Failure"] | null;
+      finished_at?: string | null;
+      /** Format: uuid */
+      id: string;
+      /** @description As the operator wrote it; `null` in lists. */
+      idea?: string | null;
+      last_round?: components["schemas"]["SpecDraftLastRound"] | null;
+      /** @description `en | id` */
+      locale: string;
+      /** @description The new spec file, from the repo root. */
+      path: string;
+      /** @description `retry | open_written | open_file`; `null` unless `failed`. */
+      primary_action?: string | null;
+      /** Format: uuid */
+      project_id: string;
+      /**
+       * Format: int32
+       * @description Manual retries so far, at most 3.
+       */
+      retries: number;
+      session?: components["schemas"]["SessionBrief"] | null;
+      /** @description The file name without its extension. */
+      slug: string;
+      /**
+       * Format: uuid
+       * @description The registered spec once `succeeded`.
+       */
+      spec_id?: string | null;
+      /** @description `queued | preparing | drafting | committing | succeeded | failed | cancelled` */
+      state: string;
+      updated_at: string;
+      /** Format: int64 */
+      version: number;
+      /** @description Only while `queued`: an architect slot or an agent account window. Empty in action responses. */
+      waiting_on: components["schemas"]["WaitingOn"][];
+    };
+    SpecDraftAttempt: {
+      /** @description The base branch commit the attempt's environment was prepared at. */
+      base_sha?: string | null;
+      ended_at?: string | null;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: int32
+       * @description `architect.lint_rounds`.
+       */
+      max_rounds: number;
+      note?: string | null;
+      /** Format: int32 */
+      number: number;
+      packet_sha256?: string | null;
+      reason?: string | null;
+      /** Format: int32 */
+      rounds: number;
+      started_at: string;
+      /** @description `running | succeeded | failed | cancelled` */
+      state: string;
+      /** @description `auto` (first) or `manual` (retry). */
+      trigger: string;
+    };
+    SpecDraftBudget: {
+      /** Format: uuid */
+      attempt_id: string;
+      /** @description Decimal strings in dollars. */
+      cost_usd: components["schemas"]["Measure"];
+      /** @description Minutes; `used` is a decimal number. */
+      running_minutes: components["schemas"]["Measure"];
+      tokens: components["schemas"]["Measure"];
+      turns: components["schemas"]["Measure"];
+      /** Format: int32 */
+      warn_percent: number;
+    };
+    /** @description The latest file content the architect wrote. */
+    SpecDraftContent: {
+      /** Format: int32 */
+      attempt: number;
+      /** Format: int64 */
+      bytes: number;
+      /** @description The bytes as written, as UTF-8 (line endings kept). */
+      content: string;
+      content_hash?: string | null;
+      path: string;
+      /** Format: int32 */
+      round: number;
+    };
+    SpecDraftLastRound: {
+      /**
+       * Format: int32
+       * @description Attempt number.
+       */
+      attempt: number;
+      /**
+       * Format: int64
+       * @description `null` when the file was missing.
+       */
+      bytes?: number | null;
+      /** @description `sha256:<hex>`; `null` when the file was missing or too large. */
+      content_hash?: string | null;
+      created_at: string;
+      /** Format: int32 */
+      decisions_open: number;
+      issues: components["schemas"]["LintIssue"][];
+      /** @description `passed | failed | missing` */
+      outcome: string;
+      /** Format: int32 */
+      parser_version: number;
+      /** Format: int32 */
+      round: number;
+    };
+    SpecDraftLintRound: {
+      /**
+       * Format: int32
+       * @description Attempt number.
+       */
+      attempt: number;
+      /** Format: int64 */
+      bytes?: number | null;
+      content_hash?: string | null;
+      created_at: string;
+      /** Format: int32 */
+      decisions_open: number;
+      /** @description Same shape as `Spec.lint.issues`, context issues included. */
+      issues: components["schemas"]["LintIssue"][];
+      /** @description `passed | failed | missing` */
+      outcome: string;
+      /** Format: int32 */
+      parser_version: number;
+      /** Format: int32 */
+      round: number;
+      /** Format: uuid */
+      session_id: string;
+      /** Format: int32 */
+      turn: number;
+    };
+    SpecDraftLintRoundList: {
+      /** @description Ascending by attempt, then round. */
+      items: components["schemas"]["SpecDraftLintRound"][];
+    };
+    /** @description The packet of the latest attempt, as sent to the architect. */
+    SpecDraftPacket: {
+      /** Format: int32 */
+      attempt: number;
+      base_sha: string;
+      documents: components["schemas"]["SpecDraftPacketDocument"][];
+      /** @description SHA-256 hex of `text`. */
+      sha256: string;
+      text: string;
+    };
+    SpecDraftPacketDocument: {
+      /** Format: int64 */
+      bytes: number;
+      content_hash: string;
+      /** Format: int32 */
+      index: number;
+      /** @description `template | rules | selected | always` */
+      origin: string;
+      /** @description `null` for the template and the rules. */
+      path?: string | null;
+      /** @description What the packet names the document by, for example `docs/prd.md @ <commit>`. */
+      source: string;
     };
     SpecProblem: {
       /** @description Same codes as registering a spec: `spec_slug_conflict`, `validation_failed`, `scm_unavailable`. */
@@ -2003,6 +2351,92 @@ export interface operations {
       };
     };
   };
+  list_spec_drafts: {
+    parameters: {
+      query?: {
+        /** @description `active` (default: queued, preparing, drafting, committing, failed), `finished` (succeeded, cancelled), or `all`. */
+        state?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_SpecDraft"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  create_spec_draft: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateSpecDraftBody"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   list_specs: {
     parameters: {
       query?: {
@@ -2298,6 +2732,210 @@ export interface operations {
         };
       };
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_spec_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  cancel_spec_draft: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  retry_spec_draft: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RetrySpecDraftBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_spec_draft_content: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraftContent"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_spec_draft_rounds: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraftLintRoundList"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_spec_draft_packet: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraftPacket"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      409: {
         headers: {
           [name: string]: unknown;
         };

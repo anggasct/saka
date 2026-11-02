@@ -56,6 +56,9 @@ enum Command {
     #[command(about = "Tasks")]
     #[command(subcommand)]
     Task(TaskCmd),
+    #[command(about = "Spec drafts the architect writes from an idea")]
+    #[command(subcommand)]
+    Draft(DraftCmd),
     #[command(about = "Permission requests from agent sessions")]
     #[command(subcommand)]
     Permission(PermissionCmd),
@@ -129,6 +132,38 @@ enum SpecCmd {
         #[arg(long)]
         reason: String,
     },
+    #[command(
+        about = "Asks the architect to draft a new spec from an idea; prints the draft id",
+        after_help = "Exit codes with --wait: 0 succeeded, 1 failed, 3 failed on lint, 4 cancelled."
+    )]
+    Draft {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "Path of the new spec file from the repo root")]
+        path: String,
+        #[arg(
+            help = "The idea, in your own words",
+            long,
+            required_unless_present = "idea_file",
+            conflicts_with = "idea_file"
+        )]
+        idea: Option<String>,
+        #[arg(help = "Read the idea from this file", long)]
+        idea_file: Option<PathBuf>,
+        #[arg(
+            help = "A doc in the project folder the architect reads first (repeatable, up to 16)",
+            long = "context"
+        )]
+        context: Vec<String>,
+        #[arg(
+            help = "Language of the spec: en or id (default en)",
+            long,
+            value_parser = ["en", "id"]
+        )]
+        locale: Option<String>,
+        #[arg(help = "Wait until the draft succeeds, fails, or is cancelled", long)]
+        wait: bool,
+    },
     #[command(about = "Prints a spec template that passes lint")]
     Template {
         #[arg(long, default_value = "en", help = "Template language: en or id")]
@@ -175,6 +210,50 @@ enum TaskCmd {
     },
     #[command(about = "Prints what the task's agent sessions did, in order")]
     Timeline { id: String },
+}
+
+#[derive(Subcommand)]
+enum DraftCmd {
+    #[command(about = "Lists the project's spec drafts")]
+    List {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(
+            help = "active (default), finished, or all",
+            long,
+            default_value = "active",
+            value_parser = ["active", "finished", "all"]
+        )]
+        state: String,
+    },
+    #[command(about = "Shows a draft: state, attempt, latest lint round, and failure")]
+    Show { id: String },
+    #[command(about = "Prints what the draft's latest architect session did, in order")]
+    Timeline { id: String },
+    #[command(about = "Sends a message to the draft's running or idle architect session")]
+    Steer { id: String, text: String },
+    #[command(about = "Stops the architect's current turn; the session waits for a steer")]
+    Interrupt { id: String },
+    #[command(about = "Ends the draft's architect session and fails the draft")]
+    Stop {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    #[command(about = "Starts a new attempt of a failed draft")]
+    Retry {
+        id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(help = "Sent to the architect with the new attempt", long)]
+        note: Option<String>,
+    },
+    #[command(about = "Cancels a draft that is not committing")]
+    Cancel {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -298,6 +377,70 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         }) => {
             let client = Client::new(&server(cli.server)?, cli.json);
             current_thread()?.block_on(client.spec_withdraw(&project, &path, &reason))
+        }
+        Command::Spec(SpecCmd::Draft {
+            project,
+            path,
+            idea,
+            idea_file,
+            context,
+            locale,
+            wait,
+        }) => {
+            let idea = match (idea, idea_file) {
+                (Some(text), _) => text,
+                (None, Some(file)) => cli::read_idea(&file)?,
+                (None, None) => String::new(),
+            };
+            let client = Client::new(&server(cli.server)?, cli.json);
+            let new = cli::NewDraft {
+                project: &project,
+                path: &path,
+                idea: &idea,
+                context: &context,
+                locale: locale.as_deref(),
+                wait,
+            };
+            current_thread()?.block_on(client.spec_draft(&new))
+        }
+        Command::Draft(cmd) => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(async {
+                match cmd {
+                    DraftCmd::List { project, state } => client.draft_list(&project, &state).await,
+                    DraftCmd::Show { id } => client.draft_show(&id).await,
+                    DraftCmd::Timeline { id } => client.draft_timeline(&id).await,
+                    DraftCmd::Steer { id, text } => {
+                        client
+                            .draft_session(&id, "steer", &serde_json::json!({ "text": text }))
+                            .await
+                    }
+                    DraftCmd::Interrupt { id } => {
+                        client
+                            .draft_session(&id, "interrupt", &serde_json::json!({}))
+                            .await
+                    }
+                    DraftCmd::Stop { id, reason } => {
+                        client
+                            .draft_session(&id, "stop", &serde_json::json!({ "reason": reason }))
+                            .await
+                    }
+                    DraftCmd::Retry { id, reason, note } => {
+                        client
+                            .draft_action(
+                                &id,
+                                "retry",
+                                &serde_json::json!({ "reason": reason, "note": note }),
+                            )
+                            .await
+                    }
+                    DraftCmd::Cancel { id, reason } => {
+                        client
+                            .draft_action(&id, "cancel", &serde_json::json!({ "reason": reason }))
+                            .await
+                    }
+                }
+            })
         }
         Command::Spec(SpecCmd::Template { locale }) => {
             let client = Client::new(&server(cli.server)?, cli.json);

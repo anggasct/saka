@@ -13,8 +13,9 @@ use saka_core::ids::{
     SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
+use saka_core::vocab::DraftLocale;
 use saka_engine::{
-    AddProject, EngineError, PermissionFilter, Precondition, Produced, Reply, RunOf,
+    AddProject, EngineError, NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf,
     SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
@@ -1440,4 +1441,283 @@ pub async fn events(
 
 pub async fn api_not_found() -> Response {
     ApiError::not_found().into_response()
+}
+
+const DRAFT_ACTIVE: &[&str] = &["queued", "preparing", "drafting", "committing", "failed"];
+const DRAFT_FINISHED: &[&str] = &["succeeded", "cancelled"];
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/spec-drafts", tag = "spec-drafts",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::CreateSpecDraftBody,
+    responses(
+        (status = 201, body = dto::SpecDraft),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn create_spec_draft(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let req: dto::CreateSpecDraftBody = tri!(body(&raw));
+    let locale = match req.locale.as_deref() {
+        None => DraftLocale::En,
+        Some(l) => tri!(
+            l.parse::<DraftLocale>()
+                .map_err(|_| ApiError::validation("locale", "invalid"))
+        ),
+    };
+    let project = ProjectId(tri!(path_id(&project)));
+    let engine = tri!(s.engine().cloned());
+    let viewer = engine.clone();
+    let respond = move |p: Produced<'_>| match p {
+        Produced::Draft(d) => reply(
+            StatusCode::CREATED,
+            &dto::SpecDraft::from_view(&viewer.draft_view(d.clone(), Vec::new(), None)),
+        ),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "spec_draft.create",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            let new = NewSpecDraft {
+                path: req.path,
+                idea: req.idea,
+                locale,
+                context_paths: req.context_paths,
+            };
+            engine
+                .create_spec_draft(project, new, &cause, Some(&action))
+                .await
+                .map(|_| Some(project))
+                .map_err(|e| (e, Some(project)))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/spec-drafts", tag = "spec-drafts",
+    params(("project_id" = uuid::Uuid, Path), dto::SpecDraftQuery),
+    responses(
+        (status = 200, body = dto::Page<dto::SpecDraft>),
+        (status = 404, body = dto::Problem, content_type = "application/problem+json"),
+        (status = 422, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn list_spec_drafts(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    Query(q): Query<dto::SpecDraftQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let project = ProjectId(tri!(path_id(&project)));
+    let which = q.state.as_deref().unwrap_or("active");
+    let states: Vec<String> = match which {
+        "active" => DRAFT_ACTIVE,
+        "finished" => DRAFT_FINISHED,
+        "all" => &[],
+        _ => return ApiError::validation("state", "invalid").into_response(),
+    }
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    let key = format!("spec_drafts:{project:?}:{which}");
+    let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
+    let paged = tri!(engine.spec_drafts(project, &states, &p));
+    ok(
+        StatusCode::OK,
+        &dto::Page {
+            items: paged.items.iter().map(dto::SpecDraft::list_item).collect(),
+            next_cursor: paged.next.map(|k| encode_cursor(k, &key)),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/spec-drafts/{spec_draft_id}", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::SpecDraft), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn get_spec_draft(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = SpecDraftId(tri!(path_id(&id)));
+    let view = tri!(engine.spec_draft(id));
+    ok(StatusCode::OK, &dto::SpecDraft::from_view(&view))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::SpecDraftLintRoundList), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_spec_draft_rounds(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = SpecDraftId(tri!(path_id(&id)));
+    let rounds = tri!(engine.spec_draft_rounds(id));
+    ok(
+        StatusCode::OK,
+        &dto::SpecDraftLintRoundList {
+            items: rounds
+                .iter()
+                .map(|(attempt, r)| dto::SpecDraftLintRound::from_round(*attempt, r))
+                .collect(),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/spec-drafts/{spec_draft_id}/content", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path)),
+    responses(
+        (status = 200, body = dto::SpecDraftContent),
+        (status = 404, body = dto::Problem, content_type = "application/problem+json"),
+        (status = 422, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn get_spec_draft_content(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = SpecDraftId(tri!(path_id(&id)));
+    let content = tri!(engine.spec_draft_content(id));
+    ok(StatusCode::OK, &dto::SpecDraftContent::from_view(&content))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/spec-drafts/{spec_draft_id}/packet", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path)),
+    responses(
+        (status = 200, body = dto::SpecDraftPacket),
+        (status = 404, body = dto::Problem, content_type = "application/problem+json"),
+        (status = 409, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn get_spec_draft_packet(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = SpecDraftId(tri!(path_id(&id)));
+    let packet = tri!(engine.spec_draft_packet(id));
+    ok(StatusCode::OK, &dto::SpecDraftPacket::from_view(&packet))
+}
+
+#[derive(Clone, Copy)]
+enum DraftAction {
+    Retry,
+    Cancel,
+}
+
+async fn draft_action(
+    s: AppState,
+    id: String,
+    (method, uri, headers, raw): (Method, Uri, HeaderMap, Bytes),
+    which: DraftAction,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let draft = SpecDraftId(tri!(path_id(&id)));
+    let (reason, note) = match which {
+        DraftAction::Retry => {
+            let req: dto::RetrySpecDraftBody = tri!(body(&raw));
+            (req.reason, req.note)
+        }
+        DraftAction::Cancel => {
+            let req: dto::RequiredReason = tri!(body(&raw));
+            (req.reason, None)
+        }
+    };
+    let engine = tri!(s.engine().cloned());
+    let before = engine.spec_draft(draft).ok();
+    let project = before.as_ref().map(|v| v.draft.draft.project_id);
+    let last_round = before.and_then(|v| v.last_round);
+    let viewer = engine.clone();
+    let respond = move |p: Produced<'_>| match p {
+        Produced::Draft(d) => reply(
+            StatusCode::ACCEPTED,
+            &dto::SpecDraft::from_view(&viewer.draft_view(
+                d.clone(),
+                Vec::new(),
+                last_round.clone(),
+            )),
+        ),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: match which {
+            DraftAction::Retry => "spec_draft.retry",
+            DraftAction::Cancel => "spec_draft.cancel",
+        },
+        target_type: "spec_draft",
+        target_id: Some(draft.0),
+        reason: Some(reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            let result = match which {
+                DraftAction::Retry => {
+                    engine.retry_spec_draft(draft, &reason, note, &cause, Some(&action))
+                }
+                DraftAction::Cancel => {
+                    engine.cancel_spec_draft(draft, &reason, &cause, Some(&action))
+                }
+            };
+            result.map(|_| project).map_err(|e| (e, project))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/spec-drafts/{spec_draft_id}/actions/retry", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RetrySpecDraftBody,
+    responses((status = 202, body = dto::SpecDraft), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn retry_spec_draft(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    draft_action(s, id, (method, uri, headers, raw), DraftAction::Retry).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::SpecDraft), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn cancel_spec_draft(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    draft_action(s, id, (method, uri, headers, raw), DraftAction::Cancel).await
 }

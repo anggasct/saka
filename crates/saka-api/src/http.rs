@@ -48,7 +48,7 @@ fn etag(body: &Value) -> Option<HeaderValue> {
     {
         return HeaderValue::from_str(&format!("\"{blob}\"")).ok();
     }
-    if body.get("task_key").is_some()
+    if (body.get("task_key").is_some() || body.get("context_paths").is_some())
         && let Some(v) = body.get("version").and_then(Value::as_u64)
     {
         return HeaderValue::from_str(&format!("W/\"{v}\"")).ok();

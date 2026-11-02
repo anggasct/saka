@@ -5,7 +5,9 @@ use saka_core::admission::Waiting;
 use saka_core::draft::{self as core, DraftInput, NewDraft, PacketFacts};
 use saka_core::event::{Event, Prompt};
 use saka_core::ids::{EnvironmentId, ProjectId, SessionId, SpecDraftAttemptId, SpecDraftId};
-use saka_core::model::{Draft, Environment, LintRound, Project, RunOwner};
+use saka_core::model::{
+    Budget, Draft, DraftDocument, Environment, LintRound, Project, RunOwner, Usage,
+};
 use saka_core::paths::{self, MAX_DOC_BYTES};
 use saka_core::rejection::{FileUnsupported, Rejection, TargetTakenBy};
 use saka_core::vocab::{
@@ -26,7 +28,7 @@ use crate::commands::{SpecFile, reason};
 use crate::docs::Precondition;
 use crate::packet::{self, ArchitectInput, ArchitectPacket, PreviousAttempt};
 use crate::register::{invalid, path_code};
-use crate::views::PermissionView;
+use crate::views::{self, PermissionView};
 use crate::worker::{Effect, Execution, field, internal, session_ref};
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
 
@@ -51,8 +53,42 @@ pub struct DraftView {
     pub waiting_on: Vec<Waiting>,
     pub primary_action: Option<PrimaryAction>,
     pub actions: Vec<&'static str>,
-    pub last_round: Option<LintRound>,
+    pub last_round: Option<(u32, LintRound)>,
     pub max_rounds: u32,
+    pub budget: Option<DraftBudgetView>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftBudgetView {
+    pub attempt_id: SpecDraftAttemptId,
+    pub warn_percent: u32,
+    pub limit: Budget,
+    pub used: Usage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftContentView {
+    pub attempt: u32,
+    pub round: u32,
+    pub path: String,
+    pub bytes: u64,
+    pub content_hash: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftPacketDocument {
+    pub document: DraftDocument,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftPacketView {
+    pub attempt: u32,
+    pub base_sha: String,
+    pub sha256: String,
+    pub documents: Vec<DraftPacketDocument>,
+    pub text: String,
 }
 
 type Previous = (PreviousAttempt, Option<Vec<u8>>);
@@ -89,16 +125,11 @@ impl Engine {
     pub fn spec_draft(&self, id: SpecDraftId) -> Result<DraftView> {
         let now = self.now();
         let (draft, drafts, quotas, last_round) = self.store.read(|c| {
-            let draft = rows::load_draft(c, id)?;
-            let last = match draft.as_ref().and_then(|d| d.draft.current_attempt_id) {
-                Some(attempt) => rows::last_round_of(c, attempt)?,
-                None => None,
-            };
             Ok((
-                draft,
+                rows::load_draft(c, id)?,
                 rows::load_drafts(c, DraftSet::Live)?,
                 read::account_quotas(c)?,
-                last,
+                rows::last_round(c, id)?,
             ))
         })?;
         let draft = draft.ok_or(EngineError::Rejected(Rejection::NotFound))?;
@@ -107,13 +138,158 @@ impl Engine {
             .find(|(d, _)| *d == id)
             .map(|(_, w)| w)
             .unwrap_or_default();
-        Ok(DraftView {
+        Ok(self.draft_view(draft, waiting_on, last_round))
+    }
+
+    pub fn draft_view(
+        &self,
+        draft: Draft,
+        waiting_on: Vec<Waiting>,
+        last_round: Option<(u32, LintRound)>,
+    ) -> DraftView {
+        let budget = draft.running_attempt().and_then(|a| {
+            core::run_view(&draft).map(|run| DraftBudgetView {
+                attempt_id: a.id,
+                warn_percent: self.cfg.draft.session.budget_warn_percent,
+                limit: a.budget,
+                used: run.usage(self.now()),
+            })
+        });
+        DraftView {
             primary_action: core::primary_action(&draft),
             actions: core::available_actions(&draft),
             waiting_on,
             last_round,
             max_rounds: self.cfg.draft.lint_rounds,
+            budget,
             draft,
+        }
+    }
+
+    pub fn spec_drafts(
+        &self,
+        project: ProjectId,
+        states: &[String],
+        page: &list::Page,
+    ) -> Result<views::Paged<DraftView>> {
+        let now = self.now();
+        let (known, keys) = self.store.read(|c| {
+            Ok((
+                read::load_project(c, project)?.is_some(),
+                list::spec_drafts(c, project, states, &views::probe(page))?,
+            ))
+        })?;
+        if !known {
+            return Err(Rejection::NotFound.into());
+        }
+        let keys = views::paged(keys, page, |(_, key)| *key);
+        let next = keys.next;
+        let keys = keys.items;
+        let ids: Vec<SpecDraftId> = keys.iter().map(|(id, _)| *id).collect();
+        let (mut drafts, live, quotas, rounds) = self.store.read(|c| {
+            let mut rounds = BTreeMap::new();
+            for id in &ids {
+                if let Some(round) = rows::last_round(c, *id)? {
+                    rounds.insert(*id, round);
+                }
+            }
+            Ok((
+                rows::load_drafts(c, DraftSet::Ids(&ids))?,
+                rows::load_drafts(c, DraftSet::Live)?,
+                read::account_quotas(c)?,
+                rounds,
+            ))
+        })?;
+        drafts.sort_by_key(|d| ids.iter().position(|id| *id == d.draft.id));
+        let mut waiting: BTreeMap<SpecDraftId, Vec<Waiting>> =
+            core::waiting(&live, &quotas, &self.cfg.draft, now)
+                .into_iter()
+                .collect();
+        let mut rounds = rounds;
+        Ok(views::Paged {
+            items: drafts
+                .into_iter()
+                .map(|d| {
+                    let id = d.draft.id;
+                    self.draft_view(
+                        d,
+                        waiting.remove(&id).unwrap_or_default(),
+                        rounds.remove(&id),
+                    )
+                })
+                .collect(),
+            next,
+        })
+    }
+
+    pub fn spec_draft_rounds(&self, id: SpecDraftId) -> Result<Vec<(u32, LintRound)>> {
+        let (draft, rounds) = self
+            .store
+            .read(|c| Ok((rows::load_draft(c, id)?, rows::lint_rounds(c, id)?)))?;
+        draft.ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        Ok(rounds)
+    }
+
+    pub fn spec_draft_content(&self, id: SpecDraftId) -> Result<DraftContentView> {
+        let (draft, written) = self
+            .store
+            .read(|c| Ok((rows::load_draft(c, id)?, rows::last_written(c, id)?)))?;
+        let draft = draft.ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let (attempt, round) = written.ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let bytes = round.content.unwrap_or_default();
+        let size = bytes.len() as u64;
+        let content = String::from_utf8(bytes).map_err(|_| Rejection::FileUnsupported {
+            reason: FileUnsupported::NotUtf8,
+        })?;
+        Ok(DraftContentView {
+            attempt,
+            round: round.round,
+            path: draft.draft.path,
+            bytes: size,
+            content_hash: round.content_hash,
+            content,
+        })
+    }
+
+    pub fn spec_draft_packet(&self, id: SpecDraftId) -> Result<DraftPacketView> {
+        let draft = self.load_draft(id)?;
+        let no_packet = || {
+            EngineError::Rejected(Rejection::InvalidState {
+                state: draft.draft.state.as_str().to_string(),
+            })
+        };
+        let attempt = draft.attempt.as_ref().ok_or_else(no_packet)?;
+        let (text, rendered) = self.store.read(|c| {
+            Ok((
+                rows::packet(c, attempt.id)?,
+                rows::packet_rendered(c, id, attempt.id)?,
+            ))
+        })?;
+        let (Some(text), Some(rendered)) = (text, rendered) else {
+            return Err(no_packet());
+        };
+        let documents: Vec<DraftDocument> =
+            serde_json::from_value(rendered["documents"].clone())
+                .map_err(|e| EngineError::Internal(format!("packet documents: {e}")))?;
+        let sources = packet::sources(&text);
+        Ok(DraftPacketView {
+            attempt: attempt.attempt,
+            base_sha: rendered["base_sha"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            sha256: rendered["packet_sha256"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            documents: documents
+                .into_iter()
+                .map(|document| DraftPacketDocument {
+                    source: sources.get(&document.index).cloned().unwrap_or_default(),
+                    document,
+                })
+                .collect(),
+            text,
         })
     }
 

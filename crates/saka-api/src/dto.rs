@@ -1,16 +1,17 @@
 use saka_core::admission::Waiting;
 use saka_core::gate::Check;
 use saka_core::model::{
-    Environment as CoreEnvironment, PermissionRule as CoreRule, RunOwner as CoreOwner,
-    SessionActivity as CoreActivity, StageRun, Task,
+    Environment as CoreEnvironment, LintRound, PermissionRule as CoreRule, RunOwner as CoreOwner,
+    SessionActivity as CoreActivity, SpecDraftAttempt as CoreAttempt, StageRun, Task,
 };
 use saka_core::session::session_actions;
 use saka_core::task::available_actions;
 use saka_core::time::Timestamp;
 use saka_core::vocab::EnvironmentState;
 use saka_engine::{
-    AccountView, BudgetView, DocContentView, DocTreeView, DocWriteView, PermissionView,
-    ProjectView, SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    AccountView, BudgetView, DocContentView, DocTreeView, DocWriteView, DraftBudgetView,
+    DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView, SessionView,
+    SpecView, TaskDetail, TaskView, UsageView,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -797,6 +798,340 @@ impl WorkItemDetail {
     }
 }
 
+/// A spec that the architect drafts from an idea, until Saka's lint passes and the file is committed.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraft {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    /// The new spec file, from the repo root.
+    pub path: String,
+    /// The file name without its extension.
+    pub slug: String,
+    /// As the operator wrote it; `null` in lists.
+    pub idea: Option<String>,
+    /// `en | id`
+    pub locale: String,
+    pub context_paths: Vec<String>,
+    /// `queued | preparing | drafting | committing | succeeded | failed | cancelled`
+    pub state: String,
+    /// The latest attempt; `null` before the first admission.
+    pub attempt: Option<SpecDraftAttempt>,
+    /// The latest lint round of any attempt; `issues` is empty in lists.
+    pub last_round: Option<SpecDraftLastRound>,
+    /// The latest session of the latest attempt.
+    pub session: Option<SessionBrief>,
+    /// Use and limits of the running attempt; `null` when no attempt runs.
+    pub budget: Option<SpecDraftBudget>,
+    /// Only while `queued`: an architect slot or an agent account window. Empty in action responses.
+    pub waiting_on: Vec<WaitingOn>,
+    /// `{code, params}` while `failed`.
+    pub failure: Option<Failure>,
+    /// `retry | open_written | open_file`; `null` unless `failed`.
+    pub primary_action: Option<String>,
+    /// Subset of `retry`, `cancel`.
+    pub available_actions: Vec<String>,
+    /// Manual retries so far, at most 3.
+    pub retries: u32,
+    /// The registered spec once `succeeded`.
+    pub spec_id: Option<Uuid>,
+    /// The docs commit once `succeeded`, and for `failed` with `register_failed`.
+    pub commit: Option<String>,
+    pub version: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftAttempt {
+    pub id: Uuid,
+    pub number: u32,
+    /// `auto` (first) or `manual` (retry).
+    pub trigger: String,
+    pub reason: Option<String>,
+    pub note: Option<String>,
+    /// `running | succeeded | failed | cancelled`
+    pub state: String,
+    /// The base branch commit the attempt's environment was prepared at.
+    pub base_sha: Option<String>,
+    pub rounds: u32,
+    /// `architect.lint_rounds`.
+    pub max_rounds: u32,
+    pub packet_sha256: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftLastRound {
+    /// Attempt number.
+    pub attempt: u32,
+    pub round: u32,
+    /// `passed | failed | missing`
+    pub outcome: String,
+    /// `null` when the file was missing.
+    pub bytes: Option<u64>,
+    /// `sha256:<hex>`; `null` when the file was missing or too large.
+    pub content_hash: Option<String>,
+    pub decisions_open: u32,
+    pub parser_version: u32,
+    pub issues: Vec<LintIssue>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftLintRound {
+    /// Attempt number.
+    pub attempt: u32,
+    pub round: u32,
+    pub session_id: Uuid,
+    pub turn: u32,
+    /// `passed | failed | missing`
+    pub outcome: String,
+    pub bytes: Option<u64>,
+    pub content_hash: Option<String>,
+    pub parser_version: u32,
+    pub decisions_open: u32,
+    /// Same shape as `Spec.lint.issues`, context issues included.
+    pub issues: Vec<LintIssue>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftLintRoundList {
+    /// Ascending by attempt, then round.
+    pub items: Vec<SpecDraftLintRound>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftBudget {
+    pub attempt_id: Uuid,
+    pub warn_percent: u32,
+    /// Minutes; `used` is a decimal number.
+    pub running_minutes: Measure,
+    pub turns: Measure,
+    pub tokens: Measure,
+    /// Decimal strings in dollars.
+    pub cost_usd: Measure,
+}
+
+/// The latest file content the architect wrote.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftContent {
+    pub attempt: u32,
+    pub round: u32,
+    pub path: String,
+    pub bytes: u64,
+    pub content_hash: Option<String>,
+    /// The bytes as written, as UTF-8 (line endings kept).
+    pub content: String,
+}
+
+/// The packet of the latest attempt, as sent to the architect.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftPacket {
+    pub attempt: u32,
+    pub base_sha: String,
+    /// SHA-256 hex of `text`.
+    pub sha256: String,
+    pub documents: Vec<SpecDraftPacketDocument>,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftPacketDocument {
+    pub index: u32,
+    /// What the packet names the document by, for example `docs/prd.md @ <commit>`.
+    pub source: String,
+    /// `null` for the template and the rules.
+    pub path: Option<String>,
+    /// `template | rules | selected | always`
+    pub origin: String,
+    pub bytes: u64,
+    pub content_hash: String,
+}
+
+fn issues_of(values: &[Value]) -> Vec<LintIssue> {
+    values
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect()
+}
+
+impl SpecDraftBudget {
+    fn from_view(v: &DraftBudgetView) -> SpecDraftBudget {
+        let minutes = (v.used.running_ms as f64 / 60_000.0 * 10.0).round() / 10.0;
+        SpecDraftBudget {
+            attempt_id: v.attempt_id.0,
+            warn_percent: v.warn_percent,
+            running_minutes: Measure {
+                used: Value::from(minutes),
+                limit: Value::from(v.limit.running_minutes),
+            },
+            turns: Measure {
+                used: Value::from(v.used.turns),
+                limit: Value::from(v.limit.turns),
+            },
+            tokens: Measure {
+                used: Value::from(v.used.tokens),
+                limit: Value::from(v.limit.tokens),
+            },
+            cost_usd: Measure {
+                used: Value::from(usd(v.used.cost_usd_micros)),
+                limit: Value::from(usd(v.limit.cost_usd_micros)),
+            },
+        }
+    }
+}
+
+impl SpecDraftAttempt {
+    fn from_attempt(a: &CoreAttempt, max_rounds: u32) -> SpecDraftAttempt {
+        SpecDraftAttempt {
+            id: a.id.0,
+            number: a.attempt,
+            trigger: a.trigger.as_str().to_string(),
+            reason: a.reason.clone(),
+            note: a.note.clone(),
+            state: a.state.as_str().to_string(),
+            base_sha: a.base_sha.clone(),
+            rounds: a.rounds,
+            max_rounds,
+            packet_sha256: a.packet_sha256.clone(),
+            started_at: time(a.started_at),
+            ended_at: opt_time(a.ended_at),
+        }
+    }
+}
+
+impl SpecDraftLintRound {
+    pub fn from_round(attempt: u32, r: &LintRound) -> SpecDraftLintRound {
+        SpecDraftLintRound {
+            attempt,
+            round: r.round,
+            session_id: r.session_id.0,
+            turn: r.turn,
+            outcome: r.outcome.as_str().to_string(),
+            bytes: r.bytes,
+            content_hash: r.content_hash.clone(),
+            parser_version: r.parser_version,
+            decisions_open: r.decisions_open,
+            issues: issues_of(&r.issues),
+            created_at: time(r.created_at),
+        }
+    }
+}
+
+impl SpecDraft {
+    pub fn from_view(v: &DraftView) -> SpecDraft {
+        SpecDraft::build(v, true)
+    }
+
+    pub fn list_item(v: &DraftView) -> SpecDraft {
+        SpecDraft::build(v, false)
+    }
+
+    fn build(v: &DraftView, full: bool) -> SpecDraft {
+        let d = &v.draft.draft;
+        let owner = v.draft.run_owner();
+        SpecDraft {
+            id: d.id.0,
+            project_id: d.project_id.0,
+            path: d.path.clone(),
+            slug: d.slug.clone(),
+            idea: full.then(|| d.idea.clone()),
+            locale: d.locale.as_str().to_string(),
+            context_paths: d.context_paths.clone(),
+            state: d.state.as_str().to_string(),
+            attempt: v
+                .draft
+                .attempt
+                .as_ref()
+                .map(|a| SpecDraftAttempt::from_attempt(a, v.max_rounds)),
+            last_round: v
+                .last_round
+                .as_ref()
+                .map(|(attempt, r)| SpecDraftLastRound {
+                    attempt: *attempt,
+                    round: r.round,
+                    outcome: r.outcome.as_str().to_string(),
+                    bytes: r.bytes,
+                    content_hash: r.content_hash.clone(),
+                    decisions_open: r.decisions_open,
+                    parser_version: r.parser_version,
+                    issues: if full {
+                        issues_of(&r.issues)
+                    } else {
+                        Vec::new()
+                    },
+                    created_at: time(r.created_at),
+                }),
+            session: v
+                .draft
+                .session
+                .as_ref()
+                .filter(|s| owner.is_some_and(|o| s.owner == o))
+                .map(|s| SessionBrief {
+                    id: s.id.0,
+                    state: s.state.as_str().to_string(),
+                    cli: s.cli.clone(),
+                    started_at: opt_time(s.started_at),
+                    ended_at: opt_time(s.ended_at),
+                }),
+            budget: v.budget.as_ref().map(SpecDraftBudget::from_view),
+            waiting_on: v.waiting_on.iter().map(WaitingOn::from).collect(),
+            failure: d.failure.as_ref().map(|f| Failure {
+                code: f.code.clone(),
+                params: f.params.clone(),
+            }),
+            primary_action: v.primary_action.map(|a| a.as_str().to_string()),
+            available_actions: v.actions.iter().map(|a| (*a).to_string()).collect(),
+            retries: d.retries,
+            spec_id: d.spec_id.map(|x| x.0),
+            commit: d.commit_sha.clone(),
+            version: d.version,
+            created_at: time(d.created_at),
+            updated_at: time(d.updated_at),
+            finished_at: opt_time(d.finished_at),
+        }
+    }
+}
+
+impl SpecDraftContent {
+    pub fn from_view(v: &DraftContentView) -> SpecDraftContent {
+        SpecDraftContent {
+            attempt: v.attempt,
+            round: v.round,
+            path: v.path.clone(),
+            bytes: v.bytes,
+            content_hash: v.content_hash.clone(),
+            content: v.content.clone(),
+        }
+    }
+}
+
+impl SpecDraftPacket {
+    pub fn from_view(v: &DraftPacketView) -> SpecDraftPacket {
+        SpecDraftPacket {
+            attempt: v.attempt,
+            base_sha: v.base_sha.clone(),
+            sha256: v.sha256.clone(),
+            documents: v
+                .documents
+                .iter()
+                .map(|d| SpecDraftPacketDocument {
+                    index: d.document.index,
+                    source: d.source.clone(),
+                    path: d.document.path.clone(),
+                    origin: d.document.origin.as_str().to_string(),
+                    bytes: d.document.bytes,
+                    content_hash: d.document.content_hash.clone(),
+                })
+                .collect(),
+            text: v.text.clone(),
+        }
+    }
+}
+
 /// The run that owns a session, its permission requests, and its usage records.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1111,6 +1446,7 @@ pub const CAPABILITIES: &[&str] = &[
     "work_item_cancel",
     "permission_answer",
     "events_sse",
+    "spec_draft",
 ];
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1226,6 +1562,31 @@ pub struct OptionalReason {
 #[serde(deny_unknown_fields)]
 pub struct RequiredReason {
     pub reason: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSpecDraftBody {
+    /// 1 to 8000 characters after trimming; stored as written.
+    pub idea: String,
+    /// The new spec file from the repo root, inside the project folder, ending in `.md`.
+    pub path: String,
+    /// Up to 16 distinct docs in the project folder the architect reads first.
+    #[serde(default)]
+    pub context_paths: Vec<String>,
+    /// `en` (default) or `id`: the template and the language of the prose.
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetrySpecDraftBody {
+    /// 1 to 500 characters.
+    pub reason: String,
+    /// 1 to 4000 characters, sent to the architect in the packet of the new attempt.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1411,6 +1772,15 @@ pub struct SpecTemplate {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SpecDraftQuery {
+    /// `active` (default: queued, preparing, drafting, committing, failed), `finished` (succeeded, cancelled), or `all`.
+    pub state: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
