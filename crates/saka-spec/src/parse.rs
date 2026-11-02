@@ -4,12 +4,13 @@ use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, parse_document};
 
 use crate::context::MAX_LINKS;
+use crate::decision::DecisionReader;
 use crate::frontmatter;
 use crate::graph::cycles;
 use crate::lint::{LintCode, LintIssue};
 use crate::model::{AcceptanceCriterion, Link, SpecModel, Step};
 
-pub const PARSER_VERSION: u32 = 3;
+pub const PARSER_VERSION: u32 = 4;
 pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 pub const MAX_STEPS: usize = 50;
 
@@ -73,6 +74,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
     let links = collect_links(root, &mut issues);
 
     let mut doc = Document::default();
+    let mut decisions = DecisionReader::new(&body);
     let mut section = Section::Other;
     for node in root.children() {
         let line = start_line(node);
@@ -84,6 +86,15 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             let title = inline_text(node).trim().to_string();
             if level == 1 && doc.title.is_none() {
                 doc.title = Some(title.clone());
+            }
+            if level <= 2 {
+                decisions.close(&mut issues);
+            }
+            if level == 1 && matches!(section, Section::Decisions) {
+                section = Section::Other;
+            }
+            if level == 3 && matches!(section, Section::Decisions) {
+                decisions.heading(node, &mut issues);
             }
             if level == 2 {
                 section = match title.to_lowercase().as_str() {
@@ -99,6 +110,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
                         doc.done_when = Some(DoneWhen { line, items: None });
                         Section::DoneWhen
                     }
+                    "decisions" => Section::Decisions,
                     _ => Section::Other,
                 };
             }
@@ -114,6 +126,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
                     done_when.items = Some(read_done_when(node));
                 }
             }
+            Section::Decisions => decisions.block(node),
             _ => {}
         }
     }
@@ -142,6 +155,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             Vec::new()
         }
     };
+    let decisions = decisions.finish(&mut issues);
     check_commands(&steps, &mut issues);
     if !steps.is_empty() {
         check_coverage(&doc.acs, &steps, &mut issues);
@@ -157,6 +171,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             acceptance_criteria: doc.acs,
             steps,
             links,
+            decisions,
         }),
         issues,
         depends_on_line,
@@ -168,6 +183,7 @@ enum Section {
     Ac,
     Steps,
     DoneWhen,
+    Decisions,
     Other,
 }
 
@@ -275,7 +291,7 @@ fn line_at(bytes: &[u8], offset: usize) -> u32 {
     u32::try_from(newlines + 1).unwrap_or(u32::MAX)
 }
 
-fn start_line<'a>(node: &'a AstNode<'a>) -> u32 {
+pub(crate) fn start_line<'a>(node: &'a AstNode<'a>) -> u32 {
     u32::try_from(node.data.borrow().sourcepos.start.line).unwrap_or(u32::MAX)
 }
 
@@ -299,7 +315,7 @@ fn valid_ac_id(id: &str) -> bool {
         .is_some_and(|n| (2..=3).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit()))
 }
 
-fn inline_text<'a>(node: &'a AstNode<'a>) -> String {
+pub(crate) fn inline_text<'a>(node: &'a AstNode<'a>) -> String {
     let mut out = String::new();
     push_text(node, &mut out);
     out

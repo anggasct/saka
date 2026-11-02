@@ -25,12 +25,15 @@ const EXAMPLE_PARAMS: Record<string, unknown> = {
   cycle: ["a", "b", "a"],
   expected: "S2",
   found: "S3",
+  heading: "Storage",
   id: "AC-1",
   item: 2,
   key: "owner",
   limit: 32,
+  max: 20,
   max_bytes: 262144,
   max_steps: 50,
+  option: 2,
   origin: "link",
   path: "docs/context.md",
   reason: "docs",
@@ -173,7 +176,7 @@ describe("spec tools", () => {
     expect(() => parseLintReport('{"is_spec": true}')).toThrow();
     expect(() =>
       parseLintReport(
-        '{"is_spec":true,"parser_version":3,"issues":[{"code":"x","severity":"fatal","line":1,"params":{}}],"steps":[]}',
+        '{"is_spec":true,"parser_version":4,"issues":[{"code":"x","severity":"fatal","line":1,"params":{}}],"steps":[]}',
       ),
     ).toThrow();
     expect(() => parseLintCodes('[{"code":"x"}]')).toThrow();

@@ -25,3 +25,4 @@ Sebutkan file atau modul yang terlibat kalau sudah tahu.
 - Step berjalan berurutan. Supaya step berjalan paralel, tambahkan kolom `After` dan tulis step yang ditunggu, misalnya `S1` atau `S1, S2`. Sel kosong berarti step itu tidak menunggu apa pun.
 - Untuk perubahan kecil, ganti bagian Steps dengan bagian `Done when`: list berisi satu perintah dalam backtick per item.
 - Semua perintah di kolom `Done when` harus lulus sebelum sebuah step selesai.
+- Untuk menyerahkan keputusan teknis ke operator, tambahkan bagian `## Decisions` dengan satu heading `### Q1: <pertanyaan>` per keputusan dan list berisi dua atau tiga pilihan, masing-masing diawali `[ ]`. Taruh pilihan yang direkomendasikan di urutan pertama dan tandai `(recommended)`. Jawab dengan mencentang tepat satu pilihan (`[x]`); spec dengan keputusan yang belum dijawab tidak bisa di-approve.

@@ -173,6 +173,30 @@ pub struct AcceptanceCriterion {
     pub text: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SpecDecisionOption {
+    /// Markdown source after the checkbox, trimmed, at most 500 characters (cut with `…`).
+    pub text: String,
+    pub line: u32,
+    /// The option text contains `(recommended)`.
+    pub recommended: bool,
+    /// The checkbox is checked (`[x]` or `[X]`).
+    pub chosen: bool,
+}
+
+/// One question from the spec's `## Decisions` section.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SpecDecision {
+    /// `Q<n>`, unique in the spec.
+    pub id: String,
+    pub question: String,
+    /// Line of the `### Q<n>:` heading.
+    pub line: u32,
+    pub options: Vec<SpecDecisionOption>,
+    /// 1-based number of the checked option; null while the decision is open.
+    pub chosen: Option<u32>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Step {
     pub id: String,
@@ -259,6 +283,8 @@ pub struct Spec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acceptance_criteria: Option<Vec<AcceptanceCriterion>>,
     pub steps: Vec<Step>,
+    /// Decisions in the latest revision, in written order; empty in list items.
+    pub decisions: Vec<SpecDecision>,
     pub approved_at: Option<String>,
     pub shipped_at: Option<String>,
     pub created_at: String,
@@ -297,6 +323,13 @@ impl Spec {
         let criteria: Vec<AcceptanceCriterion> = r
             .model
             .get("acceptance_criteria")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let decisions: Vec<SpecDecision> = r
+            .model
+            .get("decisions")
+            .filter(|_| with_criteria)
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
@@ -370,6 +403,7 @@ impl Spec {
                     after: st.after,
                 })
                 .collect(),
+            decisions,
             approved_at: opt_time(s.approved_at),
             shipped_at: opt_time(s.shipped_at),
             created_at: time(s.created_at),

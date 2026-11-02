@@ -105,6 +105,21 @@ mod tests {
     }
 
     #[test]
+    fn open_decisions_come_back_as_their_lint_code() {
+        let text = include_str!("../../saka-spec/tests/fixtures/decisions-ok.md");
+        let report = lint_json("docs/specs/uploads.md", text);
+        assert_eq!(
+            report["issues"],
+            json!([{
+                "code": "decision_unanswered",
+                "severity": "error",
+                "line": 29,
+                "params": { "id": "Q2" },
+            }])
+        );
+    }
+
+    #[test]
     fn a_plain_doc_is_not_a_spec_and_has_no_issues() {
         let report = lint_json("notes.md", "# Notes\n\nNothing to lint.\n");
         assert_eq!(

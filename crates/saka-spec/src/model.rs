@@ -14,6 +14,25 @@ pub struct SpecModel {
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub steps: Vec<Step>,
     pub links: Vec<Link>,
+    #[serde(default)]
+    pub decisions: Vec<Decision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Decision {
+    pub id: String,
+    pub question: String,
+    pub line: u32,
+    pub options: Vec<DecisionOption>,
+    pub chosen: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionOption {
+    pub text: String,
+    pub line: u32,
+    pub recommended: bool,
+    pub chosen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

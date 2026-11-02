@@ -1,5 +1,6 @@
 use saka_spec::{
-    LintCode, LintIssue, Locale, MAX_SPEC_BYTES, PARSER_VERSION, Severity, parse, template,
+    Decision, LintCode, LintIssue, Locale, MAX_DECISIONS, MAX_SPEC_BYTES, PARSER_VERSION, Severity,
+    parse, rules, template,
 };
 use serde_json::{Value, json};
 
@@ -32,8 +33,8 @@ fn after(parsed: &saka_spec::Parsed) -> Vec<(String, Vec<String>)> {
 }
 
 #[test]
-fn the_parser_is_version_three() {
-    assert_eq!(PARSER_VERSION, 3);
+fn the_parser_is_version_four() {
+    assert_eq!(PARSER_VERSION, 4);
 }
 
 fn links_of(text: &str) -> (Vec<(String, u32)>, Vec<LintIssue>) {
@@ -140,7 +141,11 @@ fn two_step_spec_parses_into_the_model() {
 
 #[test]
 fn crlf_line_endings_parse_the_same() {
-    for bytes in [fixture!("two-step"), fixture!("frontmatter-full")] {
+    for bytes in [
+        fixture!("two-step"),
+        fixture!("frontmatter-full"),
+        fixture!("decisions-ok"),
+    ] {
         let lf = std::str::from_utf8(bytes).unwrap();
         let crlf = lf.replace('\n', "\r\n");
         assert_eq!(parse("x.md", lf.as_bytes()), parse("x.md", crlf.as_bytes()));
@@ -685,7 +690,9 @@ fn both_templates_parse_without_issues() {
             locale.as_str(),
             parsed.issues
         );
+        assert!(template(locale).contains("`## Decisions`"));
         let model = parsed.model.unwrap();
+        assert!(model.decisions.is_empty());
         assert_eq!(model.steps.len(), 2);
         assert_eq!(model.acceptance_criteria.len(), 2);
     }
@@ -726,4 +733,233 @@ fn the_end_to_end_fixture_spec_is_ready() {
             ("S2", vec!["test -f e2e-runs/20261101-093000-1a2b/s2.md"]),
         ]
     );
+}
+
+fn options_of(decision: &Decision) -> Vec<(&str, u32, bool, bool)> {
+    decision
+        .options
+        .iter()
+        .map(|o| (o.text.as_str(), o.line, o.recommended, o.chosen))
+        .collect()
+}
+
+#[test]
+fn decisions_are_read_with_their_options_and_open_ones_are_errors() {
+    let parsed = parse("x.md", fixture!("decisions-ok"));
+    assert_eq!(
+        found(&parsed.issues),
+        vec![(
+            LintCode::DecisionUnanswered,
+            Severity::Error,
+            29,
+            json!({"id": "Q2"})
+        )]
+    );
+    assert!(!parsed.is_ready());
+    let decisions = parsed.model.unwrap().decisions;
+    assert_eq!(decisions.len(), 2);
+    let q1 = &decisions[0];
+    assert_eq!(
+        (q1.id.as_str(), q1.question.as_str(), q1.line, q1.chosen),
+        ("Q1", "Where are uploaded files stored?", 16, Some(1))
+    );
+    assert_eq!(
+        options_of(q1),
+        vec![
+            (
+                "**Local disk** (recommended) — one node only;\nnothing to configure.",
+                20,
+                true,
+                true
+            ),
+            (
+                "**S3-compatible storage** — scales out; needs credentials.",
+                22,
+                false,
+                false
+            ),
+            ("**Both, chosen per project** — flexible.", 23, false, false),
+        ]
+    );
+    let q2 = &decisions[1];
+    assert_eq!(
+        (q2.id.as_str(), q2.question.as_str(), q2.line, q2.chosen),
+        ("Q2", "How are thumbnails made?", 29, None)
+    );
+    assert_eq!(
+        options_of(q2),
+        vec![
+            ("On upload (RECOMMENDED)", 31, true, false),
+            ("On first read", 32, false, false),
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(q2).unwrap()["chosen"],
+        Value::Null,
+        "an open decision serializes its answer as null"
+    );
+}
+
+#[test]
+fn a_capital_x_answers_a_decision() {
+    let parsed = parse("x.md", fixture!("decisions-answered"));
+    assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+    assert!(parsed.is_ready());
+    let chosen: Vec<Option<u32>> = parsed
+        .model
+        .unwrap()
+        .decisions
+        .iter()
+        .map(|d| d.chosen)
+        .collect();
+    assert_eq!(chosen, vec![Some(1), Some(2)]);
+}
+
+#[test]
+fn each_decision_code_has_a_fixture() {
+    use LintCode as C;
+    let cases: Vec<(&[u8], LintCode, u32, Value)> = vec![
+        (
+            fixture!("decision_id_invalid"),
+            C::DecisionIdInvalid,
+            16,
+            json!({"heading": "Storage"}),
+        ),
+        (
+            fixture!("decision_id_duplicate"),
+            C::DecisionIdDuplicate,
+            21,
+            json!({"id": "Q1"}),
+        ),
+        (
+            fixture!("decisions-21"),
+            C::DecisionLimitExceeded,
+            116,
+            json!({"max": 20}),
+        ),
+        (
+            fixture!("decision_options_missing"),
+            C::DecisionOptionsInvalid,
+            16,
+            json!({"id": "Q1", "reason": "missing"}),
+        ),
+        (
+            fixture!("decision_options_count_one"),
+            C::DecisionOptionsInvalid,
+            16,
+            json!({"id": "Q1", "reason": "count", "count": 1}),
+        ),
+        (
+            fixture!("decision_options_count_four"),
+            C::DecisionOptionsInvalid,
+            16,
+            json!({"id": "Q1", "reason": "count", "count": 4}),
+        ),
+        (
+            fixture!("decision_options_not_task"),
+            C::DecisionOptionsInvalid,
+            19,
+            json!({"id": "Q1", "reason": "not_task", "option": 2}),
+        ),
+        (
+            fixture!("decision_recommendation_first_missing"),
+            C::DecisionRecommendationInvalid,
+            18,
+            json!({"id": "Q1", "reason": "first_missing", "option": 1}),
+        ),
+        (
+            fixture!("decision_recommendation_other_marked"),
+            C::DecisionRecommendationInvalid,
+            19,
+            json!({"id": "Q1", "reason": "other_marked", "option": 2}),
+        ),
+        (
+            fixture!("decision_answer_multiple"),
+            C::DecisionAnswerMultiple,
+            16,
+            json!({"id": "Q1"}),
+        ),
+    ];
+    for (bytes, code, line, params) in cases {
+        let parsed = parse("x.md", bytes);
+        assert_eq!(
+            found(&parsed.issues),
+            vec![(code, Severity::Error, line, params.clone())],
+            "fixture for {} {params}",
+            code.as_str()
+        );
+        assert!(!parsed.is_ready());
+    }
+    let limited = parse("x.md", fixture!("decisions-21")).model.unwrap();
+    assert_eq!(limited.decisions.len(), MAX_DECISIONS);
+    assert_eq!(limited.decisions.last().unwrap().id, "Q20");
+    let duplicate = parse("x.md", fixture!("decision_id_duplicate"))
+        .model
+        .unwrap();
+    assert_eq!(duplicate.decisions.len(), 1);
+    assert_eq!(duplicate.decisions[0].question, "First?");
+}
+
+#[test]
+fn long_decision_text_is_cut_with_an_ellipsis() {
+    let long = "a".repeat(600);
+    let text = format!(
+        "---\nsaka: spec\n---\n# T\n\n## Acceptance criteria\n\n- **AC-01**: one.\n\n## Done when\n\n- `true`\n\n## Decisions\n\n### {long}\n\n### Q1: Q?\n\n- [x] {long} (recommended)\n- [ ] b\n"
+    );
+    let parsed = parse("x.md", text.as_bytes());
+    let heading = parsed.issues[0].params["heading"].as_str().unwrap();
+    assert_eq!(heading.chars().count(), 80);
+    assert!(heading.ends_with('…'));
+    let decisions = parsed.model.unwrap().decisions;
+    let option = &decisions[0].options[0];
+    assert_eq!(option.text.chars().count(), 500);
+    assert!(option.text.ends_with('…'));
+    assert!(option.recommended, "the mark past the cut still counts");
+}
+
+#[test]
+fn checkboxes_and_level_three_headings_outside_decisions_change_nothing() {
+    let parsed = parse("x.md", fixture!("ac-tasklist"));
+    assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+    let model = parsed.model.unwrap();
+    let ids: Vec<&str> = model
+        .acceptance_criteria
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["AC-02"]);
+    assert!(model.decisions.is_empty());
+}
+
+#[test]
+fn specs_without_decisions_have_an_empty_list() {
+    for bytes in [
+        fixture!("two-step"),
+        fixture!("one-step"),
+        fixture!("after-graph"),
+        fixture!("frontmatter-full"),
+    ] {
+        let model = parse("x.md", bytes).model.unwrap();
+        assert!(model.decisions.is_empty());
+        assert_eq!(
+            serde_json::to_value(&model).unwrap()["decisions"],
+            json!([])
+        );
+    }
+}
+
+#[test]
+fn the_rules_list_every_lint_code_once() {
+    let rules = rules();
+    for code in LintCode::ALL {
+        let needle = format!("`{}`", code.as_str());
+        assert_eq!(
+            rules.matches(&needle).count(),
+            1,
+            "{} in the rules",
+            code.as_str()
+        );
+    }
+    assert_eq!(LintCode::ALL.len(), 45);
+    assert!(rules.contains("## Decisions"));
 }

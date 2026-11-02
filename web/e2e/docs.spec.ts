@@ -111,7 +111,7 @@ const spec = {
     id: "rev",
     source_commit: COMMIT,
     content_hash: hashOf(SPEC),
-    parser_version: 3,
+    parser_version: 4,
     context_hash: "sha256:0",
     context: [],
     created_at: AT,
@@ -132,6 +132,7 @@ const spec = {
     after: [],
     work_item_id: t.id,
   })),
+  decisions: [],
   approved_at: AT,
   shipped_at: null,
   created_at: AT,
@@ -213,7 +214,7 @@ async function mockApi(page: Page, server: Server) {
     } else if (path === "/api/v1/work-items") {
       await json({ items: tasks, next_cursor: null });
     } else if (path === "/api/v1/spec-template") {
-      await json({ content: SPEC, locale: "en", parser_version: 3 });
+      await json({ content: SPEC, locale: "en", parser_version: 4 });
     } else if (path === "/api/v1/permission-requests") {
       await json({ items: [], next_cursor: null });
     } else {
