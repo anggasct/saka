@@ -12,6 +12,19 @@ initSync({
   module: readFileSync(resolve("src/wasm/pkg/saka_wasm_bg.wasm")),
 });
 
+// jsdom has no scrolling or layout: the router restores scroll positions, and
+// CodeMirror measures text ranges after each update. Node-only suites skip this.
+if (typeof window !== "undefined") {
+  window.scrollTo = () => undefined;
+  const noRects = {
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: [][Symbol.iterator],
+  };
+  Range.prototype.getClientRects = () => noRects;
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+}
+
 afterEach(() => {
   cleanup();
 });

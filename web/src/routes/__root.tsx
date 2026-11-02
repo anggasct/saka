@@ -26,6 +26,12 @@ function Layout() {
         <nav className="mx-auto flex max-w-4xl items-center gap-4 px-4">
           <span className="py-3 font-semibold">{t("app.name")}</span>
           <Link
+            to="/docs"
+            className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+          >
+            {t("nav.docs")}
+          </Link>
+          <Link
             to="/delivery"
             className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
           >

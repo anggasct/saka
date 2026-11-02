@@ -9,6 +9,7 @@ import type { components } from "./schema";
 export const EVENT_KINDS = [
   "workspace.repo.registered",
   "workspace.project.registered",
+  "workspace.doc.committed",
   "spec.spec.registered",
   "spec.revision.recorded",
   "spec.spec.approved",
@@ -65,11 +66,12 @@ export const QUERY_ROOTS = {
   permissions: "permission-requests",
   sessions: "sessions",
   timeline: "timeline",
+  docs: "docs",
 } as const;
 
 const AFFECTS: Record<string, readonly string[]> = {
   repo: [QUERY_ROOTS.projects],
-  project: [QUERY_ROOTS.projects],
+  project: [QUERY_ROOTS.projects, QUERY_ROOTS.docs],
   spec: [QUERY_ROOTS.specs],
   work_item: [QUERY_ROOTS.workItems, QUERY_ROOTS.specs],
   session: [QUERY_ROOTS.workItems, QUERY_ROOTS.sessions],
