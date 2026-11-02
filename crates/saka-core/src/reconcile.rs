@@ -129,6 +129,9 @@ pub fn reconcile(
         if crate::task::needs_tick(task, cfg, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::Tick));
         }
+        if crate::task::auto_retry_due(task, now) {
+            actions.push(Action::Decide(task.item.id, TaskInput::AutoRetry));
+        }
     }
 
     for spec in snapshot
