@@ -980,8 +980,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6, 7]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(7));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(8));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

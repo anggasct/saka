@@ -148,6 +148,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/secrets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_secrets"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/secrets/{name}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put: operations["set_secret"];
+    post?: never;
+    delete: operations["remove_secret"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/specs": {
     parameters: {
       query?: never;
@@ -887,6 +919,16 @@ export interface components {
       /** Format: uuid */
       to_revision_id: string;
     };
+    /** @description The secrets of a project, ordered by name. At most 200, so there is no paging. */
+    SecretList: {
+      items: components["schemas"]["SecretName"][];
+    };
+    /** @description A project secret, by name only. */
+    SecretName: {
+      /** @description `^[A-Z_][A-Z0-9_]{0,63}$`, never a name Saka sets itself. */
+      name: string;
+      updated_at: string;
+    };
     Session: {
       /** @description Subset of `steer`, `interrupt`, `stop`. */
       available_actions: string[];
@@ -946,6 +988,11 @@ export interface components {
     };
     SessionList: {
       items: components["schemas"]["Session"][];
+    };
+    /** @description Body of `PUT /api/v1/projects/{project_id}/secrets/{name}`. The value is write-only: no response, event, or log carries it, and it cannot be read back. */
+    SetSecretBody: {
+      /** @description 8 to 65536 bytes of UTF-8 without NUL. Shorter values are refused (`secret_too_short`) so output redaction always applies. */
+      value: string;
     };
     Spec: {
       /** @description Left out of list items. */
@@ -1489,6 +1536,103 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_secrets: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SecretList"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  set_secret: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SetSecretBody"];
+      };
+    };
+    responses: {
+      /** @description The secret is stored */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  remove_secret: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The secret is gone, or never existed */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

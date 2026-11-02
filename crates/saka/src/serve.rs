@@ -16,8 +16,8 @@ use saka_core::vocab::{MergeMethod, Stage};
 use saka_docs::GitDocs;
 use saka_engine::{Engine, EngineConfig, EnvConfig, Integration, Ports};
 use saka_env::{
-    Git, GitRepos, Platform, RecipeRunner, ReposConfig, SystemdSupervisor, ToolchainConfig,
-    ToolchainInstaller,
+    AeadSecrets, Git, GitRepos, Platform, RecipeRunner, ReposConfig, SystemdSupervisor,
+    ToolchainConfig, ToolchainInstaller, runtime_dir,
 };
 use saka_ports::{
     ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
@@ -229,13 +229,6 @@ fn loop_config(cfg: &Config) -> LoopConfig {
     }
 }
 
-fn runtime_dir() -> std::path::PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
-        || std::path::PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw())),
-        std::path::PathBuf::from,
-    )
-}
-
 async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
     let (Ok(mut term), Ok(mut int)) = (
@@ -273,6 +266,20 @@ pub fn serve(cfg: &Config) -> ExitCode {
     if let Err(code) = check_envs_dir(&cfg.data_dir().join("envs")) {
         return code;
     }
+    let Some(key_file) = config::secret_key_path() else {
+        tracing::error!(
+            code = "config_key_file_unreadable",
+            "no config directory for the secret key"
+        );
+        return ExitCode::from(EXIT_REFUSED);
+    };
+    let secrets = match AeadSecrets::from_key_file(&key_file) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            tracing::error!(code = e.code, detail = %e.detail, "secret key refused");
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -283,10 +290,15 @@ pub fn serve(cfg: &Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    runtime.block_on(run(cfg, listen, policy))
+    runtime.block_on(run(cfg, listen, policy, secrets))
 }
 
-async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> ExitCode {
+async fn run(
+    cfg: &Config,
+    listen: std::net::SocketAddr,
+    policy: Policy,
+    secrets: Arc<AeadSecrets>,
+) -> ExitCode {
     let listener = match tokio::net::TcpListener::bind(listen).await {
         Ok(l) => l,
         Err(e) => {
@@ -444,6 +456,7 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
             agents: Arc::new(agents),
             docs: Arc::new(GitDocs::new(repos)),
             toolchains,
+            secrets,
         },
         EngineConfig {
             loop_cfg: loop_config(cfg),

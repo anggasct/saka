@@ -7,17 +7,89 @@ use std::time::Duration;
 use std::io::Read;
 
 use async_trait::async_trait;
+use saka_core::secret::SecretText;
 use saka_ports::{
     COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, PortError, PortResult, RunnerUnit, Supervisor,
 };
 use serde_json::json;
 use tokio::process::{Child, Command};
+use zeroize::Zeroizing;
 
 const STOP_WAIT: Duration = Duration::from_secs(10);
 const KILL_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(100);
 
 const RUN_BACKSTOP: Duration = Duration::from_secs(30);
+
+const SOURCE_SECRETS: &str = r#"set -a; . "$0" || exit 125; set +a; rm -f -- "$0"; exec "$@""#;
+
+pub fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+        || PathBuf::from(format!("/run/user/{}", rustix::process::getuid().as_raw())),
+        PathBuf::from,
+    )
+}
+
+fn push_quoted(out: &mut String, value: &str) {
+    out.push('\'');
+    for c in value.chars() {
+        if c == '\'' {
+            out.push_str(r"'\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+}
+
+struct SecretFile {
+    path: PathBuf,
+}
+
+impl SecretFile {
+    fn write(unit: &str, vars: &[(String, SecretText)]) -> std::io::Result<Option<SecretFile>> {
+        use std::io::Write;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+        if vars.is_empty() {
+            return Ok(None);
+        }
+        let dir = runtime_dir().join("saka").join("secrets");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        let path = dir.join(format!("{unit}.env"));
+        let _ = std::fs::remove_file(&path);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        let file_guard = SecretFile { path };
+        // Sized up front so growing the buffer never leaves an unwiped copy behind.
+        let size = vars
+            .iter()
+            .map(|(n, v)| n.len() + v.expose().len() * 4 + 4)
+            .sum();
+        let mut text = Zeroizing::new(String::with_capacity(size));
+        for (name, value) in vars {
+            text.push_str(name);
+            text.push('=');
+            push_quoted(&mut text, value.expose());
+            text.push('\n');
+        }
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(Some(file_guard))
+    }
+}
+
+impl Drop for SecretFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
 fn failed(code: &str, detail: impl Into<String>) -> PortError {
     PortError::retryable(code, json!({ "detail": detail.into() }))
@@ -210,6 +282,14 @@ impl Supervisor for SystemdSupervisor {
         for (key, value) in &unit.env {
             command.arg(format!("{key}={value}"));
         }
+        let secrets = SecretFile::write(&unit.name, &unit.secret_env)
+            .map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+        if let Some(file) = &secrets {
+            // Secret values never reach argv: the shell sources them from a 0600 file and removes it.
+            command
+                .args(["/bin/sh", "-c", SOURCE_SECRETS])
+                .arg(&file.path);
+        }
         let mut child = command
             .arg(&unit.program)
             .args(&unit.args)
@@ -220,7 +300,7 @@ impl Supervisor for SystemdSupervisor {
             .spawn()
             .map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
         drop(command);
-        match tokio::time::timeout(unit.timeout, child.wait()).await {
+        let result = match tokio::time::timeout(unit.timeout, child.wait()).await {
             Ok(status) => {
                 let status = status.map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
                 collect(reader, status.code(), false).await
@@ -230,7 +310,9 @@ impl Supervisor for SystemdSupervisor {
                 let _ = child.wait().await;
                 collect(reader, None, true).await
             }
-        }
+        };
+        drop(secrets);
+        result
     }
 }
 
@@ -325,6 +407,7 @@ impl Supervisor for DirectSupervisor {
             .current_dir(&unit.cwd)
             .env_clear()
             .envs(&unit.env)
+            .envs(unit.secret_env.iter().map(|(k, v)| (k, v.expose())))
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)

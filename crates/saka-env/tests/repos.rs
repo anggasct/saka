@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use saka_core::ids::{EnvironmentId, RepoId, WorkItemId};
+use saka_core::secret::{SecretText, SecretVar};
+use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
     EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest, PushOutcome,
@@ -199,6 +201,7 @@ impl World {
             worktree_path: prepared.worktree_path,
             vars: std::collections::BTreeMap::from([("APP_ENV".to_string(), "test".to_string())]),
             path_prefix: vec!["/opt/toolchains/node/bin".into()],
+            secrets: Vec::new(),
         }
     }
 
@@ -646,6 +649,37 @@ async fn a_recipe_command_runs_in_the_worktree_with_only_the_minimal_environment
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600);
+}
+
+#[tokio::test]
+async fn setup_secrets_reach_the_command_env_and_are_redacted_by_name_in_the_log() {
+    let w = World::new();
+    w.repos.fetch(&w.repo).await.unwrap();
+    let mut env = w.prepare(8).await;
+    env.secrets = vec![
+        SecretVar {
+            name: "NPM_TOKEN".into(),
+            value: SecretText::new("npm-token-abcdef".into()),
+            purposes: vec![SecretPurpose::Setup],
+        },
+        SecretVar {
+            name: "TEST_API_KEY".into(),
+            value: SecretText::new("session-only-value".into()),
+            purposes: vec![SecretPurpose::Session],
+        },
+    ];
+    let outcome = w
+        .run(
+            &env,
+            0,
+            "echo \"npm=$NPM_TOKEN api=${TEST_API_KEY-unset}\"; env | grep -c session-only-value || true",
+        )
+        .await;
+    assert!(outcome.succeeded(), "{outcome:?}");
+    let log = std::fs::read_to_string(&outcome.log_path).unwrap();
+    assert!(log.contains("npm=«secret:NPM_TOKEN» api=unset"), "{log}");
+    assert!(!log.contains("npm-token-abcdef"), "{log}");
+    assert!(log.lines().any(|l| l.trim() == "0"), "{log}");
 }
 
 #[tokio::test]

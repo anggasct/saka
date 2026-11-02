@@ -1728,7 +1728,9 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         B::EnvSetupFailed
         | B::EnvRecipeInvalid
         | B::ToolchainUnpinned
-        | B::ToolchainUnavailable => (Stage::Dev, StagePhase::PreparingEnvironment),
+        | B::ToolchainUnavailable
+        | B::SecretMissing
+        | B::SecretUnreadable => (Stage::Dev, StagePhase::PreparingEnvironment),
         B::SessionFailed
         | B::SessionLost
         | B::SessionTimeout
@@ -2367,6 +2369,8 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::WorkItemCreated { .. }
         | E::RepoRegistered { .. }
         | E::ProjectRegistered { .. }
+        | E::SecretSet { .. }
+        | E::SecretRemoved { .. }
         | E::SpecRegistered { .. }
         | E::SpecRevisionRecorded { .. }
         | E::SpecApproved { .. }

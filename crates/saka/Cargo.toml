@@ -16,7 +16,7 @@ axum.workspace = true
 clap.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "termios"] }
 saka-agents = { path = "../saka-agents" }
 saka-api = { path = "../saka-api" }
 saka-core = { path = "../saka-core" }
@@ -34,6 +34,7 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid = { workspace = true, features = ["v7"] }
+zeroize.workspace = true
 
 [features]
 # Serves the web app from the binary (run `pnpm --dir web build` first).

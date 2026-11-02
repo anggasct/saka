@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use saka_core::vocab::Tool;
+use saka_core::vocab::{SecretPurpose, Tool};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -12,6 +12,7 @@ pub const MAX_COMMANDS: usize = 20;
 pub const MAX_COMMAND_BYTES: usize = 4096;
 pub const MAX_ENV_VARS: usize = 64;
 pub const MAX_ENV_VALUE_BYTES: usize = 4096;
+pub const MAX_SECRETS: usize = 64;
 
 const RESERVED_NAMES: &[&str] = &[
     "PATH", "HOME", "TMPDIR", "LANG", "TERM", "USER", "SHELL", "PORT",
@@ -33,6 +34,7 @@ pub struct Recipe {
     pub setup: Vec<String>,
     pub teardown: Vec<String>,
     pub toolchain: BTreeMap<Tool, String>,
+    pub secrets: BTreeMap<String, Vec<SecretPurpose>>,
 }
 
 impl Recipe {
@@ -47,6 +49,7 @@ impl Recipe {
             "setup": self.setup,
             "teardown": self.teardown,
             "toolchain": self.toolchain,
+            "secrets": self.secrets,
         })
     }
 
@@ -83,6 +86,10 @@ impl Recipe {
                 .get("toolchain")
                 .and_then(|t| serde_json::from_value(t.clone()).ok())
                 .unwrap_or_default(),
+            secrets: value
+                .get("secrets")
+                .and_then(|t| serde_json::from_value(t.clone()).ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -115,6 +122,13 @@ struct Raw {
     setup: Option<Spanned<Commands>>,
     teardown: Option<Spanned<Commands>>,
     toolchain: Option<RawToolchain>,
+    secrets: Option<Spanned<BTreeMap<String, Spanned<RawSecret>>>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSecret {
+    to: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +189,50 @@ fn commands(
             issues.push(issue("command_invalid", field, text, start));
         } else {
             out.push(command);
+        }
+    }
+    out
+}
+
+fn secrets(
+    raw: Option<Spanned<BTreeMap<String, Spanned<RawSecret>>>>,
+    env: &BTreeMap<String, String>,
+    text: &str,
+    issues: &mut Vec<Issue>,
+) -> BTreeMap<String, Vec<SecretPurpose>> {
+    let mut out = BTreeMap::new();
+    let Some(raw) = raw else {
+        return out;
+    };
+    let at = raw.span().start;
+    let declared = raw.into_inner();
+    if declared.len() > MAX_SECRETS {
+        issues.push(issue("too_many_secrets", "secrets", text, at));
+        return out;
+    }
+    for (name, secret) in declared {
+        let field = format!("secrets.{name}");
+        let start = secret.span().start;
+        let to = secret.into_inner().to;
+        let purposes: Option<Vec<SecretPurpose>> = match &to {
+            None => Some(vec![SecretPurpose::Setup]),
+            Some(list) => list.iter().map(|p| p.parse().ok()).collect(),
+        };
+        if !name_ok(&name) {
+            issues.push(issue("secret_name_invalid", field, text, start));
+        } else if name_reserved(&name) {
+            issues.push(issue("secret_name_reserved", field, text, start));
+        } else if env.contains_key(&name) {
+            issues.push(issue("secret_env_conflict", field, text, start));
+        } else {
+            match purposes {
+                Some(mut p) if !p.is_empty() => {
+                    p.sort();
+                    p.dedup();
+                    out.insert(name, p);
+                }
+                _ => issues.push(issue("secret_purpose_invalid", field, text, start)),
+            }
         }
     }
     out
@@ -251,6 +309,7 @@ pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
             }
         }
     }
+    let secrets = secrets(raw.secrets, &env, text, &mut issues);
     if issues.is_empty() {
         Ok(Recipe {
             ports,
@@ -258,6 +317,7 @@ pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
             setup,
             teardown,
             toolchain,
+            secrets,
         })
     } else {
         Err(issues)
@@ -302,11 +362,54 @@ mod tests {
     #[test]
     fn unknown_fields_are_rejected_with_their_line() {
         assert_eq!(
-            first("ports = 1\n[secrets]\nNPM_TOKEN = 1\n"),
-            ("field_unknown", Some("secrets".into()), Some(2))
+            first("ports = 1\n[caches]\nNPM = 1\n"),
+            ("field_unknown", Some("caches".into()), Some(2))
+        );
+        assert_eq!(
+            first("[secrets]\nNPM_TOKEN = { to = [\"setup\"], file = true }\n").0,
+            "field_unknown"
         );
         assert_eq!(first("[toolchain]\nrust = \"1.99.1\"\n").0, "field_unknown");
         assert_eq!(first("[setup]\ncommand = [\"x\"]\n").0, "field_unknown");
+    }
+
+    #[test]
+    fn secrets_declare_their_purposes_and_default_to_setup() {
+        let recipe = parse(
+            "[secrets]\nNPM_TOKEN = {}\nTEST_API_KEY = { to = [\"session\", \"setup\", \"setup\"] }\n",
+            10,
+        )
+        .unwrap();
+        assert_eq!(recipe.secrets["NPM_TOKEN"], [SecretPurpose::Setup]);
+        assert_eq!(
+            recipe.secrets["TEST_API_KEY"],
+            [SecretPurpose::Setup, SecretPurpose::Session]
+        );
+        assert_eq!(Recipe::from_json(&recipe.to_json()), recipe);
+        for (text, code) in [
+            ("[secrets]\nlower = {}\n", "secret_name_invalid"),
+            ("[secrets]\nGIT_TOKEN = {}\n", "secret_name_reserved"),
+            ("[secrets]\nPATH = {}\n", "secret_name_reserved"),
+            (
+                "[env]\nAPI = \"x\"\n[secrets]\nAPI = {}\n",
+                "secret_env_conflict",
+            ),
+            ("[secrets]\nA_KEY = { to = [] }\n", "secret_purpose_invalid"),
+            (
+                "[secrets]\nA_KEY = { to = [\"ci\"] }\n",
+                "secret_purpose_invalid",
+            ),
+        ] {
+            assert_eq!(first(text).0, code, "{text}");
+        }
+        assert_eq!(
+            first("\n[secrets]\nlower = {}\n"),
+            ("secret_name_invalid", Some("secrets.lower".into()), Some(3))
+        );
+        let many: String = (0..=MAX_SECRETS)
+            .map(|i| format!("S{i} = {{}}\n"))
+            .collect();
+        assert_eq!(first(&format!("[secrets]\n{many}")).0, "too_many_secrets");
     }
 
     #[test]

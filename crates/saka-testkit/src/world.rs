@@ -3,18 +3,21 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use saka_core::gate::Check;
+use saka_core::ids::ProjectId;
 use saka_core::ids::{EnvironmentId, SessionId};
 use saka_core::model::ToolchainUse;
 use saka_core::policy::RequestPath;
+use saka_core::secret::{SecretText, SecretVar, aad};
 use saka_core::time::Timestamp;
+use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
 use saka_ports::{
     Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession, Link,
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
-    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, SessionLaunch,
-    SessionRef, Toolchains, WorktreeState,
+    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, Sealed,
+    SecretStore, SessionLaunch, SessionRef, Toolchains, WorktreeState,
 };
 use serde_json::{Value, json};
 
@@ -158,12 +161,27 @@ struct State {
     repo_files: BTreeMap<String, String>,
     toolchain_scripts: HashMap<Tool, VecDeque<ToolchainScript>>,
     toolchain_installs: Vec<(Tool, String, bool)>,
+    secrets_unreadable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
+    pub secrets: BTreeMap<String, String>,
+    pub redacted: Vec<String>,
+}
+
+fn injected(secrets: &[SecretVar], purpose: SecretPurpose) -> BTreeMap<String, String> {
+    secrets
+        .iter()
+        .filter(|s| s.serves(purpose))
+        .map(|s| (s.name.clone(), s.value.expose().to_string()))
+        .collect()
+}
+
+fn redacted(secrets: &[SecretVar]) -> Vec<String> {
+    secrets.iter().map(|s| s.name.clone()).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +203,8 @@ pub struct RecipeRun {
     pub command: String,
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
+    pub secrets: BTreeMap<String, String>,
+    pub redacted: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +237,7 @@ impl FakeWorld {
                 repo_files: BTreeMap::new(),
                 toolchain_scripts: HashMap::new(),
                 toolchain_installs: Vec::new(),
+                secrets_unreadable: false,
                 next_sha: 1,
                 parents,
                 remote,
@@ -390,6 +411,10 @@ impl FakeWorld {
             Some(t) => s.repo_files.insert(path.to_string(), t.to_string()),
             None => s.repo_files.remove(path),
         };
+    }
+
+    pub fn break_secret_key(&self, broken: bool) {
+        self.state().secrets_unreadable = broken;
     }
 
     pub fn script_toolchain(&self, tool: Tool, script: ToolchainScript) {
@@ -738,6 +763,8 @@ impl Environments for FakeWorld {
             command: command.command.clone(),
             vars: env.vars.clone(),
             path_prefix: env.path_prefix.clone(),
+            secrets: injected(&env.secrets, SecretPurpose::Setup),
+            redacted: redacted(&env.secrets),
         });
         Ok(RecipeCommandOutcome {
             exit_code: match script {
@@ -921,6 +948,8 @@ impl Agents for FakeWorld {
         s.launches.push(Launch {
             vars: launch.environment.vars.clone(),
             path_prefix: launch.environment.path_prefix.clone(),
+            secrets: injected(&launch.environment.secrets, SecretPurpose::Session),
+            redacted: redacted(&launch.environment.secrets),
         });
         let id = launch.session_id;
         if s.sessions.get(&id).is_some_and(|old| old.running) {
@@ -1227,5 +1256,42 @@ impl Toolchains for FakeWorld {
             env,
             downloaded,
         })
+    }
+}
+
+// Not encryption: the AAD followed by the value XOR a constant, so a row moved to another
+// project fails to open and the plain value never lands in the database.
+impl SecretStore for FakeWorld {
+    fn seal(&self, project: ProjectId, name: &str, value: &SecretText) -> PortResult<Sealed> {
+        let mut ciphertext = aad(project.0, name);
+        ciphertext.push(0xff);
+        ciphertext.extend(value.expose().bytes().map(|b| b ^ 0x5a));
+        Ok(Sealed {
+            nonce: vec![0; 24],
+            ciphertext,
+        })
+    }
+
+    fn open(&self, project: ProjectId, name: &str, sealed: &Sealed) -> PortResult<SecretText> {
+        let unreadable = || PortError::permanent("secret_unreadable", json!({ "name": name }));
+        if self.state().secrets_unreadable {
+            return Err(unreadable());
+        }
+        let mut prefix = aad(project.0, name);
+        prefix.push(0xff);
+        let value = sealed
+            .ciphertext
+            .strip_prefix(prefix.as_slice())
+            .ok_or_else(unreadable)?;
+        String::from_utf8(value.iter().map(|b| b ^ 0x5a).collect())
+            .map(SecretText::new)
+            .map_err(|_| unreadable())
+    }
+
+    fn fingerprint(&self, project: ProjectId, name: &str, value: &SecretText) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (project.0, name, value.expose()).hash(&mut h);
+        format!("fake:{:016x}", h.finish())
     }
 }

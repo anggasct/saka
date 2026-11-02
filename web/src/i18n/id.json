@@ -49,6 +49,8 @@
   "blocker.env_recipe_invalid": "Resep environment .saka/environment.toml ditolak: {issue}{line, select, none {} other { (baris {line})}}.",
   "blocker.toolchain_unpinned": "{source, select, pnpm_requires_node {pnpm butuh versi Node yang dipin; deklarasikan di package.json devEngines, .node-version, atau .nvmrc.} other {Repo meminta {tool} {value}; pin versi persis (misalnya 1.2.3) di {source}.}}",
   "blocker.toolchain_unavailable": "{cause, select, not_found {{tool} {version} tidak ditemukan di sumber rilis.} checksum_mismatch {Unduhan {tool} {version} tidak cocok dengan checksum resminya.} unsupported_platform {{tool} tidak punya rilis untuk mesin ini.} archive_invalid {Arsip {tool} {version} tidak bisa dibongkar.} other {{tool} {version} tidak bisa diunduh.}}",
+  "blocker.secret_missing": "Resep environment meminta secret yang belum ada di project: {names}. Simpan dengan saka secret set, lalu coba lagi.",
+  "blocker.secret_unreadable": "Secret {name} tidak bisa didekripsi dengan key server ini; simpan ulang, lalu coba lagi.",
   "blocker.session_failed": "{cause, select, operator_stop {Operator menghentikan sesi agent: {reason}} other {Sesi agent gagal.}}",
   "blocker.session_lost": "Sesi agent hilang.",
   "blocker.session_timeout": "{cause, select, idle {Agent yang di-interrupt menunggu arahan lebih dari {minutes, number} menit.} other {Agent berjalan lebih dari {minutes, number} menit.}}",

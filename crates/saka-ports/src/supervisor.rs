@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use saka_core::secret::SecretText;
 
 use crate::PortResult;
 
@@ -27,6 +28,7 @@ pub struct CommandUnit {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: BTreeMap<String, String>,
+    pub secret_env: Vec<(String, SecretText)>,
     pub limits: UnitLimits,
     pub timeout: Duration,
 }

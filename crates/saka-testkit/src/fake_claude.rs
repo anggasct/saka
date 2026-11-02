@@ -110,6 +110,10 @@ pub fn main() -> i32 {
                     };
                     out(&text(&detail));
                 }
+                for name in script.iter().filter_map(|s| s.strip_prefix("env:")) {
+                    let value = std::env::var(name).unwrap_or_default();
+                    out(&text(&format!("{name}={value}")));
+                }
                 if has("secrets") {
                     let all = secrets.join(" ");
                     out(&text(&format!("here: {all}")));

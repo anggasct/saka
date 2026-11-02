@@ -49,6 +49,8 @@
   "blocker.env_recipe_invalid": "The environment recipe .saka/environment.toml was refused: {issue}{line, select, none {} other { (line {line})}}.",
   "blocker.toolchain_unpinned": "{source, select, pnpm_requires_node {pnpm needs a pinned Node version; declare one in package.json devEngines, .node-version, or .nvmrc.} other {The repo asks for {tool} {value}; pin an exact version (for example 1.2.3) in {source}.}}",
   "blocker.toolchain_unavailable": "{cause, select, not_found {{tool} {version} was not found at the release source.} checksum_mismatch {The {tool} {version} download did not match its published checksum.} unsupported_platform {{tool} has no release for this machine.} archive_invalid {The {tool} {version} archive could not be unpacked.} other {{tool} {version} could not be downloaded.}}",
+  "blocker.secret_missing": "The environment recipe asks for secrets the project does not have: {names}. Set them with saka secret set, then retry.",
+  "blocker.secret_unreadable": "The secret {name} cannot be decrypted with this server's key; set it again, then retry.",
   "blocker.session_failed": "{cause, select, operator_stop {The operator stopped the agent session: {reason}} other {The agent session failed.}}",
   "blocker.session_lost": "The agent session was lost.",
   "blocker.session_timeout": "{cause, select, idle {The interrupted agent waited more than {minutes, number} minutes for a steer.} other {The agent ran longer than {minutes, number} minutes.}}",

@@ -18,6 +18,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("../migrations/0005_agent_runtime.sql")),
     (6, include_str!("../migrations/0006_task_environment.sql")),
     (7, include_str!("../migrations/0007_toolchain_blockers.sql")),
+    (8, include_str!("../migrations/0008_secrets.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -747,7 +748,7 @@ mod tests {
         let blockers = "SELECT id || ':' || code || ':' || state || ':' || ifnull(resolution, '-') FROM blocker ORDER BY id";
         let before = ids(&conn, blockers);
 
-        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..7], &backups, Timestamp(3)).unwrap();
         assert_eq!(report.applied, vec![7]);
         assert_eq!(ids(&conn, blockers), before);
         let broken: Option<String> = conn
@@ -764,6 +765,41 @@ mod tests {
         for sql in [
             "INSERT INTO blocker VALUES ('b5', 'w5', NULL, 'p1', 'toolchain_unavailable', '{}', 'open', NULL, 6, NULL)",
             "INSERT INTO blocker VALUES ('b6', 'w4', NULL, 'p1', 'toolchain_missing', '{}', 'open', NULL, 6, NULL)",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn the_secret_migration_keeps_blockers_and_adds_the_secret_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V2_DATA).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..7], &backups, Timestamp(2)).unwrap();
+        conn.execute_batch(
+            "INSERT INTO blocker VALUES ('b1', 'w5', NULL, 'p1', 'toolchain_unpinned', '{}', 'open', NULL, 3, NULL);",
+        )
+        .unwrap();
+        let blockers = "SELECT id || ':' || code || ':' || state FROM blocker ORDER BY id";
+        let before = ids(&conn, blockers);
+
+        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        assert_eq!(report.applied, vec![8]);
+        assert_eq!(ids(&conn, blockers), before);
+        conn.execute_batch(
+            "UPDATE blocker SET state = 'resolved', resolution = 'retried', resolved_at = 4 WHERE id = 'b1';
+             INSERT INTO blocker VALUES ('b2', 'w5', NULL, 'p1', 'secret_missing', '{}', 'resolved', 'retried', 4, 5),
+               ('b3', 'w5', NULL, 'p1', 'secret_unreadable', '{}', 'open', NULL, 5, NULL);
+             INSERT INTO secret VALUES ('p1', 'NPM_TOKEN', zeroblob(24), x'00', 1, 1);",
+        )
+        .unwrap();
+        for sql in [
+            "INSERT INTO secret VALUES ('p1', 'SHORT_NONCE', zeroblob(12), x'00', 1, 1)",
+            "INSERT INTO secret VALUES ('p9', 'NO_PROJECT', zeroblob(24), x'00', 1, 1)",
+            "INSERT INTO secret VALUES ('p1', 'NPM_TOKEN', zeroblob(24), x'00', 2, 2)",
         ] {
             assert!(conn.execute(sql, []).is_err(), "{sql}");
         }

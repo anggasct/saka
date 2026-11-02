@@ -18,6 +18,8 @@ use saka_agents::redact;
 use saka_agents::runner::{EXIT_OK, EXIT_VERSION_MISMATCH, runner_version};
 use saka_agents::{AgentsConfig, ClaudeAgents, client::RunnerConnection};
 use saka_core::ids::{EnvironmentId, RepoId, SessionId, WorkItemId};
+use saka_core::secret::{SecretText, SecretVar};
+use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, SystemdSupervisor};
 use saka_ports::{
     Agents, CommandUnit, EnvRef, RepoRef, RunnerEvent, RunnerEventKind, SessionLaunch, SessionRef,
@@ -77,6 +79,10 @@ fn main() -> ExitCode {
         (
             "the_adapter_starts_drives_and_stops_a_session",
             the_adapter_starts_drives_and_stops_a_session,
+        ),
+        (
+            "session_secrets_reach_only_the_cli_env_and_are_redacted_by_name",
+            session_secrets_reach_only_the_cli_env_and_are_redacted_by_name,
         ),
         (
             "the_adapter_launches_in_the_physical_worktree_and_scopes_memory_to_it",
@@ -190,6 +196,7 @@ impl Fixture {
             redaction: Redaction {
                 known_values: vec![KNOWN.to_string()],
             },
+            secrets_path: None,
             resumed,
             heartbeat_ms,
         };
@@ -693,6 +700,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
             worktree_path: root.join("worktree").to_string_lossy().into_owned(),
             vars: Default::default(),
             path_prefix: Vec::new(),
+            secrets: Vec::new(),
         },
         resume_cli_session_id: None,
     }
@@ -748,6 +756,57 @@ fn the_adapter_starts_drives_and_stops_a_session() {
             "the runner is gone"
         );
         assert!(agents.send_turn(&session, 2, "more").await.is_err());
+    });
+}
+
+fn session_secrets_reach_only_the_cli_env_and_are_redacted_by_name() {
+    const SESSION_VALUE: &str = "session-secret-value-1";
+    const SETUP_VALUE: &str = "setup-secret-value-22";
+    block_on(async {
+        let fx = Fixture::new();
+        let supervisor = Arc::new(DirectSupervisor::new(fx.path("logs")));
+        let (agents, mut rx) = adapter(&fx, supervisor.clone(), "env:TEST_API_KEY,env:NPM_TOKEN");
+        let mut launch = launch_for(&fx);
+        launch.environment.secrets = vec![
+            SecretVar {
+                name: "TEST_API_KEY".into(),
+                value: SecretText::new(SESSION_VALUE.into()),
+                purposes: vec![SecretPurpose::Setup, SecretPurpose::Session],
+            },
+            SecretVar {
+                name: "NPM_TOKEN".into(),
+                value: SecretText::new(SETUP_VALUE.into()),
+                purposes: vec![SecretPurpose::Setup],
+            },
+        ];
+        let launched = agents.start(&launch).await.unwrap();
+        let session = SessionRef {
+            session_id: fx.session,
+            runner_unit: launched.runner_unit.clone(),
+            socket_path: launched.socket_path.clone(),
+        };
+        agents.send_turn(&session, 1, "work").await.unwrap();
+        turn_ends(&mut rx).await;
+        agents
+            .stop(fx.session, Some(&launched.runner_unit))
+            .await
+            .unwrap();
+
+        let log = std::fs::read_to_string(&launched.log_path).unwrap();
+        assert!(log.contains("TEST_API_KEY=«secret:TEST_API_KEY»"), "{log}");
+        assert!(log.contains("NPM_TOKEN="), "{log}");
+        let launch_file = fx.path(&format!("sessions/{}/launch.json", fx.session));
+        let launch_json = std::fs::read_to_string(launch_file).unwrap();
+        for value in [SESSION_VALUE, SETUP_VALUE] {
+            assert!(!log.contains(value), "a value reached events.ndjson");
+            assert!(!launch_json.contains(value), "a value reached launch.json");
+        }
+        let left: Vec<_> = std::fs::read_dir(fx.path("run/saka/runners"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".secrets.json"))
+            .collect();
+        assert!(left.is_empty(), "the runner removes the secrets file");
     });
 }
 
@@ -866,6 +925,7 @@ fn systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env() {
                 ("APP_ENV".to_string(), "test".to_string()),
                 ("PATH".to_string(), "/usr/bin:/bin".to_string()),
             ]),
+            secret_env: Vec::new(),
             limits: UnitLimits {
                 memory_max: "1G".into(),
                 cpu_quota: "50%".into(),
@@ -924,6 +984,47 @@ fn systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env() {
         }
         let timed_out = slow.await.unwrap().unwrap();
         assert!(timed_out.timed_out && timed_out.exit_code.is_none());
+
+        // A secret reaches the command's env exactly, but never its argv or the unit's properties.
+        let value = "tok'en $HOME \"quoted\"\nsecond line";
+        let mut with_secret = unit(
+            "printf '%s' \"$API_TOKEN\"; sleep 2",
+            Duration::from_secs(30),
+        );
+        with_secret.secret_env = vec![("API_TOKEN".into(), SecretText::new(value.into()))];
+        let running = {
+            let supervisor = supervisor.clone();
+            tokio::spawn(async move { supervisor.run(&with_secret).await })
+        };
+        let mut seen = Vec::new();
+        for _ in 0..50 {
+            seen = SystemdSupervisor::processes(&name).await;
+            if !seen.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        for pid in &seen {
+            let argv = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            assert!(
+                !String::from_utf8_lossy(&argv).contains("tok'en"),
+                "the value is in argv of {pid}"
+            );
+        }
+        assert_eq!(
+            SystemdSupervisor::property(&name, "Environment")
+                .await
+                .as_deref(),
+            Some("")
+        );
+        let done = running.await.unwrap().unwrap();
+        assert_eq!(done.exit_code, Some(0));
+        assert_eq!(String::from_utf8_lossy(&done.output), value);
+        let secrets_dir = saka_env::runtime_dir().join("saka/secrets");
+        assert!(
+            !secrets_dir.join(format!("{name}.env")).exists(),
+            "the secrets file is removed"
+        );
         assert!(!SystemdSupervisor::is_active(&name).await);
         for pid in processes {
             assert!(

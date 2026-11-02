@@ -18,7 +18,7 @@ pub use error::{Result, StoreError};
 pub use jobs::{ClaimedJob, LEASE_EXTEND_MS, LEASE_MS};
 pub use migrate::MigrationReport;
 pub use read::{StoredEvent, TaskSet};
-pub use write::{ActionRecord, Batch, EventRecord, JobOutcome, NewJob, SpecRevisionRow};
+pub use write::{ActionRecord, Batch, EventRecord, JobOutcome, NewJob, SecretRow, SpecRevisionRow};
 
 pub struct Store {
     path: PathBuf,

@@ -59,6 +59,36 @@ enum Command {
     #[command(about = "Permission requests from agent sessions")]
     #[command(subcommand)]
     Permission(PermissionCmd),
+    #[command(about = "Project secrets for environment recipes (write-only)")]
+    #[command(subcommand)]
+    Secret(SecretCmd),
+}
+
+#[derive(Subcommand)]
+enum SecretCmd {
+    #[command(about = "Stores a secret; the value is read from stdin, never from the command line")]
+    Set {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "Secret name, for example NPM_TOKEN")]
+        name: String,
+        #[arg(
+            help = "Store all of stdin as is, instead of the first line without its newline",
+            long
+        )]
+        multiline: bool,
+    },
+    #[command(about = "Lists secret names; values cannot be read back")]
+    List {
+        #[arg(help = "Project id or name")]
+        project: String,
+    },
+    #[command(about = "Removes a secret")]
+    Rm {
+        #[arg(help = "Project id or name")]
+        project: String,
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -218,6 +248,23 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         Command::Runner { session, launch } => {
             let code = current_thread()?.block_on(saka_agents::runner::run(&session, &launch));
             ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Command::Secret(cmd) => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(async {
+                match cmd {
+                    SecretCmd::Set {
+                        project,
+                        name,
+                        multiline,
+                    } => match cli::read_secret(&name, multiline) {
+                        Ok(value) => client.secret_set(&project, &name, &value).await,
+                        Err(code) => code,
+                    },
+                    SecretCmd::List { project } => client.secret_list(&project).await,
+                    SecretCmd::Rm { project, name } => client.secret_rm(&project, &name).await,
+                }
+            })
         }
         Command::Project(cmd) => {
             let client = Client::new(&server(cli.server)?, cli.json);

@@ -166,4 +166,15 @@ describe("blockerText", () => {
       }),
     ).toBe("pnpm 12.16.1 tidak bisa diunduh.");
   });
+
+  it("names the secrets a recipe is missing or cannot open", () => {
+    expect(
+      blockerText(en, "secret_missing", { names: ["NPM_TOKEN", "API_KEY"] }),
+    ).toBe(
+      "The environment recipe asks for secrets the project does not have: NPM_TOKEN, API_KEY. Set them with saka secret set, then retry.",
+    );
+    expect(blockerText(id, "secret_unreadable", { name: "NPM_TOKEN" })).toBe(
+      "Secret NPM_TOKEN tidak bisa didekripsi dengan key server ini; simpan ulang, lalu coba lagi.",
+    );
+  });
 });

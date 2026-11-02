@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use crate::client::RunnerConnection;
 use crate::launch::{self, ClaudeSettings, LaunchSpec, SessionPaths, UnsupportedPath};
 use crate::protocol::ServerFrame;
+use crate::secrets::SessionSecrets;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY: Duration = Duration::from_millis(50);
@@ -146,6 +147,9 @@ impl ClaudeAgents {
         for (k, v) in &launch.environment.vars {
             spec.env.entry(k.clone()).or_insert_with(|| v.clone());
         }
+        if !launch.environment.secrets.is_empty() {
+            spec.secrets_path = Some(paths.secrets_file().to_string_lossy().into_owned());
+        }
         if !launch.environment.path_prefix.is_empty()
             && let Some(path) = spec.env.get_mut("PATH")
         {
@@ -203,6 +207,12 @@ impl Agents for ClaudeAgents {
         // A socket left by an earlier attempt must not answer for the new runner.
         let _ = std::fs::remove_file(&paths.socket_path);
         write_launch(&paths, &spec).map_err(|e| io_error("launch_write_failed", &e))?;
+        let secrets = paths.secrets_file();
+        if spec.secrets_path.is_some() {
+            SessionSecrets::of(&launch.environment.secrets)
+                .write(&secrets)
+                .map_err(|e| io_error("launch_write_failed", &e))?;
+        }
         let name = unit_name(launch.session_id);
         self.supervisor
             .start(&RunnerUnit {
@@ -232,6 +242,7 @@ impl Agents for ClaudeAgents {
                 Ok(conn) => break conn,
                 Err(e) if !e.retryable || tokio::time::Instant::now() >= deadline => {
                     let _ = self.supervisor.stop(&name).await;
+                    let _ = std::fs::remove_file(&secrets);
                     return Err(e);
                 }
                 Err(_) => tokio::time::sleep(CONNECT_RETRY).await,
@@ -451,6 +462,7 @@ mod tests {
                     "/data/toolchains/go/1.26.3-linux-x64/bin".into(),
                     "/data/toolchains/node/26.13.0-linux-x64/bin".into(),
                 ],
+                secrets: Vec::new(),
             },
             resume_cli_session_id: None,
         };

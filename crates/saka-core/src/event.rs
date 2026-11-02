@@ -41,6 +41,10 @@ pub enum Event {
         config_commit: String,
         repos: Vec<ProjectRepo>,
     },
+    #[serde(rename = "workspace.secret.set")]
+    SecretSet { project_id: ProjectId, name: String },
+    #[serde(rename = "workspace.secret.removed")]
+    SecretRemoved { project_id: ProjectId, name: String },
     #[serde(rename = "spec.spec.registered")]
     SpecRegistered {
         spec_id: SpecId,
@@ -485,7 +489,9 @@ impl Event {
         use Event as E;
         match self {
             E::RepoRegistered { repo_id, .. } => Stream::Repo(*repo_id),
-            E::ProjectRegistered { project_id, .. } => Stream::Project(*project_id),
+            E::ProjectRegistered { project_id, .. }
+            | E::SecretSet { project_id, .. }
+            | E::SecretRemoved { project_id, .. } => Stream::Project(*project_id),
             E::SpecRegistered { spec_id, .. }
             | E::SpecRevisionRecorded { spec_id, .. }
             | E::SpecApproved { spec_id, .. }

@@ -54,6 +54,9 @@ node_dist_url = "https://nodejs.org/dist"
 npm_registry_url = "https://registry.npmjs.org"
 download_timeout_secs = 600        # 30..=3600; per download
 
+# Project secrets (`saka secret set`) are sealed with XChaCha20-Poly1305 under a 32-byte key in
+# `secret.key` next to this file. It is created 0600 on first start; any other mode refuses start.
+
 [git]
 author_name = "Saka Agent"
 author_email = "agent@saka.invalid"

@@ -2092,3 +2092,230 @@ fn new_timeline_rows_are_announced_on_the_event_stream() {
         json!({ "session_id": sid, "work_item_id": api.sim.task(1).item.id, "offset": offset, "kind": "message" })
     );
 }
+
+#[derive(Clone, Default)]
+struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn keyed(api: &Api, method: Method, path: &str, key: &str, body: Option<&Value>) -> Reply {
+    let req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", "127.0.0.1:7420")
+        .header("content-type", "application/json")
+        .header("idempotency-key", key);
+    let body = body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
+    api.send(req.body(body).unwrap())
+}
+
+fn database_bytes(api: &Api) -> Vec<u8> {
+    let db = api.sim.engine().store().path().to_path_buf();
+    let mut bytes = Vec::new();
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = db.clone().into_os_string();
+        path.push(suffix);
+        bytes.extend(std::fs::read(path).unwrap_or_default());
+    }
+    bytes
+}
+
+#[test]
+fn secrets_are_write_only_and_their_values_never_leave_the_request() {
+    const VALUE: &str = "npm-token-0123456789abcdef";
+    let mut api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let path = format!("/api/v1/projects/{project}/secrets/NPM_TOKEN");
+    let logs = LogBuffer::default();
+    let out = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || out.clone())
+        .finish();
+    let before = api.last_seq();
+    tracing::subscriber::with_default(subscriber, || {
+        let key = api.key();
+        let set = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": VALUE })),
+        );
+        assert_eq!(set.status, StatusCode::NO_CONTENT, "{:?}", set.body);
+        assert_eq!(set.body, Value::Null);
+        let replay = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": VALUE })),
+        );
+        assert_eq!(replay.status, StatusCode::NO_CONTENT);
+        assert_eq!(replay.headers["idempotent-replayed"], "true");
+        let other = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": "another-value-12345" })),
+        );
+        problem(
+            &other,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "idempotency_key_reused",
+        );
+        let key = api.key();
+        let rotated = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": "rotated-value-12345" })),
+        );
+        assert_eq!(rotated.status, StatusCode::NO_CONTENT);
+        let key = api.key();
+        let second = format!("/api/v1/projects/{project}/secrets/API_KEY");
+        let set = keyed(
+            &api,
+            Method::PUT,
+            &second,
+            &key,
+            Some(&json!({ "value": VALUE })),
+        );
+        assert_eq!(set.status, StatusCode::NO_CONTENT);
+
+        let list = api.get(&format!("/api/v1/projects/{project}/secrets"));
+        assert_eq!(list.status, StatusCode::OK);
+        let names: Vec<&str> = list.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["API_KEY", "NPM_TOKEN"]);
+        assert!(list.body["items"][0]["updated_at"].is_string());
+        assert!(!list.body.to_string().contains("value"));
+
+        let key = api.key();
+        let gone = keyed(&api, Method::DELETE, &second, &key, None);
+        assert_eq!(gone.status, StatusCode::NO_CONTENT);
+        let key = api.key();
+        let again = keyed(&api, Method::DELETE, &second, &key, None);
+        assert_eq!(again.status, StatusCode::NO_CONTENT);
+    });
+
+    let events = api.sim.engine().events_after(before, 100).unwrap();
+    let kinds: Vec<(&str, &str)> = events
+        .iter()
+        .map(|e| (e.kind.as_str(), e.payload["name"].as_str().unwrap_or("")))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("workspace.secret.set", "NPM_TOKEN"),
+            ("workspace.secret.set", "NPM_TOKEN"),
+            ("workspace.secret.set", "API_KEY"),
+            ("workspace.secret.removed", "API_KEY"),
+        ],
+        "a second delete records no event"
+    );
+    for e in &events {
+        assert_eq!(e.payload.as_object().unwrap().len(), 2, "{:?}", e.payload);
+    }
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let db = database_bytes(&api);
+    for value in [VALUE, "another-value-12345", "rotated-value-12345"] {
+        assert!(!text.contains(value), "a value reached the logs");
+        assert!(
+            !db.windows(value.len()).any(|w| w == value.as_bytes()),
+            "a value is stored in plain text"
+        );
+    }
+    assert!(text.contains("secret set"), "{text}");
+}
+
+#[test]
+fn secret_refusals_carry_their_codes() {
+    let mut api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let put = |api: &mut Api, project: String, name: &str, body: Value| {
+        let key = api.key();
+        keyed(
+            api,
+            Method::PUT,
+            &format!("/api/v1/projects/{project}/secrets/{name}"),
+            &key,
+            Some(&body),
+        )
+    };
+    let ok = json!({ "value": "long-enough-value" });
+    let r = put(
+        &mut api,
+        project.to_string(),
+        "NPM_TOKEN",
+        json!({ "value": "short" }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "secret_too_short");
+    for name in ["lower", "GIT_TOKEN", "PATH", "SAKA_X", "1ABC"] {
+        let r = put(&mut api, project.to_string(), name, ok.clone());
+        problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "secret_name_invalid");
+    }
+    let r = put(
+        &mut api,
+        project.to_string(),
+        "NPM_TOKEN",
+        json!({ "value": "x".repeat(65_537) }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let r = put(
+        &mut api,
+        project.to_string(),
+        "NPM_TOKEN",
+        json!({ "value": "has\u{0}nul-byte" }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let r = put(
+        &mut api,
+        project.to_string(),
+        "NPM_TOKEN",
+        json!({ "value": "long-enough-value", "to": ["session"] }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let missing = uuid::Uuid::now_v7().to_string();
+    let r = put(&mut api, missing.clone(), "NPM_TOKEN", ok.clone());
+    problem(&r, StatusCode::NOT_FOUND, "not_found");
+    problem(
+        &api.get(&format!("/api/v1/projects/{missing}/secrets")),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    let no_key = api.send(
+        Request::builder()
+            .method(Method::PUT)
+            .uri(format!("/api/v1/projects/{project}/secrets/NPM_TOKEN"))
+            .header("host", "127.0.0.1:7420")
+            .header("content-type", "application/json")
+            .body(Body::from(ok.to_string()))
+            .unwrap(),
+    );
+    assert_eq!(no_key.status.as_u16() / 100, 4);
+    for i in 0..200 {
+        let r = put(&mut api, project.to_string(), &format!("S{i}"), ok.clone());
+        assert_eq!(r.status, StatusCode::NO_CONTENT);
+    }
+    let r = put(&mut api, project.to_string(), "S0", ok.clone());
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "replacing one is fine");
+    let r = put(&mut api, project.to_string(), "ONE_MORE", ok);
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(r.body["params"]["errors"][0]["code"], "too_many_secrets");
+}

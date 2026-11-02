@@ -43,6 +43,10 @@ utoipa = { version = "6.0.0", features = ["macros", "uuid"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std"] }
 uuid = { version = "1.29.0", features = ["serde"] }
 wiremock = "0.6.5"
+zeroize = "1.9.1"
+chacha20poly1305 = "0.11.0"
+hkdf = "0.13.0"
+hmac = "0.13.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -16,6 +16,8 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub redaction: Redaction,
+    #[serde(default)]
+    pub secrets_path: Option<String>,
     pub resumed: bool,
     pub heartbeat_ms: u64,
 }
@@ -50,6 +52,10 @@ impl SessionPaths {
             env_root: env_root.to_path_buf(),
             worktree: worktree.to_path_buf(),
         }
+    }
+
+    pub fn secrets_file(&self) -> PathBuf {
+        self.socket_path.with_extension("secrets.json")
     }
 
     pub fn launch_file(&self) -> PathBuf {
@@ -184,6 +190,7 @@ pub fn claude(
         args,
         env,
         redaction: Redaction { known_values },
+        secrets_path: None,
         resumed: resume.is_some(),
         heartbeat_ms: HEARTBEAT_MS,
     })
@@ -259,6 +266,7 @@ mod tests {
                     "TMPDIR": "/data/envs/e-1/tmp",
                 },
                 "redaction": { "known_values": [] },
+                "secrets_path": null,
                 "resumed": false,
                 "heartbeat_ms": 10000,
             })

@@ -6,6 +6,7 @@ pub mod recipe;
 mod reconciler;
 mod register;
 mod runner;
+mod secrets;
 mod text;
 mod timeline;
 pub mod toolchain;
@@ -26,7 +27,7 @@ use saka_core::rejection::Rejection;
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm, Toolchains,
+    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm, SecretStore, Toolchains,
 };
 use saka_store::read;
 use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
@@ -40,6 +41,7 @@ pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
+pub use secrets::SecretInfo;
 pub use views::{
     AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
     SessionView, SpecView, TaskDetail, TaskView, UsageView,
@@ -85,6 +87,7 @@ pub struct Ports {
     pub agents: Arc<dyn Agents>,
     pub docs: Arc<dyn DocSource>,
     pub toolchains: Arc<dyn Toolchains>,
+    pub secrets: Arc<dyn SecretStore>,
 }
 
 #[derive(Debug, thiserror::Error)]
