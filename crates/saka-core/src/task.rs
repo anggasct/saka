@@ -134,6 +134,7 @@ pub enum TaskInput {
         utilization: f64,
         status: String,
         resets_at: Option<Timestamp>,
+        refused: bool,
     },
     Tick,
     ServerRestarted,
@@ -325,7 +326,8 @@ pub fn decide(
             utilization,
             status,
             resets_at,
-        } => d.quota_observed(window, utilization, status, resets_at, ctx),
+            refused,
+        } => d.quota_observed(window, utilization, status, resets_at, refused, ctx),
         I::Tick => d.tick(ctx),
         I::BranchPushed { sha } => d.branch_pushed(sha, ctx),
         I::PushRejected {
@@ -685,6 +687,7 @@ impl Decider<'_> {
         utilization: f64,
         status: String,
         resets_at: Option<Timestamp>,
+        refused: bool,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let Some(session) = self.task.live_session() else {
@@ -707,7 +710,7 @@ impl Decider<'_> {
             status: quota.status.clone(),
             resets_at,
         }];
-        if quota.rejected() {
+        if refused {
             events.extend(self.saka_stop(
                 session,
                 "quota_exhausted",
