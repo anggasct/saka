@@ -74,6 +74,7 @@ impl Default for SimConfig {
                 ci_appear_timeout_ms: 600_000,
                 poll_interval_ms: 15_000,
                 merge_method: MergeMethod::Squash,
+                delete_branch_after_merge: true,
             },
             max_active_tasks: 2,
             env: EnvConfig {

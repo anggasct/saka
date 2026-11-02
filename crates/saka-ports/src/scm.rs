@@ -94,6 +94,8 @@ pub trait Scm: Send + Sync {
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()>;
 
+    fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities>;
+
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool>;
 
     fn parse_webhook(
@@ -105,6 +107,21 @@ pub trait Scm: Send + Sync {
 }
 
 pub const MAX_WEBHOOK_TARGETS: usize = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebhookSignature {
+    HmacSha256,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScmCapabilities {
+    pub provider: &'static str,
+    pub merge_methods: &'static [saka_core::vocab::MergeMethod],
+    pub webhook_signature: Option<WebhookSignature>,
+    pub check_kinds: &'static [saka_core::vocab::CheckKind],
+    pub draft_change_requests: bool,
+    pub delete_branch_after_merge: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WebhookTarget {

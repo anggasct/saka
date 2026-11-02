@@ -24,7 +24,8 @@ pub use env::{
 pub use git::{Blob, GitAccess, GitRemote, Repos};
 pub use scm::{
     ChangeSnapshot, MAX_WEBHOOK_TARGETS, MergeOutcome, MergeRequest, OpenChangeRequest,
-    OpenedChange, PushOutcome, PushRequest, RepoInfo, RepoRef, Scm, WebhookDelivery, WebhookTarget,
+    OpenedChange, PushOutcome, PushRequest, RepoInfo, RepoRef, Scm, ScmCapabilities,
+    WebhookDelivery, WebhookSignature, WebhookTarget,
 };
 pub use secret::{Sealed, SecretStore};
 pub use supervisor::{

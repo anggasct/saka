@@ -22,7 +22,7 @@ use saka_env::{
 use saka_ports::{
     ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
     OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
-    RepoRef, Scm, UnitLimits, WebhookDelivery,
+    RepoRef, Scm, ScmCapabilities, UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
 use saka_store::{Store, StoreError};
@@ -94,6 +94,9 @@ impl Scm for ScmRouter {
         self.get(&repo.integration_id)?
             .delete_branch(repo, branch)
             .await
+    }
+    fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities> {
+        self.0.get(integration_id)?.capabilities(integration_id)
     }
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool> {
         self.get(integration_id)?.webhook_configured(integration_id)
@@ -238,6 +241,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
         poll_interval_ms: first.map_or(15, |s| i64::try_from(s.poll_interval_secs).unwrap_or(15))
             * 1000,
         merge_method: first.map_or(MergeMethod::Squash, |s| s.merge_method),
+        delete_branch_after_merge: true,
     }
 }
 
@@ -320,6 +324,22 @@ pub fn serve(cfg: &Config) -> ExitCode {
 struct Webhooks {
     listen: Option<std::net::SocketAddr>,
     secrets: HashMap<String, Vec<u8>>,
+}
+
+fn capability_refusal(
+    cfg: &Config,
+    caps_of: impl Fn(&str) -> Option<ScmCapabilities>,
+) -> Option<(&'static str, String)> {
+    cfg.scm.iter().find_map(|s| {
+        let caps = caps_of(&s.id)?;
+        if !caps.merge_methods.contains(&s.merge_method) {
+            return Some(("config_merge_method_unsupported", s.id.clone()));
+        }
+        if s.webhook_secret_file.is_some() && caps.webhook_signature.is_none() {
+            return Some(("config_webhook_unsupported", s.id.clone()));
+        }
+        None
+    })
 }
 
 async fn run(
@@ -473,6 +493,17 @@ async fn run(
             })
             .collect(),
     );
+    if let Some((code, integration)) = capability_refusal(cfg, |id| scm.capabilities(id)) {
+        tracing::error!(code, integration = %integration, "the integration lacks a capability the config asks for");
+        let _ = stop.send(true);
+        let _ = http.await;
+        return ExitCode::from(EXIT_REFUSED);
+    }
+    let delete_branch_after_merge = cfg
+        .scm
+        .first()
+        .and_then(|s| scm.capabilities(&s.id))
+        .is_none_or(|c| c.delete_branch_after_merge);
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
     let agents = ClaudeAgents::new(
         AgentsConfig {
@@ -513,7 +544,10 @@ async fn run(
             secrets,
         },
         EngineConfig {
-            loop_cfg: loop_config(cfg),
+            loop_cfg: LoopConfig {
+                delete_branch_after_merge,
+                ..loop_config(cfg)
+            },
             max_active_tasks: cfg.scheduler.max_active_tasks,
             policy,
             worker_id: format!("serve-{}", std::process::id()),
@@ -547,4 +581,48 @@ async fn run(
     }
     forwarder.abort();
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use saka_core::vocab::{CheckKind, MergeMethod};
+
+    use super::*;
+
+    const LIMITED: ScmCapabilities = ScmCapabilities {
+        provider: "limited",
+        merge_methods: &[MergeMethod::Merge],
+        webhook_signature: None,
+        check_kinds: &[CheckKind::CommitStatus],
+        draft_change_requests: false,
+        delete_branch_after_merge: false,
+    };
+
+    fn config(extra: &str) -> Config {
+        Config::parse(&format!(
+            "[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_config_asking_for_a_missing_capability_is_refused() {
+        let full = saka_scm::GITHUB_CAPABILITIES;
+        assert_eq!(
+            capability_refusal(&config(""), |_| Some(full.clone())),
+            None
+        );
+        assert_eq!(
+            capability_refusal(&config("merge_method = \"squash\"\n"), |_| Some(LIMITED)),
+            Some(("config_merge_method_unsupported", "github".to_string()))
+        );
+        assert_eq!(
+            capability_refusal(
+                &config("merge_method = \"merge\"\nwebhook_secret_file = \"/s\"\n"),
+                |_| Some(LIMITED)
+            ),
+            Some(("config_webhook_unsupported", "github".to_string()))
+        );
+        assert_eq!(capability_refusal(&config(""), |_| None), None);
+    }
 }

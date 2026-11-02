@@ -31,6 +31,7 @@ pub struct LoopConfig {
     pub ci_appear_timeout_ms: i64,
     pub poll_interval_ms: i64,
     pub merge_method: MergeMethod,
+    pub delete_branch_after_merge: bool,
     pub permission_wait_ms: i64,
     pub idle_ms: i64,
     pub budgets: BTreeMap<Stage, Budget>,

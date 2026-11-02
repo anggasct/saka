@@ -6,16 +6,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
-use saka_core::vocab::ChangeState;
+use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
-    PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, WebhookDelivery,
+    PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
+    WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 pub use app::{API_VERSION, GitHubApp, GitHubConfig};
 use app::{Reply, inaccessible, parse_time, split_repo};
+
+pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
+    provider: "github",
+    merge_methods: &[MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase],
+    webhook_signature: Some(WebhookSignature::HmacSha256),
+    check_kinds: &[CheckKind::CheckRun, CheckKind::CommitStatus],
+    draft_change_requests: true,
+    delete_branch_after_merge: true,
+};
 
 pub struct GitHub {
     app: Arc<GitHubApp>,
@@ -278,6 +288,10 @@ impl Scm for GitHub {
             StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => Ok(()),
             _ => Err(self.app.unexpected("delete_branch", &reply)),
         }
+    }
+
+    fn capabilities(&self, _integration_id: &str) -> Option<ScmCapabilities> {
+        Some(CAPABILITIES)
     }
 
     fn webhook_configured(&self, _integration_id: &str) -> PortResult<bool> {

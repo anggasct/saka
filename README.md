@@ -43,6 +43,8 @@ make test-claude-memory  # the installed claude CLI loads instructions only from
 make e2e                 # both of the above, then one real delivery loop (needs credentials, see below)
 ```
 
+Every SCM adapter declares its capabilities, such as merge methods, webhook signature, and branch deletion. `saka serve` refuses a config that asks for one the adapter lacks. Each adapter also passes the shared conformance suite in `crates/saka-scm/tests/conformance.rs`, run as part of `make check` or alone with `cargo test -p saka-scm --test conformance`. A new adapter adds a `Harness` there.
+
 The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/package.json` (run pnpm as `corepack pnpm` from `web/`). On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.
 
 ## End-to-end run
