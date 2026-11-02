@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{deps, hygiene, metadata};
+use crate::{deps, hygiene, metadata, wasm};
 
 const PURE_CLIPPY_CONFIGS: &[&str] = &[
     "crates/saka-core/clippy.toml",
@@ -51,19 +51,7 @@ pub fn run() -> Result<()> {
             &[&["test", "--locked"], args(&selected).as_slice()].concat(),
         )
     })?;
-    step("saka-spec for wasm32", || {
-        cargo(
-            &root,
-            &[
-                "check",
-                "--locked",
-                "--target",
-                "wasm32-unknown-unknown",
-                "-p",
-                "saka-spec",
-            ],
-        )
-    })?;
+    step("saka-wasm bindings", wasm::run)?;
     step("dependency direction", || {
         let violations = deps::check(&meta);
         for v in &violations {

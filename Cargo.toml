@@ -43,6 +43,7 @@ tracing = "0.1.44"
 utoipa = { version = "6.0.0", features = ["macros", "uuid"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "std"] }
 uuid = { version = "1.29.0", features = ["serde"] }
+wasm-bindgen = "0.2.130"
 wiremock = "0.6.5"
 zeroize = "1.9.1"
 chacha20poly1305 = "0.11.0"
@@ -62,3 +63,10 @@ print_stdout = "deny"
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
+
+# The browser build of saka-wasm: small, since the web app downloads it.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

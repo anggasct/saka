@@ -5,7 +5,7 @@ A self-hosted delivery loop for coding agents: an approved spec becomes one task
 ## Running
 
 ```sh
-cargo build --release -p saka --features embed-web   # after `corepack pnpm build` in web/
+cargo build --release -p saka --features embed-web   # after `cargo xtask wasm` and `corepack pnpm build` in web/
 saka serve                                            # API, workers, and the web app on 127.0.0.1:7420
 saka project add https://github.com/<owner>/<repo> --path docs
 saka spec template > docs/specs/<spec>.md            # a spec that passes lint (--locale id for Indonesian)
@@ -54,11 +54,12 @@ Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by
 |---|---|
 | `crates/` | The product crates; the allowed dependencies between them are checked by `cargo xtask deps` |
 | `web/` | The web app (Vite, React), embedded in the binary with `--features embed-web` |
-| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `test-systemd`, `test-claude-memory`, `e2e` |
+| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `wasm`, `test-systemd`, `test-claude-memory`, `e2e` |
 | `spikes/` | Research experiments, excluded from every check |
 
 ```sh
-make check               # format, lint, tests, dependency direction, source hygiene, API drift, web checks
+make check               # format, lint, tests, saka-wasm bindings, dependency direction, source hygiene, API drift, web checks
+cargo xtask wasm         # builds the spec lint for the browser into web/src/wasm/pkg (needed before pnpm dev, test, or build)
 make test-systemd        # the session supervisor in a real user systemd unit
 make test-claude-memory  # the installed claude CLI loads instructions only from the session worktree
 make e2e                 # both of the above, then one real delivery loop (needs credentials, see below)
@@ -66,7 +67,7 @@ make e2e                 # both of the above, then one real delivery loop (needs
 
 Every SCM adapter declares its capabilities, such as merge methods, webhook signature, and branch deletion. `saka serve` refuses a config that asks for one the adapter lacks. Each adapter also passes the shared conformance suite in `crates/saka-scm/tests/conformance.rs`, run as part of `make check` or alone with `cargo test -p saka-scm --test conformance`. A new adapter adds a `Harness` there.
 
-The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/package.json` (run pnpm as `corepack pnpm` from `web/`). On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.
+The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/package.json` (run pnpm as `corepack pnpm` from `web/`). The web app lints specs with `saka-spec` compiled to WebAssembly; `cargo xtask wasm` installs the `wasm-bindgen` CLI matching `Cargo.lock` under `target/tools/` and writes the bindings to `web/src/wasm/pkg/`, which is not committed. On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.
 
 ## End-to-end run
 

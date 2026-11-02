@@ -31,6 +31,7 @@ export default tseslint.config(
       ".playwright-browsers/**",
       "src/routeTree.gen.ts",
       "src/api/schema.d.ts",
+      "src/wasm/pkg/**",
       // Linted on purpose by scripts/eslint-fixtures.test.ts.
       "eslint-fixtures/**",
     ],
