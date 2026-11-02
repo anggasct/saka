@@ -7,13 +7,20 @@ use crate::ids::{
     ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::job::JobKind;
-use crate::model::{Budget, Coded, DependsOn, ProjectRepo, ToolchainUse};
+use crate::model::{Budget, Coded, ContextRef, DependsOn, ProjectRepo, ToolchainUse};
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, InterruptBy, MergeMethod,
     PermissionState, ResumeCause, ResumeReason, SessionState, Stage, StagePhase, SupersedeReason,
     Trigger,
 };
+
+fn empty_context_hash() -> String {
+    EMPTY_CONTEXT_HASH.to_string()
+}
+
+pub const EMPTY_CONTEXT_HASH: &str =
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 fn first_parser_version() -> u32 {
     1
@@ -58,6 +65,10 @@ pub enum Event {
         revision_id: SpecRevisionId,
         source_commit: String,
         content_hash: String,
+        #[serde(default = "empty_context_hash")]
+        context_hash: String,
+        #[serde(default)]
+        context: Vec<ContextRef>,
         lint_ok: bool,
         issue_codes: Vec<String>,
         title: String,

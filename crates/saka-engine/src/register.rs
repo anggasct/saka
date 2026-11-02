@@ -1,4 +1,5 @@
 use saka_core::ids::{ProjectId, RepoId};
+use saka_core::model::Project;
 use saka_core::paths::{self, PathIssue};
 use saka_core::rejection::Rejection;
 use saka_ports::RepoRef;
@@ -6,7 +7,7 @@ use saka_store::{list, read};
 use serde_json::Value;
 
 use crate::action::Action;
-use crate::commands::NewProject;
+use crate::commands::{NewProject, SpecFile};
 use crate::project_config;
 use crate::views::{ProjectView, SpecView};
 use crate::{Cause, Engine, EngineError, Result};
@@ -212,19 +213,11 @@ impl Engine {
         Ok(())
     }
 
-    pub async fn add_spec(
-        &self,
-        project_id: ProjectId,
-        path: &str,
-        cause: &Cause,
-        action: Option<&Action<'_>>,
-    ) -> Result<(SpecView, bool)> {
+    pub(crate) fn workspace_of(&self, project_id: ProjectId) -> Result<(Project, RepoRef)> {
         let project = self
             .store
             .read(|c| read::load_project(c, project_id))?
             .ok_or(Rejection::NotFound)?;
-        paths::check_spec_path(&project.project_path, path)
-            .map_err(|issue| invalid("path", path_code(issue)))?;
         let repo = self
             .store
             .read(|c| read::load_repo(c, project.workspace_repo_id))?
@@ -235,6 +228,19 @@ impl Engine {
             full_name: repo.full_name.clone(),
             url: repo.url.clone(),
         };
+        Ok((project, repo_ref))
+    }
+
+    pub async fn add_spec(
+        &self,
+        project_id: ProjectId,
+        path: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<(SpecView, bool)> {
+        let (project, repo_ref) = self.workspace_of(project_id)?;
+        paths::check_spec_path(&project.project_path, path)
+            .map_err(|issue| invalid("path", path_code(issue)))?;
         let file = self
             .ports
             .docs
@@ -254,7 +260,13 @@ impl Engine {
                 path: path.to_string(),
                 base_branch: project.base_branch.clone(),
             })?;
-        self.register_spec_with(project_id, path, &file.commit, &file.bytes, cause, action)
+        let spec_file = SpecFile {
+            path,
+            source_commit: &file.commit,
+            bytes: &file.bytes,
+        };
+        self.register_at(&project, &repo_ref, spec_file, cause, action)
+            .await
     }
 }
 

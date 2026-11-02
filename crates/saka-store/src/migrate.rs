@@ -19,6 +19,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (6, include_str!("../migrations/0006_task_environment.sql")),
     (7, include_str!("../migrations/0007_toolchain_blockers.sql")),
     (8, include_str!("../migrations/0008_secrets.sql")),
+    (9, include_str!("../migrations/0009_spec_context.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {
@@ -786,7 +787,7 @@ mod tests {
         let blockers = "SELECT id || ':' || code || ':' || state FROM blocker ORDER BY id";
         let before = ids(&conn, blockers);
 
-        let report = migrate_with(&mut conn, MIGRATIONS, &backups, Timestamp(3)).unwrap();
+        let report = migrate_with(&mut conn, &MIGRATIONS[..8], &backups, Timestamp(3)).unwrap();
         assert_eq!(report.applied, vec![8]);
         assert_eq!(ids(&conn, blockers), before);
         conn.execute_batch(
@@ -803,6 +804,76 @@ mod tests {
         ] {
             assert!(conn.execute(sql, []).is_err(), "{sql}");
         }
+    }
+
+    #[test]
+    fn the_spec_context_migration_keeps_revisions_with_an_empty_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut conn = Connection::open(dir.path().join("saka.db")).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..1], &backups, Timestamp(1)).unwrap();
+        conn.execute_batch(V1_DATA).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..8], &backups, Timestamp(2)).unwrap();
+
+        let report = migrate_with(&mut conn, &MIGRATIONS[..9], &backups, Timestamp(3)).unwrap();
+        assert_eq!(report.applied, vec![9]);
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT id || ':' || context_hash || ':' || parser_version FROM spec_revision"
+            ),
+            vec!["v1:sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:1"]
+        );
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT id FROM work_item WHERE spec_revision_id = 'v1' ORDER BY id"
+            ),
+            vec!["w1", "w2", "w3"]
+        );
+        assert_eq!(
+            ids(
+                &conn,
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'spec_revision' AND sql IS NOT NULL"
+            ),
+            vec!["spec_revision_spec_idx"]
+        );
+        let broken: Option<String> = conn
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(broken, None);
+
+        let hash = format!("sha256:{}", "a".repeat(64));
+        conn.execute(
+            "INSERT INTO context_blob VALUES ('p1', ?1, x'2341', 3)",
+            [&hash],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spec_revision_context VALUES ('v1', 1, 'p1', 'docs/a.md', 'link', 4, ?1, 2)",
+            [&hash],
+        )
+        .unwrap();
+        let refused = [
+            "INSERT INTO spec_revision SELECT 'v2', spec_id, project_id, source_commit, content_hash, context_hash,
+               content, lint_ok, lint_issues, model, parser_version, created_at FROM spec_revision WHERE id = 'v1'"
+                .to_string(),
+            "INSERT INTO context_blob VALUES ('p1', 'sha256:short', x'00', 3)".to_string(),
+            format!("INSERT INTO spec_revision_context VALUES ('v1', 2, 'p1', 'docs/a.md', 'link', 4, '{hash}', 2)"),
+            format!("INSERT INTO spec_revision_context VALUES ('v1', 3, 'p1', 'docs/b.md', 'other', 4, '{hash}', 2)"),
+            format!("INSERT INTO spec_revision_context VALUES ('v1', 33, 'p1', 'docs/c.md', 'link', 4, '{hash}', 2)"),
+            format!("INSERT INTO spec_revision_context VALUES ('missing', 4, 'p1', 'docs/d.md', 'link', 4, '{hash}', 2)"),
+        ];
+        for sql in refused {
+            assert!(conn.execute(&sql, []).is_err(), "{sql}");
+        }
+        conn.execute(
+            "INSERT INTO spec_revision_context VALUES ('v1', 5, 'p1', 'docs/e.md', 'link', 4, 'sha256:unknown', 2)",
+            [],
+        )
+        .unwrap_err();
     }
 
     #[test]

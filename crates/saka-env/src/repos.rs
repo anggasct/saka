@@ -10,9 +10,9 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    CommandUnit, EnvRef, Environments, GitAccess, GitRemote, PortError, PortResult, PrepareRequest,
-    PreparedEnvironment, PushOutcome, PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef,
-    Repos, Supervisor, UnitLimits, WorktreeState,
+    Blob, CommandUnit, EnvRef, Environments, GitAccess, GitRemote, PortError, PortResult,
+    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, RecipeCommand,
+    RecipeCommandOutcome, RepoRef, Repos, Supervisor, UnitLimits, WorktreeState,
 };
 use serde_json::json;
 
@@ -466,6 +466,77 @@ impl Repos for GitRepos {
             .git_ok(&bare, &["cat-file", "blob", &object], "read_file")
             .await?;
         Ok(Some(out.stdout))
+    }
+
+    async fn read_bounded(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Blob> {
+        if !is_sha(commit) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "commit" }),
+            ));
+        }
+        arg(path, "path")?;
+        let bare = self.mirror_path(repo.repo_id);
+        let object = format!("{commit}:{path}");
+        let kind = self
+            .cfg
+            .git
+            .local(&bare, &["cat-file", "-t", &object])
+            .await?;
+        if !kind.ok() || kind.text() != "blob" {
+            return Ok(Blob::Missing);
+        }
+        let size = self
+            .git_ok(&bare, &["cat-file", "-s", &object], "read_file")
+            .await?;
+        let bytes: u64 = size.text().parse().map_err(|_| {
+            PortError::retryable("git_output_invalid", json!({ "op": "read_file" }))
+        })?;
+        if bytes > max_bytes {
+            return Ok(Blob::TooLarge { bytes });
+        }
+        let out = self
+            .git_ok(&bare, &["cat-file", "blob", &object], "read_file")
+            .await?;
+        Ok(Blob::Bytes(out.stdout))
+    }
+
+    async fn grep_paths(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        pattern: &str,
+        pathspecs: &[String],
+    ) -> PortResult<Vec<String>> {
+        if !is_sha(commit) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "commit" }),
+            ));
+        }
+        arg(pattern, "pattern")?;
+        let bare = self.mirror_path(repo.repo_id);
+        let mut args = vec!["grep", "-l", "-I", "-E", "-e", pattern, commit, "--"];
+        args.extend(pathspecs.iter().map(String::as_str));
+        let out = self.cfg.git.local(&bare, &args).await?;
+        if !out.ok() {
+            if out.code == Some(1) && out.stderr.is_empty() {
+                return Ok(Vec::new());
+            }
+            return Err(failed("grep", &out));
+        }
+        let prefix = format!("{commit}:");
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix(&prefix))
+            .map(str::to_string)
+            .collect())
     }
 
     async fn push(&self, request: &PushRequest) -> PortResult<PushOutcome> {

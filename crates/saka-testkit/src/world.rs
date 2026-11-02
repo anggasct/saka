@@ -13,8 +13,8 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
 use saka_ports::{
-    Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession, Link,
-    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    Agents, Blob, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession,
+    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
     RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, Sealed,
     SecretStore, SessionLaunch, SessionRef, Toolchains, WorktreeState,
@@ -151,6 +151,7 @@ struct State {
     stats: Stats,
     next_request: u32,
     docs: BTreeMap<String, Vec<u8>>,
+    doc_history: HashMap<String, BTreeMap<String, Vec<u8>>>,
     inaccessible: BTreeSet<String>,
     prompts: Vec<String>,
     resumes: Vec<Option<String>>,
@@ -248,6 +249,7 @@ impl FakeWorld {
                 stats: Stats::default(),
                 next_request: 0,
                 docs: BTreeMap::new(),
+                doc_history: HashMap::new(),
                 inaccessible: BTreeSet::new(),
                 prompts: Vec::new(),
                 resumes: Vec::new(),
@@ -361,6 +363,8 @@ impl FakeWorld {
         let commit = s.new_commit(vec![base]);
         s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
         s.docs.insert(path.to_string(), bytes.to_vec());
+        let snapshot = s.docs.clone();
+        s.doc_history.insert(commit.clone(), snapshot);
         commit
     }
 
@@ -833,6 +837,51 @@ impl DocSource for FakeWorld {
             commit,
             bytes: bytes.clone(),
         }))
+    }
+
+    async fn read_at(
+        &self,
+        _repo: &RepoRef,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Blob> {
+        let s = self.state();
+        let docs = s.doc_history.get(commit).unwrap_or(&s.docs);
+        Ok(match docs.get(path) {
+            None => Blob::Missing,
+            Some(b) if b.len() as u64 > max_bytes => Blob::TooLarge {
+                bytes: b.len() as u64,
+            },
+            Some(b) => Blob::Bytes(b.clone()),
+        })
+    }
+
+    async fn find_always(
+        &self,
+        _repo: &RepoRef,
+        commit: &str,
+        project_path: &str,
+    ) -> PortResult<Vec<String>> {
+        let s = self.state();
+        let docs = s.doc_history.get(commit).unwrap_or(&s.docs);
+        let prefix = match project_path.trim_matches('/') {
+            "" | "." => String::new(),
+            dir => format!("{dir}/"),
+        };
+        Ok(docs
+            .iter()
+            .filter(|(path, _)| {
+                path.starts_with(&prefix) && (path.ends_with(".md") || path.ends_with(".markdown"))
+            })
+            .filter(|(_, bytes)| {
+                String::from_utf8_lossy(bytes).lines().any(|line| {
+                    line.strip_prefix("context:")
+                        .is_some_and(|rest| rest.trim() == "always")
+                })
+            })
+            .map(|(path, _)| path.clone())
+            .collect())
     }
 }
 

@@ -52,10 +52,17 @@ pub enum LintCode {
     DependsOnUnknown,
     DependsOnWithdrawn,
     DependsOnCycle,
+    LinksLimitExceeded,
+    ReferenceOutsideWorkspace,
+    ReferenceNotDoc,
+    ReferenceMissing,
+    ReferenceNotText,
+    ReferenceTooLarge,
+    ContextTooLarge,
 }
 
 impl LintCode {
-    pub const ALL: [LintCode; 31] = [
+    pub const ALL: [LintCode; 38] = [
         LintCode::NotASpec,
         LintCode::FileTooLarge,
         LintCode::InvalidUtf8,
@@ -87,6 +94,13 @@ impl LintCode {
         LintCode::DependsOnUnknown,
         LintCode::DependsOnWithdrawn,
         LintCode::DependsOnCycle,
+        LintCode::LinksLimitExceeded,
+        LintCode::ReferenceOutsideWorkspace,
+        LintCode::ReferenceNotDoc,
+        LintCode::ReferenceMissing,
+        LintCode::ReferenceNotText,
+        LintCode::ReferenceTooLarge,
+        LintCode::ContextTooLarge,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -122,6 +136,13 @@ impl LintCode {
             LintCode::DependsOnUnknown => "depends_on_unknown",
             LintCode::DependsOnWithdrawn => "depends_on_withdrawn",
             LintCode::DependsOnCycle => "depends_on_cycle",
+            LintCode::LinksLimitExceeded => "links_limit_exceeded",
+            LintCode::ReferenceOutsideWorkspace => "reference_outside_workspace",
+            LintCode::ReferenceNotDoc => "reference_not_doc",
+            LintCode::ReferenceMissing => "reference_missing",
+            LintCode::ReferenceNotText => "reference_not_text",
+            LintCode::ReferenceTooLarge => "reference_too_large",
+            LintCode::ContextTooLarge => "context_too_large",
         }
     }
 
@@ -130,7 +151,9 @@ impl LintCode {
             LintCode::AcUncovered
             | LintCode::StepWorkEmpty
             | LintCode::StepCommandDuplicate
-            | LintCode::StepParallelStart => Severity::Warning,
+            | LintCode::StepParallelStart
+            | LintCode::LinksLimitExceeded
+            | LintCode::ReferenceNotDoc => Severity::Warning,
             LintCode::NotASpec
             | LintCode::FileTooLarge
             | LintCode::InvalidUtf8
@@ -157,7 +180,12 @@ impl LintCode {
             | LintCode::DoneWhenItemInvalid
             | LintCode::DependsOnUnknown
             | LintCode::DependsOnWithdrawn
-            | LintCode::DependsOnCycle => Severity::Error,
+            | LintCode::DependsOnCycle
+            | LintCode::ReferenceOutsideWorkspace
+            | LintCode::ReferenceMissing
+            | LintCode::ReferenceNotText
+            | LintCode::ReferenceTooLarge
+            | LintCode::ContextTooLarge => Severity::Error,
         }
     }
 }

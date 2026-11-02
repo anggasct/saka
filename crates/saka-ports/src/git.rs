@@ -21,6 +21,13 @@ impl fmt::Debug for GitRemote {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Blob {
+    Missing,
+    TooLarge { bytes: u64 },
+    Bytes(Vec<u8>),
+}
+
 #[async_trait]
 pub trait GitAccess: Send + Sync {
     async fn remote(&self, repo: &RepoRef) -> PortResult<GitRemote>;
@@ -40,6 +47,22 @@ pub trait Repos: Send + Sync {
         commit: &str,
         path: &str,
     ) -> PortResult<Option<Vec<u8>>>;
+
+    async fn read_bounded(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Blob>;
+
+    async fn grep_paths(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        pattern: &str,
+        pathspecs: &[String],
+    ) -> PortResult<Vec<String>>;
 
     async fn push(&self, request: &PushRequest) -> PortResult<PushOutcome>;
 }

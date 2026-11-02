@@ -16,6 +16,13 @@ saka task steer <task> "<message>"                     # also: interrupt, stop -
 saka permission answer <request> allow --remember      # allow the same request in this project from now on
 ```
 
+A spec's context is pinned with it. Saka reads two kinds of markdown doc at the same commit as the spec and stores them with each revision:
+
+- docs the spec links to with ordinary markdown links;
+- docs in the project folder whose frontmatter says `context: always`.
+
+A changed doc makes a new revision. Approving it again repins the steps that have not started. A link to a missing doc, or context over 32 docs or 256 KiB, is a lint error that blocks approve.
+
 Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
 
 ## Development

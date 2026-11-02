@@ -128,6 +128,8 @@ impl World {
         let revision = NewRevision {
             source_commit: "a".repeat(40),
             content_hash: "sha256:abc".into(),
+            context_hash: "sha256:none".into(),
+            context: Vec::new(),
             lint_ok: true,
             issue_codes: vec![],
             title: "Mark tasks as done".into(),
@@ -165,6 +167,8 @@ impl World {
             project_id,
             source_commit: "a".repeat(40),
             content_hash: "sha256:abc".into(),
+            context_hash: "sha256:none".into(),
+            context: Vec::new(),
             content: b"---\nsaka: spec\n---\n".to_vec(),
             lint_ok: true,
             lint_issues: json!([]),
@@ -586,6 +590,8 @@ fn re_approval_repins_the_row_and_replaces_its_dependencies() {
         revision_id: v2,
         source_commit: "b".repeat(40),
         content_hash: "sha256:def".into(),
+        context_hash: "sha256:none".into(),
+        context: Vec::new(),
         lint_ok: true,
         issue_codes: vec![],
         title: "Mark tasks as done".into(),
@@ -605,6 +611,8 @@ fn re_approval_repins_the_row_and_replaces_its_dependencies() {
         project_id: w.project.id,
         source_commit: "b".repeat(40),
         content_hash: "sha256:def".into(),
+        context_hash: "sha256:none".into(),
+        context: Vec::new(),
         content: b"---\nsaka: spec\n---\n".to_vec(),
         lint_ok: true,
         lint_issues: json!([]),
@@ -980,8 +988,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(8));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(9));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1013,7 +1021,7 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     );
     assert_eq!(
         reopened
-            .read(|c| read::revision_by_hash(c, spec.id, "sha256:abc", 2))
+            .read(|c| read::revision_by_hash(c, spec.id, "sha256:abc", "sha256:none", 2))
             .unwrap(),
         Some(spec.latest_revision_id)
     );

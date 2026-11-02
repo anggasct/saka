@@ -32,8 +32,61 @@ fn after(parsed: &saka_spec::Parsed) -> Vec<(String, Vec<String>)> {
 }
 
 #[test]
-fn the_parser_is_version_two() {
-    assert_eq!(PARSER_VERSION, 2);
+fn the_parser_is_version_three() {
+    assert_eq!(PARSER_VERSION, 3);
+}
+
+fn links_of(text: &str) -> (Vec<(String, u32)>, Vec<LintIssue>) {
+    let parsed = parse("docs/specs/t.md", text.as_bytes());
+    let links = parsed
+        .model
+        .map(|m| m.links.into_iter().map(|l| (l.target, l.line)).collect())
+        .unwrap_or_default();
+    (links, parsed.issues)
+}
+
+#[test]
+fn inline_and_reference_links_are_recorded_in_document_order() {
+    let body = "See [arch](../arch.md#layers) and [ref][r].\n\n\
+                [Web](https://example.com), <https://x.dev>, [mail](mailto:a@b.c), [host](//h/x.md),\n\
+                [self](#acceptance-criteria), ![img](../img.md), `[code](../code.md)`, [q](notes.md?plain=1).\n\n\
+                ```\n[block](../block.md)\n```\n\n\
+                [space](my%20doc.md) [bad](%ff.md)\n\n\
+                [r]: /docs/ref.md\n";
+    let text = spec_with_frontmatter("").replace("# Title\n", &format!("# Title\n\n{body}"));
+    let (links, issues) = links_of(&text);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(
+        links,
+        vec![
+            ("../arch.md".to_string(), 6),
+            ("/docs/ref.md".to_string(), 6),
+            ("notes.md".to_string(), 9),
+            ("my doc.md".to_string(), 15),
+            ("%ff.md".to_string(), 15),
+        ]
+    );
+}
+
+#[test]
+fn links_in_the_frontmatter_are_not_recorded() {
+    let text = spec_with_frontmatter("title: \"[x](a.md)\"\n");
+    assert_eq!(links_of(&text).0, Vec::new());
+}
+
+#[test]
+fn links_past_the_limit_warn_once() {
+    let many: String = (0..300).map(|i| format!("[d{i}](d{i}.md)\n\n")).collect();
+    let text = spec_with_frontmatter("").replace("# Title\n", &format!("# Title\n\n{many}"));
+    let (links, issues) = links_of(&text);
+    assert_eq!(links.len(), 256);
+    assert_eq!(links[255].0, "d255.md");
+    let found = found(&issues);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, LintCode::LinksLimitExceeded);
+    assert_eq!(found[0].1, Severity::Warning);
+    assert_eq!(found[0].2, 6 + 2 * 256);
+    assert_eq!(found[0].3, json!({ "limit": 256 }));
 }
 
 #[test]
@@ -309,6 +362,8 @@ fn every_lint_code_has_a_fixed_severity() {
         C::StepWorkEmpty,
         C::StepCommandDuplicate,
         C::StepParallelStart,
+        C::LinksLimitExceeded,
+        C::ReferenceNotDoc,
     ];
     for code in LintCode::ALL {
         let expected = if warnings.contains(&code) {

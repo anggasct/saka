@@ -3,7 +3,7 @@ use saka_core::ids::{
     PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::model::{
-    AccountQuota, Budget, PermissionRequest, PermissionRule, Project, Repo, Session,
+    AccountQuota, Budget, ContextRef, PermissionRequest, PermissionRule, Project, Repo, Session,
     SessionActivity, Spec, StageRun, Task, Usage, UsageRecord,
 };
 use saka_core::plan::RevisionPlan;
@@ -27,6 +27,8 @@ pub struct RevisionInfo {
     pub id: SpecRevisionId,
     pub source_commit: String,
     pub content_hash: String,
+    pub context_hash: String,
+    pub context: Vec<ContextRef>,
     pub lint_ok: bool,
     pub issues: Value,
     pub model: Value,
@@ -40,6 +42,8 @@ impl From<&SpecRevisionRow> for RevisionInfo {
             id: SpecRevisionId(r.id),
             source_commit: r.source_commit.clone(),
             content_hash: r.content_hash.clone(),
+            context_hash: r.context_hash.clone(),
+            context: r.context.clone(),
             lint_ok: r.lint_ok,
             issues: r.lint_issues.clone(),
             model: r.model.clone(),

@@ -116,7 +116,24 @@ pub struct Revision {
     pub content_hash: String,
     /// Version of the parser that read this revision.
     pub parser_version: u32,
+    /// `sha256:<hex>` over the resolved context references; part of the revision identity.
+    pub context_hash: String,
+    /// Context documents pinned with this revision, in work packet order (`link` first, then `always`).
+    pub context: Vec<ContextDoc>,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContextDoc {
+    /// Path relative to the workspace repo root.
+    pub path: String,
+    /// `link` (linked from the spec) or `always` (marked `context: always` in the project folder).
+    pub origin: String,
+    /// Line of the first link in the spec; `1` for `always`.
+    pub line: u32,
+    pub bytes: u64,
+    /// `sha256:<hex>` of the raw bytes.
+    pub content_hash: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -296,6 +313,18 @@ impl Spec {
                 source_commit: r.source_commit.clone(),
                 content_hash: r.content_hash.clone(),
                 parser_version: r.parser_version,
+                context_hash: r.context_hash.clone(),
+                context: r
+                    .context
+                    .iter()
+                    .map(|c| ContextDoc {
+                        path: c.path.clone(),
+                        origin: c.origin.as_str().to_string(),
+                        line: c.line,
+                        bytes: c.bytes,
+                        content_hash: c.content_hash.clone(),
+                    })
+                    .collect(),
                 created_at: time(r.created_at),
             },
             approved_revision_id: s.approved_revision_id.map(|id| id.0),

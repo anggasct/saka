@@ -1,5 +1,6 @@
 mod action;
 mod commands;
+mod context;
 mod metrics;
 mod project_config;
 pub mod recipe;

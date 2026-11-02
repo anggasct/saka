@@ -6,7 +6,7 @@ use saka_core::ids::{
     RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
-    AccountQuota, Blocker, ChangeRequest, Environment, GateResult, PermissionRequest,
+    AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, GateResult, PermissionRequest,
     PermissionRule, Project, ProjectRepo, Repo, RevisionView, Session, Spec, SpecDependency,
     StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
@@ -800,12 +800,14 @@ pub fn revision_by_hash(
     conn: &Connection,
     spec: SpecId,
     content_hash: &str,
+    context_hash: &str,
     parser_version: u32,
 ) -> Result<Option<SpecRevisionId>> {
     let id: Option<String> = conn
         .query_row(
-            "SELECT id FROM spec_revision WHERE spec_id = ?1 AND content_hash = ?2 AND parser_version = ?3",
-            params![spec.0.to_string(), content_hash, parser_version],
+            "SELECT id FROM spec_revision
+             WHERE spec_id = ?1 AND content_hash = ?2 AND context_hash = ?3 AND parser_version = ?4",
+            params![spec.0.to_string(), content_hash, context_hash, parser_version],
             |r| r.get(0),
         )
         .optional()?;
@@ -817,8 +819,54 @@ pub fn revision_by_hash(
     .transpose()
 }
 
+pub fn revision_context(conn: &Connection, id: SpecRevisionId) -> Result<Vec<ContextRef>> {
+    let mut stmt = conn.prepare(
+        "SELECT path, origin, line, bytes, content_hash FROM spec_revision_context
+         WHERE revision_id = ?1 ORDER BY ordinal",
+    )?;
+    let mut rows = stmt.query([id.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(ContextRef {
+            path: row.get("path")?,
+            origin: vocab(row, "origin")?,
+            line: u32_col(row, "line")?,
+            bytes: u64_col(row, "bytes")?,
+            content_hash: row.get("content_hash")?,
+        });
+    }
+    Ok(out)
+}
+
+pub fn context_contents(
+    conn: &Connection,
+    id: SpecRevisionId,
+) -> Result<Vec<(ContextRef, Vec<u8>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.path, c.origin, c.line, c.bytes, c.content_hash, b.content
+         FROM spec_revision_context c
+         JOIN context_blob b ON b.project_id = c.project_id AND b.content_hash = c.content_hash
+         WHERE c.revision_id = ?1 ORDER BY c.ordinal",
+    )?;
+    let mut rows = stmt.query([id.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push((
+            ContextRef {
+                path: row.get("path")?,
+                origin: vocab(row, "origin")?,
+                line: u32_col(row, "line")?,
+                bytes: u64_col(row, "bytes")?,
+                content_hash: row.get("content_hash")?,
+            },
+            row.get("content")?,
+        ));
+    }
+    Ok(out)
+}
+
 pub fn load_revision(conn: &Connection, id: SpecRevisionId) -> Result<Option<SpecRevisionRow>> {
-    one(
+    let Some(mut row) = one(
         conn,
         "SELECT * FROM spec_revision WHERE id = ?1",
         &[&id.0.to_string()],
@@ -829,6 +877,8 @@ pub fn load_revision(conn: &Connection, id: SpecRevisionId) -> Result<Option<Spe
                 project_id: ProjectId(uuid(row, "project_id")?),
                 source_commit: row.get("source_commit")?,
                 content_hash: row.get("content_hash")?,
+                context_hash: row.get("context_hash")?,
+                context: Vec::new(),
                 content: row.get("content")?,
                 lint_ok: row.get("lint_ok")?,
                 lint_issues: json(row, "lint_issues")?,
@@ -837,7 +887,12 @@ pub fn load_revision(conn: &Connection, id: SpecRevisionId) -> Result<Option<Spe
                 created_at: ts(row, "created_at")?,
             })
         },
-    )
+    )?
+    else {
+        return Ok(None);
+    };
+    row.context = revision_context(conn, id)?;
+    Ok(Some(row))
 }
 
 pub fn revision_view(conn: &Connection, id: SpecRevisionId) -> Result<Option<RevisionView>> {

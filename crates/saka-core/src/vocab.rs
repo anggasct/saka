@@ -116,6 +116,7 @@ vocab!(
 );
 vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
 vocab!(SecretPurpose { Setup => "setup", Session => "session" });
+vocab!(ContextOrigin { Link => "link", Always => "always" });
 vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });
 vocab!(SessionState {

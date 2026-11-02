@@ -986,7 +986,7 @@ fn a_spec_shows_priority_dependencies_effective_steps_and_severities() {
         .map(|s| &s["after"])
         .collect();
     assert_eq!(after, [&json!([]), &json!(["S1"]), &json!([])]);
-    assert_eq!(b["revision"]["parser_version"], 2);
+    assert_eq!(b["revision"]["parser_version"], 3);
     assert_eq!(b["lint"]["ok"], true);
     assert_eq!(
         b["lint"]["issues"],
@@ -1084,7 +1084,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
     let again = api.register_doc("docs/specs/kept.md", &text);
     assert_eq!(again.body["id"], spec.0.to_string());
     assert_ne!(again.body["revision"]["id"], old.0.to_string());
-    assert_eq!(again.body["revision"]["parser_version"], 2);
+    assert_eq!(again.body["revision"]["parser_version"], 3);
     let versions: Vec<i64> = api
         .sim
         .engine()
@@ -1097,7 +1097,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
             Ok(rows.collect::<Result<Vec<i64>, _>>()?)
         })
         .unwrap();
-    assert_eq!(versions, vec![1, 2]);
+    assert_eq!(versions, vec![1, 3]);
     assert_eq!(api.approve_reply(&again).status, StatusCode::OK);
 }
 
@@ -1107,7 +1107,7 @@ fn the_spec_template_comes_in_english_and_indonesian() {
     let en = api.get("/api/v1/spec-template");
     assert_eq!(en.status, StatusCode::OK);
     assert_eq!(en.body["locale"], "en");
-    assert_eq!(en.body["parser_version"], 2);
+    assert_eq!(en.body["parser_version"], 3);
     let id = api.get("/api/v1/spec-template?locale=id");
     assert_eq!(id.body["locale"], "id");
     assert_ne!(id.body["content"], en.body["content"]);
@@ -2348,4 +2348,62 @@ fn secret_refusals_carry_their_codes() {
     let r = put(&mut api, project.to_string(), "ONE_MORE", ok);
     problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
     assert_eq!(r.body["params"]["errors"][0]["code"], "too_many_secrets");
+}
+
+#[test]
+fn a_spec_shows_its_pinned_context_and_context_issues_block_approve() {
+    let mut api = Api::new(SimConfig::default());
+    api.sim
+        .world
+        .put_doc("docs/architecture.md", b"# Architecture\n");
+    api.sim
+        .world
+        .put_doc("docs/glossary.md", b"---\ncontext: always\n---\n# Terms\n");
+    let text = one_step_spec("Linked", "").replace(
+        "# Linked\n",
+        "# Linked\n\nRead [the architecture](../architecture.md).\n",
+    );
+    let r = api.register_doc("docs/specs/linked.md", &text);
+    assert_eq!(r.body["lint"]["ok"], true, "{}", r.body);
+    let context = &r.body["revision"]["context"];
+    assert_eq!(context.as_array().unwrap().len(), 2, "{context}");
+    assert_eq!(context[0]["path"], "docs/architecture.md");
+    assert_eq!(context[0]["origin"], "link");
+    assert_eq!(context[0]["bytes"], 15);
+    assert!(
+        context[0]["content_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert_eq!(context[1]["path"], "docs/glossary.md");
+    assert_eq!(context[1]["origin"], "always");
+    assert_eq!(context[1]["line"], 1);
+    assert_eq!(
+        r.body["revision"]["context_hash"].as_str().unwrap().len(),
+        71
+    );
+
+    let broken = one_step_spec("Broken", "")
+        .replace("# Broken\n", "# Broken\n\nRead [the plan](../plan.md).\n");
+    let r = api.register_doc("docs/specs/broken.md", &broken);
+    assert_eq!(r.body["lint"]["ok"], false);
+    let issue = r.body["lint"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["code"] == "reference_missing")
+        .cloned()
+        .unwrap();
+    assert_eq!(issue["severity"], "error");
+    assert_eq!(issue["params"], json!({ "path": "docs/plan.md" }));
+    let reply = api.approve_reply(&r);
+    problem(&reply, StatusCode::UNPROCESSABLE_ENTITY, "spec_not_ready");
+    assert!(
+        reply.body["params"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["code"] == "reference_missing")
+    );
 }

@@ -562,6 +562,21 @@ export interface components {
       state: string;
       url: string;
     };
+    ContextDoc: {
+      /** Format: int64 */
+      bytes: number;
+      /** @description `sha256:<hex>` of the raw bytes. */
+      content_hash: string;
+      /**
+       * Format: int32
+       * @description Line of the first link in the spec; `1` for `always`.
+       */
+      line: number;
+      /** @description `link` (linked from the spec) or `always` (marked `context: always` in the project folder). */
+      origin: string;
+      /** @description Path relative to the workspace repo root. */
+      path: string;
+    };
     /** @enum {string} */
     Decision: "allow" | "deny";
     EmptyBody: Record<string, never>;
@@ -899,6 +914,10 @@ export interface components {
     };
     Revision: {
       content_hash: string;
+      /** @description Context documents pinned with this revision, in work packet order (`link` first, then `always`). */
+      context: components["schemas"]["ContextDoc"][];
+      /** @description `sha256:<hex>` over the resolved context references; part of the revision identity. */
+      context_hash: string;
       created_at: string;
       /** Format: uuid */
       id: string;

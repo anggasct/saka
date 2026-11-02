@@ -175,14 +175,15 @@ impl Sim {
                 &cause,
             )
             .unwrap();
-        let spec = engine
-            .register_spec(
+        let spec = sim
+            .rt
+            .block_on(engine.register_spec(
                 project_id,
                 TWO_STEP_PATH,
                 &sim.world.base_head(),
                 TWO_STEP_SPEC.as_bytes(),
                 &cause,
-            )
+            ))
             .unwrap();
         assert!(spec.lint_ok, "fixture spec has issues: {:?}", spec.issues);
         sim.project_id = project_id;
@@ -262,14 +263,14 @@ impl Sim {
     pub fn register(&self, path: &str, text: &str) -> RegisteredSpec {
         let engine = self.engine();
         let cause = engine.cause("human:operator:local");
-        engine
-            .register_spec(
+        self.rt
+            .block_on(engine.register_spec(
                 self.project_id,
                 path,
                 &self.world.base_head(),
                 text.as_bytes(),
                 &cause,
-            )
+            ))
             .unwrap()
     }
 
@@ -315,6 +316,8 @@ impl Sim {
             project_id: self.project_id,
             source_commit: self.world.base_head(),
             content_hash: format!("sha256:{hex}"),
+            context_hash: saka_core::event::EMPTY_CONTEXT_HASH.to_string(),
+            context: Vec::new(),
             content: text.as_bytes().to_vec(),
             lint_ok: true,
             lint_issues: json!([]),
@@ -346,6 +349,8 @@ impl Sim {
             project_id: spec.project_id,
             source_commit: self.world.base_head(),
             content_hash: format!("sha256:{hex}"),
+            context_hash: saka_core::event::EMPTY_CONTEXT_HASH.to_string(),
+            context: Vec::new(),
             content: text.as_bytes().to_vec(),
             lint_ok: true,
             lint_issues: json!([]),

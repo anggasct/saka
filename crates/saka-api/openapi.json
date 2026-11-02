@@ -1922,6 +1922,41 @@
           }
         }
       },
+      "ContextDoc": {
+        "type": "object",
+        "required": [
+          "path",
+          "origin",
+          "line",
+          "bytes",
+          "content_hash"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "content_hash": {
+            "type": "string",
+            "description": "`sha256:<hex>` of the raw bytes."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Line of the first link in the spec; `1` for `always`.",
+            "minimum": 0
+          },
+          "origin": {
+            "type": "string",
+            "description": "`link` (linked from the spec) or `always` (marked `context: always` in the project folder)."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path relative to the workspace repo root."
+          }
+        }
+      },
       "Decision": {
         "type": "string",
         "enum": [
@@ -3127,11 +3162,24 @@
           "source_commit",
           "content_hash",
           "parser_version",
+          "context_hash",
+          "context",
           "created_at"
         ],
         "properties": {
           "content_hash": {
             "type": "string"
+          },
+          "context": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContextDoc"
+            },
+            "description": "Context documents pinned with this revision, in work packet order (`link` first, then `always`)."
+          },
+          "context_hash": {
+            "type": "string",
+            "description": "`sha256:<hex>` over the resolved context references; part of the revision identity."
           },
           "created_at": {
             "type": "string"

@@ -105,6 +105,26 @@ pub(crate) fn read(text: &str, slug: &str) -> Option<Frontmatter> {
     Some(front)
 }
 
+pub(crate) fn top_level(text: &str) -> Option<Vec<(&str, String)>> {
+    let mut lines = text.split('\n').map(|l| l.trim_end_matches('\r'));
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let mut pairs = Vec::new();
+    for raw in lines {
+        if matches!(raw.trim_end(), "---" | "...") {
+            return Some(pairs);
+        }
+        if raw.starts_with([' ', '\t']) {
+            continue;
+        }
+        if let Some((key, value)) = split_key(strip_comment(raw)) {
+            pairs.push((key, unquote(value).to_string()));
+        }
+    }
+    None
+}
+
 fn not_a_key(line: u32, content: &str) -> LintIssue {
     let key = content.split_once(':').map_or(content, |(key, _)| key);
     LintIssue::new(LintCode::FrontmatterInvalid, line)
