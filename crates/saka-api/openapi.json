@@ -2033,6 +2033,7 @@
         "type": "object",
         "required": [
           "source",
+          "required",
           "head_sha",
           "outcome",
           "checks",
@@ -2055,8 +2056,13 @@
             "type": "string",
             "description": "`pending | passed | failed`"
           },
+          "required": {
+            "type": "boolean",
+            "description": "Whether this source decides merge readiness under the repo's `[gate] source`."
+          },
           "source": {
-            "type": "string"
+            "type": "string",
+            "description": "`scm` or `saka`."
           }
         }
       },
@@ -2597,6 +2603,7 @@
                 "state",
                 "priority",
                 "waiting_on",
+                "gates",
                 "pending_permission_count",
                 "available_actions",
                 "version",
@@ -2671,15 +2678,12 @@
                     }
                   ]
                 },
-                "gate": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/Gate"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                "gates": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Gate"
+                  },
+                  "description": "Latest result per gate source for the current change request head, `scm` first."
                 },
                 "id": {
                   "type": "string",
@@ -4087,6 +4091,7 @@
           "state",
           "priority",
           "waiting_on",
+          "gates",
           "pending_permission_count",
           "available_actions",
           "version",
@@ -4161,15 +4166,12 @@
               }
             ]
           },
-          "gate": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Gate"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Gate"
+            },
+            "description": "Latest result per gate source for the current change request head, `scm` first."
           },
           "id": {
             "type": "string",

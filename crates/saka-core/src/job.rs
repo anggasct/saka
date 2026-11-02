@@ -47,6 +47,8 @@ job_kinds! {
     ScmDeleteBranch => "scm.delete_branch", 5;
     EnvTeardown => "env.teardown", 5;
     ScmWebhookPrune => "scm.webhook_prune", 3;
+    GateVerify => "gate.verify", 3;
+    ScmReportStatus => "scm.report_status", 3;
 }
 
 impl JobKind {
@@ -73,11 +75,16 @@ impl JobKind {
             JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
             JobKind::ScmMerge => scm(StagePhase::Merging),
             JobKind::EnvVerifyMerged => Some((BlockerCode::DodFailed, json!({}))),
+            JobKind::GateVerify => Some((
+                BlockerCode::CiRed,
+                json!({ "source": "saka", "reason": "runner_failed" }),
+            )),
             JobKind::SessionStop
             | JobKind::SessionReattach
             | JobKind::ScmDeleteBranch
             | JobKind::EnvTeardown
-            | JobKind::ScmWebhookPrune => None,
+            | JobKind::ScmWebhookPrune
+            | JobKind::ScmReportStatus => None,
         }
     }
 }
@@ -129,5 +136,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmDeleteBranch => "scm.delete_branch",
         JobKind::EnvTeardown => "env.teardown",
         JobKind::ScmWebhookPrune => "scm.webhook_prune",
+        JobKind::GateVerify => "gate.verify",
+        JobKind::ScmReportStatus => "scm.report_status",
     }
 }

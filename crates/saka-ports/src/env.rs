@@ -40,6 +40,7 @@ pub struct EnvRef {
 pub enum RecipePhase {
     Setup,
     Teardown,
+    Gate,
 }
 
 impl RecipePhase {
@@ -47,6 +48,7 @@ impl RecipePhase {
         match self {
             RecipePhase::Setup => "setup",
             RecipePhase::Teardown => "teardown",
+            RecipePhase::Gate => "gate",
         }
     }
 }
@@ -56,6 +58,34 @@ pub struct RecipeCommand {
     pub phase: RecipePhase,
     pub index: usize,
     pub command: String,
+    pub run: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+impl RecipeCommand {
+    pub fn label(&self) -> String {
+        match &self.run {
+            Some(run) => format!("{}-{run}-{}", self.phase.as_str(), self.index),
+            None => format!("{}-{}", self.phase.as_str(), self.index),
+        }
+    }
+}
+
+pub const OUTPUT_TAIL_LINES: usize = 60;
+pub const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
+
+pub fn output_tail(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(OUTPUT_TAIL_LINES);
+    let mut tail = lines[start..].join("\n");
+    if tail.len() > OUTPUT_TAIL_BYTES {
+        let mut cut = tail.len() - OUTPUT_TAIL_BYTES;
+        while !tail.is_char_boundary(cut) {
+            cut += 1;
+        }
+        tail = tail[cut..].to_string();
+    }
+    tail
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +94,7 @@ pub struct RecipeCommandOutcome {
     pub timed_out: bool,
     pub duration_ms: u64,
     pub log_path: String,
+    pub output_tail: String,
 }
 
 impl RecipeCommandOutcome {
@@ -105,4 +136,21 @@ pub trait Environments: Send + Sync {
     ) -> PortResult<RecipeCommandOutcome>;
 
     fn resolve_path(&self, env: &EnvRef, raw: &str) -> RequestPath;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_output_tail_keeps_the_last_lines_within_the_byte_cap() {
+        let many: String = (0..100).map(|i| format!("line {i}\n")).collect();
+        let tail = output_tail(&many);
+        assert_eq!(tail.lines().count(), OUTPUT_TAIL_LINES);
+        assert!(tail.starts_with("line 40"));
+        let wide = format!("{}\n", "é".repeat(OUTPUT_TAIL_BYTES));
+        let tail = output_tail(&wide);
+        assert!(tail.len() <= OUTPUT_TAIL_BYTES);
+        assert!(tail.chars().all(|c| c == 'é'));
+    }
 }

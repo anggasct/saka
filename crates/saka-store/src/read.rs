@@ -164,10 +164,11 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         gate,
     )? {
         if let Some(t) = tasks.get_mut(&g.work_item_id)
-            && t.gate.is_none()
+            && !t.gates.iter().any(|x| x.source == g.source)
             && t.stage_run.as_ref().is_some_and(|r| r.id == g.stage_run_id)
         {
-            t.gate = Some(g);
+            let at = t.gates.partition_point(|x| x.source < g.source);
+            t.gates.insert(at, g);
         }
     }
     for x in rows(

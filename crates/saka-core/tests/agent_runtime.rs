@@ -56,6 +56,7 @@ fn cfg_with(dev: Budget) -> task::LoopConfig {
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
+        commit_status: true,
         permission_wait_ms: 24 * HOUR,
         idle_ms: 30 * MINUTE,
         budgets: BTreeMap::from([(Stage::Dev, dev)]),

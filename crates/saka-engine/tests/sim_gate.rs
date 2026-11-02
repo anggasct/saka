@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use saka_core::rejection::Rejection;
-use saka_core::vocab::{BlockerCode, ChangeState, GateOutcome, Stage, StagePhase, WorkItemState};
+use saka_core::vocab::{
+    BlockerCode, ChangeState, GateOutcome, GateSource, Stage, StagePhase, WorkItemState,
+};
 use saka_engine::EngineError;
 use saka_testkit::{CiScript, Sim, SimConfig};
 use serde_json::json;
@@ -48,9 +50,11 @@ fn merge_is_refused_until_the_gate_passes_at_the_current_head() {
         s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
     }));
     let t = sim.task(1);
-    let gate = t.gate.unwrap();
-    assert_eq!(gate.outcome, GateOutcome::Passed);
-    assert_eq!(gate.head_sha, t.change_request.unwrap().head_sha);
+    let head = t.change_request.clone().unwrap().head_sha;
+    for source in [GateSource::Scm, GateSource::Saka] {
+        let gate = t.gate_for(source, &head).unwrap();
+        assert_eq!(gate.outcome, GateOutcome::Passed, "{source}");
+    }
     assert_eq!(sim.stats().merges, 0, "nothing merges without the operator");
 
     request_merge(&sim).unwrap();
@@ -68,7 +72,7 @@ fn a_failing_check_blocks_as_ci_red_with_the_failing_names() {
     assert_eq!(blocker.code, BlockerCode::CiRed);
     assert_eq!(
         blocker.params,
-        json!({ "checks": ["lint", "test"], "head_sha": head })
+        json!({ "source": "scm", "checks": ["lint", "test"], "head_sha": head })
     );
     match request_merge(&sim) {
         Err(EngineError::Rejected(Rejection::MergeNotReady { gate_outcome, .. })) => {
@@ -82,6 +86,7 @@ fn a_failing_check_blocks_as_ci_red_with_the_failing_names() {
 #[test]
 fn no_check_within_the_appear_timeout_blocks_as_ci_red_no_checks() {
     let mut sim = sim(CiScript::Silent);
+    sim.world.set_recipe(Some("[gate]\nsource = \"scm\"\n"));
     assert!(sim.run_until(STEPS, |s| {
         s.task(1).is_at(Stage::Merge, StagePhase::AwaitingCi)
     }));

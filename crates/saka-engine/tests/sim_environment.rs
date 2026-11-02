@@ -210,7 +210,7 @@ fn a_repo_without_a_recipe_still_gets_a_port_block_and_no_commands() {
     let env = sim.task(1).environment.unwrap();
     assert!(env.port_start.is_some());
     assert!(env.recipe.is_none() && env.recipe_sha256.is_none());
-    assert!(sim.world.recipe_runs().is_empty());
+    assert!(sim.world.recipe_runs().iter().all(|r| r.phase == "gate"));
     let vars = &sim.world.launch_vars()[0];
     assert_eq!(vars["SAKA_PORT_COUNT"], "10");
 }

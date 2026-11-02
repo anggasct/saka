@@ -18,6 +18,7 @@ export const EVENT_KINDS = [
   "delivery.stage_run.created",
   "delivery.stage_run.phase_changed",
   "delivery.stage_run.succeeded",
+  "delivery.gate.started",
   "delivery.gate.observed",
   "delivery.merge.requested",
   "delivery.work_item.blocked",

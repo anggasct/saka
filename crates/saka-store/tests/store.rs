@@ -59,6 +59,7 @@ fn cfg() -> LoopConfig {
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
+        commit_status: true,
     }
 }
 
@@ -503,6 +504,21 @@ fn a_whole_task_round_trips_through_the_schema() {
             checks,
         },
     );
+    w.step(id, TaskInput::SakaGateStarted { head_sha: sha('b') });
+    w.step(
+        id,
+        TaskInput::SakaGateObserved {
+            head_sha: sha('b'),
+            checks: vec![Check {
+                name: "make test".into(),
+                kind: CheckKind::Command,
+                status: CheckStatus::Completed,
+                conclusion: Some(CheckConclusion::Success),
+                url: None,
+            }],
+            failure: None,
+        },
+    );
     let version = w
         .store
         .read(|c| read::load_task(c, id))
@@ -540,7 +556,8 @@ fn a_whole_task_round_trips_through_the_schema() {
         "dev, merge, and sync runs are all kept"
     );
     assert_eq!(count(&w.store, "ci_check"), 1);
-    assert_eq!(count(&w.store, "gate_result"), 1);
+    assert_eq!(count(&w.store, "gate_result"), 3);
+    assert_eq!(count(&w.store, "ci_check"), 1);
     let pending_jobs: i64 = count(&w.store, "job");
     assert!(pending_jobs >= 10);
 

@@ -606,6 +606,9 @@ export interface components {
       observed_at: string;
       /** @description `pending | passed | failed` */
       outcome: string;
+      /** @description Whether this source decides merge readiness under the repo's `[gate] source`. */
+      required: boolean;
+      /** @description `scm` or `saka`. */
       source: string;
     };
     GateCheck: {
@@ -767,7 +770,8 @@ export interface components {
         created_at: string;
         done_at?: string | null;
         environment?: components["schemas"]["WorkItemEnvironment"] | null;
-        gate?: components["schemas"]["Gate"] | null;
+        /** @description Latest result per gate source for the current change request head, `scm` first. */
+        gates: components["schemas"]["Gate"][];
         /** Format: uuid */
         id: string;
         origin: string;
@@ -1198,7 +1202,8 @@ export interface components {
       created_at: string;
       done_at?: string | null;
       environment?: components["schemas"]["WorkItemEnvironment"] | null;
-      gate?: components["schemas"]["Gate"] | null;
+      /** @description Latest result per gate source for the current change request head, `scm` first. */
+      gates: components["schemas"]["Gate"][];
       /** Format: uuid */
       id: string;
       origin: string;

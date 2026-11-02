@@ -218,6 +218,8 @@ impl World {
                     phase: RecipePhase::Setup,
                     index,
                     command: command.into(),
+                    run: None,
+                    timeout_ms: None,
                 },
             )
             .await
@@ -748,6 +750,34 @@ async fn setup_secrets_reach_the_command_env_and_are_redacted_by_name_in_the_log
     assert!(log.contains("npm=«secret:NPM_TOKEN» api=unset"), "{log}");
     assert!(!log.contains("npm-token-abcdef"), "{log}");
     assert!(log.lines().any(|l| l.trim() == "0"), "{log}");
+    assert!(
+        outcome
+            .output_tail
+            .contains("npm=«secret:NPM_TOKEN» api=unset")
+    );
+    assert!(!outcome.output_tail.contains("npm-token-abcdef"));
+
+    let gate = w
+        .repos
+        .run_recipe_command(
+            &env,
+            &RecipeCommand {
+                phase: RecipePhase::Gate,
+                index: 0,
+                command: "echo gate $NPM_TOKEN; sleep 5".into(),
+                run: Some("abcdef012345".into()),
+                timeout_ms: Some(500),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(gate.timed_out, "{gate:?}");
+    assert!(
+        gate.log_path.ends_with("gate-abcdef012345-0.log"),
+        "{}",
+        gate.log_path
+    );
+    assert_eq!(gate.output_tail, "gate «secret:NPM_TOKEN»");
 }
 
 #[tokio::test]

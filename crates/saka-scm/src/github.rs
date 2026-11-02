@@ -10,7 +10,7 @@ use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
     PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
-    WebhookDelivery, WebhookSignature,
+    StatusReport, WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -25,6 +25,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     check_kinds: &[CheckKind::CheckRun, CheckKind::CommitStatus],
     draft_change_requests: true,
     delete_branch_after_merge: true,
+    commit_status: true,
 };
 
 pub struct GitHub {
@@ -287,6 +288,41 @@ impl Scm for GitHub {
             // Already gone.
             StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => Ok(()),
             _ => Err(self.app.unexpected("delete_branch", &reply)),
+        }
+    }
+
+    async fn report_status(
+        &self,
+        repo: &RepoRef,
+        sha: &str,
+        report: &StatusReport,
+    ) -> PortResult<()> {
+        if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "sha" }),
+            ));
+        }
+        let body = json!({
+            "state": report.state.as_str(),
+            "context": report.context,
+            "description": report.description,
+        });
+        let reply = self
+            .repo_call(
+                &repo.full_name,
+                Method::POST,
+                &["statuses", sha],
+                Some(&body),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(()),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Err(PortError::permanent(
+                "scm_status_refused",
+                json!({ "status": reply.status.as_u16() }),
+            )),
+            _ => Err(self.app.unexpected("report_status", &reply)),
         }
     }
 

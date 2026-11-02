@@ -3,14 +3,17 @@ use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId, Work
 use saka_core::job::{Job, JobKind};
 use std::collections::BTreeMap;
 
+use saka_core::gate::{Check, GatePolicy};
 use saka_core::model::{Coded, Environment, EnvironmentSetup, Task, ToolchainUse};
 use saka_core::task::TaskInput;
 use saka_core::vocab::{
-    BlockerCode, ChangeState, EnvironmentState, PermissionState, Stage, StagePhase,
+    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
+    PermissionState, Stage, StagePhase,
 };
 use saka_ports::{
     EnvRef, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PrepareRequest, PushOutcome,
-    PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef,
+    PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef, StatusReport,
+    StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
@@ -63,6 +66,16 @@ impl Refusal {
             Refusal::Fail(e) => e,
         }
     }
+}
+
+const CHECK_NAME_MAX: usize = 120;
+
+fn check_name(command: &str) -> String {
+    if command.chars().count() <= CHECK_NAME_MAX {
+        return command.to_string();
+    }
+    let cut: String = command.chars().take(CHECK_NAME_MAX - 1).collect();
+    format!("{cut}…")
 }
 
 fn field<T: DeserializeOwned>(payload: &Value, name: &str) -> std::result::Result<T, PortError> {
@@ -203,6 +216,11 @@ impl Engine {
             JobKind::EnvVerifyMerged => self.verify(&task, job).await,
             JobKind::EnvTeardown => self.teardown(&task, field(p, "environment_id")?).await,
             JobKind::ScmWebhookPrune => Ok(Effect::Skipped),
+            JobKind::GateVerify => {
+                self.gate_verify(&task, field(p, "stage_run_id")?, field(p, "head_sha")?)
+                    .await
+            }
+            JobKind::ScmReportStatus => self.report_status(&task, p).await,
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;
@@ -483,6 +501,8 @@ impl Engine {
                 phase: RecipePhase::Teardown,
                 index,
                 command: command.clone(),
+                run: None,
+                timeout_ms: None,
             };
             match self.ports.env.run_recipe_command(env, &run).await {
                 Ok(o) if o.succeeded() => {}
@@ -666,6 +686,8 @@ impl Engine {
                 phase: RecipePhase::Setup,
                 index,
                 command: command.clone(),
+                run: None,
+                timeout_ms: None,
             };
             let outcome = self.ports.env.run_recipe_command(&env, &run).await?;
             setup.push(json!({
@@ -841,6 +863,141 @@ impl Engine {
             commits_ahead: state.commits_ahead,
             head_sha: state.head_sha,
         }))
+    }
+
+    async fn gate_verify(&self, task: &Task, run: StageRunId, head: String) -> Execution {
+        let in_gate = task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+            || task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
+        let current = task.stage_run.as_ref().is_some_and(|r| r.id == run)
+            && task
+                .change_request
+                .as_ref()
+                .is_some_and(|c| c.head_sha == head);
+        let Some(env) = task.ready_environment().filter(|_| in_gate && current) else {
+            return Ok(Effect::Skipped);
+        };
+        let cause = self.cause("system:gate");
+        self.decide(
+            task.item.id,
+            Some(TaskInput::SakaGateStarted {
+                head_sha: head.clone(),
+            }),
+            Mode::Fact,
+            &cause,
+            Extra::default(),
+        )
+        .map_err(internal)?;
+        let env_ref = self
+            .env_ref_with_secrets(task, env)
+            .map_err(Refusal::into_error)?;
+        let base = env.base_sha.clone().unwrap_or_default();
+        let worktree = self.ports.env.inspect(&env_ref, &base).await?;
+        if worktree.head_sha != head || worktree.dirty {
+            return Ok(Effect::Fact(TaskInput::SakaGateObserved {
+                head_sha: head,
+                checks: vec![Check {
+                    name: saka_core::gate::SAKA_STATUS_CONTEXT.to_string(),
+                    kind: CheckKind::Command,
+                    status: CheckStatus::Completed,
+                    conclusion: Some(CheckConclusion::Failure),
+                    url: None,
+                }],
+                failure: Some(json!({ "reason": "worktree_moved" })),
+            }));
+        }
+        let policy = GatePolicy::from_recipe(env.recipe.as_ref());
+        let pinned = self.pinned(task).map_err(internal)?;
+        let step_commands = pinned
+            .step(task)
+            .map(|s| s.commands.clone())
+            .unwrap_or_default();
+        let label: String = head.chars().take(12).collect();
+        let started = std::time::Instant::now();
+        let mut checks = Vec::new();
+        let mut failure = None;
+        for (index, command) in step_commands.iter().chain(&policy.commands).enumerate() {
+            let run = RecipeCommand {
+                phase: RecipePhase::Gate,
+                index,
+                command: command.clone(),
+                run: Some(label.clone()),
+                timeout_ms: Some(u64::from(policy.timeout_minutes) * 60_000),
+            };
+            let outcome = self.ports.env.run_recipe_command(&env_ref, &run).await?;
+            let conclusion = if outcome.timed_out {
+                CheckConclusion::TimedOut
+            } else if outcome.succeeded() {
+                CheckConclusion::Success
+            } else {
+                CheckConclusion::Failure
+            };
+            checks.push(Check {
+                name: check_name(command),
+                kind: CheckKind::Command,
+                status: CheckStatus::Completed,
+                conclusion: Some(conclusion),
+                url: None,
+            });
+            if !outcome.succeeded() {
+                let mut failed = json!({
+                    "command": command,
+                    "log": outcome.log_path,
+                    "log_tail": outcome.output_tail,
+                });
+                if outcome.timed_out {
+                    failed["timed_out"] = json!(true);
+                } else {
+                    failed["exit_code"] = json!(outcome.exit_code);
+                }
+                failure = Some(failed);
+                break;
+            }
+        }
+        let outcome = if failure.is_some() {
+            "failed"
+        } else {
+            "passed"
+        };
+        self.counters
+            .gate_run("saka", outcome, started.elapsed().as_secs_f64());
+        tracing::info!(
+            work_item_id = %task.item.id,
+            head_sha = %head,
+            outcome,
+            commands = checks.len(),
+            "gate.verify.finished"
+        );
+        Ok(Effect::Fact(TaskInput::SakaGateObserved {
+            head_sha: head,
+            checks,
+            failure,
+        }))
+    }
+
+    async fn report_status(&self, task: &Task, p: &Value) -> Execution {
+        let sha: String = field(p, "sha")?;
+        let description: String = field(p, "description")?;
+        let state: String = field(p, "state")?;
+        let Some(state) = StatusState::parse(&state) else {
+            return Err(PortError::permanent(
+                "job_payload_invalid",
+                json!({ "field": "state" }),
+            ));
+        };
+        let report = StatusReport {
+            context: saka_core::gate::SAKA_STATUS_CONTEXT.to_string(),
+            state,
+            description,
+        };
+        let repo = self.repo_ref(task)?;
+        match self.ports.scm.report_status(&repo, &sha, &report).await {
+            Ok(()) => Ok(Effect::Nothing),
+            Err(e) if !e.retryable => {
+                tracing::warn!(code = %e.code, work_item_id = %task.item.id, "scm.status.failed");
+                Ok(Effect::Nothing)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn push(&self, task: &Task, local_sha: String) -> Execution {

@@ -10,9 +10,9 @@ use crate::job::JobKind;
 use crate::model::{Budget, Coded, ContextRef, DependsOn, ProjectRepo, ToolchainUse};
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, InterruptBy, MergeMethod,
-    PermissionState, ResumeCause, ResumeReason, SessionState, Stage, StagePhase, SupersedeReason,
-    Trigger,
+    BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, GateSource, InterruptBy,
+    MergeMethod, PermissionState, ResumeCause, ResumeReason, SessionState, Stage, StagePhase,
+    SupersedeReason, Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -21,6 +21,10 @@ fn empty_context_hash() -> String {
 
 pub const EMPTY_CONTEXT_HASH: &str =
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+fn scm_source() -> GateSource {
+    GateSource::Scm
+}
 
 fn first_parser_version() -> u32 {
     1
@@ -159,9 +163,19 @@ pub enum Event {
         work_item_id: WorkItemId,
         stage_run_id: StageRunId,
         gate_result_id: GateResultId,
+        #[serde(default = "scm_source")]
+        source: GateSource,
         head_sha: String,
         outcome: GateOutcome,
         checks: Vec<Check>,
+    },
+    #[serde(rename = "delivery.gate.started")]
+    GateStarted {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        gate_result_id: GateResultId,
+        source: GateSource,
+        head_sha: String,
     },
     #[serde(rename = "delivery.merge.requested")]
     MergeRequested {
@@ -542,6 +556,7 @@ impl Event {
             | E::StagePhaseChanged { work_item_id, .. }
             | E::StageRunSucceeded { work_item_id, .. }
             | E::GateObserved { work_item_id, .. }
+            | E::GateStarted { work_item_id, .. }
             | E::MergeRequested { work_item_id, .. }
             | E::WorkItemBlocked { work_item_id, .. }
             | E::BlockerResolved { work_item_id, .. }

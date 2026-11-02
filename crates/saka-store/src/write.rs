@@ -7,6 +7,7 @@ use saka_core::model::{
     UsageRecord, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
+use saka_core::vocab::GateSource;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -558,7 +559,7 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     for run in t.retired_runs.iter().chain(t.stage_run.iter()) {
         stage_run(tx, t, run)?;
     }
-    if let Some(g) = &t.gate {
+    for g in &t.gates {
         gate(tx, t, g)?;
     }
     if let Some(b) = &t.blocker {
@@ -566,7 +567,11 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     }
     if let Some(cr) = &t.change_request {
         change_request(tx, t, cr)?;
-        if let Some(g) = t.gate.as_ref().filter(|g| g.head_sha == cr.head_sha) {
+        if let Some(g) = t
+            .gates
+            .iter()
+            .find(|g| g.source == GateSource::Scm && g.head_sha == cr.head_sha)
+        {
             for c in &g.checks {
                 tx.execute(
                     "INSERT INTO ci_check (change_request_id, head_sha, kind, name, status, conclusion, url, observed_at)

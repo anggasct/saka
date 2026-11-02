@@ -17,8 +17,8 @@ use saka_ports::{
     Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
     RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
-    Sealed, SecretStore, SessionLaunch, SessionRef, Toolchains, WebhookDelivery, WebhookSignature,
-    WebhookTarget, WorktreeState,
+    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Toolchains, WebhookDelivery,
+    WebhookSignature, WebhookTarget, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -160,6 +160,9 @@ struct State {
     recipe: Option<String>,
     recipe_runs: Vec<RecipeRun>,
     command_scripts: HashMap<String, VecDeque<CommandScript>>,
+    command_output: HashMap<String, String>,
+    statuses: Vec<(String, StatusReport)>,
+    statuses_refused: bool,
     launches: Vec<Launch>,
     repo_files: BTreeMap<String, String>,
     toolchain_scripts: HashMap<Tool, VecDeque<ToolchainScript>>,
@@ -238,6 +241,9 @@ impl FakeWorld {
                 recipe: None,
                 recipe_runs: Vec::new(),
                 command_scripts: HashMap::new(),
+                command_output: HashMap::new(),
+                statuses: Vec::new(),
+                statuses_refused: false,
                 launches: Vec::new(),
                 repo_files: BTreeMap::new(),
                 toolchain_scripts: HashMap::new(),
@@ -397,6 +403,26 @@ impl FakeWorld {
 
     pub fn set_recipe(&self, recipe: Option<&str>) {
         self.state().recipe = recipe.map(String::from);
+    }
+
+    pub fn dirty_worktrees(&self) {
+        for w in self.state().worktrees.values_mut() {
+            w.dirty = true;
+        }
+    }
+
+    pub fn statuses(&self) -> Vec<(String, StatusReport)> {
+        self.state().statuses.clone()
+    }
+
+    pub fn refuse_statuses(&self) {
+        self.state().statuses_refused = true;
+    }
+
+    pub fn command_output(&self, command: &str, output: &str) {
+        self.state()
+            .command_output
+            .insert(command.to_string(), output.to_string());
     }
 
     pub fn script_command(&self, command: &str, script: CommandScript) {
@@ -792,11 +818,15 @@ impl Environments for FakeWorld {
             timed_out: script == CommandScript::Timeout,
             duration_ms: 5,
             log_path: format!(
-                "/sim/logs/environments/{}/{}-{}.log",
+                "/sim/logs/environments/{}/{}.log",
                 env.environment_id,
-                command.phase.as_str(),
-                command.index
+                command.label()
             ),
+            output_tail: s
+                .command_output
+                .get(&command.command)
+                .cloned()
+                .unwrap_or_default(),
         })
     }
 
@@ -1003,6 +1033,23 @@ impl Scm for FakeWorld {
         Ok(())
     }
 
+    async fn report_status(
+        &self,
+        _repo: &RepoRef,
+        sha: &str,
+        report: &StatusReport,
+    ) -> PortResult<()> {
+        let mut s = self.state();
+        if s.statuses_refused {
+            return Err(PortError::permanent(
+                "scm_status_refused",
+                json!({ "status": 403 }),
+            ));
+        }
+        s.statuses.push((sha.to_string(), report.clone()));
+        Ok(())
+    }
+
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities> {
         (integration_id == FAKE_INTEGRATION).then(|| self.state().capabilities.clone())
     }
@@ -1066,6 +1113,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     check_kinds: &[CheckKind::CheckRun, CheckKind::CommitStatus],
     draft_change_requests: true,
     delete_branch_after_merge: true,
+    commit_status: true,
 };
 pub const FAKE_SIGNATURE_HEADER: &str = "x-fake-signature";
 

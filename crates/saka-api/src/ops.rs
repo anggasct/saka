@@ -219,6 +219,39 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     }
 
     t.family(
+        "saka_gate_runs_total",
+        "counter",
+        "Gate runs by source and outcome.",
+    );
+    for (source, outcome, n) in &m.gate_runs {
+        t.sample(
+            "saka_gate_runs_total",
+            &[("source", source), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
+        "saka_gate_duration_seconds",
+        "histogram",
+        "Duration of Saka gate runs.",
+    );
+    for (bound, n) in &m.gate_seconds.buckets {
+        let le = bound.to_string();
+        t.sample("saka_gate_duration_seconds_bucket", &[("le", &le)], n);
+    }
+    t.sample(
+        "saka_gate_duration_seconds_bucket",
+        &[("le", "+Inf")],
+        m.gate_seconds.count,
+    );
+    t.sample("saka_gate_duration_seconds_sum", &[], m.gate_seconds.sum);
+    t.sample(
+        "saka_gate_duration_seconds_count",
+        &[],
+        m.gate_seconds.count,
+    );
+
+    t.family(
         "saka_webhook_deliveries_total",
         "counter",
         "Webhook deliveries by integration, event, and outcome.",

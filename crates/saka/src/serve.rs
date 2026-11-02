@@ -22,7 +22,7 @@ use saka_env::{
 use saka_ports::{
     ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
     OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
-    RepoRef, Scm, ScmCapabilities, UnitLimits, WebhookDelivery,
+    RepoRef, Scm, ScmCapabilities, StatusReport, UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
 use saka_store::{Store, StoreError};
@@ -93,6 +93,16 @@ impl Scm for ScmRouter {
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {
         self.get(&repo.integration_id)?
             .delete_branch(repo, branch)
+            .await
+    }
+    async fn report_status(
+        &self,
+        repo: &RepoRef,
+        sha: &str,
+        report: &StatusReport,
+    ) -> PortResult<()> {
+        self.get(&repo.integration_id)?
+            .report_status(repo, sha, report)
             .await
     }
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities> {
@@ -242,6 +252,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
             * 1000,
         merge_method: first.map_or(MergeMethod::Squash, |s| s.merge_method),
         delete_branch_after_merge: true,
+        commit_status: true,
     }
 }
 
@@ -499,11 +510,11 @@ async fn run(
         let _ = http.await;
         return ExitCode::from(EXIT_REFUSED);
     }
-    let delete_branch_after_merge = cfg
-        .scm
-        .first()
-        .and_then(|s| scm.capabilities(&s.id))
+    let first_caps = cfg.scm.first().and_then(|s| scm.capabilities(&s.id));
+    let delete_branch_after_merge = first_caps
+        .as_ref()
         .is_none_or(|c| c.delete_branch_after_merge);
+    let commit_status = first_caps.as_ref().is_some_and(|c| c.commit_status);
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
     let agents = ClaudeAgents::new(
         AgentsConfig {
@@ -546,6 +557,7 @@ async fn run(
         EngineConfig {
             loop_cfg: LoopConfig {
                 delete_branch_after_merge,
+                commit_status,
                 ..loop_config(cfg)
             },
             max_active_tasks: cfg.scheduler.max_active_tasks,
@@ -596,6 +608,7 @@ mod capability_tests {
         check_kinds: &[CheckKind::CommitStatus],
         draft_change_requests: false,
         delete_branch_after_merge: false,
+        commit_status: false,
     };
 
     fn config(extra: &str) -> Config {

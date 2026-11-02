@@ -25,6 +25,23 @@ A changed doc makes a new revision. Approving it again repins the steps that hav
 
 Saka polls each open pull request, so it needs no inbound connection. To react to CI sooner, set `[hooks] listen` and give the integration a `webhook_secret_file`. Then point the GitHub App webhook at `https://<public host>/hooks/<scm id>` through a reverse proxy or tunnel. Subscribe it to pull requests, check runs, check suites, and statuses. That listener serves only `POST /hooks/{id}`, and the control API stays on loopback. A delivery must carry a valid `X-Hub-Signature-256`, and each delivery ID is handled once. A delivery never changes state by itself: it makes Saka read the pull request again from the API.
 
+Before a step's pull request can merge, its gate must pass at the pull request's head. The repo picks the gate's sources in `[gate]` of `.saka/environment.toml`, which Saka always reads from the default branch:
+
+- `scm`: CI that reports to GitHub;
+- `saka`: Saka runs the step's Done when commands, then any `[gate] commands`, in the task's environment;
+- `both`: both must pass;
+- `auto` (the default): Saka's commands must pass, and CI counts once it reports.
+
+```toml
+[gate]
+source = "auto"             # auto | scm | saka | both
+commands = ["make lint"]    # run after the step's Done when commands
+required_checks = ["test"]  # CI checks that must report and pass
+timeout_minutes = 30        # per command
+```
+
+Saka reports its result on the pull request as the `saka/verify` status when the GitHub App may write commit statuses. A failing command blocks the task with `ci_red`, and a retry hands the agent the failed command and the last lines of its output.
+
 Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
 
 ## Development
