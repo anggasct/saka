@@ -30,6 +30,7 @@ export function ActionDialog({
   description,
   submit,
   reason,
+  note,
   children,
   explain,
   alternative,
@@ -41,21 +42,36 @@ export function ActionDialog({
   description: string;
   submit: string;
   reason?: { label: string; required: boolean };
+  note?: { label: string; max: number };
   children?: ReactNode;
   explain?: (error: unknown) => string | null;
   alternative?: (error: unknown) => Alternative | null;
-  onSubmit: (reason: string | null, idempotencyKey: string) => Promise<void>;
+  onSubmit: (
+    reason: string | null,
+    idempotencyKey: string,
+    note: string | null,
+  ) => Promise<void>;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const retained = useRef<{ key: string; reason: string | null } | null>(null);
+  const [noteValue, setNoteValue] = useState("");
+  const retained = useRef<{
+    key: string;
+    reason: string | null;
+    note: string | null;
+  } | null>(null);
   const fieldId = useId();
   const countId = useId();
+  const noteId = useId();
+  const noteCountId = useId();
   const trimmed = value.trim();
-  const tooLong = value.length > REASON_MAX;
+  const noteTrimmed = noteValue.trim();
+  const tooLong =
+    value.length > REASON_MAX ||
+    (note !== undefined && noteValue.length > note.max);
   const blocked =
     pending || tooLong || (reason?.required === true && trimmed === "");
   const other = error === null ? null : (alternative?.(error) ?? null);
@@ -63,6 +79,7 @@ export function ActionDialog({
   const change = (next: boolean) => {
     if (next) {
       setValue("");
+      setNoteValue("");
       setError(null);
       retained.current = null;
     }
@@ -86,15 +103,18 @@ export function ActionDialog({
 
   const send = async () => {
     const sent = trimmed === "" ? null : trimmed;
+    const sentNote = noteTrimmed === "" ? null : noteTrimmed;
     const kept = retained.current;
     // The server stores every answer it gave under the key, so only a request
     // that never reached it may be sent again with the same key.
     const key =
-      kept !== null && kept.reason === sent ? kept.key : newIdempotencyKey();
+      kept !== null && kept.reason === sent && kept.note === sentNote
+        ? kept.key
+        : newIdempotencyKey();
     retained.current = null;
-    const failed = await attempt((k) => onSubmit(sent, k), key);
+    const failed = await attempt((k) => onSubmit(sent, k, sentNote), key);
     if (failed !== null && !(failed instanceof ApiError)) {
-      retained.current = { key, reason: sent };
+      retained.current = { key, reason: sent, note: sentNote };
     }
   };
 
@@ -134,6 +154,27 @@ export function ActionDialog({
               />
               <p id={countId} className="text-xs text-muted-foreground">
                 {t("dialog.count", { count: value.length, max: REASON_MAX })}
+              </p>
+            </div>
+          )}
+          {note !== undefined && (
+            <div className="space-y-1">
+              <label htmlFor={noteId} className="text-sm font-medium">
+                {note.label}
+              </label>
+              <textarea
+                id={noteId}
+                value={noteValue}
+                aria-describedby={noteCountId}
+                aria-invalid={noteValue.length > note.max}
+                onChange={(event) => {
+                  setNoteValue(event.target.value);
+                }}
+                rows={4}
+                className="w-full rounded-md border border-border bg-background p-2 text-sm"
+              />
+              <p id={noteCountId} className="text-xs text-muted-foreground">
+                {t("dialog.count", { count: noteValue.length, max: note.max })}
               </p>
             </div>
           )}

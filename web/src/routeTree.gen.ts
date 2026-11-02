@@ -14,6 +14,8 @@ import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
 import { Route as DeliveryTasksWorkItemIdRouteImport } from './routes/delivery.tasks.$workItemId'
+import { Route as DocsProjectIdDraftsIndexRouteImport } from './routes/docs.$projectId_.drafts.index'
+import { Route as DocsProjectIdDraftsDraftIdRouteImport } from './routes/docs.$projectId_.drafts.$draftId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -40,6 +42,18 @@ const DeliveryTasksWorkItemIdRoute = DeliveryTasksWorkItemIdRouteImport.update({
   path: '/delivery/tasks/$workItemId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsProjectIdDraftsIndexRoute =
+  DocsProjectIdDraftsIndexRouteImport.update({
+    id: '/docs/$projectId_/drafts/',
+    path: '/docs/$projectId/drafts/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const DocsProjectIdDraftsDraftIdRoute =
+  DocsProjectIdDraftsDraftIdRouteImport.update({
+    id: '/docs/$projectId_/drafts/$draftId',
+    path: '/docs/$projectId/drafts/$draftId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,6 +61,8 @@ export interface FileRoutesByFullPath {
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
+  '/docs/$projectId/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
+  '/docs/$projectId/drafts/': typeof DocsProjectIdDraftsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +70,8 @@ export interface FileRoutesByTo {
   '/delivery': typeof DeliveryIndexRoute
   '/docs': typeof DocsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
+  '/docs/$projectId/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
+  '/docs/$projectId/drafts': typeof DocsProjectIdDraftsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,6 +80,8 @@ export interface FileRoutesById {
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
+  '/docs/$projectId_/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
+  '/docs/$projectId_/drafts/': typeof DocsProjectIdDraftsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -71,6 +91,8 @@ export interface FileRouteTypes {
     | '/delivery/'
     | '/docs/'
     | '/delivery/tasks/$workItemId'
+    | '/docs/$projectId/drafts/$draftId'
+    | '/docs/$projectId/drafts/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -78,6 +100,8 @@ export interface FileRouteTypes {
     | '/delivery'
     | '/docs'
     | '/delivery/tasks/$workItemId'
+    | '/docs/$projectId/drafts/$draftId'
+    | '/docs/$projectId/drafts'
   id:
     | '__root__'
     | '/'
@@ -85,6 +109,8 @@ export interface FileRouteTypes {
     | '/delivery/'
     | '/docs/'
     | '/delivery/tasks/$workItemId'
+    | '/docs/$projectId_/drafts/$draftId'
+    | '/docs/$projectId_/drafts/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -93,6 +119,8 @@ export interface RootRouteChildren {
   DeliveryIndexRoute: typeof DeliveryIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
   DeliveryTasksWorkItemIdRoute: typeof DeliveryTasksWorkItemIdRoute
+  DocsProjectIdDraftsDraftIdRoute: typeof DocsProjectIdDraftsDraftIdRoute
+  DocsProjectIdDraftsIndexRoute: typeof DocsProjectIdDraftsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -132,6 +160,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DeliveryTasksWorkItemIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/$projectId_/drafts/': {
+      id: '/docs/$projectId_/drafts/'
+      path: '/docs/$projectId/drafts'
+      fullPath: '/docs/$projectId/drafts/'
+      preLoaderRoute: typeof DocsProjectIdDraftsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/$projectId_/drafts/$draftId': {
+      id: '/docs/$projectId_/drafts/$draftId'
+      path: '/docs/$projectId/drafts/$draftId'
+      fullPath: '/docs/$projectId/drafts/$draftId'
+      preLoaderRoute: typeof DocsProjectIdDraftsDraftIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -141,6 +183,8 @@ const rootRouteChildren: RootRouteChildren = {
   DeliveryIndexRoute: DeliveryIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
   DeliveryTasksWorkItemIdRoute: DeliveryTasksWorkItemIdRoute,
+  DocsProjectIdDraftsDraftIdRoute: DocsProjectIdDraftsDraftIdRoute,
+  DocsProjectIdDraftsIndexRoute: DocsProjectIdDraftsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -31,6 +31,10 @@ describe("startEventStream", () => {
       "runtime.permission_rule.revoked",
       "runtime.budget.warned",
       "runtime.quota.observed",
+      "spec.draft.requested",
+      "spec.draft.linted",
+      "spec.draft.succeeded",
+      "spec.draft.failed",
     ]) {
       expect(fake.listeners.has(`${kind}.v1`)).toBe(true);
     }
@@ -54,7 +58,15 @@ describe("startEventStream", () => {
       stream_type: "session",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["work-items"], ["sessions"]],
+      [["work-items"], ["sessions"], ["spec-drafts"]],
+    );
+    invalidate.mockClear();
+    fake.emit("spec.draft.succeeded.v1", {
+      seq: 7,
+      stream_type: "spec_draft",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["spec-drafts"], ["specs"]],
     );
     invalidate.mockClear();
     fake.emit("runtime.permission.requested.v1", {

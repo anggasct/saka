@@ -69,6 +69,7 @@ export function issueCounts(issues: readonly LintIssue[]) {
   return {
     errors: issues.filter((i) => i.severity === "error").length,
     warnings: issues.filter((i) => i.severity === "warning").length,
+    open: issues.filter((i) => i.code === "decision_unanswered").length,
   };
 }
 

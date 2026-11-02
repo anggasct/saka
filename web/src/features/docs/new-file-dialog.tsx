@@ -17,7 +17,7 @@ import { docsKeys, fetchTemplate } from "./queries";
 
 export type NewKind = "file" | "spec";
 
-function folderOf(projectPath: string, kind: NewKind): string {
+export function folderOf(projectPath: string, kind: NewKind): string {
   const base = projectPath === "." ? "" : `${projectPath}/`;
   return kind === "spec" ? `${base}specs/` : base;
 }
