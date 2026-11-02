@@ -21,7 +21,7 @@ pub use env::{
     EnvRef, Environments, PrepareRequest, PreparedEnvironment, RecipeCommand, RecipeCommandOutcome,
     RecipePhase, WorktreeState,
 };
-pub use git::{GitAccess, GitRemote, Repos};
+pub use git::{Blob, GitAccess, GitRemote, Repos};
 pub use scm::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome,
     PushRequest, RepoInfo, RepoRef, Scm,

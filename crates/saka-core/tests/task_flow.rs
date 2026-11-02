@@ -90,6 +90,8 @@ impl World {
         let revision = NewRevision {
             source_commit: "a".repeat(40),
             content_hash: "sha256:x".into(),
+            context_hash: "sha256:none".into(),
+            context: Vec::new(),
             lint_ok: true,
             issue_codes: vec![],
             title: "Mark tasks as done".into(),
@@ -744,6 +746,8 @@ fn same_content_records_nothing_and_old_content_reuses_its_revision() {
     let revision = || NewRevision {
         source_commit: "b".repeat(40),
         content_hash: "h".into(),
+        context_hash: "sha256:none".into(),
+        context: Vec::new(),
         lint_ok: false,
         issue_codes: vec!["steps_missing".into()],
         title: "T".into(),

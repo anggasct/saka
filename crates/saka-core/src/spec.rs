@@ -7,7 +7,8 @@ use crate::Ctx;
 use crate::event::Event;
 use crate::ids::{ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
 use crate::model::{
-    DependsOn, RevisionView, Spec, SpecDependency, StepPlan, WorkItem, WorkItemDependency,
+    ContextRef, DependsOn, RevisionView, Spec, SpecDependency, StepPlan, WorkItem,
+    WorkItemDependency,
 };
 use crate::plan::{RevisionPlan, plan_revision};
 use crate::rejection::Rejection;
@@ -18,6 +19,8 @@ use crate::vocab::{PlanAction, SpecOrigin, SpecState, SupersedeReason, WorkItemS
 pub struct NewRevision {
     pub source_commit: String,
     pub content_hash: String,
+    pub context_hash: String,
+    pub context: Vec<ContextRef>,
     pub lint_ok: bool,
     pub issue_codes: Vec<String>,
     pub title: String,
@@ -58,6 +61,8 @@ pub fn record_revision(
         revision_id: known.unwrap_or_else(|| SpecRevisionId::new(ctx.ids)),
         source_commit: revision.source_commit,
         content_hash: revision.content_hash,
+        context_hash: revision.context_hash,
+        context: revision.context,
         lint_ok: revision.lint_ok,
         issue_codes: revision.issue_codes,
         title: revision.title,

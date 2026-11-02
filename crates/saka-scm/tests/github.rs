@@ -19,7 +19,7 @@ use saka_core::vocab::{
     ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod,
 };
 use saka_ports::{
-    Clock, GitAccess, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
+    Blob, Clock, GitAccess, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
     PushOutcome, PushRequest, RepoRef, Repos, Scm,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
@@ -55,6 +55,18 @@ impl Repos for NoRepos {
     }
     async fn read_file(&self, _r: &RepoRef, _c: &str, _p: &str) -> PortResult<Option<Vec<u8>>> {
         Ok(None)
+    }
+    async fn read_bounded(&self, _r: &RepoRef, _c: &str, _p: &str, _m: u64) -> PortResult<Blob> {
+        Ok(Blob::Missing)
+    }
+    async fn grep_paths(
+        &self,
+        _r: &RepoRef,
+        _c: &str,
+        _p: &str,
+        _s: &[String],
+    ) -> PortResult<Vec<String>> {
+        Ok(Vec::new())
     }
     async fn push(&self, request: &PushRequest) -> PortResult<PushOutcome> {
         Ok(PushOutcome::Pushed {

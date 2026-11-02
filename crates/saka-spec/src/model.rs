@@ -13,6 +13,13 @@ pub struct SpecModel {
     pub depends_on: Vec<String>,
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub steps: Vec<Step>,
+    pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Link {
+    pub target: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

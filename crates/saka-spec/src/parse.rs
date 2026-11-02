@@ -3,12 +3,13 @@ use std::collections::{HashMap, HashSet};
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, parse_document};
 
+use crate::context::MAX_LINKS;
 use crate::frontmatter;
 use crate::graph::cycles;
 use crate::lint::{LintCode, LintIssue};
-use crate::model::{AcceptanceCriterion, SpecModel, Step};
+use crate::model::{AcceptanceCriterion, Link, SpecModel, Step};
 
-pub const PARSER_VERSION: u32 = 2;
+pub const PARSER_VERSION: u32 = 3;
 pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 pub const MAX_STEPS: usize = 50;
 
@@ -69,6 +70,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
     let mut options = Options::default();
     options.extension.table = true;
     let root = parse_document(&arena, &body, &options);
+    let links = collect_links(root, &mut issues);
 
     let mut doc = Document::default();
     let mut section = Section::Other;
@@ -154,6 +156,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             depends_on: front.depends_on,
             acceptance_criteria: doc.acs,
             steps,
+            links,
         }),
         issues,
         depends_on_line,
@@ -203,6 +206,68 @@ struct Row {
 struct Cell {
     text: String,
     code: Vec<String>,
+}
+
+fn collect_links<'a>(root: &'a AstNode<'a>, issues: &mut Vec<LintIssue>) -> Vec<Link> {
+    let mut links = Vec::new();
+    for node in root.descendants() {
+        let url = match &node.data.borrow().value {
+            NodeValue::Link(link) => link.url.clone(),
+            _ => continue,
+        };
+        let Some(target) = link_target(&url) else {
+            continue;
+        };
+        let line = start_line(node);
+        if links.len() == MAX_LINKS {
+            issues
+                .push(LintIssue::new(LintCode::LinksLimitExceeded, line).with("limit", MAX_LINKS));
+            break;
+        }
+        links.push(Link { target, line });
+    }
+    links
+}
+
+fn link_target(url: &str) -> Option<String> {
+    if url.starts_with("//") || has_scheme(url) {
+        return None;
+    }
+    let end = url.find(['#', '?']).unwrap_or(url.len());
+    let target = percent_decode(&url[..end]);
+    (!target.is_empty()).then_some(target)
+}
+
+fn has_scheme(url: &str) -> bool {
+    let Some((scheme, _)) = url.split_once(':') else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+}
+
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b, hex) {
+            (b'%', Some(decoded)) => {
+                out.push(decoded);
+                i += 3;
+            }
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| raw.to_string())
 }
 
 fn line_at(bytes: &[u8], offset: usize) -> u32 {

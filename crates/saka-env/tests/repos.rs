@@ -16,7 +16,7 @@ use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest, PushOutcome,
+    Blob, EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest, PushOutcome,
     PushRequest, RecipeCommand, RecipePhase, RepoRef, Repos, UnitLimits,
 };
 use uuid::Uuid;
@@ -419,6 +419,74 @@ async fn a_worktree_starts_at_the_latest_base_and_reports_its_state() {
         None
     );
     assert_eq!(w.repos.tip(&w.repo, "nope").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn docs_are_read_with_a_size_bound_and_found_by_pattern_at_a_commit() {
+    let w = World::new();
+    std::fs::create_dir_all(w.other.join("docs/sub")).unwrap();
+    std::fs::write(
+        w.other.join("docs/always.md"),
+        "---\ncontext: always\n---\n",
+    )
+    .unwrap();
+    std::fs::write(w.other.join("docs/sub/b.markdown"), "context:  always\r\n").unwrap();
+    std::fs::write(w.other.join("docs/plain.md"), "context: sometimes\n").unwrap();
+    std::fs::write(w.other.join("docs/bin.md"), b"context: always\n\0\0").unwrap();
+    std::fs::write(w.other.join("docs/notes.txt"), "context: always\n").unwrap();
+    let tip = commit(&w.other, "README.md", "context: always\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    w.repos.fetch(&w.repo).await.unwrap();
+
+    let specs = vec![
+        ":(glob)docs/**/*.md".to_string(),
+        ":(glob)docs/**/*.markdown".to_string(),
+    ];
+    let pattern = "^context:[[:space:]]*always[[:space:]]*$";
+    let mut found = w
+        .repos
+        .grep_paths(&w.repo, &tip, pattern, &specs)
+        .await
+        .unwrap();
+    found.sort();
+    assert_eq!(found, vec!["docs/always.md", "docs/sub/b.markdown"]);
+    let none = w
+        .repos
+        .grep_paths(&w.repo, &tip, "^never-here$", &specs)
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+
+    assert_eq!(
+        w.repos
+            .read_bounded(&w.repo, &tip, "docs/always.md", 1024)
+            .await
+            .unwrap(),
+        Blob::Bytes(b"---\ncontext: always\n---\n".to_vec())
+    );
+    assert_eq!(
+        w.repos
+            .read_bounded(&w.repo, &tip, "docs/always.md", 8)
+            .await
+            .unwrap(),
+        Blob::TooLarge { bytes: 24 }
+    );
+    for path in ["docs", "docs/missing.md"] {
+        assert_eq!(
+            w.repos
+                .read_bounded(&w.repo, &tip, path, 1024)
+                .await
+                .unwrap(),
+            Blob::Missing,
+            "{path}"
+        );
+    }
+    let bad = w
+        .repos
+        .read_bounded(&w.repo, "HEAD", "docs/always.md", 1024)
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code, "git_argument_invalid");
 }
 
 #[tokio::test]

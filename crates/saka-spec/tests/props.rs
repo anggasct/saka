@@ -39,6 +39,23 @@ proptest! {
     }
 
     #[test]
+    fn link_heavy_text_never_panics_and_stays_under_the_link_limit(links in prop::collection::vec(
+        prop_oneof![
+            "\\[[a-z]{0,3}\\]\\([ -~]{0,12}\\)",
+            "\\[[a-z]\\]: [ -~]{0,12}",
+            "%[0-9a-fA-F]{0,2}",
+            "[ -~]{0,10}",
+        ],
+        0..400,
+    )) {
+        let text = format!("---\nsaka: spec\n---\n# T\n\n{}\n", links.join(" \n"));
+        let parsed = parse("docs/x.md", text.as_bytes());
+        prop_assert_eq!(&parsed, &parse("docs/x.md", text.as_bytes()));
+        let count = parsed.model.map_or(0, |m| m.links.len());
+        prop_assert!(count <= saka_spec::context::MAX_LINKS);
+    }
+
+    #[test]
     fn mutated_specs_never_panic_and_parse_the_same(bytes in mutated()) {
         prop_assert_eq!(parse("after-graph.md", &bytes), parse("after-graph.md", &bytes));
     }

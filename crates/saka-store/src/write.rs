@@ -2,7 +2,7 @@ use rusqlite::{Transaction, params};
 use saka_core::ids::{ProjectId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
-    AccountQuota, Blocker, ChangeRequest, Environment, GateResult, PermissionRequest,
+    AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, GateResult, PermissionRequest,
     PermissionRule, Project, Repo, Session, SessionActivity, Spec, SpecDependency, StageRun, Task,
     UsageRecord, WorkItemDependency,
 };
@@ -51,11 +51,21 @@ pub struct SpecRevisionRow {
     pub project_id: ProjectId,
     pub source_commit: String,
     pub content_hash: String,
+    pub context_hash: String,
+    pub context: Vec<ContextRef>,
     pub content: Vec<u8>,
     pub lint_ok: bool,
     pub lint_issues: Value,
     pub model: Value,
     pub parser_version: u32,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextBlobRow {
+    pub project_id: ProjectId,
+    pub content_hash: String,
+    pub content: Vec<u8>,
     pub created_at: Timestamp,
 }
 
@@ -107,6 +117,7 @@ pub struct Batch {
     pub projects: Vec<Project>,
     pub specs: Vec<Spec>,
     pub revisions: Vec<SpecRevisionRow>,
+    pub context_blobs: Vec<ContextBlobRow>,
     pub tasks: Vec<Task>,
     pub spec_dependencies: Vec<SpecDependency>,
     pub work_item_dependencies: Vec<WorkItemDependency>,
@@ -208,6 +219,19 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for s in &b.specs {
         spec(tx, s)?;
+    }
+    for blob in &b.context_blobs {
+        tx.execute(
+            "INSERT INTO context_blob (project_id, content_hash, content, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (project_id, content_hash) DO NOTHING",
+            params![
+                blob.project_id.0.to_string(),
+                blob.content_hash,
+                blob.content,
+                blob.created_at.0,
+            ],
+        )?;
     }
     for r in &b.revisions {
         revision(tx, r)?;
@@ -420,9 +444,9 @@ fn spec(tx: &Transaction<'_>, s: &Spec) -> Result<()> {
 
 fn revision(tx: &Transaction<'_>, r: &SpecRevisionRow) -> Result<()> {
     tx.execute(
-        "INSERT INTO spec_revision (id, spec_id, project_id, source_commit, content_hash, content, lint_ok,
-           lint_issues, model, parser_version, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        "INSERT INTO spec_revision (id, spec_id, project_id, source_commit, content_hash, context_hash, content,
+           lint_ok, lint_issues, model, parser_version, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (id) DO NOTHING",
         params![
             r.id.to_string(),
@@ -430,6 +454,7 @@ fn revision(tx: &Transaction<'_>, r: &SpecRevisionRow) -> Result<()> {
             r.project_id.to_string(),
             r.source_commit,
             r.content_hash,
+            r.context_hash,
             r.content,
             r.lint_ok,
             value_json(&r.lint_issues)?,
@@ -438,6 +463,24 @@ fn revision(tx: &Transaction<'_>, r: &SpecRevisionRow) -> Result<()> {
             r.created_at.0,
         ],
     )?;
+    for (ordinal, doc) in (1u32..).zip(&r.context) {
+        tx.execute(
+            "INSERT INTO spec_revision_context (revision_id, ordinal, project_id, path, origin, line,
+               content_hash, bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT (revision_id, ordinal) DO NOTHING",
+            params![
+                r.id.to_string(),
+                ordinal,
+                r.project_id.to_string(),
+                doc.path,
+                doc.origin.as_str(),
+                doc.line,
+                doc.content_hash,
+                i64_of(doc.bytes)?,
+            ],
+        )?;
+    }
     Ok(())
 }
 

@@ -4,18 +4,18 @@ use saka_core::ids::{
     PermissionRequestId, PermissionRuleId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId,
     WorkItemId,
 };
-use saka_core::model::{PermissionRule, ProjectRepo};
+use saka_core::model::{PermissionRule, Project, ProjectRepo};
 use saka_core::rejection::Rejection;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
 use saka_core::workspace;
-use saka_ports::IdsSource;
-use saka_spec::{LintIssue, PARSER_VERSION};
-use saka_store::{Batch, SpecRevisionRow, TaskSet, list, read};
+use saka_ports::{IdsSource, RepoRef};
+use saka_spec::{LintIssue, PARSER_VERSION, Parsed};
+use saka_store::{Batch, ContextBlobRow, SpecRevisionRow, TaskSet, list, read};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::action::{Action, Produced};
+use crate::context::{PinnedContext, sha256};
 use crate::views::{ProjectView, RevisionInfo, SpecView, step_items};
 use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
 
@@ -43,6 +43,13 @@ pub struct NewProject {
     pub repo_name: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpecFile<'a> {
+    pub path: &'a str,
+    pub source_commit: &'a str,
+    pub bytes: &'a [u8],
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegisteredSpec {
     pub spec_id: SpecId,
@@ -61,12 +68,6 @@ fn reason(value: &str) -> Result<String> {
         });
     }
     Ok(trimmed.to_string())
-}
-
-fn content_hash(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("sha256:{hex}")
 }
 
 impl Engine {
@@ -151,7 +152,7 @@ impl Engine {
         Ok(view)
     }
 
-    pub fn register_spec(
+    pub async fn register_spec(
         &self,
         project_id: ProjectId,
         path: &str,
@@ -159,8 +160,13 @@ impl Engine {
         bytes: &[u8],
         cause: &Cause,
     ) -> Result<RegisteredSpec> {
-        let (view, _) =
-            self.register_spec_with(project_id, path, source_commit, bytes, cause, None)?;
+        let (project, repo) = self.workspace_of(project_id)?;
+        let file = SpecFile {
+            path,
+            source_commit,
+            bytes,
+        };
+        let (view, _) = self.register_at(&project, &repo, file, cause, None).await?;
         Ok(RegisteredSpec {
             spec_id: view.spec.id,
             revision_id: view.revision.id,
@@ -170,39 +176,79 @@ impl Engine {
         })
     }
 
-    pub(crate) fn register_spec_with(
+    pub(crate) async fn register_at(
         &self,
-        project_id: ProjectId,
-        path: &str,
-        source_commit: &str,
-        bytes: &[u8],
+        project: &Project,
+        repo: &RepoRef,
+        file: SpecFile<'_>,
         cause: &Cause,
         action: Option<&Action<'_>>,
     ) -> Result<(SpecView, bool)> {
+        let file_name = file.path.rsplit('/').next().unwrap_or(file.path);
+        let parsed = saka_spec::parse(file_name, file.bytes);
+        let context = self
+            .resolve_context(
+                repo,
+                &project.project_path,
+                file.path,
+                file.source_commit,
+                &parsed,
+            )
+            .await?;
+        let docs = context.refs.len();
+        let bytes: u64 = context.refs.iter().map(|r| r.bytes).sum();
+        let issues = context.issues.len();
+        let registered =
+            self.register_spec_with(project.id, file, parsed, context, cause, action)?;
+        tracing::info!(
+            spec_id = %registered.0.spec.id,
+            revision_id = %registered.0.revision.id,
+            docs,
+            bytes,
+            issues,
+            "spec.context.resolved"
+        );
+        Ok(registered)
+    }
+
+    fn register_spec_with(
+        &self,
+        project_id: ProjectId,
+        file: SpecFile<'_>,
+        parsed: Parsed,
+        context: PinnedContext,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<(SpecView, bool)> {
+        let SpecFile {
+            path,
+            source_commit,
+            bytes,
+        } = file;
         let _guard = self.locked()?;
         let now = self.now();
         let file_name = path.rsplit('/').next().unwrap_or(path);
         let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
-        let parsed = saka_spec::parse(file_name, bytes);
-        let hash = content_hash(bytes);
+        let hash = sha256(bytes);
         let (existing, known) = self.store.read(|c| {
             let existing = read::spec_by_path(c, project_id, path)?;
             let known = match &existing {
-                Some(s) => read::revision_by_hash(c, s.id, &hash, PARSER_VERSION)?,
+                Some(s) => read::revision_by_hash(c, s.id, &hash, &context.hash, PARSER_VERSION)?,
                 None => None,
             };
             Ok((existing, known))
         })?;
-        let lint_ok = parsed.is_ready();
+        let mut issues = parsed.issues.clone();
+        issues.extend(context.issues.iter().cloned());
+        issues.sort_by_key(|i| i.line);
+        let lint_ok = parsed.is_ready() && !context.issues.iter().any(LintIssue::is_error);
         let revision = NewRevision {
             source_commit: source_commit.to_string(),
             content_hash: hash.clone(),
+            context_hash: context.hash.clone(),
+            context: context.refs.clone(),
             lint_ok,
-            issue_codes: parsed
-                .issues
-                .iter()
-                .map(|i| i.code.as_str().to_string())
-                .collect(),
+            issue_codes: issues.iter().map(|i| i.code.as_str().to_string()).collect(),
             title: parsed
                 .model
                 .as_ref()
@@ -251,15 +297,25 @@ impl Engine {
             {
                 revision_id = Some(*id);
                 if !reused {
+                    batch
+                        .context_blobs
+                        .extend(context.blobs.iter().map(|(hash, content)| ContextBlobRow {
+                            project_id,
+                            content_hash: hash.clone(),
+                            content: content.clone(),
+                            created_at: now,
+                        }));
                     batch.revisions.push(SpecRevisionRow {
                         id: id.0,
                         spec_id: spec_id.0,
                         project_id,
                         source_commit: source_commit.to_string(),
                         content_hash: hash.clone(),
+                        context_hash: context.hash.clone(),
+                        context: context.refs.clone(),
                         content: bytes.to_vec(),
                         lint_ok,
-                        lint_issues: serde_json::to_value(&parsed.issues)
+                        lint_issues: serde_json::to_value(&issues)
                             .map_err(|e| EngineError::Internal(e.to_string()))?,
                         model: match &parsed.model {
                             Some(m) => serde_json::to_value(m)

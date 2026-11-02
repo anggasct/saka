@@ -264,6 +264,8 @@ fn priority_follows_the_latest_revision_until_approve() {
     let revision = |priority| NewRevision {
         source_commit: "a".repeat(40),
         content_hash: format!("h{priority}"),
+        context_hash: "sha256:none".into(),
+        context: Vec::new(),
         lint_ok: true,
         issue_codes: vec![],
         title: "T".into(),
@@ -325,8 +327,10 @@ fn old_events_read_with_defaults() {
         Event::SpecRevisionRecorded {
             parser_version: 1,
             priority: 0,
+            ref context_hash,
+            ref context,
             ..
-        }
+        } if context_hash == saka_core::event::EMPTY_CONTEXT_HASH && context.is_empty()
     ));
     let approved: Event = serde_json::from_value(json!({
         "kind": "spec.spec.approved",

@@ -10,10 +10,10 @@ use crate::ids::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, EnvironmentState,
-    GateOutcome, GateSource, InterruptBy, PermissionState, ResumeCause, SessionState, SpecOrigin,
-    SpecState, Stage, StagePhase, StageRunState, Tool, Trigger, WorkItemOrigin, WorkItemState,
-    WorkflowPreset,
+    Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, ContextOrigin,
+    EnvironmentState, GateOutcome, GateSource, InterruptBy, PermissionState, ResumeCause,
+    SessionState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
+    WorkItemOrigin, WorkItemState, WorkflowPreset,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +103,15 @@ pub struct RevisionView {
     pub parser_version: u32,
     pub priority: i64,
     pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextRef {
+    pub path: String,
+    pub origin: ContextOrigin,
+    pub line: u32,
+    pub bytes: u64,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
