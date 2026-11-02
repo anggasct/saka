@@ -164,7 +164,35 @@ fn a_change_merged_on_the_host_reaches_sync_through_its_webhook() {
 }
 
 #[test]
-fn a_task_outside_merge_ignores_webhooks() {
+fn a_blocked_task_whose_change_is_merged_reaches_sync_through_its_webhook() {
+    let mut sim = sim();
+    let (number, _) = awaiting_ci(&mut sim);
+    sim.cfg.operator.retry = vec![];
+    sim.world.set_ci(CiScript::Fail(vec!["test".into()]));
+    assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Blocked));
+    while sim
+        .engine()
+        .store()
+        .oldest_ready_job_age_ms(sim.clock.now())
+        .unwrap()
+        .is_some()
+    {
+        sim.step();
+    }
+    sim.world.merge_outside(number);
+    let accepted = deliver(
+        &sim,
+        &json!({ "delivery_id": "d-9", "event": "pull_request", "action": "closed", "repo": "acme/tasks", "targets": [{ "change": number }] }),
+    );
+    assert_eq!(accepted.outcome, WebhookOutcome::Refreshed);
+    assert!(
+        sim.run_until(20, |s| s.task(1).item.stage == Some(Stage::Sync)
+            || s.task(1).item.state == WorkItemState::Done)
+    );
+}
+
+#[test]
+fn a_task_without_a_change_ignores_webhooks() {
     let sim = sim();
     let accepted = deliver(
         &sim,

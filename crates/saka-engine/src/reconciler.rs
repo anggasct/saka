@@ -4,6 +4,7 @@ use saka_core::model::Task;
 use saka_core::reconcile::{Action, Snapshot, reconcile, waiting};
 use saka_core::spec;
 use saka_core::task::{TaskInput, retry_entry};
+use saka_core::time::Timestamp;
 use saka_core::vocab::BlockerCode;
 use saka_store::{Batch, TaskSet, read};
 
@@ -50,10 +51,24 @@ impl Engine {
                     let auto_retry = matches!(input, TaskInput::AutoRetry)
                         .then(|| pending_auto_retry(&snapshot, id))
                         .flatten();
+                    let advance = matches!(input, TaskInput::Admit)
+                        .then(|| latest_merged_dependency(&snapshot, id))
+                        .flatten();
                     let events =
                         self.decide(id, Some(input), Mode::Fact, &cause, Extra::default())?;
                     if !events.is_empty() {
                         report.decisions += 1;
+                        if let Some((after, merged_at)) = advance {
+                            let waited = u64::try_from(now.since(merged_at)).unwrap_or(0);
+                            let seconds = std::time::Duration::from_millis(waited).as_secs_f64();
+                            self.counters.step_advance(seconds);
+                            tracing::info!(
+                                work_item_id = %id,
+                                after_work_item_id = %after,
+                                seconds,
+                                "delivery.advance"
+                            );
+                        }
                         if let Some((code, attempt)) = auto_retry {
                             self.counters.auto_retry(code.as_str());
                             tracing::info!(
@@ -183,4 +198,22 @@ fn pending_auto_retry(snapshot: &Snapshot, id: WorkItemId) -> Option<(BlockerCod
     let (stage, _) = retry_entry(blocker.code, &blocker.params)?;
     let done = task.retries.get(&stage).map_or(0, |r| r.auto);
     Some((blocker.code, done + 1))
+}
+
+fn latest_merged_dependency(
+    snapshot: &Snapshot,
+    id: WorkItemId,
+) -> Option<(WorkItemId, Timestamp)> {
+    snapshot
+        .work_item_dependencies
+        .iter()
+        .filter(|d| d.work_item_id == id)
+        .filter_map(|d| {
+            let t = snapshot
+                .tasks
+                .iter()
+                .find(|t| t.item.id == d.depends_on_work_item_id)?;
+            Some((t.item.id, t.change_request.as_ref()?.merged_at?))
+        })
+        .max_by_key(|(_, at)| *at)
 }

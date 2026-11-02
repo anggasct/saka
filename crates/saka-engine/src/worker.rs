@@ -1051,12 +1051,10 @@ impl Engine {
     }
 
     async fn poll(&self, task: &Task, cr: ChangeRequestId) -> Execution {
-        let in_merge = task.is_at(Stage::Merge, StagePhase::AwaitingCi)
-            || task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
         let Some(change) = task
             .change_request
             .as_ref()
-            .filter(|c| c.id == cr && in_merge)
+            .filter(|c| c.id == cr && saka_core::task::watches_change(task))
         else {
             return Ok(Effect::Skipped);
         };

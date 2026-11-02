@@ -1145,8 +1145,10 @@ pub fn hook_candidates(conn: &Connection, repo: RepoId) -> Result<Vec<HookCandid
     let mut stmt = conn.prepare(
         "SELECT cr.id, cr.work_item_id, cr.project_id, cr.repo_id, cr.number, cr.head_sha
          FROM change_request cr JOIN work_item w ON w.id = cr.work_item_id
-         WHERE cr.repo_id = ?1 AND cr.state = 'open' AND w.state = 'in_stage' AND w.stage = 'merge'
-           AND w.stage_phase IN ('awaiting_ci', 'awaiting_merge')
+         WHERE cr.repo_id = ?1 AND cr.state = 'open'
+           AND ((w.state = 'in_stage' AND (w.stage = 'dev'
+                  OR (w.stage = 'merge' AND w.stage_phase IN ('awaiting_ci', 'awaiting_merge'))))
+                OR w.state = 'blocked')
          ORDER BY cr.number",
     )?;
     let mut rows = stmt.query([repo.0.to_string()])?;

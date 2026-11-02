@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewProject, RegisteredSpec, SessionCommand};
-pub use metrics::{MetricsSnapshot, Readiness};
+pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;

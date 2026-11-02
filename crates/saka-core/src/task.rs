@@ -46,6 +46,7 @@ pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
 pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
 pub const WAIT_LIMIT_SOURCE: &str = "system:wait_limit";
+pub const MERGED_ON_HOST: &str = "change merged on the host";
 const DENIED_BY_OPERATOR: &str = "Denied by the operator.";
 const PERMISSION_EXPIRED_MESSAGE: &str = "The permission request expired.";
 const BUDGET_DIMENSIONS: [BudgetDimension; 4] = [
@@ -1566,8 +1567,16 @@ impl Decider<'_> {
         let (Some(cr), Some(run)) = (&self.task.change_request, &self.task.stage_run) else {
             return vec![];
         };
-        if !in_merge || cr.state != ChangeState::Open {
+        if cr.state != ChangeState::Open {
             return vec![];
+        }
+        if !in_merge {
+            return match merge_commit_sha {
+                Some(sha) if state == ChangeState::Merged && watches_change(self.task) => {
+                    self.merged_elsewhere(sha, merged_at, ctx)
+                }
+                _ => vec![],
+            };
         }
         match state {
             ChangeState::Merged => {
@@ -1711,6 +1720,43 @@ impl Decider<'_> {
                 ctx,
             ),
         ]
+    }
+
+    fn merged_elsewhere(
+        &self,
+        merge_commit_sha: String,
+        merged_at: Option<Timestamp>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(cr) = &self.task.change_request else {
+            return vec![];
+        };
+        let mut events = Vec::new();
+        if let Some(b) = self.task.open_blocker() {
+            events.push(Event::BlockerResolved {
+                work_item_id: self.item().id,
+                blocker_id: b.id,
+                resolution: BlockerResolution::Auto,
+                reason: Some(MERGED_ON_HOST.to_string()),
+            });
+        }
+        events.extend(self.end_session(SessionState::Ended, "change_merged", json!({})));
+        events.push(Event::ChangeRequestMerged {
+            work_item_id: self.item().id,
+            change_request_id: cr.id,
+            merge_commit_sha,
+            merged_at,
+            merged_by_saka: false,
+        });
+        events.push(self.new_run(
+            Stage::Sync,
+            Trigger::Auto,
+            StagePhase::Verifying,
+            Some(MERGED_ON_HOST.to_string()),
+            None,
+            ctx,
+        ));
+        events
     }
 
     fn merge_verified(&self, found: bool, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -1924,6 +1970,9 @@ impl Decider<'_> {
         // A toolchain download that kept failing names the tool, not the job.
         if kind == JobKind::EnvPrepare && error.code == "toolchain_unavailable" {
             return self.environment_failed(BlockerCode::ToolchainUnavailable, error.params, ctx);
+        }
+        if kind == JobKind::ScmPollChangeRequest && self.task.item.stage != Some(Stage::Merge) {
+            return vec![];
         }
         let Some((code, mut params)) = kind.exhausted_blocker() else {
             return vec![];
@@ -2632,6 +2681,14 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 cr.merged_at = merged_at.or(Some(now));
                 cr.updated_at = now;
             }
+            if let Some(run) = t.stage_run.as_mut().filter(|r| {
+                r.stage == Stage::Dev
+                    && matches!(r.state, StageRunState::Pending | StageRunState::Running)
+            }) {
+                run.state = StageRunState::Cancelled;
+                run.ended_at = Some(now);
+                run.updated_at = now;
+            }
         }
         E::ChangeRequestClosed { .. } => {
             if let Some(cr) = &mut t.change_request {
@@ -2761,6 +2818,22 @@ pub fn auto_retry_due(task: &Task, now: Timestamp) -> bool {
         return false;
     };
     now.since(blocker.opened_at) >= *delay
+}
+
+pub fn watches_change(task: &Task) -> bool {
+    let open = task
+        .change_request
+        .as_ref()
+        .is_some_and(|c| c.state == ChangeState::Open);
+    open && match task.item.state {
+        WorkItemState::Blocked => true,
+        WorkItemState::InStage => {
+            task.item.stage == Some(Stage::Dev)
+                || task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+                || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+        }
+        _ => false,
+    }
 }
 
 pub fn needs_tick(task: &Task, cfg: &LoopConfig, now: Timestamp) -> bool {

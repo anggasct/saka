@@ -96,6 +96,7 @@ export const blockedTask = task(1, {
     head_sha: "a1b2".padEnd(40, "0"),
     base_branch: "main",
     merge_commit_sha: null,
+    merged_at: null,
   },
   blocker: {
     id: "0193f0c4-1b2a-7c3d-9e8f-001122334488",

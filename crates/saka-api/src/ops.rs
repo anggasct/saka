@@ -78,6 +78,17 @@ impl Text {
     }
 }
 
+fn histogram(t: &mut Text, name: &str, help: &str, h: &saka_engine::SecondsHistogram) {
+    t.family(name, "histogram", help);
+    let bucket = format!("{name}_bucket");
+    for (bound, n) in &h.buckets {
+        t.sample(&bucket, &[("le", &bound.to_string())], n);
+    }
+    t.sample(&bucket, &[("le", "+Inf")], h.count);
+    t.sample(&format!("{name}_sum"), &[], h.sum);
+    t.sample(&format!("{name}_count"), &[], h.count);
+}
+
 #[utoipa::path(
     get, path = "/metrics", tag = "ops",
     responses((status = 200, content_type = "text/plain; version=0.0.4", body = String))
@@ -238,25 +249,17 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
             n,
         );
     }
-    t.family(
+    histogram(
+        &mut t,
         "saka_gate_duration_seconds",
-        "histogram",
         "Duration of Saka gate runs.",
+        &m.gate_seconds,
     );
-    for (bound, n) in &m.gate_seconds.buckets {
-        let le = bound.to_string();
-        t.sample("saka_gate_duration_seconds_bucket", &[("le", &le)], n);
-    }
-    t.sample(
-        "saka_gate_duration_seconds_bucket",
-        &[("le", "+Inf")],
-        m.gate_seconds.count,
-    );
-    t.sample("saka_gate_duration_seconds_sum", &[], m.gate_seconds.sum);
-    t.sample(
-        "saka_gate_duration_seconds_count",
-        &[],
-        m.gate_seconds.count,
+    histogram(
+        &mut t,
+        "saka_step_advance_seconds",
+        "Time from a step's merge to the admission of the step waiting on it.",
+        &m.advance_seconds,
     );
 
     t.family(

@@ -1957,6 +1957,12 @@
               "null"
             ]
           },
+          "merged_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "number": {
             "type": "integer",
             "format": "int64",
