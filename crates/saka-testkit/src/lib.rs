@@ -16,6 +16,6 @@ pub use fixtures::{
 };
 pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step};
 pub use world::{
-    AgentOutcome, AgentScript, CiScript, CommandScript, FakeWorld, RecipeRun, SIM_RUNNER_VERSION,
-    Stats, TurnUsage,
+    AgentOutcome, AgentScript, CiScript, CommandScript, FakeWorld, Launch, RecipeRun,
+    SIM_RUNNER_VERSION, Stats, ToolchainScript, TurnUsage,
 };

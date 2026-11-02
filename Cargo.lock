@@ -2319,13 +2319,20 @@ name = "saka-env"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
+ "flate2",
+ "reqwest",
  "rustix",
  "saka-core",
  "saka-ports",
+ "serde",
  "serde_json",
+ "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

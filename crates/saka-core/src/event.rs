@@ -7,7 +7,7 @@ use crate::ids::{
     ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::job::JobKind;
-use crate::model::{Budget, Coded, DependsOn, ProjectRepo};
+use crate::model::{Budget, Coded, DependsOn, ProjectRepo, ToolchainUse};
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, InterruptBy, MergeMethod,
@@ -197,6 +197,8 @@ pub enum Event {
         recipe: Option<Value>,
         recipe_sha256: Option<String>,
         setup: Vec<Value>,
+        #[serde(default)]
+        toolchains: Vec<ToolchainUse>,
     },
     #[serde(rename = "runtime.environment.torn_down")]
     EnvironmentTornDown {

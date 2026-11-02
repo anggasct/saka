@@ -444,7 +444,14 @@ impl WorkItemEnvironment {
             state: e.state.as_str().to_string(),
             ports,
             recipe_sha256: e.recipe_sha256.clone(),
-            toolchains: Vec::new(),
+            toolchains: e
+                .toolchains
+                .iter()
+                .map(|t| Toolchain {
+                    tool: t.tool.as_str().to_string(),
+                    version: t.version.clone(),
+                })
+                .collect(),
         }
     }
 }

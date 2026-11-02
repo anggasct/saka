@@ -4,15 +4,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use saka_core::gate::Check;
 use saka_core::ids::{EnvironmentId, SessionId};
+use saka_core::model::ToolchainUse;
 use saka_core::policy::RequestPath;
 use saka_core::time::Timestamp;
+use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
 use saka_ports::{
     Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession, Link,
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
     RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, SessionLaunch,
-    SessionRef, WorktreeState,
+    SessionRef, Toolchains, WorktreeState,
 };
 use serde_json::{Value, json};
 
@@ -152,7 +154,22 @@ struct State {
     recipe: Option<String>,
     recipe_runs: Vec<RecipeRun>,
     command_scripts: HashMap<String, VecDeque<CommandScript>>,
-    launches: Vec<BTreeMap<String, String>>,
+    launches: Vec<Launch>,
+    repo_files: BTreeMap<String, String>,
+    toolchain_scripts: HashMap<Tool, VecDeque<ToolchainScript>>,
+    toolchain_installs: Vec<(Tool, String, bool)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub vars: BTreeMap<String, String>,
+    pub path_prefix: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolchainScript {
+    Missing,
+    DownloadFails,
 }
 
 pub struct FakeWorld {
@@ -167,6 +184,7 @@ pub struct RecipeRun {
     pub index: usize,
     pub command: String,
     pub vars: BTreeMap<String, String>,
+    pub path_prefix: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +214,9 @@ impl FakeWorld {
                 recipe_runs: Vec::new(),
                 command_scripts: HashMap::new(),
                 launches: Vec::new(),
+                repo_files: BTreeMap::new(),
+                toolchain_scripts: HashMap::new(),
+                toolchain_installs: Vec::new(),
                 next_sha: 1,
                 parents,
                 remote,
@@ -352,7 +373,35 @@ impl FakeWorld {
     }
 
     pub fn launch_vars(&self) -> Vec<BTreeMap<String, String>> {
+        self.state()
+            .launches
+            .iter()
+            .map(|l| l.vars.clone())
+            .collect()
+    }
+
+    pub fn launches(&self) -> Vec<Launch> {
         self.state().launches.clone()
+    }
+
+    pub fn set_repo_file(&self, path: &str, text: Option<&str>) {
+        let mut s = self.state();
+        match text {
+            Some(t) => s.repo_files.insert(path.to_string(), t.to_string()),
+            None => s.repo_files.remove(path),
+        };
+    }
+
+    pub fn script_toolchain(&self, tool: Tool, script: ToolchainScript) {
+        self.state()
+            .toolchain_scripts
+            .entry(tool)
+            .or_default()
+            .push_back(script);
+    }
+
+    pub fn toolchain_installs(&self) -> Vec<(Tool, String, bool)> {
+        self.state().toolchain_installs.clone()
     }
 
     pub fn close_outside(&self, number: u64) {
@@ -649,6 +698,15 @@ impl Environments for FakeWorld {
         Ok(self.state().recipe.clone())
     }
 
+    async fn read_repo_file(
+        &self,
+        _repo: &RepoRef,
+        _commit: &str,
+        path: &str,
+    ) -> PortResult<Option<String>> {
+        Ok(self.state().repo_files.get(path).cloned())
+    }
+
     async fn run_recipe_command(
         &self,
         env: &EnvRef,
@@ -679,6 +737,7 @@ impl Environments for FakeWorld {
             index: command.index,
             command: command.command.clone(),
             vars: env.vars.clone(),
+            path_prefix: env.path_prefix.clone(),
         });
         Ok(RecipeCommandOutcome {
             exit_code: match script {
@@ -859,7 +918,10 @@ impl Scm for FakeWorld {
 impl Agents for FakeWorld {
     async fn start(&self, launch: &SessionLaunch) -> PortResult<LaunchedSession> {
         let mut s = self.state();
-        s.launches.push(launch.environment.vars.clone());
+        s.launches.push(Launch {
+            vars: launch.environment.vars.clone(),
+            path_prefix: launch.environment.path_prefix.clone(),
+        });
         let id = launch.session_id;
         if s.sessions.get(&id).is_some_and(|old| old.running) {
             s.stats.stale_runners_stopped += 1;
@@ -1107,5 +1169,63 @@ impl Agents for FakeWorld {
             s.events.retain(|e| e.session_id != session_id);
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl Toolchains for FakeWorld {
+    async fn install(&self, tool: Tool, version: &str) -> PortResult<ToolchainUse> {
+        let mut s = self.state();
+        let params = |cause: &str| json!({ "tool": tool, "version": version, "cause": cause, "detail": null });
+        match s
+            .toolchain_scripts
+            .get_mut(&tool)
+            .and_then(VecDeque::pop_front)
+        {
+            Some(ToolchainScript::Missing) => {
+                return Err(PortError::permanent(
+                    "toolchain_unavailable",
+                    params("not_found"),
+                ));
+            }
+            Some(ToolchainScript::DownloadFails) => {
+                return Err(PortError::retryable(
+                    "toolchain_unavailable",
+                    params("download_failed"),
+                ));
+            }
+            None => {}
+        }
+        let downloaded = !s
+            .toolchain_installs
+            .iter()
+            .any(|(t, v, _)| *t == tool && v == version);
+        s.toolchain_installs
+            .push((tool, version.to_string(), downloaded));
+        let env = match tool {
+            Tool::Go => BTreeMap::from([
+                ("GOTOOLCHAIN".to_string(), "local".to_string()),
+                ("GOMODCACHE".to_string(), "/sim/caches/go/mod".to_string()),
+                ("GOCACHE".to_string(), "/sim/caches/go/build".to_string()),
+            ]),
+            Tool::Pnpm => BTreeMap::from([
+                (
+                    "npm_config_store_dir".to_string(),
+                    "/sim/caches/pnpm-store".to_string(),
+                ),
+                (
+                    "COREPACK_ENABLE_DOWNLOAD_PROMPT".to_string(),
+                    "0".to_string(),
+                ),
+            ]),
+            Tool::Node => BTreeMap::new(),
+        };
+        Ok(ToolchainUse {
+            tool,
+            version: version.to_string(),
+            bin_dir: format!("/sim/toolchains/{tool}/{version}/bin"),
+            env,
+            downloaded,
+        })
     }
 }

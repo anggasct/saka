@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use saka_core::vocab::Tool;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -31,6 +32,7 @@ pub struct Recipe {
     pub env: BTreeMap<String, String>,
     pub setup: Vec<String>,
     pub teardown: Vec<String>,
+    pub toolchain: BTreeMap<Tool, String>,
 }
 
 impl Recipe {
@@ -44,6 +46,7 @@ impl Recipe {
             "env": self.env,
             "setup": self.setup,
             "teardown": self.teardown,
+            "toolchain": self.toolchain,
         })
     }
 
@@ -76,6 +79,10 @@ impl Recipe {
                 .unwrap_or_default(),
             setup: strings("setup"),
             teardown: strings("teardown"),
+            toolchain: value
+                .get("toolchain")
+                .and_then(|t| serde_json::from_value(t.clone()).ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -107,6 +114,15 @@ struct Raw {
     env: Option<Spanned<BTreeMap<String, Spanned<String>>>>,
     setup: Option<Spanned<Commands>>,
     teardown: Option<Spanned<Commands>>,
+    toolchain: Option<RawToolchain>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawToolchain {
+    go: Option<Spanned<String>>,
+    node: Option<Spanned<String>>,
+    pnpm: Option<Spanned<String>>,
 }
 
 #[derive(Deserialize)]
@@ -217,12 +233,31 @@ pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
     }
     let setup = commands("setup", raw.setup, text, &mut issues);
     let teardown = commands("teardown", raw.teardown, text, &mut issues);
+    let mut toolchain = BTreeMap::new();
+    if let Some(t) = raw.toolchain {
+        for (tool, version) in [(Tool::Go, t.go), (Tool::Node, t.node), (Tool::Pnpm, t.pnpm)] {
+            let Some(version) = version else { continue };
+            let start = version.span().start;
+            let version = version.into_inner();
+            if version.trim().is_empty() || version.len() > 64 {
+                issues.push(issue(
+                    "toolchain_version_invalid",
+                    format!("toolchain.{tool}"),
+                    text,
+                    start,
+                ));
+            } else {
+                toolchain.insert(tool, version);
+            }
+        }
+    }
     if issues.is_empty() {
         Ok(Recipe {
             ports,
             env,
             setup,
             teardown,
+            toolchain,
         })
     } else {
         Err(issues)
@@ -241,7 +276,7 @@ mod tests {
     #[test]
     fn a_full_recipe_parses() {
         let recipe = parse(
-            "ports = 3\n\n[env]\nAPP_ENV = \"test\"\n\n[setup]\ncommands = [\"pnpm install --frozen-lockfile\", \"make db-up\"]\n\n[teardown]\ncommands = [\"make db-down\"]\n",
+            "ports = 3\n\n[env]\nAPP_ENV = \"test\"\n\n[setup]\ncommands = [\"pnpm install --frozen-lockfile\", \"make db-up\"]\n\n[teardown]\ncommands = [\"make db-down\"]\n\n[toolchain]\nnode = \"26.13.0\"\n",
             10,
         )
         .unwrap();
@@ -252,6 +287,10 @@ mod tests {
             ["pnpm install --frozen-lockfile", "make db-up"]
         );
         assert_eq!(recipe.teardown, ["make db-down"]);
+        assert_eq!(
+            recipe.toolchain.get(&Tool::Node).map(String::as_str),
+            Some("26.13.0")
+        );
         assert_eq!(Recipe::from_json(&recipe.to_json()), recipe);
     }
 
@@ -263,9 +302,10 @@ mod tests {
     #[test]
     fn unknown_fields_are_rejected_with_their_line() {
         assert_eq!(
-            first("ports = 1\n[toolchain]\nnode = \"26.13.0\"\n"),
-            ("field_unknown", Some("toolchain".into()), Some(2))
+            first("ports = 1\n[secrets]\nNPM_TOKEN = 1\n"),
+            ("field_unknown", Some("secrets".into()), Some(2))
         );
+        assert_eq!(first("[toolchain]\nrust = \"1.99.1\"\n").0, "field_unknown");
         assert_eq!(first("[setup]\ncommand = [\"x\"]\n").0, "field_unknown");
     }
 

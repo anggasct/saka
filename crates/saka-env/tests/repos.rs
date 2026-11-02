@@ -198,6 +198,7 @@ impl World {
             root_path: prepared.root_path,
             worktree_path: prepared.worktree_path,
             vars: std::collections::BTreeMap::from([("APP_ENV".to_string(), "test".to_string())]),
+            path_prefix: vec!["/opt/toolchains/node/bin".into()],
         }
     }
 
@@ -630,6 +631,11 @@ async fn a_recipe_command_runs_in_the_worktree_with_only_the_minimal_environment
     assert!(
         vars.contains(&format!("HOME={}/home", env.root_path)),
         "{vars}"
+    );
+    assert!(
+        vars.lines()
+            .any(|l| l.starts_with("PATH=/opt/toolchains/node/bin:")),
+        "toolchain bins come first on PATH: {vars}"
     );
 
     let log = std::fs::read_to_string(&outcome.log_path).unwrap();

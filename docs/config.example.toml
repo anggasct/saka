@@ -48,6 +48,12 @@ ports_per_env = 10                 # 1..=100; block size per environment; a reci
 setup_timeout_minutes = 15         # 1..=240; per setup or teardown command
 limits = { memory_max = "4G", cpu_quota = "200%", tasks_max = 512 }   # cgroup of each recipe command
 
+[toolchain]                        # Go, Node, and pnpm versions a repo declares are installed from these
+go_dl_url = "https://go.dev/dl"    # https, or http on a loopback host (a local mirror)
+node_dist_url = "https://nodejs.org/dist"
+npm_registry_url = "https://registry.npmjs.org"
+download_timeout_secs = 600        # 30..=3600; per download
+
 [git]
 author_name = "Saka Agent"
 author_email = "agent@saka.invalid"

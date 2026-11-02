@@ -409,6 +409,7 @@ fn environment(row: &Row<'_>) -> Result<Environment> {
         port_count: row.get("port_count")?,
         recipe: opt_json(row, "recipe_json")?,
         recipe_sha256: row.get("recipe_sha256")?,
+        toolchains: json(row, "toolchains_json")?,
     })
 }
 

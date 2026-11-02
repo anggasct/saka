@@ -21,6 +21,7 @@ const FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
 const BASE_FILE: &str = "base-sha";
 const RECIPE_PATH: &str = ".saka/environment.toml";
 const RECIPE_MAX_BYTES: usize = 64 * 1024;
+const REPO_FILE_MAX_BYTES: usize = 256 * 1024;
 
 #[derive(Clone)]
 pub struct ReposConfig {
@@ -42,7 +43,13 @@ pub struct RecipeRunner {
 fn recipe_env(env: &EnvRef, path: &[String]) -> std::collections::BTreeMap<String, String> {
     let root = Path::new(&env.root_path);
     let mut vars = env.vars.clone();
-    vars.insert("PATH".into(), path.join(":"));
+    let full: Vec<&str> = env
+        .path_prefix
+        .iter()
+        .chain(path)
+        .map(String::as_str)
+        .collect();
+    vars.insert("PATH".into(), full.join(":"));
     vars.insert(
         "HOME".into(),
         root.join("home").to_string_lossy().into_owned(),
@@ -130,6 +137,32 @@ impl GitRepos {
 
     pub fn mirror_path(&self, repo: RepoId) -> PathBuf {
         self.cfg.repos_dir.join(format!("{repo}.git"))
+    }
+
+    async fn read_blob(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        path: &str,
+    ) -> PortResult<Option<Vec<u8>>> {
+        if !is_sha(commit) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "commit" }),
+            ));
+        }
+        let bare = self.mirror_path(repo.repo_id);
+        let listed = self
+            .git_ok(&bare, &["ls-tree", commit, "--", path], "ls_tree")
+            .await?;
+        if listed.stdout.is_empty() {
+            return Ok(None);
+        }
+        let spec = format!("{commit}:{path}");
+        let blob = self
+            .git_ok(&bare, &["cat-file", "blob", &spec], "cat_file")
+            .await?;
+        Ok(Some(blob.stdout))
     }
 
     fn env_root(&self, id: impl std::fmt::Display) -> PathBuf {
@@ -605,32 +638,51 @@ impl Environments for GitRepos {
     }
 
     async fn read_recipe(&self, repo: &RepoRef, commit: &str) -> PortResult<Option<String>> {
-        if !is_sha(commit) {
-            return Err(PortError::permanent(
-                "git_argument_invalid",
-                json!({ "field": "commit" }),
-            ));
-        }
-        let bare = self.mirror_path(repo.repo_id);
-        let listed = self
-            .git_ok(&bare, &["ls-tree", commit, "--", RECIPE_PATH], "ls_tree")
-            .await?;
-        if listed.stdout.is_empty() {
+        let Some(blob) = self.read_blob(repo, commit, RECIPE_PATH).await? else {
             return Ok(None);
-        }
-        let spec = format!("{commit}:{RECIPE_PATH}");
-        let blob = self
-            .git_ok(&bare, &["cat-file", "blob", &spec], "cat_file")
-            .await?;
-        if blob.stdout.len() > RECIPE_MAX_BYTES {
+        };
+        if blob.len() > RECIPE_MAX_BYTES {
             return Err(PortError::permanent(
                 "env_recipe_too_large",
-                json!({ "bytes": blob.stdout.len(), "max": RECIPE_MAX_BYTES }),
+                json!({ "bytes": blob.len(), "max": RECIPE_MAX_BYTES }),
             ));
         }
-        String::from_utf8(blob.stdout).map(Some).map_err(|_| {
+        String::from_utf8(blob).map(Some).map_err(|_| {
             PortError::permanent("env_recipe_not_utf8", json!({ "path": RECIPE_PATH }))
         })
+    }
+
+    async fn read_repo_file(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        path: &str,
+    ) -> PortResult<Option<String>> {
+        let relative = Path::new(path);
+        let plain = !path.is_empty()
+            && !path.starts_with('-')
+            && !path.contains(['\n', ':'])
+            && relative
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !plain {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "path" }),
+            ));
+        }
+        let Some(blob) = self.read_blob(repo, commit, path).await? else {
+            return Ok(None);
+        };
+        if blob.len() > REPO_FILE_MAX_BYTES {
+            return Err(PortError::permanent(
+                "repo_file_too_large",
+                json!({ "path": path, "bytes": blob.len(), "max": REPO_FILE_MAX_BYTES }),
+            ));
+        }
+        String::from_utf8(blob)
+            .map(Some)
+            .map_err(|_| PortError::permanent("repo_file_not_utf8", json!({ "path": path })))
     }
 
     async fn run_recipe_command(

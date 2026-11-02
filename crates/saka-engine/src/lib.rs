@@ -8,6 +8,7 @@ mod register;
 mod runner;
 mod text;
 mod timeline;
+pub mod toolchain;
 mod views;
 mod worker;
 
@@ -24,7 +25,9 @@ use saka_core::react::react;
 use saka_core::rejection::Rejection;
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
-use saka_ports::{Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm};
+use saka_ports::{
+    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm, Toolchains,
+};
 use saka_store::read;
 use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
 use tokio::sync::{Notify, watch};
@@ -81,6 +84,7 @@ pub struct Ports {
     pub scm: Arc<dyn Scm>,
     pub agents: Arc<dyn Agents>,
     pub docs: Arc<dyn DocSource>,
+    pub toolchains: Arc<dyn Toolchains>,
 }
 
 #[derive(Debug, thiserror::Error)]

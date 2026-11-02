@@ -12,7 +12,7 @@ use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, EnvironmentState,
     GateOutcome, GateSource, InterruptBy, PermissionState, ResumeCause, SessionState, SpecOrigin,
-    SpecState, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    SpecState, Stage, StagePhase, StageRunState, Tool, Trigger, WorkItemOrigin, WorkItemState,
     WorkflowPreset,
 };
 
@@ -316,6 +316,18 @@ pub struct EnvironmentSetup {
     pub recipe: Option<Value>,
     pub recipe_sha256: Option<String>,
     pub setup: Vec<Value>,
+    pub toolchains: Vec<ToolchainUse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolchainUse {
+    pub tool: Tool,
+    pub version: String,
+    pub bin_dir: String,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub downloaded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -334,6 +346,7 @@ pub struct Environment {
     pub port_count: Option<u16>,
     pub recipe: Option<Value>,
     pub recipe_sha256: Option<String>,
+    pub toolchains: Vec<ToolchainUse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
