@@ -236,6 +236,30 @@ fn serve_refuses_a_listen_address_beyond_loopback() {
 }
 
 #[test]
+fn serve_refuses_a_data_dir_agent_sessions_cannot_scope_their_memory_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("sa[ka]");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        format!("[server]\ndata_dir = \"{}\"\n", data.display()),
+    )
+    .unwrap();
+    let out = run_saka(&path, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"code\":\"envs_dir_unsupported\""),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&data.join("envs").display().to_string()),
+        "{stderr}"
+    );
+    assert!(!data.join("saka.db").exists());
+}
+
+#[test]
 fn migrate_refuses_a_changed_migration_and_a_newer_database() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), "");
@@ -315,6 +339,8 @@ fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
 fn serve_becomes_ready_logs_json_with_correlation_ids_and_stops_on_sigterm() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
+    std::fs::create_dir_all(dir.path().join("real")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("data")).unwrap();
     let config = write_config(dir.path(), &format!("listen = \"127.0.0.1:{port}\"\n"));
     let mut child = Command::new(SAKA)
         .arg("serve")

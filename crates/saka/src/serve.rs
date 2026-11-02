@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use saka_agents::launch::ClaudeSettings;
+use saka_agents::launch::{self, ClaudeSettings, UnsupportedPath};
 use saka_agents::{AgentsConfig, ClaudeAgents};
 use saka_api::{ApiConfig, AppState};
 use saka_core::model::Budget;
@@ -116,6 +116,21 @@ fn refuse(e: &ConfigError) -> ExitCode {
     ExitCode::from(EXIT_REFUSED)
 }
 
+fn check_envs_dir(envs_dir: &Path) -> Result<(), ExitCode> {
+    let physical = std::fs::create_dir_all(envs_dir).and_then(|()| std::fs::canonicalize(envs_dir));
+    let physical = match physical {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(code = "data_dir_unwritable", error = %e, path = %envs_dir.display(), "cannot create the environments directory");
+            return Err(ExitCode::FAILURE);
+        }
+    };
+    launch::memory_scope(&physical).map(drop).map_err(|UnsupportedPath(path)| {
+        tracing::error!(code = "envs_dir_unsupported", path = %path.display(), "the environments directory has a character agent sessions cannot scope their memory to");
+        ExitCode::from(EXIT_REFUSED)
+    })
+}
+
 fn open_store(data_dir: &Path, now: Timestamp) -> Result<Store, ExitCode> {
     if let Err(e) = std::fs::create_dir_all(data_dir) {
         tracing::error!(code = "data_dir_unwritable", error = %e, path = %data_dir.display(), "cannot create the data directory");
@@ -222,6 +237,9 @@ pub fn serve(cfg: &Config) -> ExitCode {
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    if let Err(code) = check_envs_dir(&cfg.data_dir().join("envs")) {
+        return code;
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

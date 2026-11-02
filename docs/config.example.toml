@@ -5,7 +5,7 @@
 [server]
 listen = "127.0.0.1:7420"          # loopback only; any other address exits with code 2
 allowed_origins = []               # extra browser origins, e.g. "http://localhost:5173" for the Vite dev server
-data_dir = "~/.local/share/saka"   # default $XDG_DATA_HOME/saka
+data_dir = "~/.local/share/saka"   # default $XDG_DATA_HOME/saka; no * ? [ ] { } ( ) ! + @ | \ in the path
 
 [scheduler]
 max_active_tasks = 2               # 1..=16

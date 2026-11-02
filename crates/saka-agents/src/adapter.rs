@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::client::RunnerConnection;
-use crate::launch::{self, ClaudeSettings, LaunchSpec, SessionPaths};
+use crate::launch::{self, ClaudeSettings, LaunchSpec, SessionPaths, UnsupportedPath};
 use crate::protocol::ServerFrame;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -115,14 +115,16 @@ impl ClaudeAgents {
         &self,
         program: &Path,
         launch: &SessionLaunch,
-    ) -> (LaunchSpec, SessionPaths) {
+    ) -> PortResult<(LaunchSpec, SessionPaths)> {
         let id = launch.session_id.to_string();
+        let worktree = std::fs::canonicalize(&launch.environment.worktree_path)
+            .map_err(|e| io_error("worktree_unreadable", &e))?;
         let paths = SessionPaths::new(
             &self.cfg.runtime_dir,
             &self.cfg.sessions_dir,
             &id,
             Path::new(&launch.environment.root_path),
-            Path::new(&launch.environment.worktree_path),
+            &worktree,
         );
         let mut spec = launch::claude(
             &self.cfg.claude,
@@ -131,11 +133,17 @@ impl ClaudeAgents {
             &paths,
             self.cfg.known_values.clone(),
             launch.resume_cli_session_id.as_deref(),
-        );
+        )
+        .map_err(|UnsupportedPath(path)| {
+            PortError::permanent(
+                "envs_dir_unsupported",
+                json!({ "path": path.to_string_lossy() }),
+            )
+        })?;
         for (k, v) in &self.cfg.extra_env {
             spec.env.insert(k.clone(), v.clone());
         }
-        (spec, paths)
+        Ok((spec, paths))
     }
 }
 
@@ -182,7 +190,7 @@ impl Agents for ClaudeAgents {
             )
         })?;
         let version = cli_version(&program).await;
-        let (spec, paths) = self.launch_spec(&program, launch);
+        let (spec, paths) = self.launch_spec(&program, launch)?;
         self.drop_conn(launch.session_id);
         // A socket left by an earlier attempt must not answer for the new runner.
         let _ = std::fs::remove_file(&paths.socket_path);

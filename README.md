@@ -24,13 +24,14 @@ Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by
 |---|---|
 | `crates/` | The product crates; the allowed dependencies between them are checked by `cargo xtask deps` |
 | `web/` | The web app (Vite, React), embedded in the binary with `--features embed-web` |
-| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `test-systemd`, `e2e` |
+| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `test-systemd`, `test-claude-memory`, `e2e` |
 | `spikes/` | Research experiments, excluded from every check |
 
 ```sh
-make check          # format, lint, tests, dependency direction, source hygiene, API drift, web checks
-make test-systemd   # the session supervisor in a real user systemd unit
-make e2e            # test-systemd, then one real delivery loop (needs credentials, see below)
+make check               # format, lint, tests, dependency direction, source hygiene, API drift, web checks
+make test-systemd        # the session supervisor in a real user systemd unit
+make test-claude-memory  # the installed claude CLI loads instructions only from the session worktree
+make e2e                 # both of the above, then one real delivery loop (needs credentials, see below)
 ```
 
 The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/package.json` (run pnpm as `corepack pnpm` from `web/`). On a shared machine `make` runs each target through `scripts/limited`; set `CI=true` to skip that.

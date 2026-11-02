@@ -97,8 +97,33 @@ fn is_executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-// Claude Code's default commit trailer carries `<email>`, which no allow rule can match.
-const NO_ATTRIBUTION: &str = r#"{"attribution":{"commit":"","pr":""}}"#;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedPath(pub PathBuf);
+
+// Claude Code turns every `\` in a pattern into `/`, so these cannot be escaped in a path.
+const GLOB_SPECIAL: &[char] = &[
+    '*', '?', '[', ']', '{', '}', '(', ')', '!', '+', '@', '|', '\\',
+];
+
+// Claude Code loads CLAUDE.md from every parent of its cwd and matches the physical path.
+// It ORs the patterns, so one negated pattern is the only way to keep just this tree.
+pub fn memory_scope(dir: &Path) -> Result<String, UnsupportedPath> {
+    match dir.to_str() {
+        Some(text) if dir.is_absolute() && !text.contains(GLOB_SPECIAL) => {
+            Ok(format!("!{}/**", text.trim_end_matches('/')))
+        }
+        _ => Err(UnsupportedPath(dir.to_path_buf())),
+    }
+}
+
+fn session_settings(worktree: &Path) -> Result<String, UnsupportedPath> {
+    Ok(serde_json::json!({
+        // Claude Code's default commit trailer carries `<email>`, which no allow rule can match.
+        "attribution": { "commit": "", "pr": "" },
+        "claudeMdExcludes": [memory_scope(worktree)?],
+    })
+    .to_string())
+}
 
 pub fn claude(
     settings: &ClaudeSettings,
@@ -107,7 +132,7 @@ pub fn claude(
     paths: &SessionPaths,
     known_values: Vec<String>,
     resume: Option<&str>,
-) -> LaunchSpec {
+) -> Result<LaunchSpec, UnsupportedPath> {
     let mut args: Vec<String> = [
         "-p",
         "--input-format",
@@ -124,10 +149,10 @@ pub fn claude(
         "project",
         "--strict-mcp-config",
         "--settings",
-        NO_ATTRIBUTION,
     ]
     .map(String::from)
     .to_vec();
+    args.push(session_settings(&paths.worktree)?);
     if let Some(model) = settings.model.as_ref().filter(|m| !m.is_empty()) {
         args.extend(["--model".to_string(), model.clone()]);
     }
@@ -149,7 +174,7 @@ pub fn claude(
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
-    LaunchSpec {
+    Ok(LaunchSpec {
         session_id: session_id.to_string(),
         socket_path: s(&paths.socket_path),
         log_path: s(&paths.session_dir.join("events.ndjson")),
@@ -161,7 +186,7 @@ pub fn claude(
         redaction: Redaction { known_values },
         resumed: resume.is_some(),
         heartbeat_ms: HEARTBEAT_MS,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -205,7 +230,8 @@ mod tests {
             &paths(),
             vec![],
             None,
-        );
+        )
+        .unwrap();
         assert_eq!(
             serde_json::to_value(&spec).unwrap(),
             json!({
@@ -218,7 +244,7 @@ mod tests {
                 "args": ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                          "--permission-mode", "manual", "--permission-prompt-tool", "stdio",
                          "--setting-sources", "project", "--strict-mcp-config",
-                         "--settings", "{\"attribution\":{\"commit\":\"\",\"pr\":\"\"}}",
+                         "--settings", "{\"attribution\":{\"commit\":\"\",\"pr\":\"\"},\"claudeMdExcludes\":[\"!/data/envs/e-1/worktree/**\"]}",
                          "--model", "haiku"],
                 "env": {
                     "CLAUDE_CONFIG_DIR": "/data/agents/claude/default",
@@ -248,7 +274,8 @@ mod tests {
             &paths(),
             vec![],
             Some("cli-abc"),
-        );
+        )
+        .unwrap();
         assert_eq!(
             spec.args[spec.args.len() - 2..],
             ["--resume".to_string(), "cli-abc".to_string()]
@@ -266,7 +293,8 @@ mod tests {
                 &paths(),
                 vec![],
                 None,
-            );
+            )
+            .unwrap();
             let keys: Vec<&str> = spec.env.keys().map(String::as_str).collect();
             assert_eq!(
                 keys,
@@ -313,5 +341,50 @@ mod tests {
         assert_eq!(s.program(), Some(bin));
         s.command = "missing-cli".into();
         assert_eq!(s.program(), None);
+    }
+
+    #[test]
+    fn the_memory_scope_keeps_only_the_given_tree() {
+        for dir in [
+            "/data/envs/e-1/worktree",
+            "/data/envs/e-1/worktree/",
+            "/home/u/my data/saka.v2/env_1-x/worktree",
+            "/home/ü/データ/worktree",
+        ] {
+            let pattern = memory_scope(Path::new(dir)).unwrap();
+            assert_eq!(pattern, format!("!{}/**", dir.trim_end_matches('/')));
+        }
+    }
+
+    #[test]
+    fn a_path_the_cli_would_read_as_a_glob_has_no_memory_scope() {
+        for c in GLOB_SPECIAL {
+            let dir = PathBuf::from(format!("/data/en{c}vs/e-1/worktree"));
+            assert_eq!(memory_scope(&dir), Err(UnsupportedPath(dir.clone())), "{c}");
+        }
+        assert!(memory_scope(Path::new("envs/e-1/worktree")).is_err());
+        assert_eq!(GLOB_SPECIAL.len(), 13);
+    }
+
+    #[test]
+    fn a_launch_in_an_unsupported_path_is_refused() {
+        let paths = SessionPaths::new(
+            Path::new("/run/user/1000"),
+            Path::new("/data/sessions"),
+            "s-1",
+            Path::new("/data/[envs]/e-1"),
+            Path::new("/data/[envs]/e-1/worktree"),
+        );
+        assert_eq!(
+            claude(
+                &settings(None),
+                Path::new("/usr/bin/claude"),
+                "s-1",
+                &paths,
+                vec![],
+                None
+            ),
+            Err(UnsupportedPath(PathBuf::from("/data/[envs]/e-1/worktree")))
+        );
     }
 }
