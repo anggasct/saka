@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::ids::WorkItemId;
+use crate::model::RunOwner;
 use crate::time::Timestamp;
 use crate::vocab::{BlockerCode, StagePhase};
 
@@ -52,42 +54,39 @@ job_kinds! {
     ScmPollCommit => "scm.poll_commit", 5;
 }
 
-impl JobKind {
-    pub fn exhausted_blocker(self) -> Option<(BlockerCode, Value)> {
-        let scm =
-            |phase: StagePhase| Some((BlockerCode::ScmUnavailable, json!({ "phase": phase })));
-        match self {
-            JobKind::EnvPrepare | JobKind::EnvInspectWorktree => {
-                Some((BlockerCode::EnvSetupFailed, json!({})))
-            }
-            JobKind::SessionStart => Some((
-                BlockerCode::SessionFailed,
-                json!({ "reason": "launch_failed" }),
-            )),
-            JobKind::SessionSendTurn
-            | JobKind::SessionDeliverPermissionAnswer
-            | JobKind::SessionInterrupt
-            | JobKind::SessionSteer => Some((
-                BlockerCode::SessionLost,
-                json!({ "cause": "runner_unreachable" }),
-            )),
-            JobKind::ScmPushBranch => scm(StagePhase::Pushing),
-            JobKind::ScmOpenChangeRequest => scm(StagePhase::OpeningChange),
-            JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
-            JobKind::ScmMerge => scm(StagePhase::Merging),
-            JobKind::ScmPollCommit => scm(StagePhase::Verifying),
-            JobKind::EnvVerifyMerged => Some((BlockerCode::DodFailed, json!({}))),
-            JobKind::GateVerify => Some((
-                BlockerCode::CiRed,
-                json!({ "source": "saka", "reason": "runner_failed" }),
-            )),
-            JobKind::SessionStop
-            | JobKind::SessionReattach
-            | JobKind::ScmDeleteBranch
-            | JobKind::EnvTeardown
-            | JobKind::ScmWebhookPrune
-            | JobKind::ScmReportStatus => None,
+pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
+    let scm = |phase: StagePhase| Some((BlockerCode::ScmUnavailable, json!({ "phase": phase })));
+    match kind {
+        JobKind::EnvPrepare | JobKind::EnvInspectWorktree => {
+            Some((BlockerCode::EnvSetupFailed, json!({})))
         }
+        JobKind::SessionStart => Some((
+            BlockerCode::SessionFailed,
+            json!({ "reason": "launch_failed" }),
+        )),
+        JobKind::SessionSendTurn
+        | JobKind::SessionDeliverPermissionAnswer
+        | JobKind::SessionInterrupt
+        | JobKind::SessionSteer => Some((
+            BlockerCode::SessionLost,
+            json!({ "cause": "runner_unreachable" }),
+        )),
+        JobKind::ScmPushBranch => scm(StagePhase::Pushing),
+        JobKind::ScmOpenChangeRequest => scm(StagePhase::OpeningChange),
+        JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
+        JobKind::ScmMerge => scm(StagePhase::Merging),
+        JobKind::ScmPollCommit => scm(StagePhase::Verifying),
+        JobKind::EnvVerifyMerged => Some((BlockerCode::DodFailed, json!({}))),
+        JobKind::GateVerify => Some((
+            BlockerCode::CiRed,
+            json!({ "source": "saka", "reason": "runner_failed" }),
+        )),
+        JobKind::SessionStop
+        | JobKind::SessionReattach
+        | JobKind::ScmDeleteBranch
+        | JobKind::EnvTeardown
+        | JobKind::ScmWebhookPrune
+        | JobKind::ScmReportStatus => None,
     }
 }
 
@@ -116,6 +115,17 @@ impl Job {
 
     pub fn max_attempts(&self) -> u32 {
         self.kind.max_attempts()
+    }
+}
+
+pub fn owner_of(payload: &Value) -> Option<RunOwner> {
+    serde_json::from_value(payload.get("owner")?.clone()).ok()
+}
+
+pub fn work_item_of(payload: &Value) -> Option<WorkItemId> {
+    match payload.get("owner") {
+        Some(_) => owner_of(payload)?.work_item_id(),
+        None => serde_json::from_value(payload.get("work_item_id")?.clone()).ok(),
     }
 }
 

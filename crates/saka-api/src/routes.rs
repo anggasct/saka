@@ -9,12 +9,13 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use saka_core::ids::{
-    PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
+    PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId, SpecId,
+    SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
 use saka_engine::{
-    AddProject, EngineError, PermissionFilter, Precondition, Produced, Reply, SessionCommand,
-    SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
+    AddProject, EngineError, PermissionFilter, Precondition, Produced, Reply, RunOf,
+    SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -892,16 +893,26 @@ pub async fn list_permissions(
     Query(q): Query<dto::PermissionQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
+    let run = tri!(run_of(
+        q.work_item_id.as_deref(),
+        q.spec_draft_id.as_deref()
+    ));
     let filter = PermissionFilter {
         states: tri!(states(q.state.as_deref(), PERMISSION_STATES)),
         project: tri!(opt_id(q.project_id.as_deref(), "project_id")).map(ProjectId),
-        work_item: tri!(opt_id(q.work_item_id.as_deref(), "work_item_id")).map(WorkItemId),
+        work_item: match run {
+            Some(RunOf::WorkItem(id)) => Some(id),
+            _ => None,
+        },
+        spec_draft: match run {
+            Some(RunOf::SpecDraft(id)) => Some(id),
+            _ => None,
+        },
     };
     let key = format!(
-        "permissions:{}:{:?}:{:?}",
+        "permissions:{}:{:?}:{run:?}",
         filter.states.join(","),
         filter.project,
-        filter.work_item
     );
     let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
     let paged = tri!(engine.permission_requests(&filter, &p));
@@ -994,16 +1005,30 @@ pub async fn list_sessions(
     Query(q): Query<dto::SessionsQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
-    let Some(item) = tri!(opt_id(q.work_item_id.as_deref(), "work_item_id")) else {
+    let Some(run) = tri!(run_of(
+        q.work_item_id.as_deref(),
+        q.spec_draft_id.as_deref()
+    )) else {
         return ApiError::validation("work_item_id", "required").into_response();
     };
-    let sessions = tri!(engine.sessions_of(WorkItemId(item)));
+    let sessions = tri!(engine.sessions_of(run));
     ok(
         StatusCode::OK,
         &dto::SessionList {
             items: sessions.iter().map(dto::Session::from_view).collect(),
         },
     )
+}
+
+fn run_of(work_item: Option<&str>, spec_draft: Option<&str>) -> Result<Option<RunOf>, ApiError> {
+    let work_item = opt_id(work_item, "work_item_id")?;
+    let spec_draft = opt_id(spec_draft, "spec_draft_id")?;
+    match (work_item, spec_draft) {
+        (Some(_), Some(_)) => Err(ApiError::validation("spec_draft_id", "exclusive")),
+        (Some(id), None) => Ok(Some(RunOf::WorkItem(WorkItemId(id)))),
+        (None, Some(id)) => Ok(Some(RunOf::SpecDraft(SpecDraftId(id)))),
+        (None, None) => Ok(None),
+    }
 }
 
 const TIMELINE_DEFAULT: u32 = 200;
@@ -1260,14 +1285,17 @@ pub async fn list_usage_records(
     Query(q): Query<dto::UsageQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
-    let work_item = tri!(opt_id(q.work_item_id.as_deref(), "work_item_id")).map(WorkItemId);
+    let run = tri!(run_of(
+        q.work_item_id.as_deref(),
+        q.spec_draft_id.as_deref()
+    ));
     let session = tri!(opt_id(q.session_id.as_deref(), "session_id")).map(SessionId);
-    if work_item.is_none() && session.is_none() {
+    if run.is_none() && session.is_none() {
         return ApiError::validation("work_item_id", "required").into_response();
     }
-    let key = format!("usage:{work_item:?}:{session:?}");
+    let key = format!("usage:{run:?}:{session:?}");
     let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
-    let rows = tri!(engine.usage_records(work_item, session));
+    let rows = tri!(engine.usage_records(run, session));
     let mut items: Vec<_> = rows
         .iter()
         .filter(|u| {
@@ -1329,7 +1357,7 @@ fn sse_event(e: &StoredEvent) -> Event {
 fn activity_event(a: &saka_core::model::SessionActivity) -> Event {
     let data = dto::ActivityNotice {
         session_id: a.session_id.0,
-        work_item_id: a.work_item_id.0,
+        owner: dto::RunOwner::from(&a.owner),
         offset: a.offset,
         kind: a.kind.clone(),
     };

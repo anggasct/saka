@@ -16,6 +16,7 @@ use saka_core::policy::{Decision, DecisionSource, Effect};
 use saka_core::react::react;
 use saka_core::reconcile::{Action, Snapshot, reconcile};
 use saka_core::rejection::Rejection;
+use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
@@ -243,7 +244,10 @@ impl World {
         self.decide(step, TaskInput::Admit);
         self.decide(step, prepared(step));
         self.decide(step, launched(step));
-        self.decide(step, TaskInput::TurnAccepted { turn: 1 });
+        self.decide(
+            step,
+            TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+        );
         self.decide(step, turn_ended(1, "success"));
         self.decide(step, inspected(1, false, 1));
         self.decide(step, TaskInput::BranchPushed { sha: sha('b') });
@@ -329,7 +333,7 @@ fn prepared_with(step: u32, recipe: serde_json::Value) -> TaskInput {
 }
 
 fn launched(step: u32) -> TaskInput {
-    TaskInput::SessionLaunched {
+    TaskInput::Session(SessionInput::Launched {
         session_id: SessionId(Uuid::from_u128(600 + u128::from(step))),
         cli: "claude".into(),
         cli_version: Some("2.0.0".into()),
@@ -338,12 +342,12 @@ fn launched(step: u32) -> TaskInput {
         runner_unit: format!("saka-session-{step}"),
         socket_path: "/run/s.sock".into(),
         log_path: "/data/s/events.ndjson".into(),
-    }
+    })
 }
 
 fn launched_again(step: u32) -> TaskInput {
     match launched(step) {
-        TaskInput::SessionLaunched {
+        TaskInput::Session(SessionInput::Launched {
             session_id,
             cli,
             cli_version,
@@ -352,7 +356,7 @@ fn launched_again(step: u32) -> TaskInput {
             runner_unit,
             socket_path,
             log_path,
-        } => TaskInput::SessionLaunched {
+        }) => TaskInput::Session(SessionInput::Launched {
             session_id: SessionId(Uuid::from_u128(session_id.0.as_u128() + 50)),
             cli,
             cli_version,
@@ -361,19 +365,19 @@ fn launched_again(step: u32) -> TaskInput {
             runner_unit,
             socket_path,
             log_path,
-        },
+        }),
         other => other,
     }
 }
 
 fn turn_ended(turn: u32, status: &str) -> TaskInput {
-    TaskInput::TurnEnded {
+    TaskInput::Session(SessionInput::TurnEnded {
         turn,
         status: status.into(),
         cost_usd_micros: Some(10),
         input_tokens: Some(1),
         output_tokens: Some(2),
-    }
+    })
 }
 
 fn inspected(turn: u32, dirty: bool, commits_ahead: u32) -> TaskInput {
@@ -420,7 +424,7 @@ fn observed(head: char, checks: Vec<Check>) -> TaskInput {
 }
 
 fn ask(cli_request_id: &str, id: u128) -> TaskInput {
-    TaskInput::PermissionRequested {
+    TaskInput::Session(SessionInput::PermissionRequested {
         permission_request_id: PermissionRequestId(Uuid::from_u128(id)),
         cli_request_id: cli_request_id.into(),
         tool: "Bash".into(),
@@ -430,7 +434,7 @@ fn ask(cli_request_id: &str, id: u128) -> TaskInput {
             effect: Effect::Ask,
             source: DecisionSource::Default,
         },
-    }
+    })
 }
 
 #[test]
@@ -470,7 +474,10 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         }
     ));
     assert_eq!(w.take_jobs(), vec![JobKind::SessionSendTurn]);
-    w.decide(1, TaskInput::TurnAccepted { turn: 1 });
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     assert_eq!(
         w.task(1).session.as_ref().unwrap().state,
         SessionState::Running
@@ -486,14 +493,14 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     let id = PermissionRequestId(Uuid::from_u128(800));
     w.decide(
         1,
-        TaskInput::AnswerPermission {
+        TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: id,
             allow: true,
             message: None,
             actor: "operator:local".into(),
             remember: false,
             active_rules: Vec::new(),
-        },
+        }),
     );
     assert_eq!(
         w.task(1).session.as_ref().unwrap().state,
@@ -503,22 +510,22 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     assert_eq!(
         w.try_decide(
             1,
-            TaskInput::AnswerPermission {
+            TaskInput::Session(SessionInput::AnswerPermission {
                 permission_request_id: id,
                 allow: false,
                 message: None,
                 actor: "operator:local".into(),
                 remember: false,
                 active_rules: Vec::new(),
-            }
+            })
         ),
         Err(Rejection::PermissionAlreadyAnswered)
     );
     w.decide(
         1,
-        TaskInput::PermissionDelivered {
+        TaskInput::Session(SessionInput::PermissionDelivered {
             permission_request_id: id,
-        },
+        }),
     );
     assert!(w.task(1).permissions[0].delivered_at.is_some());
     assert!(w.decide(1, ask("req-1", 801)).is_empty());
@@ -537,7 +544,10 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
             ..
         }
     ));
-    w.decide(1, TaskInput::TurnAccepted { turn: 2 });
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 2 }),
+    );
     w.decide(1, turn_ended(2, "success"));
     w.jobs.clear();
     w.decide(1, inspected(2, false, 1));
@@ -873,7 +883,7 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
         w.take_jobs(),
         vec![JobKind::ScmPollChangeRequest, JobKind::SessionStart]
     );
-    let launch = TaskInput::SessionLaunched {
+    let launch = TaskInput::Session(SessionInput::Launched {
         session_id: SessionId(Uuid::from_u128(650)),
         cli: "claude".into(),
         cli_version: None,
@@ -882,13 +892,16 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
         runner_unit: "u".into(),
         socket_path: "s".into(),
         log_path: "l".into(),
-    };
+    });
     let events = w.decide(1, launch);
     assert!(
         matches!(&events[1], Event::SessionTurnRequested { prompt: Prompt::WorkPacket { retry_of: Some(Coded { code, .. }) }, .. } if code == "ci_red")
     );
 
-    w.decide(1, TaskInput::TurnAccepted { turn: 1 });
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     w.decide(1, turn_ended(1, "success"));
     w.decide(
         1,
@@ -941,7 +954,10 @@ fn running_time_excludes_waiting_for_a_person() {
     w.decide(1, TaskInput::Admit);
     w.decide(1, prepared(1));
     w.decide(1, launched(1));
-    w.decide(1, TaskInput::TurnAccepted { turn: 1 });
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     w.now = w.now.plus_ms(10 * 60_000);
     w.decide(1, ask("r", 801));
     w.now = w.now.plus_ms(5 * 60 * 60_000);
@@ -949,14 +965,14 @@ fn running_time_excludes_waiting_for_a_person() {
     let id = PermissionRequestId(Uuid::from_u128(801));
     w.decide(
         1,
-        TaskInput::AnswerPermission {
+        TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: id,
             allow: false,
             message: None,
             actor: "operator:local".into(),
             remember: false,
             active_rules: Vec::new(),
-        },
+        }),
     );
     assert_eq!(
         w.task(1).permissions[0].message.as_deref(),
@@ -991,10 +1007,13 @@ fn server_restart_loses_the_session_expires_its_requests_and_resumes_it() {
     w.decide(1, TaskInput::Admit);
     w.decide(1, prepared(1));
     w.decide(1, launched(1));
-    w.decide(1, TaskInput::TurnAccepted { turn: 1 });
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     w.decide(1, ask("r", 802));
     w.jobs.clear();
-    w.decide(1, TaskInput::ServerRestarted);
+    w.decide(1, TaskInput::Session(SessionInput::ServerRestarted));
     let t = w.task(1);
     assert_eq!(t.session.as_ref().unwrap().state, SessionState::Lost);
     assert_eq!(t.permissions[0].state, PermissionState::Expired);
@@ -1024,14 +1043,14 @@ fn server_restart_loses_the_session_expires_its_requests_and_resumes_it() {
     assert_eq!(
         w.try_decide(
             1,
-            TaskInput::AnswerPermission {
+            TaskInput::Session(SessionInput::AnswerPermission {
                 permission_request_id: PermissionRequestId(Uuid::from_u128(802)),
                 allow: true,
                 message: None,
                 actor: "x".into(),
                 remember: false,
                 active_rules: Vec::new(),
-            }
+            })
         ),
         Err(Rejection::PermissionAlreadyAnswered)
     );
@@ -1046,15 +1065,15 @@ fn failed_turns_runner_exits_and_empty_work_block_with_their_codes() {
         ),
         (
             vec![
-                TaskInput::CliExited {
+                TaskInput::Session(SessionInput::CliExited {
                     code: Some(1),
                     signal: None,
-                },
+                }),
                 launched_again(1),
-                TaskInput::CliExited {
+                TaskInput::Session(SessionInput::CliExited {
                     code: Some(1),
                     signal: None,
-                },
+                }),
             ],
             BlockerCode::SessionLost,
         ),
@@ -1062,7 +1081,7 @@ fn failed_turns_runner_exits_and_empty_work_block_with_their_codes() {
             vec![
                 turn_ended(1, "success"),
                 inspected(1, false, 0),
-                TaskInput::TurnAccepted { turn: 2 },
+                TaskInput::Session(SessionInput::TurnAccepted { turn: 2 }),
                 turn_ended(2, "success"),
                 inspected(2, true, 0),
             ],
@@ -1075,7 +1094,10 @@ fn failed_turns_runner_exits_and_empty_work_block_with_their_codes() {
         w.decide(1, TaskInput::Admit);
         w.decide(1, prepared(1));
         w.decide(1, launched(1));
-        w.decide(1, TaskInput::TurnAccepted { turn: 1 });
+        w.decide(
+            1,
+            TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+        );
         for input in inputs {
             w.decide(1, input);
         }
@@ -1091,7 +1113,10 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
     w.decide(1, TaskInput::Admit);
     w.decide(1, prepared(1));
     w.decide(1, launched(1));
-    w.decide(1, TaskInput::TurnAccepted { turn: 1 });
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     w.decide(1, turn_ended(1, "success"));
     w.decide(1, inspected(1, false, 1));
     w.decide(
@@ -1466,7 +1491,7 @@ fn a_leftover_environment_gets_one_cleanup_job_per_hour_until_it_is_torn_down() 
     w.run_to_tearing_down(1);
     w.decide(1, teardown_exhausted());
     let env = w.task(1).environment.as_ref().unwrap().id;
-    let item = w.task(1).item.id;
+    let owner = w.task(1).environment.as_ref().unwrap().owner;
 
     w.now = Timestamp(3 * 3_600_000 + 10);
     let first = w.teardown_jobs();
@@ -1474,7 +1499,7 @@ fn a_leftover_environment_gets_one_cleanup_job_per_hour_until_it_is_torn_down() 
     assert_eq!(first[0].idempotency_key, format!("env.teardown:{env}:3"));
     assert_eq!(
         first[0].payload,
-        json!({ "work_item_id": item, "environment_id": env })
+        json!({ "owner": owner, "environment_id": env })
     );
     w.now = Timestamp(4 * 3_600_000 - 1);
     let same_hour = w.teardown_jobs();

@@ -4,10 +4,11 @@ use serde_json::Value;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
+    ProjectId, RepoId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
+    WorkItemId,
 };
 use crate::job::JobKind;
-use crate::model::{Budget, Coded, ContextRef, DependsOn, ProjectRepo, ToolchainUse};
+use crate::model::{Budget, Coded, ContextRef, DependsOn, ProjectRepo, RunOwner, ToolchainUse};
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, GateSource, InterruptBy,
@@ -224,12 +225,12 @@ pub enum Event {
 
     #[serde(rename = "runtime.environment.prepared")]
     EnvironmentPrepared {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         environment_id: EnvironmentId,
         repo_id: RepoId,
         root_path: String,
         worktree_path: String,
-        branch: String,
+        branch: Option<String>,
         base_sha: String,
         port_start: Option<u16>,
         port_count: Option<u16>,
@@ -241,21 +242,20 @@ pub enum Event {
     },
     #[serde(rename = "runtime.environment.torn_down")]
     EnvironmentTornDown {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         environment_id: EnvironmentId,
         teardown_failures: Vec<Value>,
     },
     #[serde(rename = "runtime.environment.teardown_failed")]
     EnvironmentTeardownFailed {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         environment_id: EnvironmentId,
         error: Coded,
     },
     #[serde(rename = "runtime.session.started")]
     SessionStarted {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
-        stage_run_id: StageRunId,
         environment_id: EnvironmentId,
         cli: String,
         cli_version: Option<String>,
@@ -269,14 +269,14 @@ pub enum Event {
     },
     #[serde(rename = "runtime.session.reattached")]
     SessionReattached {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         runner_version: String,
         from_offset: u64,
     },
     #[serde(rename = "runtime.session.steered")]
     SessionSteered {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         text: String,
         turn: u32,
@@ -284,41 +284,41 @@ pub enum Event {
     },
     #[serde(rename = "runtime.session.interrupt_requested")]
     SessionInterruptRequested {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         actor: InterruptBy,
         turn: u32,
     },
     #[serde(rename = "runtime.session.stop_requested")]
     SessionStopRequested {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         reason: String,
     },
     #[serde(rename = "runtime.session.initialized")]
     SessionInitialized {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         cli_session_id: String,
         model: Option<String>,
     },
     #[serde(rename = "runtime.session.state_changed")]
     SessionStateChanged {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         state: SessionState,
         running_ms: i64,
     },
     #[serde(rename = "runtime.session.turn_requested")]
     SessionTurnRequested {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         turn: u32,
         prompt: Prompt,
     },
     #[serde(rename = "runtime.session.turn_ended")]
     SessionTurnEnded {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         turn: u32,
         status: String,
@@ -331,19 +331,19 @@ pub enum Event {
     },
     #[serde(rename = "runtime.session.ended")]
     SessionEnded {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         end_reason: Coded,
     },
     #[serde(rename = "runtime.session.lost")]
     SessionLost {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         cause: String,
     },
     #[serde(rename = "runtime.permission.requested")]
     PermissionRequested {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         permission_request_id: PermissionRequestId,
         cli_request_id: String,
@@ -353,7 +353,7 @@ pub enum Event {
     },
     #[serde(rename = "runtime.permission.answered")]
     PermissionAnswered {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         permission_request_id: PermissionRequestId,
         state: PermissionState,
         answer_source: String,
@@ -361,14 +361,14 @@ pub enum Event {
     },
     #[serde(rename = "runtime.permission.delivered")]
     PermissionDelivered {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         permission_request_id: PermissionRequestId,
     },
     #[serde(rename = "runtime.permission_rule.added")]
     PermissionRuleAdded {
         rule_id: PermissionRuleId,
         project_id: ProjectId,
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         tool: String,
         command: Option<String>,
         permission_request_id: PermissionRequestId,
@@ -382,15 +382,14 @@ pub enum Event {
     },
     #[serde(rename = "runtime.budget.warned")]
     BudgetWarned {
-        work_item_id: WorkItemId,
-        stage_run_id: StageRunId,
+        owner: RunOwner,
         dimension: BudgetDimension,
         used: Value,
         limit: Value,
     },
     #[serde(rename = "runtime.quota.observed")]
     QuotaObserved {
-        work_item_id: WorkItemId,
+        owner: RunOwner,
         session_id: SessionId,
         account: String,
         window: String,
@@ -468,6 +467,7 @@ pub enum Stream {
     Project(ProjectId),
     Spec(SpecId),
     WorkItem(WorkItemId),
+    SpecDraft(SpecDraftId),
     Session(SessionId),
     PermissionRequest(PermissionRequestId),
     Job(uuid::Uuid),
@@ -480,6 +480,7 @@ impl Stream {
             Stream::Project(_) => "project",
             Stream::Spec(_) => "spec",
             Stream::WorkItem(_) => "work_item",
+            Stream::SpecDraft(_) => "spec_draft",
             Stream::Session(_) => "session",
             Stream::PermissionRequest(_) => "permission_request",
             Stream::Job(_) => "job",
@@ -492,9 +493,19 @@ impl Stream {
             Stream::Project(id) => id.0,
             Stream::Spec(id) => id.0,
             Stream::WorkItem(id) => id.0,
+            Stream::SpecDraft(id) => id.0,
             Stream::Session(id) => id.0,
             Stream::PermissionRequest(id) => id.0,
             Stream::Job(id) => id,
+        }
+    }
+}
+
+impl Stream {
+    pub fn of_owner(owner: &RunOwner) -> Stream {
+        match owner {
+            RunOwner::StageRun { work_item_id, .. } => Stream::WorkItem(*work_item_id),
+            RunOwner::DraftAttempt { spec_draft_id, .. } => Stream::SpecDraft(*spec_draft_id),
         }
     }
 }
@@ -573,48 +584,63 @@ impl Event {
             | E::BlockerResolved { work_item_id, .. }
             | E::WorkItemCancelled { work_item_id, .. }
             | E::WorkItemDone { work_item_id, .. }
-            | E::EnvironmentPrepared { work_item_id, .. }
-            | E::EnvironmentTornDown { work_item_id, .. }
-            | E::EnvironmentTeardownFailed { work_item_id, .. }
-            | E::BudgetWarned { work_item_id, .. }
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }
             | E::ChangeRequestMerged { work_item_id, .. }
             | E::ChangeRequestClosed { work_item_id, .. } => Stream::WorkItem(*work_item_id),
+            E::EnvironmentPrepared { owner, .. }
+            | E::EnvironmentTornDown { owner, .. }
+            | E::EnvironmentTeardownFailed { owner, .. }
+            | E::BudgetWarned { owner, .. } => Stream::of_owner(owner),
             E::JobExhausted { job_id, .. } => Stream::Job(*job_id),
         }
     }
 
-    pub fn work_item_id(&self) -> Option<WorkItemId> {
+    pub fn owner(&self) -> Option<&RunOwner> {
         use Event as E;
         match self {
-            E::SpecRegistered { .. }
-            | E::SpecRevisionRecorded { .. }
-            | E::SpecApproved { .. }
-            | E::SpecWithdrawn { .. }
-            | E::SpecShipped { .. }
-            | E::PermissionRuleRevoked { .. } => None,
-            E::SessionStarted { work_item_id, .. }
-            | E::SessionReattached { work_item_id, .. }
-            | E::SessionSteered { work_item_id, .. }
-            | E::SessionInterruptRequested { work_item_id, .. }
-            | E::SessionStopRequested { work_item_id, .. }
-            | E::QuotaObserved { work_item_id, .. }
-            | E::PermissionRuleAdded { work_item_id, .. }
-            | E::SessionInitialized { work_item_id, .. }
-            | E::SessionStateChanged { work_item_id, .. }
-            | E::SessionTurnRequested { work_item_id, .. }
-            | E::SessionTurnEnded { work_item_id, .. }
-            | E::SessionEnded { work_item_id, .. }
-            | E::SessionLost { work_item_id, .. }
-            | E::PermissionRequested { work_item_id, .. }
-            | E::PermissionAnswered { work_item_id, .. }
-            | E::PermissionDelivered { work_item_id, .. } => Some(*work_item_id),
-            _ => match self.stream() {
-                Stream::WorkItem(id) => Some(id),
-                _ => None,
-            },
+            E::EnvironmentPrepared { owner, .. }
+            | E::EnvironmentTornDown { owner, .. }
+            | E::EnvironmentTeardownFailed { owner, .. }
+            | E::SessionStarted { owner, .. }
+            | E::SessionReattached { owner, .. }
+            | E::SessionSteered { owner, .. }
+            | E::SessionInterruptRequested { owner, .. }
+            | E::SessionStopRequested { owner, .. }
+            | E::SessionInitialized { owner, .. }
+            | E::SessionStateChanged { owner, .. }
+            | E::SessionTurnRequested { owner, .. }
+            | E::SessionTurnEnded { owner, .. }
+            | E::SessionEnded { owner, .. }
+            | E::SessionLost { owner, .. }
+            | E::PermissionRequested { owner, .. }
+            | E::PermissionAnswered { owner, .. }
+            | E::PermissionDelivered { owner, .. }
+            | E::PermissionRuleAdded { owner, .. }
+            | E::BudgetWarned { owner, .. }
+            | E::QuotaObserved { owner, .. } => Some(owner),
+            _ => None,
+        }
+    }
+
+    pub fn work_item_id(&self) -> Option<WorkItemId> {
+        if let Some(owner) = self.owner() {
+            return owner.work_item_id();
+        }
+        match self.stream() {
+            Stream::WorkItem(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn spec_draft_id(&self) -> Option<SpecDraftId> {
+        if let Some(owner) = self.owner() {
+            return owner.spec_draft_id();
+        }
+        match self.stream() {
+            Stream::SpecDraft(id) => Some(id),
+            _ => None,
         }
     }
 }

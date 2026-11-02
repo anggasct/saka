@@ -1,19 +1,20 @@
-use saka_core::event::{Event, Prompt};
-use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId, WorkItemId};
-use saka_core::job::{Job, JobKind};
 use std::collections::BTreeMap;
 
+use saka_core::event::{Event, Prompt};
 use saka_core::gate::{Check, GatePolicy};
-use saka_core::model::{Coded, Environment, EnvironmentSetup, Task, ToolchainUse};
+use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId};
+use saka_core::job::{Job, JobKind};
+use saka_core::model::{Coded, Environment, EnvironmentSetup, RunOwner, Task, ToolchainUse};
+use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
 use saka_core::vocab::{
     BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
     PermissionState, Stage, StagePhase,
 };
 use saka_ports::{
-    EnvRef, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PrepareRequest, PushOutcome,
-    PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef, StatusReport,
-    StatusState,
+    Checkout, EnvRef, LaunchProfile, MergeOutcome, MergeRequest, OpenChangeRequest, PortError,
+    PortResult, PrepareRequest, PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef,
+    SessionLaunch, SessionRef, StatusReport, StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
@@ -86,6 +87,12 @@ fn field<T: DeserializeOwned>(payload: &Value, name: &str) -> std::result::Resul
         .ok_or_else(|| PortError::permanent("job_payload_invalid", json!({ "field": name })))
 }
 
+fn owner_run(payload: &Value) -> PortResult<StageRunId> {
+    saka_core::job::owner_of(payload)
+        .and_then(|owner| owner.stage_run_id())
+        .ok_or_else(|| PortError::permanent("job_payload_invalid", json!({ "field": "owner" })))
+}
+
 fn internal(e: EngineError) -> PortError {
     PortError::retryable("internal", json!({ "error": e.to_string() }))
 }
@@ -95,12 +102,9 @@ impl Engine {
         let Some(job) = self.claim_job()? else {
             return Ok(None);
         };
-        let work_item = job
-            .payload
-            .get("work_item_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        let work_item = saka_core::job::work_item_of(&job.payload)
+            .map(|id| id.to_string())
+            .unwrap_or_default();
         let span = tracing::info_span!(
             "job",
             correlation_id = %job.correlation_id,
@@ -150,7 +154,14 @@ impl Engine {
             self.prune_webhooks().map_err(internal)?;
             return Ok(Effect::Nothing);
         }
-        let id: WorkItemId = field(&job.payload, "work_item_id")?;
+        let id = match saka_core::job::owner_of(&job.payload) {
+            Some(RunOwner::StageRun { work_item_id, .. }) => work_item_id,
+            Some(RunOwner::DraftAttempt { .. }) => {
+                tracing::warn!(job_id = %job.id, "job for a run without a decider");
+                return Ok(Effect::Skipped);
+            }
+            None => field(&job.payload, "work_item_id")?,
+        };
         let Some(task) = self
             .store
             .read(|c| read::load_task(c, id))
@@ -160,11 +171,8 @@ impl Engine {
         };
         let p = &job.payload;
         match job.kind {
-            JobKind::EnvPrepare => self.env_prepare(&task, field(p, "stage_run_id")?).await,
-            JobKind::SessionStart => {
-                self.session_start(&task, field(p, "stage_run_id")?, job.id)
-                    .await
-            }
+            JobKind::EnvPrepare => self.env_prepare(&task, owner_run(p)?).await,
+            JobKind::SessionStart => self.session_start(&task, owner_run(p)?, job.id).await,
             JobKind::SessionSendTurn => {
                 self.send_turn(
                     &task,
@@ -245,7 +253,7 @@ impl Engine {
             causation_id: Some(job.id),
             correlation_id: job.correlation_id,
         };
-        let work_item: Option<WorkItemId> = field(&job.payload, "work_item_id").ok();
+        let work_item = saka_core::job::work_item_of(&job.payload);
         let succeeded = || JobOutcome::Succeeded {
             id: job.id,
             owner: owner.clone(),
@@ -345,7 +353,7 @@ impl Engine {
         };
         if job.kind == JobKind::EnvPrepare
             && !rerun
-            && let Ok(run) = field::<StageRunId>(&job.payload, "stage_run_id")
+            && let Ok(run) = owner_run(&job.payload)
         {
             self.release_ports(EnvironmentId(run.0));
         }
@@ -601,16 +609,15 @@ impl Engine {
             .env
             .prepare(&PrepareRequest {
                 environment_id,
-                work_item_id: task.item.id,
                 repo: repo.clone(),
-                branch: task.item.branch.clone(),
+                checkout: Checkout::Branch(task.item.branch.clone()),
                 base_branch: self.base_branch(task)?,
             })
             .await?;
         let mut env = EnvRef {
             environment_id,
             repo: repo.clone(),
-            branch: task.item.branch.clone(),
+            branch: Some(task.item.branch.clone()),
             root_path: prepared.root_path.clone(),
             worktree_path: prepared.worktree_path.clone(),
             vars: BTreeMap::new(),
@@ -737,22 +744,28 @@ impl Engine {
         }
         // One start job per session: a repeated start replaces the runner it left behind.
         let session_id = match &task.session {
-            Some(previous) if previous.stage_run_id == run => SessionId(job),
+            Some(previous) if previous.owner.stage_run_id() == Some(run) => SessionId(job),
             _ => SessionId(run.0),
+        };
+        let Some(view) = saka_core::task::run_view(task) else {
+            return Ok(Effect::Skipped);
         };
         let launched = self
             .ports
             .agents
             .start(&SessionLaunch {
                 session_id,
-                work_item_id: task.item.id,
+                owner: view.owner,
                 environment: self
                     .env_ref_with_secrets(task, env)
                     .map_err(Refusal::into_error)?,
-                resume_cli_session_id: saka_core::resume::plan(task).and_then(|p| p.cli_session_id),
+                resume_cli_session_id: saka_core::resume::plan(&view)
+                    .and_then(|p| p.cli_session_id),
+                profile: LaunchProfile::Task,
+                model: None,
             })
             .await?;
-        Ok(Effect::Fact(TaskInput::SessionLaunched {
+        Ok(Effect::Fact(TaskInput::Session(SessionInput::Launched {
             session_id,
             cli: launched.cli,
             cli_version: launched.cli_version,
@@ -761,7 +774,7 @@ impl Engine {
             runner_unit: launched.runner_unit,
             socket_path: launched.socket_path,
             log_path: launched.log_path,
-        }))
+        })))
     }
 
     async fn reattach(&self, task: &Task, id: SessionId) -> Execution {
@@ -769,22 +782,22 @@ impl Engine {
             return Ok(Effect::Skipped);
         };
         if !self.ports.agents.unit_active(&session).await? {
-            return Ok(Effect::Fact(TaskInput::SessionGone {
+            return Ok(Effect::Fact(TaskInput::Session(SessionInput::Gone {
                 cause: "runner_exited".into(),
-            }));
+            })));
         }
         let last = task.session.as_ref().map_or(0, |s| s.last_offset);
         let from_offset = if last == 0 { 0 } else { last + 1 };
         match self.ports.agents.reattach(&session, from_offset).await {
-            Ok(r) => Ok(Effect::Fact(TaskInput::SessionReattached {
+            Ok(r) => Ok(Effect::Fact(TaskInput::Session(SessionInput::Reattached {
                 runner_version: r.runner_version,
                 from_offset,
-            })),
+            }))),
             Err(e) if e.code == "version_mismatch" => {
                 let _ = self.ports.agents.stop(id, Some(&session.runner_unit)).await;
-                Ok(Effect::Fact(TaskInput::SessionGone {
+                Ok(Effect::Fact(TaskInput::Session(SessionInput::Gone {
                     cause: "version_mismatch".into(),
-                }))
+                })))
             }
             Err(e) => Err(e),
         }
@@ -819,7 +832,9 @@ impl Engine {
             other => self.turn_text(task, other).map_err(internal)?,
         };
         self.ports.agents.send_turn(&session, turn, &body).await?;
-        Ok(Effect::Fact(TaskInput::TurnAccepted { turn }))
+        Ok(Effect::Fact(TaskInput::Session(
+            SessionInput::TurnAccepted { turn },
+        )))
     }
 
     async fn deliver_answer(
@@ -828,7 +843,7 @@ impl Engine {
         id: saka_core::ids::PermissionRequestId,
     ) -> Execution {
         let Some(request) = task.permissions.iter().find(|p| {
-            p.id == id && p.delivered_at.is_none() && saka_core::task::awaits_delivery(p)
+            p.id == id && p.delivered_at.is_none() && saka_core::session::awaits_delivery(p)
         }) else {
             return Ok(Effect::Skipped);
         };

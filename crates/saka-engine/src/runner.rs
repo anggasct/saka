@@ -1,6 +1,7 @@
 use saka_core::ids::PermissionRequestId;
-use saka_core::model::Task;
+use saka_core::model::{RunOwner, Task};
 use saka_core::policy::{Effect, ToolRequest};
+use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
 use saka_ports::{EnvRef, RunnerEvent, RunnerEventKind};
 use saka_store::read;
@@ -22,11 +23,18 @@ const SUMMARY_MAX: usize = 200;
 
 impl Engine {
     pub fn on_runner_event(&self, event: RunnerEvent) -> Result<()> {
-        let Some(work_item) = self
+        let Some(owner) = self
             .store
-            .read(|c| read::session_work_item(c, event.session_id))?
+            .read(|c| read::session_owner(c, event.session_id))?
         else {
             return Ok(());
+        };
+        let work_item = match owner {
+            RunOwner::StageRun { work_item_id, .. } => work_item_id,
+            RunOwner::DraftAttempt { .. } => {
+                tracing::warn!(session_id = %event.session_id, "runner event for a run without a decider");
+                return Ok(());
+            }
         };
         let task = self.load_task(work_item)?;
         let Some(session) = task.session.as_ref().filter(|s| s.id == event.session_id) else {
@@ -43,10 +51,10 @@ impl Engine {
             RunnerEventKind::SessionInit {
                 cli_session_id,
                 model,
-            } => vec![TaskInput::SessionInitialized {
+            } => vec![TaskInput::Session(SessionInput::Initialized {
                 cli_session_id: cli_session_id.clone(),
                 model: model.clone(),
-            }],
+            })],
             RunnerEventKind::PermissionRequest {
                 request_id,
                 tool,
@@ -58,12 +66,12 @@ impl Engine {
                     tool.clone(),
                     input.clone(),
                 )?;
-                if let TaskInput::PermissionRequested {
+                if let TaskInput::Session(SessionInput::PermissionRequested {
                     permission_request_id,
                     summary,
                     decision,
                     ..
-                } = &next
+                }) = &next
                 {
                     let state = match decision.effect {
                         Effect::Allow => "allowed",
@@ -91,8 +99,10 @@ impl Engine {
                     permission = Some((p.id, p.summary.clone(), state));
                 }
                 found
-                    .map(|p| TaskInput::PermissionDelivered {
-                        permission_request_id: p.id,
+                    .map(|p| {
+                        TaskInput::Session(SessionInput::PermissionDelivered {
+                            permission_request_id: p.id,
+                        })
                     })
                     .into_iter()
                     .collect()
@@ -104,18 +114,23 @@ impl Engine {
                 input_tokens,
                 output_tokens,
                 ..
-            } => vec![TaskInput::TurnEnded {
+            } => vec![TaskInput::Session(SessionInput::TurnEnded {
                 turn: *turn,
                 status: status.clone(),
                 cost_usd_micros: *cost_usd_micros,
                 input_tokens: *input_tokens,
                 output_tokens: *output_tokens,
-            }],
-            RunnerEventKind::CliExited { code, signal } => vec![TaskInput::CliExited {
-                code: *code,
-                signal: *signal,
-            }],
-            RunnerEventKind::RateLimit { info } => timeline::quota_windows(info),
+            })],
+            RunnerEventKind::CliExited { code, signal } => {
+                vec![TaskInput::Session(SessionInput::CliExited {
+                    code: *code,
+                    signal: *signal,
+                })]
+            }
+            RunnerEventKind::RateLimit { info } => timeline::quota_windows(info)
+                .into_iter()
+                .map(TaskInput::Session)
+                .collect(),
             RunnerEventKind::RunnerError { code, .. } => {
                 tracing::warn!(session_id = %event.session_id, code = %code, "runner error");
                 vec![]
@@ -127,7 +142,7 @@ impl Engine {
         };
         let row = timeline::activity(
             &event,
-            work_item,
+            session.owner,
             permission
                 .as_ref()
                 .map(|(id, summary, state)| (*id, summary.as_str(), *state)),
@@ -167,14 +182,14 @@ impl Engine {
             .store
             .read(|c| read::active_permission_rules(c, task.item.project_id))?;
         let decision = self.cfg.policy.evaluate_with(&request, &rules);
-        Ok(TaskInput::PermissionRequested {
+        Ok(TaskInput::Session(SessionInput::PermissionRequested {
             permission_request_id: PermissionRequestId(self.new_id()),
             cli_request_id: request_id,
             summary: summary(&tool, &input),
             tool,
             input,
             decision,
-        })
+        }))
     }
 
     fn tool_request(&self, task: &Task, tool: &str, input: &Value) -> ToolRequest {
@@ -202,6 +217,7 @@ impl Engine {
                     path_prefix: Vec::new(),
                     secrets: Vec::new(),
                 },
+                "",
                 raw,
             )),
             (Some(raw), _, _) => Some(saka_core::policy::RequestPath {

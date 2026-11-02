@@ -15,7 +15,7 @@ async-trait.workspace = true
 base64.workspace = true
 flate2.workspace = true
 reqwest.workspace = true
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["fs", "process"] }
 saka-core = { path = "../saka-core" }
 saka-ports = { path = "../saka-ports" }
 serde.workspace = true

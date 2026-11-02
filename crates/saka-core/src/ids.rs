@@ -42,4 +42,6 @@ id_type!(
     PermissionRequestId,
     PermissionRuleId,
     UsageRecordId,
+    SpecDraftId,
+    SpecDraftAttemptId,
 );

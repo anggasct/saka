@@ -14,6 +14,7 @@ use saka_core::job::{Job, JobKind};
 use saka_core::model::{Coded, Project, ProjectRepo, Repo, RevisionView, Spec, StepPlan, Task};
 use saka_core::policy::{Decision, DecisionSource, Effect};
 use saka_core::react::react;
+use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
@@ -245,6 +246,15 @@ impl World {
         tasks
     }
 
+    fn run_environment(&self, id: WorkItemId) -> EnvironmentId {
+        let task = self
+            .store
+            .read(|c| read::load_task(c, id))
+            .unwrap()
+            .unwrap();
+        EnvironmentId(task.stage_run.unwrap().id.0)
+    }
+
     fn step(&mut self, id: WorkItemId, input: TaskInput) -> Vec<Event> {
         let before = self
             .store
@@ -289,7 +299,7 @@ impl World {
         expected.added_rules.clear();
         expected.permissions.retain(|p| {
             p.state == saka_core::vocab::PermissionState::Pending
-                || p.delivered_at.is_none() && task::awaits_delivery(p)
+                || p.delivered_at.is_none() && saka_core::session::awaits_delivery(p)
         });
         assert_eq!(stored, expected, "stored task differs after {events:?}");
         events
@@ -301,10 +311,11 @@ impl World {
 
     fn run_to_tearing_down(&mut self, id: WorkItemId, n: u128) {
         self.step(id, TaskInput::Admit);
+        let environment_id = self.run_environment(id);
         self.step(
             id,
             TaskInput::EnvironmentPrepared {
-                environment_id: EnvironmentId(Uuid::from_u128(n)),
+                environment_id,
                 root_path: format!("/e{n}"),
                 worktree_path: format!("/e{n}/w"),
                 base_sha: sha('a'),
@@ -313,7 +324,7 @@ impl World {
         );
         self.step(
             id,
-            TaskInput::SessionLaunched {
+            TaskInput::Session(SessionInput::Launched {
                 session_id: SessionId(Uuid::from_u128(n + 1)),
                 cli: "claude".into(),
                 cli_version: None,
@@ -322,18 +333,21 @@ impl World {
                 runner_unit: format!("saka-session-{n}"),
                 socket_path: format!("/run/{n}.sock"),
                 log_path: format!("/data/{n}/events.ndjson"),
-            },
+            }),
         );
-        self.step(id, TaskInput::TurnAccepted { turn: 1 });
         self.step(
             id,
-            TaskInput::TurnEnded {
+            TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+        );
+        self.step(
+            id,
+            TaskInput::Session(SessionInput::TurnEnded {
                 turn: 1,
                 status: "success".into(),
                 cost_usd_micros: None,
                 input_tokens: None,
                 output_tokens: None,
-            },
+            }),
         );
         self.step(
             id,
@@ -432,7 +446,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     w.step(
         id,
         TaskInput::EnvironmentPrepared {
-            environment_id: EnvironmentId(Uuid::from_u128(76)),
+            environment_id: w.run_environment(id),
             root_path: "/e".into(),
             worktree_path: "/e/w".into(),
             base_sha: sha('a'),
@@ -441,7 +455,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     );
     w.step(
         id,
-        TaskInput::SessionLaunched {
+        TaskInput::Session(SessionInput::Launched {
             session_id: session,
             cli: "claude".into(),
             cli_version: Some("2.0.0".into()),
@@ -450,24 +464,27 @@ fn a_whole_task_round_trips_through_the_schema() {
             runner_unit: "saka-session-77".into(),
             socket_path: "/run/77.sock".into(),
             log_path: "/data/77/events.ndjson".into(),
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::SessionInitialized {
+        TaskInput::Session(SessionInput::Initialized {
             cli_session_id: "cli-1".into(),
             model: Some("sonnet".into()),
-        },
+        }),
     );
     w.tick(1000);
-    w.step(id, TaskInput::TurnAccepted { turn: 1 });
+    w.step(
+        id,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     w.tick(5000);
     let stored = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
     assert_eq!(stored.session.as_ref().unwrap().running_ms_at(w.now), 5000);
 
     w.step(
         id,
-        TaskInput::PermissionRequested {
+        TaskInput::Session(SessionInput::PermissionRequested {
             permission_request_id: permission,
             cli_request_id: "r1".into(),
             tool: "Bash".into(),
@@ -477,35 +494,35 @@ fn a_whole_task_round_trips_through_the_schema() {
                 effect: Effect::Ask,
                 source: DecisionSource::Default,
             },
-        },
+        }),
     );
     w.tick(60_000);
     w.step(
         id,
-        TaskInput::AnswerPermission {
+        TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: permission,
             allow: true,
             message: None,
             actor: "operator:local".into(),
             remember: false,
             active_rules: Vec::new(),
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::PermissionDelivered {
+        TaskInput::Session(SessionInput::PermissionDelivered {
             permission_request_id: permission,
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::TurnEnded {
+        TaskInput::Session(SessionInput::TurnEnded {
             turn: 1,
             status: "success".into(),
             cost_usd_micros: Some(1500),
             input_tokens: Some(10),
             output_tokens: Some(20),
-        },
+        }),
     );
     w.step(
         id,
@@ -1054,9 +1071,9 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
     assert_eq!(
         w.store.migration().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(10));
+    assert_eq!(w.store.schema_version().unwrap(), Some(11));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1190,7 +1207,7 @@ fn reconcile_keeps_loading_shipped_tasks_whose_environment_still_needs_cleanup()
 }
 
 fn launched(n: u128) -> TaskInput {
-    TaskInput::SessionLaunched {
+    TaskInput::Session(SessionInput::Launched {
         session_id: SessionId(Uuid::from_u128(n)),
         cli: "claude".into(),
         cli_version: Some("2.1.0".into()),
@@ -1199,7 +1216,7 @@ fn launched(n: u128) -> TaskInput {
         runner_unit: format!("saka-session-{n}"),
         socket_path: format!("/run/{n}.sock"),
         log_path: format!("/data/{n}/events.ndjson"),
-    }
+    })
 }
 
 #[test]
@@ -1211,7 +1228,7 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
     w.step(
         id,
         TaskInput::EnvironmentPrepared {
-            environment_id: EnvironmentId(Uuid::from_u128(76)),
+            environment_id: w.run_environment(id),
             root_path: "/e".into(),
             worktree_path: "/e/w".into(),
             base_sha: "a".repeat(40),
@@ -1221,24 +1238,27 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
     w.step(id, launched(77));
     w.step(
         id,
-        TaskInput::SessionInitialized {
+        TaskInput::Session(SessionInput::Initialized {
             cli_session_id: "cli-1".into(),
             model: None,
-        },
+        }),
     );
-    w.step(id, TaskInput::TurnAccepted { turn: 1 });
+    w.step(
+        id,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     let first = SessionId(Uuid::from_u128(77));
     w.tick(60_000);
     w.step(
         id,
-        TaskInput::Steer {
+        TaskInput::Session(SessionInput::Steer {
             session_id: first,
             text: "keep going".into(),
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::PermissionRequested {
+        TaskInput::Session(SessionInput::PermissionRequested {
             permission_request_id: PermissionRequestId(Uuid::from_u128(78)),
             cli_request_id: "c1".into(),
             tool: "Bash".into(),
@@ -1248,70 +1268,79 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
                 effect: Effect::Ask,
                 source: DecisionSource::Default,
             },
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::AnswerPermission {
+        TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: PermissionRequestId(Uuid::from_u128(78)),
             allow: true,
             message: None,
             actor: "operator:local".into(),
             remember: true,
             active_rules: Vec::new(),
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::QuotaObserved {
+        TaskInput::Session(SessionInput::QuotaObserved {
             window: "five_hour".into(),
             utilization: 0.4,
             status: "allowed".into(),
             resets_at: Some(Timestamp(9_000_000)),
             refused: false,
-        },
+        }),
     );
     w.tick(30_000);
     w.step(
         id,
-        TaskInput::TurnEnded {
+        TaskInput::Session(SessionInput::TurnEnded {
             turn: 1,
             status: "success".into(),
             cost_usd_micros: Some(1_500),
             input_tokens: Some(10),
             output_tokens: Some(20),
-        },
+        }),
     );
     w.step(
         id,
-        TaskInput::Steer {
+        TaskInput::Session(SessionInput::Steer {
             session_id: first,
             text: "add a test".into(),
-        },
+        }),
     );
-    w.step(id, TaskInput::TurnAccepted { turn: 2 });
+    w.step(
+        id,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 2 }),
+    );
     w.tick(10_000);
     w.step(
         id,
-        TaskInput::CliExited {
+        TaskInput::Session(SessionInput::CliExited {
             code: Some(137),
             signal: None,
-        },
+        }),
     );
     w.step(id, launched(79));
-    w.step(id, TaskInput::TurnAccepted { turn: 1 });
+    w.step(
+        id,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
     let second = SessionId(Uuid::from_u128(79));
-    w.step(id, TaskInput::Interrupt { session_id: second });
+    w.step(
+        id,
+        TaskInput::Session(SessionInput::Interrupt { session_id: second }),
+    );
     w.tick(5_000);
     w.step(
         id,
-        TaskInput::TurnEnded {
+        TaskInput::Session(SessionInput::TurnEnded {
             turn: 1,
             status: "error_during_execution".into(),
             cost_usd_micros: None,
             input_tokens: None,
             output_tokens: None,
-        },
+        }),
     );
 
     let stored = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
@@ -1336,12 +1365,18 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
     );
     assert_eq!((s.recorded_turn, s.recorded_running_ms), (1, 5_000));
 
-    let sessions = w.store.read(|c| read::sessions(c, id)).unwrap();
+    let sessions = w
+        .store
+        .read(|c| read::sessions(c, read::RunOf::WorkItem(id)))
+        .unwrap();
     assert_eq!(sessions.len(), 2);
-    assert_eq!(sessions[0].state, saka_core::vocab::SessionState::Resumed);
-    assert_eq!(sessions[0].steers, 2);
+    assert_eq!(sessions[0].0.state, saka_core::vocab::SessionState::Resumed);
+    assert_eq!(sessions[0].0.steers, 2);
     assert_eq!(
-        (sessions[0].recorded_turn, sessions[0].recorded_running_ms),
+        (
+            sessions[0].0.recorded_turn,
+            sessions[0].0.recorded_running_ms
+        ),
         (1, 90_000)
     );
 
@@ -1441,7 +1476,7 @@ fn two_live_environments_never_hold_the_same_port_block() {
     w.step(
         id,
         TaskInput::EnvironmentPrepared {
-            environment_id: EnvironmentId(Uuid::from_u128(76)),
+            environment_id: w.run_environment(id),
             root_path: "/e".into(),
             worktree_path: "/e/w".into(),
             base_sha: sha('a'),

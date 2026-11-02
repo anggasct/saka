@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use saka_core::gate::Check;
 use saka_core::ids::ProjectId;
 use saka_core::ids::{EnvironmentId, SessionId};
-use saka_core::model::ToolchainUse;
+use saka_core::model::{RunOwner, ToolchainUse};
 use saka_core::policy::RequestPath;
 use saka_core::secret::{SecretText, SecretVar, aad};
 use saka_core::time::Timestamp;
@@ -14,12 +14,12 @@ use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
     Agents, Blob, ChangeSnapshot, Clock, DocBlob, DocCommit, DocEntry, DocExpect, DocFile,
-    DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments, LaunchedSession, Link,
-    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments, LaunchProfile, LaunchedSession,
+    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
     RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
     Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Toolchains, WebhookDelivery,
-    WebhookSignature, WebhookTarget, WorktreeState,
+    WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -107,6 +107,8 @@ struct Worktree {
     head: String,
     dirty: bool,
     torn_down: bool,
+    files: BTreeMap<String, Vec<u8>>,
+    links: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +185,9 @@ struct State {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
+    pub owner: RunOwner,
+    pub profile: LaunchProfile,
+    pub model: Option<String>,
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
     pub secrets: BTreeMap<String, String>,
@@ -796,6 +801,8 @@ impl Environments for FakeWorld {
                 head: base.clone(),
                 dirty: false,
                 torn_down: false,
+                files: BTreeMap::new(),
+                links: BTreeSet::new(),
             },
         );
         s.stats.prepares += 1;
@@ -934,7 +941,62 @@ impl Environments for FakeWorld {
         })
     }
 
-    fn resolve_path(&self, env: &EnvRef, raw: &str) -> RequestPath {
+    async fn read_worktree_file(
+        &self,
+        env: &EnvRef,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<WorktreeFile> {
+        let s = self.state();
+        let w = s
+            .worktrees
+            .get(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        let path = worktree_relative(path)?;
+        if w.links
+            .iter()
+            .any(|l| path == *l || path.starts_with(&format!("{l}/")))
+        {
+            return Ok(WorktreeFile::NotRegular);
+        }
+        Ok(match w.files.get(&path) {
+            None if w.files.keys().any(|f| f.starts_with(&format!("{path}/"))) => {
+                WorktreeFile::NotRegular
+            }
+            None => WorktreeFile::Missing,
+            Some(b) if b.len() as u64 > max_bytes => WorktreeFile::TooLarge {
+                bytes: b.len() as u64,
+            },
+            Some(b) => WorktreeFile::Bytes(b.clone()),
+        })
+    }
+
+    async fn write_worktree_file(&self, env: &EnvRef, path: &str, bytes: &[u8]) -> PortResult<()> {
+        let mut s = self.state();
+        let w = s
+            .worktrees
+            .get_mut(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        let path = worktree_relative(path)?;
+        let blocked = w
+            .links
+            .iter()
+            .any(|l| path == *l || path.starts_with(&format!("{l}/")))
+            || w.files.keys().any(|f| path.starts_with(&format!("{f}/")))
+            || w.files.keys().any(|f| f.starts_with(&format!("{path}/")));
+        if blocked {
+            return Err(PortError::permanent(
+                "worktree_path_conflict",
+                json!({ "path": path }),
+            ));
+        }
+        w.files.insert(path, bytes.to_vec());
+        Ok(())
+    }
+
+    fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath {
         let root = env.worktree_path.trim_end_matches('/');
         let relative = if let Some(rest) = raw.strip_prefix(&format!("{root}/")) {
             rest.to_string()
@@ -943,8 +1005,10 @@ impl Environments for FakeWorld {
                 path: raw.to_string(),
                 inside_worktree: false,
             };
-        } else {
+        } else if cwd.is_empty() {
             raw.to_string()
+        } else {
+            format!("{cwd}/{raw}")
         };
         let mut parts: Vec<&str> = Vec::new();
         for part in relative.split('/') {
@@ -965,6 +1029,22 @@ impl Environments for FakeWorld {
             path: parts.join("/"),
             inside_worktree: true,
         }
+    }
+}
+
+fn worktree_relative(path: &str) -> PortResult<String> {
+    let valid = !path.is_empty()
+        && !path.starts_with('/')
+        && path
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != "..");
+    if valid {
+        Ok(path.to_string())
+    } else {
+        Err(PortError::permanent(
+            "worktree_path_invalid",
+            json!({ "path": path }),
+        ))
     }
 }
 
@@ -1037,6 +1117,29 @@ impl DocSource for FakeWorld {
             files,
             truncated,
         })
+    }
+
+    async fn tree_at(
+        &self,
+        _repo: &RepoRef,
+        commit: &str,
+        project_path: &str,
+    ) -> PortResult<Vec<DocEntry>> {
+        let s = self.state();
+        let docs = s.doc_history.get(commit).unwrap_or(&s.docs);
+        Ok(docs
+            .iter()
+            .filter(|(path, _)| {
+                inside_folder(project_path, path)
+                    && markdown_name(path)
+                    && !s.doc_links.contains(*path)
+            })
+            .map(|(path, bytes)| DocEntry {
+                path: path.clone(),
+                blob: git_blob(bytes),
+                bytes: bytes.len() as u64,
+            })
+            .collect())
     }
 
     async fn open(
@@ -1354,6 +1457,9 @@ impl Agents for FakeWorld {
     async fn start(&self, launch: &SessionLaunch) -> PortResult<LaunchedSession> {
         let mut s = self.state();
         s.launches.push(Launch {
+            owner: launch.owner,
+            profile: launch.profile.clone(),
+            model: launch.model.clone(),
             vars: launch.environment.vars.clone(),
             path_prefix: launch.environment.path_prefix.clone(),
             secrets: injected(&launch.environment.secrets, SecretPurpose::Session),

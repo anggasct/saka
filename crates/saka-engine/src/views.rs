@@ -11,7 +11,7 @@ use saka_core::spec as core_spec;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SpecState, WorkItemState};
 use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
-use saka_store::read::{TimelineCursor, TimelinePage};
+use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 use saka_store::{SpecRevisionRow, StoredEvent, TaskSet, read};
 use serde_json::Value;
 
@@ -367,21 +367,14 @@ impl Engine {
         })
     }
 
-    pub fn sessions_of(&self, work_item: WorkItemId) -> Result<Vec<SessionView>> {
-        let (task, sessions) = self.store.read(|c| {
-            Ok((
-                read::load_task(c, work_item)?,
-                read::sessions(c, work_item)?,
-            ))
-        })?;
-        let Some(task) = task else {
-            return Ok(Vec::new());
-        };
-        Ok(sessions
+    pub fn sessions_of(&self, of: RunOf) -> Result<Vec<SessionView>> {
+        Ok(self
+            .store
+            .read(|c| read::sessions(c, of))?
             .into_iter()
-            .map(|session| SessionView {
+            .map(|(session, project_id)| SessionView {
                 session,
-                project_id: task.item.project_id,
+                project_id,
             })
             .collect())
     }
@@ -411,12 +404,12 @@ impl Engine {
 
     pub fn usage_records(
         &self,
-        work_item: Option<WorkItemId>,
+        of: Option<RunOf>,
         session: Option<SessionId>,
     ) -> Result<Vec<UsageView>> {
         Ok(self
             .store
-            .read(|c| read::usage_records(c, work_item, session))?
+            .read(|c| read::usage_records(c, of, session))?
             .into_iter()
             .map(|(record, project_id)| UsageView { record, project_id })
             .collect())

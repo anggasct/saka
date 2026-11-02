@@ -124,7 +124,7 @@ const blocked = task(2, {
 const request = {
   id: PERMISSION_ID,
   project_id: PROJECT_ID,
-  work_item_id: ready.id,
+  owner: { kind: "stage_run", work_item_id: ready.id, stage_run_id: "s" },
   session_id: SESSION_ID,
   tool: "Bash",
   summary:
@@ -140,8 +140,11 @@ const request = {
 const session = {
   id: SESSION_ID,
   project_id: PROJECT_ID,
-  work_item_id: ready.id,
-  stage_run_id: "s",
+  owner: {
+    kind: "stage_run",
+    work_item_id: ready.id,
+    stage_run_id: "s",
+  },
   cli: "claude",
   cli_version: "2.1.0",
   model: "opus",

@@ -42,8 +42,11 @@ const task = {
 const session = {
   id: SESSION_ID,
   project_id: PROJECT_ID,
-  work_item_id: TASK_ID,
-  stage_run_id: "s",
+  owner: {
+    kind: "stage_run",
+    work_item_id: TASK_ID,
+    stage_run_id: "s",
+  },
   cli: "claude",
   cli_version: "2.1.0",
   model: "opus",
@@ -86,7 +89,7 @@ async function mockApi(page: Page, server: Server) {
         (offset) =>
           `event: runtime.session.activity.v1\ndata: ${JSON.stringify({
             session_id: SESSION_ID,
-            work_item_id: TASK_ID,
+            owner: session.owner,
             offset,
             kind: "message",
           })}\n\n`,

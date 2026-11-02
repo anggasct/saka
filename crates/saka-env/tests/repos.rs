@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use saka_core::ids::{EnvironmentId, RepoId, WorkItemId};
+use saka_core::ids::{EnvironmentId, RepoId};
 use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    Blob, EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest, PushOutcome,
-    PushRequest, RecipeCommand, RecipePhase, RepoRef, Repos, UnitLimits,
+    Blob, Checkout, EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest,
+    PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef, Repos, UnitLimits, WorktreeFile,
 };
 use uuid::Uuid;
 
@@ -181,14 +181,18 @@ impl World {
     }
 
     async fn prepare(&self, n: u128) -> EnvRef {
+        self.prepare_with(n, Checkout::Branch(BRANCH.into())).await
+    }
+
+    async fn prepare_with(&self, n: u128, checkout: Checkout) -> EnvRef {
         let id = EnvironmentId(Uuid::from_u128(n));
+        let branch = checkout.branch().map(String::from);
         let prepared = self
             .repos
             .prepare(&PrepareRequest {
                 environment_id: id,
-                work_item_id: WorkItemId(Uuid::from_u128(9)),
                 repo: self.repo.clone(),
-                branch: BRANCH.into(),
+                checkout,
                 base_branch: "main".into(),
             })
             .await
@@ -196,7 +200,7 @@ impl World {
         EnvRef {
             environment_id: id,
             repo: self.repo.clone(),
-            branch: BRANCH.into(),
+            branch,
             root_path: prepared.root_path,
             worktree_path: prepared.worktree_path,
             vars: std::collections::BTreeMap::from([("APP_ENV".to_string(), "test".to_string())]),
@@ -570,6 +574,127 @@ async fn a_new_environment_replaces_an_unfinished_one_that_holds_the_branch() {
     assert!(!Path::new(&old.worktree_path).exists());
     let wt = PathBuf::from(&new.worktree_path);
     assert_eq!(git(&wt, &["branch", "--show-current"]), BRANCH);
+}
+
+#[tokio::test]
+async fn a_detached_worktree_sits_at_the_base_without_a_branch_and_leaves_no_branch_behind() {
+    let w = World::new();
+    let base = git(&w.other, &["rev-parse", "HEAD"]);
+    let env = w.prepare_with(1, Checkout::Detached).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    assert_eq!(env.branch, None);
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), base);
+    assert_eq!(git(&wt, &["branch", "--show-current"]), "");
+    let bare = w.repos.mirror_path(w.repo.repo_id);
+    assert_eq!(git(&bare, &["branch", "--list"]), "");
+    assert!(w.log().contains("worktree add --quiet --detach"));
+
+    let again = w.prepare_with(1, Checkout::Detached).await;
+    assert_eq!(again.worktree_path, env.worktree_path);
+
+    std::fs::write(&w.log, "").unwrap();
+    w.repos.teardown(&env).await.unwrap();
+    assert!(!Path::new(&env.root_path).exists());
+    assert!(!git(&bare, &["worktree", "list"]).contains("worktree"));
+    assert!(!w.log().contains("branch -D"), "{}", w.log());
+}
+
+#[tokio::test]
+async fn worktree_files_are_read_and_written_as_exact_bytes_without_following_links() {
+    let w = World::new();
+    let env = w.prepare_with(1, Checkout::Detached).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let read = |path: &'static str, max: u64| {
+        let env = env.clone();
+        let repos = &w.repos;
+        async move { repos.read_worktree_file(&env, path, max).await.unwrap() }
+    };
+
+    assert_eq!(read("docs/specs/a.md", 64).await, WorktreeFile::Missing);
+    assert_eq!(read("README.md/x.md", 64).await, WorktreeFile::Missing);
+    let bytes = b"# A\r\n\r\n- [ ] one\xc3\xa9\n\tend".to_vec();
+    w.repos
+        .write_worktree_file(&env, "docs/specs/a.md", &bytes)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(wt.join("docs/specs/a.md")).unwrap(), bytes);
+    assert_eq!(
+        read("docs/specs/a.md", 64).await,
+        WorktreeFile::Bytes(bytes.clone())
+    );
+    let size = u64::try_from(bytes.len()).unwrap();
+    assert_eq!(
+        read("docs/specs/a.md", size - 1).await,
+        WorktreeFile::TooLarge { bytes: size }
+    );
+    assert_eq!(
+        read("docs/specs/a.md", size).await,
+        WorktreeFile::Bytes(bytes)
+    );
+
+    w.repos
+        .write_worktree_file(&env, "docs/specs/a.md", b"second")
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(wt.join("docs/specs/a.md")).unwrap(),
+        b"second"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(wt.join("docs/specs"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(leftovers, vec![std::ffi::OsString::from("a.md")]);
+
+    std::fs::write(w._dir.path().join("outside.md"), "secret").unwrap();
+    std::os::unix::fs::symlink(w._dir.path().join("outside.md"), wt.join("docs/link.md")).unwrap();
+    std::os::unix::fs::symlink(wt.join("docs/specs"), wt.join("docs/alias")).unwrap();
+    assert_eq!(read("docs/link.md", 64).await, WorktreeFile::NotRegular);
+    assert_eq!(read("docs/alias/a.md", 64).await, WorktreeFile::NotRegular);
+    assert_eq!(read("docs", 64).await, WorktreeFile::NotRegular);
+    for path in ["docs/link.md", "docs/alias/b.md", "docs"] {
+        let refused = w
+            .repos
+            .write_worktree_file(&env, path, b"x")
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "worktree_path_conflict", "{path}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(w._dir.path().join("outside.md")).unwrap(),
+        "secret"
+    );
+    for path in ["../outside.md", "/etc/passwd", "docs/../README.md", ""] {
+        let refused = w
+            .repos
+            .read_worktree_file(&env, path, 64)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "worktree_path_invalid", "{path}");
+    }
+}
+
+#[test]
+fn a_relative_path_resolves_from_the_session_cwd_and_stays_relative_to_the_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let wt = dir.path().canonicalize().unwrap().join("worktree");
+    std::fs::create_dir_all(wt.join("docs/specs")).unwrap();
+    let r = |cwd: &str, raw: &str| saka_env::repos::resolve_in(&wt, cwd, raw);
+    let inside = |p: &str| saka_core::policy::RequestPath {
+        path: p.into(),
+        inside_worktree: true,
+    };
+    assert_eq!(r("docs", "specs/a.md"), inside("docs/specs/a.md"));
+    assert_eq!(r("docs", "./specs/../a.md"), inside("docs/a.md"));
+    assert_eq!(r("docs", "../src/main.rs"), inside("src/main.rs"));
+    assert_eq!(
+        r("docs", &format!("{}/docs/specs/a.md", wt.display())),
+        inside("docs/specs/a.md")
+    );
+    assert_eq!(r("", "specs/a.md"), inside("specs/a.md"));
+    let outside = r("docs", "../../etc/passwd");
+    assert!(!outside.inside_worktree);
+    assert_eq!(outside.path, "../../etc/passwd");
 }
 
 #[test]

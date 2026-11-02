@@ -14,6 +14,7 @@ pub mod rejection;
 pub mod resume;
 pub mod rule;
 pub mod secret;
+pub mod session;
 pub mod spec;
 pub mod task;
 pub mod time;

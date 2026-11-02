@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use saka_core::ids::{EnvironmentId, WorkItemId};
+use saka_core::ids::EnvironmentId;
 use saka_core::policy::RequestPath;
 use saka_core::secret::SecretVar;
 
@@ -9,11 +9,25 @@ use crate::PortResult;
 use crate::scm::RepoRef;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checkout {
+    Branch(String),
+    Detached,
+}
+
+impl Checkout {
+    pub fn branch(&self) -> Option<&str> {
+        match self {
+            Checkout::Branch(branch) => Some(branch),
+            Checkout::Detached => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrepareRequest {
     pub environment_id: EnvironmentId,
-    pub work_item_id: WorkItemId,
     pub repo: RepoRef,
-    pub branch: String,
+    pub checkout: Checkout,
     pub base_branch: String,
 }
 
@@ -28,7 +42,7 @@ pub struct PreparedEnvironment {
 pub struct EnvRef {
     pub environment_id: EnvironmentId,
     pub repo: RepoRef,
-    pub branch: String,
+    pub branch: Option<String>,
     pub root_path: String,
     pub worktree_path: String,
     pub vars: BTreeMap<String, String>,
@@ -110,6 +124,14 @@ pub struct WorktreeState {
     pub head_sha: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeFile {
+    Missing,
+    NotRegular,
+    TooLarge { bytes: u64 },
+    Bytes(Vec<u8>),
+}
+
 #[async_trait]
 pub trait Environments: Send + Sync {
     async fn prepare(&self, request: &PrepareRequest) -> PortResult<PreparedEnvironment>;
@@ -142,7 +164,16 @@ pub trait Environments: Send + Sync {
         command: &RecipeCommand,
     ) -> PortResult<RecipeCommandOutcome>;
 
-    fn resolve_path(&self, env: &EnvRef, raw: &str) -> RequestPath;
+    async fn read_worktree_file(
+        &self,
+        env: &EnvRef,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<WorktreeFile>;
+
+    async fn write_worktree_file(&self, env: &EnvRef, path: &str, bytes: &[u8]) -> PortResult<()>;
+
+    fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath;
 }
 
 #[cfg(test)]

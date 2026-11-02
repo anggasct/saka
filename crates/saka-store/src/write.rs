@@ -11,7 +11,7 @@ use saka_core::vocab::GateSource;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::codec::{budget_json, i64_of, to_json, value_json};
+use crate::codec::{budget_json, i64_of, owner_columns, to_json, value_json};
 use crate::error::{Result, StoreError};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -323,18 +323,20 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for (project, a) in &b.activities {
         tx.execute(
-            "INSERT INTO session_activity (session_id, \"offset\", work_item_id, project_id, at, kind, summary, data)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO session_activity (session_id, \"offset\", work_item_id, spec_draft_id, project_id, at, kind,
+               summary, data)
+             VALUES (?1, ?2, ?3, ?9, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (session_id, \"offset\") DO NOTHING",
             params![
                 a.session_id.to_string(),
                 i64_of(a.offset)?,
-                a.work_item_id.to_string(),
+                owner_columns(&a.owner).work_item_id,
                 project.to_string(),
                 a.at.0,
                 a.kind,
                 a.summary,
                 value_json(&a.data)?,
+                owner_columns(&a.owner).spec_draft_id,
             ],
         )?;
     }
@@ -614,16 +616,17 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
 }
 
 fn usage_record(tx: &Transaction<'_>, t: &Task, u: &UsageRecord) -> Result<()> {
+    let owner = owner_columns(&u.owner);
     tx.execute(
-        "INSERT INTO usage_record (id, project_id, work_item_id, stage_run_id, session_id, account, turn, status,
-           input_tokens, output_tokens, cost_usd_micros, running_ms, ended_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "INSERT INTO usage_record (id, project_id, work_item_id, stage_run_id, spec_draft_id, spec_draft_attempt_id,
+           session_id, account, turn, status, input_tokens, output_tokens, cost_usd_micros, running_ms, ended_at)
+         VALUES (?1, ?2, ?3, ?4, ?14, ?15, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (session_id, turn) DO NOTHING",
         params![
             u.id.to_string(),
             t.item.project_id.to_string(),
-            u.work_item_id.to_string(),
-            u.stage_run_id.to_string(),
+            owner.work_item_id,
+            owner.stage_run_id,
             u.session_id.to_string(),
             u.account,
             u.turn,
@@ -633,6 +636,8 @@ fn usage_record(tx: &Transaction<'_>, t: &Task, u: &UsageRecord) -> Result<()> {
             u.cost_usd_micros,
             u.running_ms,
             u.ended_at.0,
+            owner.spec_draft_id,
+            owner.spec_draft_attempt_id,
         ],
     )?;
     Ok(())
@@ -781,16 +786,18 @@ fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<(
 }
 
 fn environment(tx: &Transaction<'_>, t: &Task, e: &Environment) -> Result<()> {
+    let owner = owner_columns(&e.owner);
     tx.execute(
-        "INSERT INTO environment (id, project_id, work_item_id, repo_id, root_path, worktree_path, branch, base_sha,
-           state, created_at, updated_at, port_start, port_count, recipe_json, recipe_sha256, toolchains_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        "INSERT INTO environment (id, project_id, work_item_id, spec_draft_id, spec_draft_attempt_id, repo_id,
+           root_path, worktree_path, branch, base_sha, state, created_at, updated_at, port_start, port_count,
+           recipe_json, recipe_sha256, toolchains_json)
+         VALUES (?1, ?2, ?3, ?17, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT (id) DO UPDATE SET base_sha = excluded.base_sha, state = excluded.state,
            updated_at = excluded.updated_at",
         params![
             e.id.to_string(),
             t.item.project_id.to_string(),
-            e.work_item_id.to_string(),
+            owner.work_item_id,
             e.repo_id.to_string(),
             e.root_path,
             e.worktree_path,
@@ -804,19 +811,23 @@ fn environment(tx: &Transaction<'_>, t: &Task, e: &Environment) -> Result<()> {
             e.recipe.as_ref().map(Value::to_string),
             e.recipe_sha256,
             serde_json::to_string(&e.toolchains)?,
+            owner.spec_draft_id,
+            owner.spec_draft_attempt_id,
         ],
     )?;
     Ok(())
 }
 
 fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
+    let owner = owner_columns(&s.owner);
     tx.execute(
-        "INSERT INTO session (id, project_id, work_item_id, stage_run_id, environment_id, cli, cli_version,
-           cli_session_id, model, account, state, runner_unit, socket_path, log_path, turns, followups, running_ms,
-           cost_usd_micros, input_tokens, output_tokens, end_reason, started_at, ended_at, created_at, updated_at,
-           resumed_from_session_id, resume_cause, idle_since, interrupt_requested)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25, ?26, ?27, ?28, ?29)
+        "INSERT INTO session (id, project_id, work_item_id, stage_run_id, spec_draft_id, spec_draft_attempt_id,
+           environment_id, cli, cli_version, cli_session_id, model, account, state, runner_unit, socket_path,
+           log_path, turns, followups, running_ms, cost_usd_micros, input_tokens, output_tokens, end_reason,
+           started_at, ended_at, created_at, updated_at, resumed_from_session_id, resume_cause, idle_since,
+           interrupt_requested)
+         VALUES (?1, ?2, ?3, ?4, ?30, ?31, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+           ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
          ON CONFLICT (id) DO UPDATE SET cli_session_id = excluded.cli_session_id, model = excluded.model,
            state = excluded.state, turns = excluded.turns, followups = excluded.followups,
            running_ms = excluded.running_ms, cost_usd_micros = excluded.cost_usd_micros,
@@ -826,8 +837,8 @@ fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
         params![
             s.id.to_string(),
             t.item.project_id.to_string(),
-            s.work_item_id.to_string(),
-            s.stage_run_id.to_string(),
+            owner.work_item_id,
+            owner.stage_run_id,
             s.environment_id.to_string(),
             s.cli,
             s.cli_version,
@@ -853,22 +864,25 @@ fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
             s.resume_cause.map(|c| c.as_str()),
             s.idle_since.map(|x| x.0),
             s.interrupt_requested.map(|i| i.as_str()),
+            owner.spec_draft_id,
+            owner.spec_draft_attempt_id,
         ],
     )?;
     Ok(())
 }
 
 fn permission(tx: &Transaction<'_>, t: &Task, p: &PermissionRequest) -> Result<()> {
+    let owner = owner_columns(&p.owner);
     tx.execute(
-        "INSERT INTO permission_request (id, project_id, work_item_id, session_id, cli_request_id, tool, input, summary,
-           state, answer_source, message, requested_at, answered_at, delivered_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        "INSERT INTO permission_request (id, project_id, work_item_id, spec_draft_id, session_id, cli_request_id,
+           tool, input, summary, state, answer_source, message, requested_at, answered_at, delivered_at)
+         VALUES (?1, ?2, ?3, ?15, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, answer_source = excluded.answer_source,
            message = excluded.message, answered_at = excluded.answered_at, delivered_at = excluded.delivered_at",
         params![
             p.id.to_string(),
             t.item.project_id.to_string(),
-            p.work_item_id.to_string(),
+            owner.work_item_id,
             p.session_id.to_string(),
             p.cli_request_id,
             p.tool,
@@ -880,6 +894,7 @@ fn permission(tx: &Transaction<'_>, t: &Task, p: &PermissionRequest) -> Result<(
             p.requested_at.0,
             p.answered_at.map(|x| x.0),
             p.delivered_at.map(|x| x.0),
+            owner.spec_draft_id,
         ],
     )?;
     Ok(())

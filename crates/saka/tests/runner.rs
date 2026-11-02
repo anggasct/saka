@@ -17,13 +17,14 @@ use saka_agents::protocol::{LogEvent, RunnerFrame, ServerFrame};
 use saka_agents::redact;
 use saka_agents::runner::{EXIT_OK, EXIT_VERSION_MISMATCH, runner_version};
 use saka_agents::{AgentsConfig, ClaudeAgents, client::RunnerConnection};
-use saka_core::ids::{EnvironmentId, RepoId, SessionId, WorkItemId};
+use saka_core::ids::{EnvironmentId, RepoId, SessionId, StageRunId, WorkItemId};
+use saka_core::model::RunOwner;
 use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, SystemdSupervisor};
 use saka_ports::{
-    Agents, CommandUnit, EnvRef, RepoRef, RunnerEvent, RunnerEventKind, SessionLaunch, SessionRef,
-    Supervisor, UnitLimits,
+    Agents, CommandUnit, EnvRef, LaunchProfile, RepoRef, RunnerEvent, RunnerEventKind,
+    SessionLaunch, SessionRef, Supervisor, UnitLimits,
 };
 use saka_testkit::fake_claude;
 use tokio::process::{Child, Command};
@@ -686,7 +687,10 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
     std::fs::create_dir_all(root.join("worktree")).unwrap();
     SessionLaunch {
         session_id: fx.session,
-        work_item_id: WorkItemId(Uuid::now_v7()),
+        owner: RunOwner::StageRun {
+            work_item_id: WorkItemId(Uuid::now_v7()),
+            stage_run_id: StageRunId(Uuid::now_v7()),
+        },
         environment: EnvRef {
             environment_id: EnvironmentId(Uuid::now_v7()),
             repo: RepoRef {
@@ -695,7 +699,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
                 full_name: "acme/app".into(),
                 url: "https://github.com/acme/app".into(),
             },
-            branch: "saka/x/s1".into(),
+            branch: Some("saka/x/s1".into()),
             root_path: root.to_string_lossy().into_owned(),
             worktree_path: root.join("worktree").to_string_lossy().into_owned(),
             vars: Default::default(),
@@ -703,6 +707,8 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
             secrets: Vec::new(),
         },
         resume_cli_session_id: None,
+        profile: LaunchProfile::Task,
+        model: None,
     }
 }
 

@@ -89,10 +89,7 @@ impl Engine {
                     let project = snapshot
                         .tasks
                         .iter()
-                        .find(|t| {
-                            job.payload.get("work_item_id").and_then(|v| v.as_str())
-                                == Some(t.item.id.to_string().as_str())
-                        })
+                        .find(|t| saka_core::job::work_item_of(&job.payload) == Some(t.item.id))
                         .map(|t| t.item.project_id);
                     self.push_job(&mut jobs, job, project, &cause);
                 }
@@ -160,10 +157,7 @@ impl Engine {
 
     fn monitor(&self, tasks: &[Task]) -> Vec<Job> {
         let mut jobs = Vec::new();
-        for (task, session) in tasks
-            .iter()
-            .filter_map(|t| t.live_session().map(|s| (t, s)))
-        {
+        for session in tasks.iter().filter_map(Task::live_session) {
             match self.ports.agents.link(session.id) {
                 Link::Open { silent_ms } if silent_ms > RUNNER_SILENCE_MS => {
                     tracing::info!(session_id = %session.id, silent_ms, "runner is silent; reconnecting");
@@ -173,7 +167,7 @@ impl Engine {
                 Link::Closed { generation } => jobs.push(Job::new(
                     JobKind::SessionReattach,
                     format!("{}:{}:{generation}", session.id, self.boot),
-                    json!({ "work_item_id": task.item.id, "session_id": session.id }),
+                    json!({ "owner": session.owner, "session_id": session.id }),
                     self.now(),
                 )),
             }
@@ -185,10 +179,7 @@ impl Engine {
 fn project_of(tasks: &[Task], job: &Job) -> Option<saka_core::ids::ProjectId> {
     tasks
         .iter()
-        .find(|t| {
-            job.payload.get("work_item_id").and_then(|v| v.as_str())
-                == Some(t.item.id.to_string().as_str())
-        })
+        .find(|t| saka_core::job::work_item_of(&job.payload) == Some(t.item.id))
         .map(|t| t.item.project_id)
 }
 

@@ -13,17 +13,17 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub use agent::{
-    Agents, LaunchedSession, Link, Reattached, RunnerEvent, RunnerEventKind, SessionLaunch,
-    SessionRef,
+    Agents, LaunchProfile, LaunchedSession, Link, Reattached, RunnerEvent, RunnerEventKind,
+    SessionLaunch, SessionRef,
 };
 pub use docs::{
     CommitIdentity, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource,
     DocTree, DocWrite,
 };
 pub use env::{
-    EnvRef, Environments, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest,
-    PreparedEnvironment, RecipeCommand, RecipeCommandOutcome, RecipePhase, WorktreeState,
-    output_tail,
+    Checkout, EnvRef, Environments, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest,
+    PreparedEnvironment, RecipeCommand, RecipeCommandOutcome, RecipePhase, WorktreeFile,
+    WorktreeState, output_tail,
 };
 pub use git::{
     Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,

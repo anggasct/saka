@@ -6,7 +6,8 @@ use serde_json::Value;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
+    ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
+    StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::time::Timestamp;
 use crate::vocab::{
@@ -15,6 +16,56 @@ use crate::vocab::{
     SessionState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
     WorkItemOrigin, WorkItemState, WorkflowPreset,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunOwner {
+    StageRun {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+    },
+    DraftAttempt {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+    },
+}
+
+impl RunOwner {
+    pub fn work_item_id(&self) -> Option<WorkItemId> {
+        match self {
+            RunOwner::StageRun { work_item_id, .. } => Some(*work_item_id),
+            RunOwner::DraftAttempt { .. } => None,
+        }
+    }
+
+    pub fn stage_run_id(&self) -> Option<StageRunId> {
+        match self {
+            RunOwner::StageRun { stage_run_id, .. } => Some(*stage_run_id),
+            RunOwner::DraftAttempt { .. } => None,
+        }
+    }
+
+    pub fn spec_draft_id(&self) -> Option<SpecDraftId> {
+        match self {
+            RunOwner::StageRun { .. } => None,
+            RunOwner::DraftAttempt { spec_draft_id, .. } => Some(*spec_draft_id),
+        }
+    }
+
+    pub fn attempt_id(&self) -> Option<SpecDraftAttemptId> {
+        match self {
+            RunOwner::StageRun { .. } => None,
+            RunOwner::DraftAttempt { attempt_id, .. } => Some(*attempt_id),
+        }
+    }
+
+    pub fn run_id(&self) -> uuid::Uuid {
+        match self {
+            RunOwner::StageRun { stage_run_id, .. } => stage_run_id.0,
+            RunOwner::DraftAttempt { attempt_id, .. } => attempt_id.0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Repo {
@@ -235,8 +286,7 @@ impl Usage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageRecord {
     pub id: UsageRecordId,
-    pub work_item_id: WorkItemId,
-    pub stage_run_id: StageRunId,
+    pub owner: RunOwner,
     pub session_id: SessionId,
     pub account: String,
     pub turn: u32,
@@ -252,7 +302,7 @@ pub struct UsageRecord {
 pub struct SessionActivity {
     pub session_id: SessionId,
     pub offset: u64,
-    pub work_item_id: WorkItemId,
+    pub owner: RunOwner,
     pub at: Timestamp,
     pub kind: String,
     pub summary: String,
@@ -348,11 +398,11 @@ pub struct ToolchainUse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Environment {
     pub id: EnvironmentId,
-    pub work_item_id: WorkItemId,
+    pub owner: RunOwner,
     pub repo_id: RepoId,
     pub root_path: String,
     pub worktree_path: String,
-    pub branch: String,
+    pub branch: Option<String>,
     pub base_sha: Option<String>,
     pub state: EnvironmentState,
     pub created_at: Timestamp,
@@ -367,8 +417,7 @@ pub struct Environment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
-    pub work_item_id: WorkItemId,
-    pub stage_run_id: StageRunId,
+    pub owner: RunOwner,
     pub environment_id: EnvironmentId,
     pub cli: String,
     pub cli_version: Option<String>,
@@ -423,7 +472,7 @@ impl Session {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionRequest {
     pub id: PermissionRequestId,
-    pub work_item_id: WorkItemId,
+    pub owner: RunOwner,
     pub session_id: SessionId,
     pub cli_request_id: String,
     pub tool: String,
@@ -479,6 +528,13 @@ impl Task {
         }
     }
 
+    pub fn run_owner(&self) -> Option<RunOwner> {
+        self.stage_run.as_ref().map(|r| RunOwner::StageRun {
+            work_item_id: self.item.id,
+            stage_run_id: r.id,
+        })
+    }
+
     pub fn open_blocker(&self) -> Option<&Blocker> {
         self.blocker.as_ref().filter(|b| b.resolution.is_none())
     }
@@ -502,7 +558,7 @@ impl Task {
     pub fn stage_usage(&self, now: Timestamp) -> Usage {
         let mut usage = self.prior_usage;
         if let (Some(s), Some(run)) = (&self.session, &self.stage_run)
-            && s.stage_run_id == run.id
+            && s.owner.stage_run_id() == Some(run.id)
         {
             usage.add(s.usage_at(now));
         }

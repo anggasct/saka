@@ -1,12 +1,15 @@
 use rusqlite::{Connection, Row, ToSql};
-use saka_core::ids::{PermissionRequestId, ProjectId, RepoId, SessionId, SpecId, WorkItemId};
+use saka_core::ids::{
+    PermissionRequestId, ProjectId, RepoId, SessionId, SpecDraftId, SpecId, WorkItemId,
+};
 use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun};
 use uuid::Uuid;
 
 use crate::codec::uuid;
 use crate::error::Result;
 use crate::read::{
-    load_project, permission, project_row, repo_row, session, spec_row, stage_run, ts,
+    PERMISSION_SELECT, load_project, permission, project_row, repo_row, session, spec_row,
+    stage_run, ts,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +243,7 @@ pub struct PermissionFilter {
     pub states: Vec<String>,
     pub project: Option<ProjectId>,
     pub work_item: Option<WorkItemId>,
+    pub spec_draft: Option<SpecDraftId>,
 }
 
 pub type PermissionRow = (PermissionRequest, ProjectId);
@@ -261,10 +265,13 @@ pub fn permissions(
     if let Some(w) = filter.work_item {
         q.eq("work_item_id", w.0.to_string());
     }
+    if let Some(d) = filter.spec_draft {
+        q.eq("spec_draft_id", d.0.to_string());
+    }
     q.after("requested_at", page, false);
     q.run(
         conn,
-        "SELECT * FROM permission_request",
+        PERMISSION_SELECT,
         "requested_at, id",
         page,
         permission_row,
@@ -281,15 +288,9 @@ pub fn load_permission(
         after: None,
         limit: 1,
     };
-    Ok(q.run(
-        conn,
-        "SELECT * FROM permission_request",
-        "id",
-        &page,
-        permission_row,
-    )?
-    .into_iter()
-    .next())
+    Ok(q.run(conn, PERMISSION_SELECT, "id", &page, permission_row)?
+        .into_iter()
+        .next())
 }
 
 pub fn load_session(conn: &Connection, id: SessionId) -> Result<Option<(Session, ProjectId)>> {
@@ -299,16 +300,13 @@ pub fn load_session(conn: &Connection, id: SessionId) -> Result<Option<(Session,
         after: None,
         limit: 1,
     };
-    Ok(q
-        .run(
-            conn,
-            "SELECT s.*, w.project_id AS project_id FROM session s JOIN work_item w ON w.id = s.work_item_id",
-            "s.id",
-            &page,
-            |r| Ok((session(r)?, ProjectId(uuid(r, "project_id")?))),
-        )?
+    Ok(
+        q.run(conn, "SELECT s.* FROM session s", "s.id", &page, |r| {
+            Ok((session(r)?, ProjectId(uuid(r, "project_id")?)))
+        })?
         .into_iter()
-        .next())
+        .next(),
+    )
 }
 
 pub fn stage_runs(conn: &Connection, id: WorkItemId) -> Result<Vec<StageRun>> {

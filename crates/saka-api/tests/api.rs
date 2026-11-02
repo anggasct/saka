@@ -641,7 +641,7 @@ fn a_permission_answer_is_delivered_once_and_a_second_answer_is_refused() {
     let id = items[0]["id"].as_str().unwrap().to_string();
     let work = api.get(&format!(
         "/api/v1/work-items/{}",
-        items[0]["work_item_id"].as_str().unwrap()
+        items[0]["owner"]["work_item_id"].as_str().unwrap()
     ));
     assert_eq!(work.body["pending_permission_count"], 1);
     let session = api.get(&format!(
@@ -1840,6 +1840,65 @@ fn running_session(api: &mut Api) -> (String, String) {
     (t.item.id.to_string(), t.session.unwrap().id.to_string())
 }
 
+fn rejected(api: &Api, path: &str, field: &str, code: &str) {
+    let r = api.get(path);
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(
+        r.body["params"]["errors"][0],
+        json!({ "field": field, "code": code }),
+        "{path}"
+    );
+}
+
+#[test]
+fn runtime_lists_filter_by_exactly_one_run_owner() {
+    let mut api = Api::new(SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    });
+    let (item, sid) = running_session(&mut api);
+    let stage_run = api.sim.task(1).session.unwrap().owner.stage_run_id();
+    let draft = uuid::Uuid::now_v7();
+
+    let list = api.get(&format!("/api/v1/sessions?work_item_id={item}"));
+    assert_eq!(list.status, StatusCode::OK);
+    assert_eq!(list.body["items"][0]["id"], sid.as_str());
+    assert_eq!(
+        list.body["items"][0]["owner"],
+        json!({ "kind": "stage_run", "work_item_id": item, "stage_run_id": stage_run })
+    );
+    assert!(list.body["items"][0].get("work_item_id").is_none());
+    assert!(list.body["items"][0].get("stage_run_id").is_none());
+    let drafts = api.get(&format!("/api/v1/sessions?spec_draft_id={draft}"));
+    assert_eq!(drafts.status, StatusCode::OK);
+    assert_eq!(drafts.body["items"], json!([]));
+
+    rejected(&api, "/api/v1/sessions", "work_item_id", "required");
+    for path in [
+        "/api/v1/sessions",
+        "/api/v1/permission-requests",
+        "/api/v1/usage-records",
+    ] {
+        rejected(
+            &api,
+            &format!("{path}?work_item_id={item}&spec_draft_id={draft}"),
+            "spec_draft_id",
+            "exclusive",
+        );
+        rejected(
+            &api,
+            &format!("{path}?spec_draft_id=nope"),
+            "spec_draft_id",
+            "invalid",
+        );
+    }
+    for path in ["/api/v1/permission-requests", "/api/v1/usage-records"] {
+        let r = api.get(&format!("{path}?spec_draft_id={draft}"));
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        assert_eq!(r.body["items"], json!([]));
+    }
+}
+
 #[test]
 fn operators_steer_interrupt_and_stop_a_session_over_the_api() {
     let mut api = Api::new(SimConfig {
@@ -2219,7 +2278,16 @@ fn new_timeline_rows_are_announced_on_the_event_stream() {
     .unwrap();
     assert_eq!(
         data,
-        json!({ "session_id": sid, "work_item_id": api.sim.task(1).item.id, "offset": offset, "kind": "message" })
+        json!({
+            "session_id": sid,
+            "owner": {
+                "kind": "stage_run",
+                "work_item_id": api.sim.task(1).item.id,
+                "stage_run_id": api.sim.task(1).session.unwrap().owner.stage_run_id(),
+            },
+            "offset": offset,
+            "kind": "message",
+        })
     );
 }
 

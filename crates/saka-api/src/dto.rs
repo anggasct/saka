@@ -1,10 +1,11 @@
 use saka_core::admission::Waiting;
 use saka_core::gate::Check;
 use saka_core::model::{
-    Environment as CoreEnvironment, PermissionRule as CoreRule, SessionActivity as CoreActivity,
-    StageRun, Task,
+    Environment as CoreEnvironment, PermissionRule as CoreRule, RunOwner as CoreOwner,
+    SessionActivity as CoreActivity, StageRun, Task,
 };
-use saka_core::task::{available_actions, session_actions};
+use saka_core::session::session_actions;
+use saka_core::task::available_actions;
 use saka_core::time::Timestamp;
 use saka_core::vocab::EnvironmentState;
 use saka_engine::{
@@ -793,11 +794,48 @@ impl WorkItemDetail {
     }
 }
 
+/// The run that owns a session, its permission requests, and its usage records.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunOwner {
+    /// A stage run of a task.
+    StageRun {
+        work_item_id: Uuid,
+        stage_run_id: Uuid,
+    },
+    /// An attempt of a spec draft.
+    DraftAttempt {
+        spec_draft_id: Uuid,
+        attempt_id: Uuid,
+    },
+}
+
+impl From<&CoreOwner> for RunOwner {
+    fn from(o: &CoreOwner) -> RunOwner {
+        match o {
+            CoreOwner::StageRun {
+                work_item_id,
+                stage_run_id,
+            } => RunOwner::StageRun {
+                work_item_id: work_item_id.0,
+                stage_run_id: stage_run_id.0,
+            },
+            CoreOwner::DraftAttempt {
+                spec_draft_id,
+                attempt_id,
+            } => RunOwner::DraftAttempt {
+                spec_draft_id: spec_draft_id.0,
+                attempt_id: attempt_id.0,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PermissionRequest {
     pub id: Uuid,
     pub project_id: Uuid,
-    pub work_item_id: Uuid,
+    pub owner: RunOwner,
     pub session_id: Uuid,
     pub tool: String,
     pub summary: String,
@@ -817,7 +855,7 @@ impl PermissionRequest {
         PermissionRequest {
             id: p.id.0,
             project_id: v.project_id.0,
-            work_item_id: p.work_item_id.0,
+            owner: RunOwner::from(&p.owner),
             session_id: p.session_id.0,
             tool: p.tool.clone(),
             summary: p.summary.clone(),
@@ -835,8 +873,7 @@ impl PermissionRequest {
 pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
-    pub work_item_id: Uuid,
-    pub stage_run_id: Uuid,
+    pub owner: RunOwner,
     pub cli: String,
     pub cli_version: Option<String>,
     pub model: Option<String>,
@@ -985,8 +1022,7 @@ pub struct AgentAccountList {
 pub struct UsageRecord {
     pub id: Uuid,
     pub project_id: Uuid,
-    pub work_item_id: Uuid,
-    pub stage_run_id: Uuid,
+    pub owner: RunOwner,
     pub session_id: Uuid,
     /// `<cli>:<account name>`
     pub account: String,
@@ -1007,8 +1043,7 @@ impl From<&UsageView> for UsageRecord {
         UsageRecord {
             id: u.id.0,
             project_id: v.project_id.0,
-            work_item_id: u.work_item_id.0,
-            stage_run_id: u.stage_run_id.0,
+            owner: RunOwner::from(&u.owner),
             session_id: u.session_id.0,
             account: u.account.clone(),
             turn: u.turn,
@@ -1034,8 +1069,7 @@ impl Session {
         Session {
             id: s.id.0,
             project_id: v.project_id.0,
-            work_item_id: s.work_item_id.0,
-            stage_run_id: s.stage_run_id.0,
+            owner: RunOwner::from(&s.owner),
             cli: s.cli.clone(),
             cli_version: s.cli_version.clone(),
             model: s.model.clone(),
@@ -1113,7 +1147,7 @@ pub struct Problem {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ActivityNotice {
     pub session_id: Uuid,
-    pub work_item_id: Uuid,
+    pub owner: RunOwner,
     pub offset: u64,
     pub kind: String,
 }
@@ -1406,7 +1440,9 @@ pub struct PermissionQuery {
     /// One or more of `pending, allowed, denied, expired`, comma-separated.
     pub state: Option<String>,
     pub project_id: Option<String>,
+    /// Exclusive with `spec_draft_id`.
     pub work_item_id: Option<String>,
+    pub spec_draft_id: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
@@ -1414,7 +1450,9 @@ pub struct PermissionQuery {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SessionsQuery {
+    /// Exactly one of `work_item_id` and `spec_draft_id` is required.
     pub work_item_id: Option<String>,
+    pub spec_draft_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -1433,8 +1471,9 @@ pub struct TimelineQuery {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct UsageQuery {
-    /// One of `work_item_id` and `session_id` is required.
+    /// One of `work_item_id`, `spec_draft_id`, and `session_id` is required; `work_item_id` and `spec_draft_id` are exclusive.
     pub work_item_id: Option<String>,
+    pub spec_draft_id: Option<String>,
     pub session_id: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,

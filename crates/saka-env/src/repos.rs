@@ -10,10 +10,10 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    Blob, CommandUnit, CommitOne, CommitPush, EntryKind, EnvRef, Environments, GitAccess,
+    Blob, Checkout, CommandUnit, CommitOne, CommitPush, EntryKind, EnvRef, Environments, GitAccess,
     GitRemote, PortError, PortResult, PrepareRequest, PreparedEnvironment, PushCommit, PushOutcome,
     PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor, TreeEntry,
-    UnitLimits, WorktreeState,
+    UnitLimits, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -833,7 +833,9 @@ impl Repos for GitRepos {
 #[async_trait]
 impl Environments for GitRepos {
     async fn prepare(&self, request: &PrepareRequest) -> PortResult<PreparedEnvironment> {
-        arg(&request.branch, "branch")?;
+        if let Some(branch) = request.checkout.branch() {
+            arg(branch, "branch")?;
+        }
         arg(&request.base_branch, "base_branch")?;
         let lock = self.lock(request.repo.repo_id);
         let _guard = lock.lock().await;
@@ -862,9 +864,9 @@ impl Environments for GitRepos {
                 )
             })?;
         let bare = self.mirror_path(request.repo.repo_id);
-        let branch_ref = format!("refs/heads/{}", request.branch);
+        let branch_ref = request.checkout.branch().map(|b| format!("refs/heads/{b}"));
         for (path, branch) in self.worktrees(&bare).await? {
-            let stale = path == worktree || branch.as_deref() == Some(branch_ref.as_str());
+            let stale = path == worktree || (branch.is_some() && branch == branch_ref);
             if stale && self.inside_envs(&path) {
                 self.remove_worktree(&bare, &path).await?;
             }
@@ -874,21 +876,20 @@ impl Environments for GitRepos {
         }
         std::fs::create_dir_all(&root).map_err(|e| io("create_env_root", &e))?;
         let wt = worktree.to_string_lossy();
-        self.git_ok(
-            &bare,
-            &[
+        let add: Vec<&str> = match &request.checkout {
+            Checkout::Branch(branch) => vec![
                 "worktree",
                 "add",
                 "--quiet",
                 "--no-track",
                 "-B",
-                &request.branch,
+                branch,
                 &wt,
                 &base,
             ],
-            "worktree_add",
-        )
-        .await?;
+            Checkout::Detached => vec!["worktree", "add", "--quiet", "--detach", &wt, &base],
+        };
+        self.git_ok(&bare, &add, "worktree_add").await?;
         // Written last: an environment without it is unfinished and is made again.
         let tmp = root.join(format!("{BASE_FILE}.tmp"));
         std::fs::write(&tmp, format!("{base}\n")).map_err(|e| io("write_base", &e))?;
@@ -1012,7 +1013,9 @@ impl Environments for GitRepos {
     }
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()> {
-        arg(&env.branch, "branch")?;
+        if let Some(branch) = &env.branch {
+            arg(branch, "branch")?;
+        }
         let lock = self.lock(env.repo.repo_id);
         let _guard = lock.lock().await;
         let root = self.env_root(env.environment_id);
@@ -1022,18 +1025,20 @@ impl Environments for GitRepos {
         }
         if bare.join("HEAD").is_file() {
             self.remove_worktree(&bare, &root.join("worktree")).await?;
-            let branch_ref = format!("refs/heads/{}", env.branch);
-            let still_used = self
-                .worktrees(&bare)
-                .await?
-                .iter()
-                .any(|(_, b)| b.as_deref() == Some(branch_ref.as_str()));
-            if !still_used {
-                // Fails when the branch is already gone.
-                self.cfg
-                    .git
-                    .local(&bare, &["branch", "-D", "--quiet", &env.branch])
-                    .await?;
+            if let Some(branch) = &env.branch {
+                let branch_ref = format!("refs/heads/{branch}");
+                let still_used = self
+                    .worktrees(&bare)
+                    .await?
+                    .iter()
+                    .any(|(_, b)| b.as_deref() == Some(branch_ref.as_str()));
+                if !still_used {
+                    // Fails when the branch is already gone.
+                    self.cfg
+                        .git
+                        .local(&bare, &["branch", "-D", "--quiet", branch])
+                        .await?;
+                }
             }
         }
         if root.exists() && self.inside_envs(&root) {
@@ -1145,9 +1150,151 @@ impl Environments for GitRepos {
         })
     }
 
-    fn resolve_path(&self, env: &EnvRef, raw: &str) -> RequestPath {
-        resolve(Path::new(&env.worktree_path), raw)
+    async fn read_worktree_file(
+        &self,
+        env: &EnvRef,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<WorktreeFile> {
+        read_file_in(Path::new(&env.worktree_path), path, max_bytes)
     }
+
+    async fn write_worktree_file(&self, env: &EnvRef, path: &str, bytes: &[u8]) -> PortResult<()> {
+        write_file_in(Path::new(&env.worktree_path), path, bytes)
+    }
+
+    fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath {
+        resolve_in(Path::new(&env.worktree_path), cwd, raw)
+    }
+}
+
+pub fn resolve_in(worktree: &Path, cwd: &str, raw: &str) -> RequestPath {
+    if cwd.is_empty() || Path::new(raw).is_absolute() {
+        return resolve(worktree, raw);
+    }
+    let resolved = resolve(worktree, &Path::new(cwd).join(raw).to_string_lossy());
+    if resolved.inside_worktree {
+        resolved
+    } else {
+        RequestPath {
+            path: raw.to_string(),
+            inside_worktree: false,
+        }
+    }
+}
+
+fn relative_parts(path: &str) -> PortResult<Vec<&std::ffi::OsStr>> {
+    let invalid = || PortError::permanent("worktree_path_invalid", json!({ "path": path }));
+    let parts = Path::new(path)
+        .components()
+        .map(|c| match c {
+            Component::Normal(name) => Ok(name),
+            _ => Err(invalid()),
+        })
+        .collect::<PortResult<Vec<_>>>()?;
+    if parts.is_empty() {
+        return Err(invalid());
+    }
+    Ok(parts)
+}
+
+fn open_no_follow(path: &Path, flags: rustix::fs::OFlags) -> std::io::Result<std::fs::File> {
+    let flags = flags | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
+    let fd = rustix::fs::open(path, flags, rustix::fs::Mode::from_raw_mode(0o644))?;
+    Ok(std::fs::File::from(fd))
+}
+
+pub fn read_file_in(worktree: &Path, path: &str, max_bytes: u64) -> PortResult<WorktreeFile> {
+    use std::io::Read;
+
+    let parts = relative_parts(path)?;
+    let mut current = worktree.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        current.push(part);
+        let meta = match std::fs::symlink_metadata(&current) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(WorktreeFile::Missing),
+            Err(e) => return Err(io("read_worktree_file", &e)),
+        };
+        if meta.file_type().is_symlink() {
+            return Ok(WorktreeFile::NotRegular);
+        }
+        if i + 1 < parts.len() {
+            if !meta.is_dir() {
+                return Ok(WorktreeFile::Missing);
+            }
+            continue;
+        }
+        if !meta.is_file() {
+            return Ok(WorktreeFile::NotRegular);
+        }
+        if meta.len() > max_bytes {
+            return Ok(WorktreeFile::TooLarge { bytes: meta.len() });
+        }
+    }
+    let file = match open_no_follow(&current, rustix::fs::OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(WorktreeFile::Missing),
+        Err(e) if e.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
+            return Ok(WorktreeFile::NotRegular);
+        }
+        Err(e) => return Err(io("read_worktree_file", &e)),
+    };
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| io("read_worktree_file", &e))?;
+    let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read > max_bytes {
+        return Ok(WorktreeFile::TooLarge { bytes: read });
+    }
+    Ok(WorktreeFile::Bytes(bytes))
+}
+
+pub fn write_file_in(worktree: &Path, path: &str, bytes: &[u8]) -> PortResult<()> {
+    use std::io::Write;
+
+    let parts = relative_parts(path)?;
+    let conflict = |at: &Path| {
+        PortError::permanent(
+            "worktree_path_conflict",
+            json!({ "path": path, "at": at.strip_prefix(worktree).unwrap_or(at).to_string_lossy() }),
+        )
+    };
+    let mut current = worktree.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        current.push(part);
+        let last = i + 1 == parts.len();
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(conflict(&current)),
+            Ok(meta) if last && !meta.is_file() => return Err(conflict(&current)),
+            Ok(meta) if !last && !meta.is_dir() => return Err(conflict(&current)),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !last => {
+                std::fs::create_dir(&current).map_err(|e| io("write_worktree_file", &e))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io("write_worktree_file", &e)),
+        }
+    }
+    let dir = current.parent().unwrap_or(worktree);
+    let name = current
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    let tmp = dir.join(format!(".{}.saka-tmp", name.unwrap_or_default()));
+    let _ = std::fs::remove_file(&tmp);
+    let write = || -> std::io::Result<()> {
+        let flags =
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL;
+        let mut file = open_no_follow(&tmp, flags)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, &current)
+    };
+    write().map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io("write_worktree_file", &e)
+    })
 }
 
 pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {

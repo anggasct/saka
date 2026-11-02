@@ -330,7 +330,7 @@ fn a_retry_after_the_budget_runs_out_resumes_with_a_full_budget() {
     assert_eq!(sessions.len(), 2);
     assert_eq!(sessions[1].resumed_from_session_id, Some(first.id));
     assert_eq!(sessions[1].resume_cause, Some(ResumeCause::Retry));
-    assert_ne!(sessions[1].stage_run_id, first.stage_run_id);
+    assert_ne!(sessions[1].owner, first.owner);
     assert!(
         sim.world
             .resumes()

@@ -151,7 +151,11 @@ export function permission(
   return {
     id: `0193f0c4-1b2a-7c3d-9e8f-0011223344a${n}`,
     project_id: PROJECT_ID,
-    work_item_id: task(1, {}).id,
+    owner: {
+      kind: "stage_run",
+      work_item_id: task(1, {}).id,
+      stage_run_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344c1",
+    },
     session_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344f1",
     tool: "Bash",
     summary: "npm install left-pad",

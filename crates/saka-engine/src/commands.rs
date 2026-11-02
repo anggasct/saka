@@ -4,8 +4,9 @@ use saka_core::ids::{
     PermissionRequestId, PermissionRuleId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId,
     WorkItemId,
 };
-use saka_core::model::{PermissionRule, Project, ProjectRepo};
+use saka_core::model::{PermissionRule, Project, ProjectRepo, RunOwner};
 use saka_core::rejection::Rejection;
+use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
 use saka_core::workspace;
@@ -659,10 +660,11 @@ impl Engine {
         cause: &Cause,
         action: Option<&Action<'_>>,
     ) -> Result<Vec<Event>> {
-        let work_item = self
+        let owner = self
             .store
-            .read(|c| read::session_work_item(c, session))?
+            .read(|c| read::session_owner(c, session))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let work_item = owner_task(owner)?;
         let steering = matches!(command, SessionCommand::Steer { .. });
         let input = match command {
             SessionCommand::Steer { text } => {
@@ -673,18 +675,18 @@ impl Engine {
                         code: "length".into(),
                     });
                 }
-                TaskInput::Steer {
+                TaskInput::Session(SessionInput::Steer {
                     session_id: session,
                     text,
-                }
+                })
             }
-            SessionCommand::Interrupt => TaskInput::Interrupt {
+            SessionCommand::Interrupt => TaskInput::Session(SessionInput::Interrupt {
                 session_id: session,
-            },
-            SessionCommand::Stop { reason: why } => TaskInput::StopSession {
+            }),
+            SessionCommand::Stop { reason: why } => TaskInput::Session(SessionInput::Stop {
                 session_id: session,
                 reason: reason(&why)?,
-            },
+            }),
         };
         let events = self.decide(
             work_item,
@@ -765,10 +767,11 @@ impl Engine {
                 code: "length".into(),
             })?;
         }
-        let work_item = self
+        let owner = self
             .store
-            .read(|c| read::permission_work_item(c, request))?
+            .read(|c| read::permission_owner(c, request))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let work_item = owner_task(owner)?;
         let active_rules = if remember {
             let task = self.load_task(work_item)?;
             self.store
@@ -776,14 +779,14 @@ impl Engine {
         } else {
             Vec::new()
         };
-        let input = TaskInput::AnswerPermission {
+        let input = TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: request,
             allow,
             message,
             actor: OPERATOR.to_string(),
             remember,
             active_rules,
-        };
+        });
         self.decide(
             work_item,
             Some(input),
@@ -794,5 +797,12 @@ impl Engine {
                 ..Extra::default()
             },
         )
+    }
+}
+
+fn owner_task(owner: RunOwner) -> Result<WorkItemId> {
+    match owner {
+        RunOwner::StageRun { work_item_id, .. } => Ok(work_item_id),
+        RunOwner::DraftAttempt { .. } => Err(EngineError::Rejected(Rejection::Unsupported)),
     }
 }

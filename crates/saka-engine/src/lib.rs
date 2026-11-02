@@ -47,7 +47,7 @@ pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
-pub use saka_store::read::{TimelineCursor, TimelinePage};
+pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{
     AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
@@ -415,13 +415,14 @@ pub(crate) fn log_runtime(e: &Event, actor: &str) {
     use Event as E;
     match e {
         E::SessionStarted {
-            work_item_id,
+            owner,
             session_id,
             resumed_from_session_id: Some(from),
             resume_cause,
             ..
         } => {
-            tracing::info!(%work_item_id, %session_id, resumed_from = %from, cause = ?resume_cause, "session resumed")
+            let run_id = owner.run_id();
+            tracing::info!(%run_id, %session_id, resumed_from = %from, cause = ?resume_cause, "session resumed")
         }
         E::SessionReattached {
             session_id,
@@ -450,7 +451,7 @@ pub(crate) fn log_runtime(e: &Event, actor: &str) {
             state: saka_core::vocab::PermissionState::Expired,
             answer_source,
             ..
-        } if answer_source == task::WAIT_LIMIT_SOURCE => {
+        } if answer_source == saka_core::session::WAIT_LIMIT_SOURCE => {
             tracing::info!(%permission_request_id, "permission request expired");
         }
         E::PermissionRuleAdded { rule_id, tool, .. } => {
@@ -460,12 +461,14 @@ pub(crate) fn log_runtime(e: &Event, actor: &str) {
             tracing::info!(%rule_id, %actor, "permission rule revoked");
         }
         E::BudgetWarned {
-            stage_run_id,
+            owner,
             dimension,
             used,
             limit,
-            ..
-        } => tracing::info!(%stage_run_id, %dimension, %used, %limit, "budget warning"),
+        } => {
+            let run_id = owner.run_id();
+            tracing::info!(%run_id, %dimension, %used, %limit, "budget warning");
+        }
         E::WorkItemBlocked {
             work_item_id,
             code: saka_core::vocab::BlockerCode::BudgetExhausted,

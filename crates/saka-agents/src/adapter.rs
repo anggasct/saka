@@ -7,14 +7,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use saka_core::ids::SessionId;
 use saka_ports::{
-    Agents, LaunchedSession, Link, PortError, PortResult, Reattached, RunnerEvent, RunnerUnit,
-    SessionLaunch, SessionRef, Supervisor, UnitLimits,
+    Agents, LaunchProfile, LaunchedSession, Link, PortError, PortResult, Reattached, RunnerEvent,
+    RunnerUnit, SessionLaunch, SessionRef, Supervisor, UnitLimits,
 };
 use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::client::RunnerConnection;
-use crate::launch::{self, ClaudeSettings, LaunchSpec, SessionPaths, UnsupportedPath};
+use crate::launch::{
+    self, ClaudeSettings, LaunchOptions, LaunchSpec, SessionPaths, UnsupportedPath,
+};
 use crate::protocol::ServerFrame;
 use crate::secrets::SessionSecrets;
 
@@ -120,6 +122,20 @@ impl ClaudeAgents {
         let id = launch.session_id.to_string();
         let worktree = std::fs::canonicalize(&launch.environment.worktree_path)
             .map_err(|e| io_error("worktree_unreadable", &e))?;
+        let (cwd, tools) = match &launch.profile {
+            LaunchProfile::Task => (worktree.clone(), None),
+            LaunchProfile::Architect { cwd } => {
+                let dir = std::fs::canonicalize(worktree.join(cwd))
+                    .map_err(|e| io_error("worktree_unreadable", &e))?;
+                if !dir.starts_with(&worktree) {
+                    return Err(PortError::permanent(
+                        "session_cwd_invalid",
+                        json!({ "cwd": cwd }),
+                    ));
+                }
+                (dir, Some(launch::ARCHITECT_TOOLS))
+            }
+        };
         let paths = SessionPaths::new(
             &self.cfg.runtime_dir,
             &self.cfg.sessions_dir,
@@ -127,13 +143,19 @@ impl ClaudeAgents {
             Path::new(&launch.environment.root_path),
             &worktree,
         );
+        let options = LaunchOptions {
+            cwd: &cwd,
+            tools,
+            model: launch.model.as_deref(),
+            resume: launch.resume_cli_session_id.as_deref(),
+        };
         let mut spec = launch::claude(
             &self.cfg.claude,
             program,
             &id,
             &paths,
             self.cfg.known_values.clone(),
-            launch.resume_cli_session_id.as_deref(),
+            &options,
         )
         .map_err(|UnsupportedPath(path)| {
             PortError::permanent(
@@ -143,6 +165,10 @@ impl ClaudeAgents {
         })?;
         for (k, v) in &self.cfg.extra_env {
             spec.env.insert(k.clone(), v.clone());
+        }
+        // An architect session reads docs: no recipe env, ports, toolchains, or secrets reach it.
+        if launch.profile != LaunchProfile::Task {
+            return Ok((spec, paths));
         }
         for (k, v) in &launch.environment.vars {
             spec.env.entry(k.clone()).or_insert_with(|| v.clone());
@@ -371,6 +397,9 @@ impl Agents for ClaudeAgents {
 
 #[cfg(test)]
 mod tests {
+    use saka_core::model::RunOwner;
+    use saka_core::secret::{SecretText, SecretVar};
+    use saka_core::vocab::SecretPurpose;
     use saka_ports::{CommandOutcome, CommandUnit, EnvRef, RepoRef};
     use serde::de::DeserializeOwned;
 
@@ -399,13 +428,9 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    #[test]
-    fn the_session_env_is_the_allowlist_plus_the_recipe_env_and_nothing_else() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let root = dir.path().join("e-1");
-        std::fs::create_dir_all(root.join("worktree")).unwrap_or_else(|e| panic!("{e}"));
+    fn agents(dir: &Path) -> ClaudeAgents {
         let (sink, _events) = mpsc::unbounded_channel();
-        let agents = ClaudeAgents::new(
+        ClaudeAgents::new(
             AgentsConfig {
                 claude: ClaudeSettings {
                     command: "claude".into(),
@@ -416,8 +441,8 @@ mod tests {
                     author_name: "Saka Agent".into(),
                     author_email: "agent@saka.invalid".into(),
                 },
-                sessions_dir: dir.path().join("sessions"),
-                runtime_dir: dir.path().join("run"),
+                sessions_dir: dir.join("sessions"),
+                runtime_dir: dir.join("run"),
                 runner_program: "/usr/bin/saka".into(),
                 limits: UnitLimits {
                     memory_max: "1G".into(),
@@ -430,7 +455,10 @@ mod tests {
             },
             Arc::new(NoSupervisor),
             sink,
-        );
+        )
+    }
+
+    fn launch(root: &Path, profile: LaunchProfile, model: Option<&str>) -> SessionLaunch {
         let vars = [
             ("APP_ENV", "test"),
             ("PORT", "41000"),
@@ -440,9 +468,12 @@ mod tests {
             ("SAKA_TASK_KEY", "a/s1"),
             ("HOME", "/somewhere/else"),
         ];
-        let launch = SessionLaunch {
+        SessionLaunch {
             session_id: id(1),
-            work_item_id: id(2),
+            owner: RunOwner::StageRun {
+                work_item_id: id(2),
+                stage_run_id: id(5),
+            },
             environment: EnvRef {
                 environment_id: id(3),
                 repo: RepoRef {
@@ -451,7 +482,7 @@ mod tests {
                     full_name: "acme/app".into(),
                     url: "https://github.com/acme/app".into(),
                 },
-                branch: "saka/a/s1".into(),
+                branch: Some("saka/a/s1".into()),
                 root_path: root.to_string_lossy().into_owned(),
                 worktree_path: root.join("worktree").to_string_lossy().into_owned(),
                 vars: vars
@@ -462,10 +493,25 @@ mod tests {
                     "/data/toolchains/go/1.26.3-linux-x64/bin".into(),
                     "/data/toolchains/node/26.13.0-linux-x64/bin".into(),
                 ],
-                secrets: Vec::new(),
+                secrets: vec![SecretVar {
+                    name: "API_TOKEN".into(),
+                    value: SecretText::new("s3cr3t".into()),
+                    purposes: vec![SecretPurpose::Session],
+                }],
             },
             resume_cli_session_id: None,
-        };
+            profile,
+            model: model.map(String::from),
+        }
+    }
+
+    #[test]
+    fn the_session_env_is_the_allowlist_plus_the_recipe_env_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir.path().join("e-1");
+        std::fs::create_dir_all(root.join("worktree")).unwrap_or_else(|e| panic!("{e}"));
+        let agents = agents(dir.path());
+        let launch = launch(&root, LaunchProfile::Task, None);
         let (spec, _paths) = agents
             .launch_spec(Path::new("/usr/bin/claude"), &launch)
             .unwrap_or_else(|e| panic!("{e:?}"));
@@ -501,5 +547,94 @@ mod tests {
             root.join("home").to_string_lossy(),
             "a recipe var never replaces a Saka-owned one"
         );
+    }
+
+    #[test]
+    fn an_architect_launch_reads_from_the_project_folder_with_only_the_doc_tools() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .join("e-1");
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(worktree.join("docs")).unwrap_or_else(|e| panic!("{e}"));
+        let agents = agents(dir.path());
+        let architect = launch(
+            &root,
+            LaunchProfile::Architect { cwd: "docs".into() },
+            Some("opus"),
+        );
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &architect)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let settings = format!(
+            "{{\"attribution\":{{\"commit\":\"\",\"pr\":\"\"}},\"claudeMdExcludes\":[\"!{}/**\"]}}",
+            worktree.display()
+        );
+        assert_eq!(
+            spec.args,
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "manual",
+                "--permission-prompt-tool",
+                "stdio",
+                "--setting-sources",
+                "project",
+                "--strict-mcp-config",
+                "--settings",
+                &settings,
+                "--tools",
+                "Read,Glob,Grep,LS,TodoWrite,Write,Edit,MultiEdit",
+                "--model",
+                "opus",
+            ]
+        );
+        assert_eq!(spec.cwd, worktree.join("docs").to_string_lossy());
+        let keys: Vec<&str> = spec.env.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "CLAUDE_CONFIG_DIR",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
+                "HOME",
+                "LANG",
+                "PATH",
+                "TERM",
+                "TMPDIR",
+            ]
+        );
+        assert_eq!(spec.env["PATH"], "/usr/bin:/bin");
+        assert_eq!(spec.secrets_path, None);
+
+        let root_cwd = launch(&root, LaunchProfile::Architect { cwd: String::new() }, None);
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &root_cwd)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(spec.cwd, worktree.to_string_lossy());
+        assert!(!spec.args.contains(&"--model".to_string()));
+
+        let task = launch(&root, LaunchProfile::Task, None);
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &task)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(!spec.args.contains(&"--tools".to_string()));
+        assert_eq!(spec.cwd, worktree.to_string_lossy());
+
+        let escape = launch(&root, LaunchProfile::Architect { cwd: "..".into() }, None);
+        let refused = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &escape)
+            .err()
+            .unwrap_or_else(|| panic!("an architect cwd outside the worktree must be refused"));
+        assert_eq!(refused.code, "session_cwd_invalid");
     }
 }
