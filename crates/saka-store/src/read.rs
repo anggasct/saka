@@ -19,7 +19,7 @@ use crate::codec::{
     budget_col, json, opt_json, opt_uuid, opt_vocab, u32_col, u64_col, uuid, vocab,
 };
 use crate::error::{Result, StoreError};
-use crate::write::{ActionRecord, SpecRevisionRow};
+use crate::write::{ActionRecord, SecretRow, SpecRevisionRow};
 
 #[derive(Debug, Clone, Copy)]
 pub enum TaskSet<'a> {
@@ -912,6 +912,27 @@ pub(crate) fn repo_row(row: &Row<'_>) -> Result<Repo> {
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,
     })
+}
+
+fn secret_row(row: &Row<'_>) -> Result<SecretRow> {
+    Ok(SecretRow {
+        project_id: ProjectId(uuid(row, "project_id")?),
+        name: row.get("name")?,
+        nonce: row.get("nonce")?,
+        ciphertext: row.get("ciphertext")?,
+        created_at: Timestamp(row.get("created_at")?),
+        updated_at: Timestamp(row.get("updated_at")?),
+    })
+}
+
+pub fn project_secrets(conn: &Connection, project: ProjectId) -> Result<Vec<SecretRow>> {
+    let mut stmt = conn.prepare("SELECT * FROM secret WHERE project_id = ?1 ORDER BY name")?;
+    let mut q = stmt.query([project.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(secret_row(row)?);
+    }
+    Ok(out)
 }
 
 pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>> {

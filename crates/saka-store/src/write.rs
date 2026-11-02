@@ -59,6 +59,16 @@ pub struct SpecRevisionRow {
     pub created_at: Timestamp,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretRow {
+    pub project_id: ProjectId,
+    pub name: String,
+    pub nonce: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewJob {
     pub id: Uuid,
@@ -106,6 +116,8 @@ pub struct Batch {
     pub activities: Vec<(ProjectId, SessionActivity)>,
     pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
     pub jobs: Vec<NewJob>,
+    pub secrets: Vec<SecretRow>,
+    pub removed_secrets: Vec<(ProjectId, String)>,
 }
 
 impl Batch {
@@ -168,6 +180,28 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for r in &b.repos {
         repo(tx, r)?;
+    }
+    for s in &b.secrets {
+        tx.execute(
+            "INSERT INTO secret (project_id, name, nonce, ciphertext, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (project_id, name) DO UPDATE SET
+               nonce = excluded.nonce, ciphertext = excluded.ciphertext, updated_at = excluded.updated_at",
+            params![
+                s.project_id.0.to_string(),
+                s.name,
+                s.nonce,
+                s.ciphertext,
+                s.created_at.0,
+                s.updated_at.0,
+            ],
+        )?;
+    }
+    for (project, name) in &b.removed_secrets {
+        tx.execute(
+            "DELETE FROM secret WHERE project_id = ?1 AND name = ?2",
+            params![project.0.to_string(), name],
+        )?;
     }
     for p in &b.projects {
         project(tx, p)?;

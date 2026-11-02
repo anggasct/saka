@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use saka_core::ids::{EnvironmentId, WorkItemId};
 use saka_core::policy::RequestPath;
+use saka_core::secret::SecretVar;
 
 use crate::PortResult;
 use crate::scm::RepoRef;
@@ -32,6 +33,7 @@ pub struct EnvRef {
     pub worktree_path: String,
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
+    pub secrets: Vec<SecretVar>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

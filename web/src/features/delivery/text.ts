@@ -59,6 +59,8 @@ export function blockerText(
     source: text(params.source) || "other",
     value: text(params.value),
     version: text(params.version),
+    name: text(params.name),
+    names: Array.isArray(params.names) ? params.names.map(text).join(", ") : "",
   };
   return t(key, values);
 }

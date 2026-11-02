@@ -55,6 +55,8 @@ pub fn reply_response(reply: &Reply, replayed: bool) -> Response {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut response = if status.is_client_error() || status.is_server_error() {
         problem_response(status, reply.body.clone())
+    } else if status == StatusCode::NO_CONTENT {
+        status.into_response()
     } else {
         json_response(status, &reply.body)
     };

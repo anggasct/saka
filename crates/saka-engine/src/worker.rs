@@ -50,9 +50,19 @@ pub enum Effect {
 
 pub type Execution = std::result::Result<Effect, PortError>;
 
-enum Refusal {
+pub(crate) enum Refusal {
     Block(BlockerCode, Value),
     Fail(PortError),
+}
+
+impl Refusal {
+    // Outside environment preparation a refusal has no blocker of its own; the job fails with it.
+    fn into_error(self) -> PortError {
+        match self {
+            Refusal::Block(code, params) => PortError::permanent(code.as_str(), params),
+            Refusal::Fail(e) => e,
+        }
+    }
 }
 
 fn field<T: DeserializeOwned>(payload: &Value, name: &str) -> std::result::Result<T, PortError> {
@@ -384,7 +394,23 @@ impl Engine {
             worktree_path: env.worktree_path.clone(),
             vars: self.env_vars(task, env.id, env.port_start, &recipe, &env.toolchains),
             path_prefix: env.toolchains.iter().map(|t| t.bin_dir.clone()).collect(),
+            secrets: Vec::new(),
         })
+    }
+
+    fn env_ref_with_secrets(
+        &self,
+        task: &Task,
+        env: &Environment,
+    ) -> std::result::Result<EnvRef, Refusal> {
+        let mut env_ref = self.env_ref(task, env).map_err(Refusal::Fail)?;
+        let recipe = env
+            .recipe
+            .as_ref()
+            .map(Recipe::from_json)
+            .unwrap_or_default();
+        env_ref.secrets = self.recipe_secrets(task.item.project_id, &recipe)?;
+        Ok(env_ref)
     }
 
     fn env_vars(
@@ -563,6 +589,7 @@ impl Engine {
             worktree_path: prepared.worktree_path.clone(),
             vars: BTreeMap::new(),
             path_prefix: Vec::new(),
+            secrets: Vec::new(),
         };
         let text = match self.ports.env.read_recipe(&repo, &prepared.base_sha).await {
             Ok(text) => text,
@@ -602,6 +629,16 @@ impl Engine {
                     )
                     .await;
             }
+        };
+        // Checked before any download or command, so a missing secret costs nothing to report.
+        env.secrets = match self.recipe_secrets(task.item.project_id, &recipe) {
+            Ok(s) => s,
+            Err(Refusal::Block(code, params)) => {
+                return self
+                    .abandon_environment(&env, &Recipe::default(), code, params)
+                    .await;
+            }
+            Err(Refusal::Fail(e)) => return Err(e),
         };
         let toolchains = match self
             .install_toolchains(&repo, &prepared.base_sha, &recipe)
@@ -681,7 +718,9 @@ impl Engine {
             .start(&SessionLaunch {
                 session_id,
                 work_item_id: task.item.id,
-                environment: self.env_ref(task, env)?,
+                environment: self
+                    .env_ref_with_secrets(task, env)
+                    .map_err(Refusal::into_error)?,
                 resume_cli_session_id: saka_core::resume::plan(task).and_then(|p| p.cli_session_id),
             })
             .await?;
@@ -965,7 +1004,12 @@ impl Engine {
         else {
             return Ok(Effect::Skipped);
         };
-        let env_ref = self.env_ref(task, env)?;
+        // Teardown is best effort: a secret removed since setup only leaves its commands without it.
+        let env_ref = match self.env_ref_with_secrets(task, env) {
+            Ok(r) => r,
+            Err(Refusal::Fail(e)) if e.retryable => return Err(e),
+            Err(_) => self.env_ref(task, env)?,
+        };
         // A cleanup retry after teardown_failed must not run the repo's teardown commands again.
         let failures = if env.state == EnvironmentState::TeardownFailed {
             Vec::new()

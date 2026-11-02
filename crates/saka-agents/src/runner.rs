@@ -17,6 +17,7 @@ use crate::claude::{self, Output, RESULT_SUMMARY_MAX, SUMMARY_MAX};
 use crate::launch::LaunchSpec;
 use crate::protocol::{self, LogEvent, Malformed, RunnerFrame, ServerFrame};
 use crate::redact::Redactor;
+use crate::secrets::SessionSecrets;
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_VERSION_MISMATCH: i32 = 3;
@@ -54,7 +55,17 @@ pub async fn run(session_id: &str, launch_path: &Path) -> i32 {
             return EXIT_LAUNCH_INVALID;
         }
     };
-    match Runner::start(launch).await {
+    let secrets = match &launch.secrets_path {
+        None => SessionSecrets::default(),
+        Some(path) => match SessionSecrets::take(Path::new(path)) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(code = "launch_invalid", error = %e, "cannot read the session secrets");
+                return EXIT_LAUNCH_INVALID;
+            }
+        },
+    };
+    match Runner::start(launch, secrets).await {
         Ok(runner) => runner.serve().await,
         Err(code) => code,
     }
@@ -160,8 +171,11 @@ struct Runner {
 }
 
 impl Runner {
-    async fn start(launch: LaunchSpec) -> Result<Runner, i32> {
-        let redactor = Arc::new(Redactor::new(&launch.redaction.known_values));
+    async fn start(launch: LaunchSpec, secrets: SessionSecrets) -> Result<Runner, i32> {
+        let redactor = Arc::new(Redactor::named(
+            &launch.redaction.known_values,
+            &secrets.redact,
+        ));
         let mut log = EventLog::open(Path::new(&launch.log_path)).map_err(|e| {
             tracing::error!(code = "log_open_failed", error = %e, "cannot open events.ndjson");
             EXIT_LAUNCH_INVALID
@@ -174,6 +188,7 @@ impl Runner {
             .args(&launch.args)
             .env_clear()
             .envs(&launch.env)
+            .envs(&secrets.env)
             .current_dir(&launch.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use saka_core::ids::RepoId;
 use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
+use saka_core::vocab::SecretPurpose;
 use saka_ports::{
     CommandUnit, EnvRef, Environments, GitAccess, GitRemote, PortError, PortResult, PrepareRequest,
     PreparedEnvironment, PushOutcome, PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef,
@@ -705,6 +706,12 @@ impl Environments for GitRepos {
             args: vec!["-c".into(), command.command.clone()],
             cwd: env.worktree_path.clone(),
             env: recipe_env(env, &runner.path),
+            secret_env: env
+                .secrets
+                .iter()
+                .filter(|s| s.serves(SecretPurpose::Setup))
+                .map(|s| (s.name.clone(), s.value.clone()))
+                .collect(),
             limits: runner.limits.clone(),
             timeout: runner.timeout,
         };
@@ -712,7 +719,12 @@ impl Environments for GitRepos {
         let outcome = runner.supervisor.run(&unit).await?;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let text = String::from_utf8_lossy(&outcome.output);
-        let redacted = Redactor::new(&[]).text(&text).into_owned();
+        let named: Vec<(String, String)> = env
+            .secrets
+            .iter()
+            .map(|s| (s.name.clone(), s.value.expose().to_string()))
+            .collect();
+        let redacted = Redactor::named(&[], &named).text(&text).into_owned();
         let log = runner
             .logs_dir
             .join(env.environment_id.to_string())

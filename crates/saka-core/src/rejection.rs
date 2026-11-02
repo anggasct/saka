@@ -46,6 +46,10 @@ pub enum Rejection {
     MultiRepoUnsupported { repos: usize },
     #[error("spec file not found on the base branch")]
     SpecFileNotFound { path: String, base_branch: String },
+    #[error("secret value is too short")]
+    SecretTooShort,
+    #[error("secret name is not valid")]
+    SecretNameInvalid,
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -75,6 +79,8 @@ impl Rejection {
             Rejection::ProjectConfigInvalid { .. } => "project_config_invalid",
             Rejection::MultiRepoUnsupported { .. } => "multi_repo_unsupported",
             Rejection::SpecFileNotFound { .. } => "spec_file_not_found",
+            Rejection::SecretTooShort => "secret_too_short",
+            Rejection::SecretNameInvalid => "secret_name_invalid",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }

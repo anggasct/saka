@@ -11,6 +11,7 @@ use futures_util::stream;
 use saka_core::ids::{
     PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
+use saka_core::secret::SecretText;
 use saka_engine::{
     AddProject, EngineError, PermissionFilter, Produced, Reply, SessionCommand, SessionView,
     StoredEvent, WorkItemFilter,
@@ -144,6 +145,126 @@ pub async fn get_project(State(s): State<AppState>, Path(id): Path<String>) -> R
     match tri!(engine.project(ProjectId(id))) {
         Some(v) => ok(StatusCode::OK, &dto::Project::from_view(&v)),
         None => ApiError::not_found().into_response(),
+    }
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/projects/{project_id}/secrets/{name}", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path), ("name" = String, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::SetSecretBody,
+    responses(
+        (status = 204, description = "The secret is stored"),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn set_secret(
+    State(s): State<AppState>,
+    Path((project, name)): Path<(String, String)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let req: dto::SetSecretBody = tri!(body(&raw));
+    let value = SecretText::new(req.value);
+    let engine = tri!(s.engine().cloned());
+    // The stored request hash covers a keyed digest of the value, never the value itself.
+    let digest = Bytes::from(engine.secret_fingerprint(project, &name, &value));
+    let m = Mutation {
+        name: "secret.set",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &digest,
+        m,
+        &no_content,
+        |cause, action| async move {
+            engine
+                .set_secret(project, &name, &value, &cause, Some(&action))
+                .map(|()| Some(project))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/secrets", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path)),
+    responses(
+        (status = 200, body = dto::SecretList),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn list_secrets(State(s): State<AppState>, Path(project): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let project = ProjectId(tri!(path_id(&project)));
+    let items = tri!(engine.secrets(project));
+    ok(
+        StatusCode::OK,
+        &dto::SecretList {
+            items: items.iter().map(dto::SecretName::from).collect(),
+        },
+    )
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/projects/{project_id}/secrets/{name}", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path), ("name" = String, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    responses(
+        (status = 204, description = "The secret is gone, or never existed"),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn remove_secret(
+    State(s): State<AppState>,
+    Path((project, name)): Path<(String, String)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let engine = tri!(s.engine().cloned());
+    let m = Mutation {
+        name: "secret.remove",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &no_content,
+        |cause, action| async move {
+            engine
+                .remove_secret(project, &name, &cause, Some(&action))
+                .map(|()| Some(project))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+fn no_content(p: Produced<'_>) -> Reply {
+    match p {
+        Produced::Nothing => Reply {
+            status: StatusCode::NO_CONTENT.as_u16(),
+            body: Value::Null,
+        },
+        _ => unexpected(),
     }
 }
 

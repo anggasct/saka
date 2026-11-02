@@ -1,8 +1,10 @@
 use std::io::Write;
 use std::process::ExitCode;
 
+use saka_core::secret::SecretText;
 use serde_json::{Value, json};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 pub const EXIT_LINT: u8 = 3;
 pub const EXIT_CONFLICT: u8 = 4;
@@ -62,6 +64,56 @@ fn conflict_line(step: &Value) -> String {
     )
     .trim_end()
     .to_string()
+}
+
+// With a terminal on stdin the value is typed without echo; otherwise it is piped in.
+pub fn read_secret(name: &str, multiline: bool) -> Result<SecretText, ExitCode> {
+    use std::io::{BufRead, IsTerminal, Read};
+    let stdin = std::io::stdin();
+    let typed = stdin.is_terminal();
+    let restore = if typed {
+        let _ = write!(std::io::stderr(), "Value for {name}: ");
+        let _ = std::io::stderr().flush();
+        hide_input()
+    } else {
+        None
+    };
+    let mut raw = Zeroizing::new(String::new());
+    let read = if multiline {
+        stdin.lock().read_to_string(&mut raw).map(drop)
+    } else {
+        stdin.lock().read_line(&mut raw).map(drop)
+    };
+    if let Some(saved) = restore {
+        let _ = rustix::termios::tcsetattr(
+            std::io::stdin(),
+            rustix::termios::OptionalActions::Now,
+            &saved,
+        );
+        err("");
+    }
+    if let Err(e) = read {
+        err(&format!(
+            "error: stdin_unreadable {}",
+            json!({ "reason": e.to_string() })
+        ));
+        return Err(ExitCode::FAILURE);
+    }
+    let value = if multiline {
+        raw.as_str()
+    } else {
+        raw.trim_end_matches('\n').trim_end_matches('\r')
+    };
+    Ok(SecretText::new(value.to_string()))
+}
+
+fn hide_input() -> Option<rustix::termios::Termios> {
+    let stdin = std::io::stdin();
+    let saved = rustix::termios::tcgetattr(&stdin).ok()?;
+    let mut quiet = saved.clone();
+    quiet.local_modes.remove(rustix::termios::LocalModes::ECHO);
+    rustix::termios::tcsetattr(&stdin, rustix::termios::OptionalActions::Now, &quiet).ok()?;
+    Some(saved)
 }
 
 fn fail(a: &Answer) -> ExitCode {
@@ -165,6 +217,78 @@ impl Client {
                     )
                 })
             }),
+            Err(code) => code,
+        }
+    }
+
+    async fn keyed(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Answer, ExitCode> {
+        let mut req = self
+            .http
+            .request(method, format!("{}{path}", self.base))
+            .header("Idempotency-Key", Uuid::now_v7().to_string());
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        self.send(req).await
+    }
+
+    pub async fn secret_set(&self, project: &str, name: &str, value: &SecretText) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let body = json!({ "value": value.expose() });
+        match self
+            .keyed(
+                reqwest::Method::PUT,
+                &format!("/api/v1/projects/{id}/secrets/{name}"),
+                Some(&body),
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |_| format!("secret {name} set")),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn secret_list(&self, project: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self.get(&format!("/api/v1/projects/{id}/secrets")).await {
+            Ok(a) => self.finish(&a, |body| {
+                body["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|s| format!("{}\t{}", text(&s["name"]), text(&s["updated_at"])))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn secret_rm(&self, project: &str, name: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self
+            .keyed(
+                reqwest::Method::DELETE,
+                &format!("/api/v1/projects/{id}/secrets/{name}"),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |_| format!("secret {name} removed")),
             Err(code) => code,
         }
     }

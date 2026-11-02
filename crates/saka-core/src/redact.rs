@@ -61,19 +61,29 @@ pub const PATTERN_NAMES: &[&str] = &[
 ];
 
 pub struct Redactor {
-    known: Vec<String>,
+    known: Vec<(String, String)>,
     patterns: Vec<(Regex, &'static str)>,
 }
 
 impl Redactor {
     pub fn new(known_values: &[String]) -> Redactor {
-        let mut known: Vec<String> = known_values
+        Redactor::named(known_values, &[])
+    }
+
+    // `named` pairs are (name, value): the value is replaced by `«secret:NAME»`.
+    pub fn named(known_values: &[String], named: &[(String, String)]) -> Redactor {
+        let mut known: Vec<(String, String)> = named
             .iter()
-            .filter(|v| v.chars().count() >= KNOWN_VALUE_MIN)
-            .cloned()
+            .map(|(name, value)| (value.clone(), format!("«secret:{name}»")))
+            .chain(
+                known_values
+                    .iter()
+                    .map(|v| (v.clone(), "«secret:known_value»".to_string())),
+            )
+            .filter(|(v, _)| v.chars().count() >= KNOWN_VALUE_MIN)
             .collect();
         // Longest first, so a value that contains another is replaced whole.
-        known.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        known.sort_by_key(|(v, _)| std::cmp::Reverse(v.len()));
         let patterns = PATTERNS
             .iter()
             .filter_map(|(_, pattern, replacement)| {
@@ -85,9 +95,9 @@ impl Redactor {
 
     pub fn text<'a>(&self, input: &'a str) -> Cow<'a, str> {
         let mut out = Cow::Borrowed(input);
-        for value in &self.known {
+        for (value, replacement) in &self.known {
             if out.contains(value.as_str()) {
-                out = Cow::Owned(out.replace(value.as_str(), "«secret:known_value»"));
+                out = Cow::Owned(out.replace(value.as_str(), replacement));
             }
         }
         for (re, replacement) in &self.patterns {
@@ -159,6 +169,21 @@ mod tests {
             "authorization: token «secret:auth_header»"
         );
         assert_eq!(r.text("nothing here"), Cow::Borrowed("nothing here"));
+    }
+
+    #[test]
+    fn named_values_are_replaced_by_their_name() {
+        let r = Redactor::named(
+            &["s3cr3t-value-123".to_string()],
+            &[
+                ("NPM_TOKEN".to_string(), "npm-token-abcdef".to_string()),
+                ("SHORT".to_string(), "tiny".to_string()),
+            ],
+        );
+        assert_eq!(
+            r.text("a npm-token-abcdef b s3cr3t-value-123 c tiny"),
+            "a «secret:NPM_TOKEN» b «secret:known_value» c tiny"
+        );
     }
 
     #[test]

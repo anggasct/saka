@@ -403,6 +403,11 @@ pub fn path() -> Option<PathBuf> {
     Some(base.join("saka").join("config.toml"))
 }
 
+// The key that seals project secrets lives next to config.toml, outside the data dir and its backups.
+pub fn secret_key_path() -> Option<PathBuf> {
+    path().and_then(|p| p.parent().map(|d| d.join("secret.key")))
+}
+
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }

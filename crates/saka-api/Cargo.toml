@@ -36,3 +36,4 @@ saka-testkit = { path = "../saka-testkit" }
 tower = { workspace = true, features = ["util"] }
 uuid = { workspace = true, features = ["v7"] }
 http-body-util = "0.1.5"
+tracing-subscriber.workspace = true

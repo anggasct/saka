@@ -1051,6 +1051,38 @@ pub struct StreamEvent {
     pub payload: Value,
 }
 
+/// Body of `PUT /api/v1/projects/{project_id}/secrets/{name}`. The value is write-only: no response, event, or log carries it, and it cannot be read back.
+// No `Debug`: the value must not be printable by accident.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetSecretBody {
+    /// 8 to 65536 bytes of UTF-8 without NUL. Shorter values are refused (`secret_too_short`) so output redaction always applies.
+    pub value: String,
+}
+
+/// A project secret, by name only.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SecretName {
+    /// `^[A-Z_][A-Z0-9_]{0,63}$`, never a name Saka sets itself.
+    pub name: String,
+    pub updated_at: String,
+}
+
+impl From<&saka_engine::SecretInfo> for SecretName {
+    fn from(s: &saka_engine::SecretInfo) -> SecretName {
+        SecretName {
+            name: s.name.clone(),
+            updated_at: time(s.updated_at),
+        }
+    }
+}
+
+/// The secrets of a project, ordered by name. At most 200, so there is no paging.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SecretList {
+    pub items: Vec<SecretName>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddProjectBody {

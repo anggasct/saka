@@ -21,6 +21,7 @@ pub enum Produced<'a> {
     Permission(&'a PermissionView),
     Session(&'a Session),
     Rule(&'a PermissionRule),
+    Nothing,
 }
 
 pub type Respond<'a> = dyn Fn(Produced<'_>) -> Reply + Send + Sync + 'a;

@@ -3,6 +3,7 @@ pub mod docs;
 pub mod env;
 pub mod git;
 pub mod scm;
+pub mod secret;
 pub mod supervisor;
 pub mod toolchain;
 
@@ -25,6 +26,7 @@ pub use scm::{
     ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome,
     PushRequest, RepoInfo, RepoRef, Scm,
 };
+pub use secret::{Sealed, SecretStore};
 pub use supervisor::{
     COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, RunnerUnit, Supervisor, UnitLimits,
 };

@@ -90,6 +90,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::ScmIntegrationUnknown { .. }
         | R::ProjectConfigInvalid { .. }
         | R::MultiRepoUnsupported { .. }
+        | R::SecretTooShort
+        | R::SecretNameInvalid
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported

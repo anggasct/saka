@@ -93,6 +93,8 @@ vocab!(
         EnvRecipeInvalid => "env_recipe_invalid",
         ToolchainUnpinned => "toolchain_unpinned",
         ToolchainUnavailable => "toolchain_unavailable",
+        SecretMissing => "secret_missing",
+        SecretUnreadable => "secret_unreadable",
         SessionFailed => "session_failed",
         SessionLost => "session_lost",
         SessionTimeout => "session_timeout",
@@ -113,6 +115,7 @@ vocab!(
     }
 );
 vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
+vocab!(SecretPurpose { Setup => "setup", Session => "session" });
 vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });
 vocab!(SessionState {

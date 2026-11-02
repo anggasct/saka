@@ -653,3 +653,138 @@ fn task_and_permission_commands_drive_a_session_and_remembered_rules() {
         4
     );
 }
+
+fn saka_with_stdin(server: &str, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(SAKA)
+        .arg("--server")
+        .arg(server)
+        .args(args)
+        .env_remove("SAKA_CONFIG")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn stored_secret(sim: &Sim, name: &str) -> Option<String> {
+    use saka_ports::{Sealed, SecretStore};
+    let rows = sim
+        .engine()
+        .store()
+        .read(|c| saka_store::read::project_secrets(c, sim.project_id))
+        .unwrap();
+    rows.into_iter().find(|r| r.name == name).map(|r| {
+        let sealed = Sealed {
+            nonce: r.nonce,
+            ciphertext: r.ciphertext,
+        };
+        sim.world
+            .open(sim.project_id, name, &sealed)
+            .unwrap()
+            .expose()
+            .to_string()
+    })
+}
+
+#[test]
+fn secret_commands_read_the_value_from_stdin_only() {
+    let sim = Sim::new(SimConfig::default());
+    let server = serve(&sim);
+
+    let set = saka_with_stdin(
+        &server,
+        &["secret", "set", "tasks", "NPM_TOKEN"],
+        "npm-token-abcdef\nignored second line\n",
+    );
+    assert_eq!(code(&set), 0, "{}", String::from_utf8_lossy(&set.stderr));
+    assert_eq!(stdout(&set).trim(), "secret NPM_TOKEN set");
+    assert_eq!(
+        stored_secret(&sim, "NPM_TOKEN").as_deref(),
+        Some("npm-token-abcdef")
+    );
+
+    let multi = saka_with_stdin(
+        &server,
+        &["secret", "set", "tasks", "TLS_KEY", "--multiline"],
+        "line one\r\nline two\n",
+    );
+    assert_eq!(
+        code(&multi),
+        0,
+        "{}",
+        String::from_utf8_lossy(&multi.stderr)
+    );
+    assert_eq!(
+        stored_secret(&sim, "TLS_KEY").as_deref(),
+        Some("line one\r\nline two\n")
+    );
+
+    let short = saka_with_stdin(&server, &["secret", "set", "tasks", "NPM_TOKEN"], "tiny\n");
+    assert_eq!(code(&short), 1);
+    let stderr = String::from_utf8_lossy(&short.stderr);
+    assert!(stderr.contains("secret_too_short"), "{stderr}");
+    assert!(!stderr.contains("tiny"), "{stderr}");
+
+    for flag in ["--value", "--secret"] {
+        let refused = saka_with_stdin(
+            &server,
+            &[
+                "secret",
+                "set",
+                "tasks",
+                "NPM_TOKEN",
+                flag,
+                "argv-value-123",
+            ],
+            "",
+        );
+        assert_eq!(code(&refused), 2, "{flag} is not an option");
+    }
+    assert_eq!(
+        stored_secret(&sim, "NPM_TOKEN").as_deref(),
+        Some("npm-token-abcdef")
+    );
+
+    let list = saka(&server, &["secret", "list", "tasks"]);
+    assert_eq!(code(&list), 0);
+    let names: Vec<String> = stdout(&list)
+        .lines()
+        .map(|l| l.split('\t').next().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["NPM_TOKEN", "TLS_KEY"]);
+    assert!(!stdout(&list).contains("npm-token"));
+
+    let rm = saka(&server, &["secret", "rm", "tasks", "TLS_KEY"]);
+    assert_eq!(code(&rm), 0);
+    assert_eq!(stdout(&rm).trim(), "secret TLS_KEY removed");
+    assert_eq!(stored_secret(&sim, "TLS_KEY"), None);
+    let again = saka(&server, &["secret", "rm", "tasks", "TLS_KEY"]);
+    assert_eq!(code(&again), 0, "removing twice is fine");
+}
+
+#[test]
+fn serve_refuses_a_secret_key_that_is_not_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), "");
+    let key = dir.path().join("secret.key");
+    std::fs::write(&key, [0u8; 32]).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"code\":\"config_key_file_mode\""),
+        "{stderr}"
+    );
+    assert!(!dir.path().join("data").join("saka.db").exists());
+}
