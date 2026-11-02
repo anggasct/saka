@@ -558,6 +558,25 @@ pub async fn get_work_item(State(s): State<AppState>, Path(id): Path<String>) ->
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/work-items/{work_item_id}/work-packet", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path)),
+    responses(
+        (status = 200, body = dto::WorkPacket),
+        (status = 404, body = dto::Problem, content_type = "application/problem+json"),
+        (status = 409, body = dto::Problem, content_type = "application/problem+json")
+    )
+)]
+pub async fn get_work_packet(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = tri!(path_id(&id));
+    let (task, packet) = tri!(engine.work_packet(WorkItemId(id)));
+    ok(
+        StatusCode::OK,
+        &dto::WorkPacket::from_packet(&task, &packet),
+    )
+}
+
 #[derive(Clone, Copy)]
 enum TaskAction {
     Merge,

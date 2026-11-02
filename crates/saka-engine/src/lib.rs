@@ -2,6 +2,7 @@ mod action;
 mod commands;
 mod context;
 mod metrics;
+pub mod packet;
 mod project_config;
 pub mod recipe;
 mod reconciler;

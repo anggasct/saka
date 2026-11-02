@@ -1269,3 +1269,66 @@ pub struct EventsQuery {
     /// Start after this `seq` (`Last-Event-ID` wins when both are given).
     pub after: Option<String>,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkPacket {
+    pub work_item_id: Uuid,
+    /// Revision the task is pinned to.
+    pub revision_id: Uuid,
+    pub source_commit: String,
+    /// The `ready` environment whose ports, toolchains, and session secret names are in the packet.
+    pub environment_id: Uuid,
+    /// UTF-8 length of `text`.
+    pub bytes: u64,
+    /// `sha256:<hex>` of `text`.
+    pub sha256: String,
+    pub documents: Vec<WorkPacketDocument>,
+    /// The first turn exactly as the session receives it, without a CI retry paragraph.
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkPacketDocument {
+    pub index: u32,
+    /// `spec` for document 1, `context` for the rest.
+    pub kind: String,
+    pub path: String,
+    /// `link` or `always`; `null` for the spec.
+    pub origin: Option<String>,
+    pub bytes: u64,
+    pub content_hash: String,
+}
+
+impl WorkPacket {
+    pub fn from_packet(
+        task: &saka_core::model::Task,
+        packet: &saka_engine::packet::Packet,
+    ) -> WorkPacket {
+        WorkPacket {
+            work_item_id: task.item.id.0,
+            revision_id: task.item.spec_revision_id.map(|r| r.0).unwrap_or_default(),
+            source_commit: packet.source_commit.clone(),
+            environment_id: task.ready_environment().map(|e| e.id.0).unwrap_or_default(),
+            bytes: packet.text.len() as u64,
+            sha256: packet.sha256.clone(),
+            documents: packet
+                .documents
+                .iter()
+                .map(|d| WorkPacketDocument {
+                    index: d.index,
+                    kind: if d.origin.is_none() {
+                        "spec"
+                    } else {
+                        "context"
+                    }
+                    .to_string(),
+                    path: d.path.clone(),
+                    origin: d.origin.map(|o| o.as_str().to_string()),
+                    bytes: d.bytes,
+                    content_hash: d.content_hash.clone(),
+                })
+                .collect(),
+            text: packet.text.clone(),
+        }
+    }
+}

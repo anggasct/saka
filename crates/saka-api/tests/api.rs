@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use saka_api::{ApiConfig, AppState, router};
 use saka_core::vocab::{Stage, StagePhase, WorkItemState};
-use saka_testkit::fixtures::TWO_STEP_SPEC;
+use saka_testkit::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
 use saka_testkit::{
     AgentOutcome, AgentScript, CiScript, Sim, SimConfig, approval_spec, one_step_spec,
 };
@@ -2406,4 +2406,46 @@ fn a_spec_shows_its_pinned_context_and_context_issues_block_approve() {
             .iter()
             .any(|i| i["code"] == "reference_missing")
     );
+}
+
+#[test]
+fn a_task_shows_the_exact_work_packet_once_its_environment_is_ready() {
+    let mut api = Api::new(SimConfig::default());
+    let (spec, revision) = (api.sim.spec_id, api.sim.revision_id);
+    api.sim.approve_spec(spec, revision).unwrap();
+    let task = api.sim.task(1);
+    let path = format!("/api/v1/work-items/{}/work-packet", task.item.id.0);
+
+    let early = api.get(&path);
+    problem(&early, StatusCode::CONFLICT, "work_packet_unavailable");
+    assert_eq!(
+        early.body["params"],
+        json!({ "reason": "environment_not_ready" })
+    );
+
+    assert!(api.sim.run_until(8_000, |s| !s.world.prompts().is_empty()));
+    let r = api.get(&path);
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let first = api.sim.world.prompts()[0].clone();
+    let b = &r.body;
+    assert_eq!(b["text"], first.as_str());
+    assert_eq!(b["bytes"], first.len());
+    assert_eq!(b["work_item_id"], task.item.id.0.to_string());
+    assert_eq!(b["revision_id"], revision.0.to_string());
+    assert_eq!(b["source_commit"].as_str().unwrap().len(), 40);
+    assert!(b["environment_id"].as_str().is_some());
+    assert!(b["sha256"].as_str().unwrap().starts_with("sha256:"));
+    assert_eq!(
+        b["documents"],
+        json!([{
+            "index": 1, "kind": "spec", "path": TWO_STEP_PATH, "origin": null,
+            "bytes": TWO_STEP_SPEC.len(), "content_hash": b["documents"][0]["content_hash"]
+        }])
+    );
+
+    let missing = api.get(&format!(
+        "/api/v1/work-items/{}/work-packet",
+        uuid::Uuid::now_v7()
+    ));
+    problem(&missing, StatusCode::NOT_FOUND, "not_found");
 }

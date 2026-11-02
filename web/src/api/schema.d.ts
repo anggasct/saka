@@ -452,6 +452,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/work-packet": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_work_packet"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/healthz": {
     parameters: {
       query?: never;
@@ -1239,6 +1255,43 @@ export interface components {
       state: string;
       /** @description Toolchains on `PATH`; empty when the repo declares no versions. */
       toolchains: components["schemas"]["Toolchain"][];
+    };
+    WorkPacket: {
+      /**
+       * Format: int64
+       * @description UTF-8 length of `text`.
+       */
+      bytes: number;
+      documents: components["schemas"]["WorkPacketDocument"][];
+      /**
+       * Format: uuid
+       * @description The `ready` environment whose ports, toolchains, and session secret names are in the packet.
+       */
+      environment_id: string;
+      /**
+       * Format: uuid
+       * @description Revision the task is pinned to.
+       */
+      revision_id: string;
+      /** @description `sha256:<hex>` of `text`. */
+      sha256: string;
+      source_commit: string;
+      /** @description The first turn exactly as the session receives it, without a CI retry paragraph. */
+      text: string;
+      /** Format: uuid */
+      work_item_id: string;
+    };
+    WorkPacketDocument: {
+      /** Format: int64 */
+      bytes: number;
+      content_hash: string;
+      /** Format: int32 */
+      index: number;
+      /** @description `spec` for document 1, `context` for the rest. */
+      kind: string;
+      /** @description `link` or `always`; `null` for the spec. */
+      origin?: string | null;
+      path: string;
     };
     Workspace: {
       base_branch: string;
@@ -2287,6 +2340,43 @@ export interface operations {
         };
       };
       "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_work_packet: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkPacket"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      409: {
         headers: {
           [name: string]: unknown;
         };

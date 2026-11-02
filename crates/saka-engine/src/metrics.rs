@@ -15,6 +15,7 @@ pub struct Counters {
     job_runs: Mutex<BTreeMap<(String, String), u64>>,
     adapter_requests: Mutex<BTreeMap<(String, String), u64>>,
     waiting: Mutex<BTreeMap<WorkItemId, Vec<Waiting>>>,
+    packet_bytes: Mutex<Vec<u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -46,7 +47,50 @@ fn adapter(kind: JobKind) -> &'static str {
     }
 }
 
+pub const PACKET_BYTE_BUCKETS: [u64; 6] = [4_096, 16_384, 65_536, 131_072, 262_144, 524_288];
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PacketBytes {
+    pub buckets: Vec<(u64, u64)>,
+    pub count: u64,
+    pub sum: u64,
+}
+
 impl Counters {
+    pub(crate) fn work_packet(&self, bytes: u64) {
+        if let Ok(mut counts) = self.packet_bytes.lock() {
+            if counts.is_empty() {
+                counts.resize(PACKET_BYTE_BUCKETS.len() + 2, 0);
+            }
+            for (slot, bound) in counts.iter_mut().zip(PACKET_BYTE_BUCKETS) {
+                if bytes <= bound {
+                    *slot += 1;
+                }
+            }
+            let n = PACKET_BYTE_BUCKETS.len();
+            counts[n] += 1;
+            counts[n + 1] = counts[n + 1].saturating_add(bytes);
+        }
+    }
+
+    fn packet_bytes(&self) -> PacketBytes {
+        let counts = self
+            .packet_bytes
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        let n = PACKET_BYTE_BUCKETS.len();
+        PacketBytes {
+            buckets: PACKET_BYTE_BUCKETS
+                .iter()
+                .enumerate()
+                .map(|(i, bound)| (*bound, counts.get(i).copied().unwrap_or(0)))
+                .collect(),
+            count: counts.get(n).copied().unwrap_or(0),
+            sum: counts.get(n + 1).copied().unwrap_or(0),
+        }
+    }
+
     pub(crate) fn job(&self, kind: JobKind, result: &JobResult, adapter_ok: Option<bool>) {
         let outcome = match result {
             JobResult::Retrying { .. } => "retry",
@@ -127,6 +171,7 @@ pub struct MetricsSnapshot {
     pub budget_exhausted: Vec<(String, i64)>,
     pub usage: Vec<(String, i64, i64)>,
     pub account_utilization: Vec<(String, String, f64)>,
+    pub work_packet_bytes: PacketBytes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +223,7 @@ impl Engine {
             stage_durations: durations,
             adapter_requests: copy(&self.counters.adapter_requests),
             admission_waiting: self.counters.waiting_counts(),
+            work_packet_bytes: self.counters.packet_bytes(),
         })
     }
 

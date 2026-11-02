@@ -219,6 +219,24 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     }
 
     t.family(
+        "saka_work_packet_bytes",
+        "histogram",
+        "Size of work packets sent as the first turn of a session.",
+    );
+    let packets = &m.work_packet_bytes;
+    for (bound, n) in &packets.buckets {
+        let le = bound.to_string();
+        t.sample("saka_work_packet_bytes_bucket", &[("le", &le)], n);
+    }
+    t.sample(
+        "saka_work_packet_bytes_bucket",
+        &[("le", "+Inf")],
+        packets.count,
+    );
+    t.sample("saka_work_packet_bytes_sum", &[], packets.sum);
+    t.sample("saka_work_packet_bytes_count", &[], packets.count);
+
+    t.family(
         "saka_stage_duration_seconds",
         "histogram",
         "Duration of finished stage runs.",
