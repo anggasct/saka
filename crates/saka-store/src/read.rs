@@ -11,7 +11,7 @@ use saka_core::model::{
     StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
-use saka_core::vocab::{SessionState, Stage};
+use saka_core::vocab::{SessionState, Stage, Trigger};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -139,6 +139,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     let b = bind.as_slice();
 
+    let mut history: BTreeMap<WorkItemId, Vec<(Stage, Trigger, Option<String>)>> = BTreeMap::new();
     for run in rows(
         conn,
         "SELECT * FROM stage_run",
@@ -150,8 +151,20 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         if let Some(t) = tasks.get_mut(&run.work_item_id) {
             let n = t.attempts.entry(run.stage).or_insert(0);
             *n = (*n).max(run.attempt);
+            history.entry(run.work_item_id).or_default().push((
+                run.stage,
+                run.trigger,
+                run.reason.clone(),
+            ));
             if t.stage_run.is_none() {
                 t.stage_run = Some(run);
+            }
+        }
+    }
+    for (id, runs) in history {
+        if let Some(t) = tasks.get_mut(&id) {
+            for (stage, trigger, reason) in runs.into_iter().rev() {
+                saka_core::task::count_retry(&mut t.retries, stage, trigger, reason.as_deref());
             }
         }
     }

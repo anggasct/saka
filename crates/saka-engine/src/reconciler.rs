@@ -1,7 +1,10 @@
+use saka_core::ids::WorkItemId;
 use saka_core::job::{Job, JobKind};
 use saka_core::model::Task;
 use saka_core::reconcile::{Action, Snapshot, reconcile, waiting};
 use saka_core::spec;
+use saka_core::task::{TaskInput, retry_entry};
+use saka_core::vocab::BlockerCode;
 use saka_store::{Batch, TaskSet, read};
 
 use saka_ports::Link;
@@ -44,10 +47,22 @@ impl Engine {
         for action in actions {
             match action {
                 Action::Decide(id, input) => {
+                    let auto_retry = matches!(input, TaskInput::AutoRetry)
+                        .then(|| pending_auto_retry(&snapshot, id))
+                        .flatten();
                     let events =
                         self.decide(id, Some(input), Mode::Fact, &cause, Extra::default())?;
                     if !events.is_empty() {
                         report.decisions += 1;
+                        if let Some((code, attempt)) = auto_retry {
+                            self.counters.auto_retry(code.as_str());
+                            tracing::info!(
+                                work_item_id = %id,
+                                code = code.as_str(),
+                                attempt,
+                                "delivery.retry.auto"
+                            );
+                        }
                     }
                 }
                 Action::ShipSpec(spec_id) => {
@@ -160,4 +175,12 @@ fn project_of(tasks: &[Task], job: &Job) -> Option<saka_core::ids::ProjectId> {
                 == Some(t.item.id.to_string().as_str())
         })
         .map(|t| t.item.project_id)
+}
+
+fn pending_auto_retry(snapshot: &Snapshot, id: WorkItemId) -> Option<(BlockerCode, u32)> {
+    let task = snapshot.tasks.iter().find(|t| t.item.id == id)?;
+    let blocker = task.open_blocker()?;
+    let (stage, _) = retry_entry(blocker.code, &blocker.params)?;
+    let done = task.retries.get(&stage).map_or(0, |r| r.auto);
+    Some((blocker.code, done + 1))
 }

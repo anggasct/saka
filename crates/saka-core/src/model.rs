@@ -105,6 +105,12 @@ pub struct RevisionView {
     pub depends_on: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Retries {
+    pub auto: u32,
+    pub manual: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextRef {
     pub path: String,
@@ -442,6 +448,7 @@ pub struct Task {
     pub session: Option<Session>,
     pub permissions: Vec<PermissionRequest>,
     pub attempts: BTreeMap<Stage, u32>,
+    pub retries: BTreeMap<Stage, Retries>,
     pub retired_runs: Vec<StageRun>,
     pub retired_sessions: Vec<Session>,
     pub prior_usage: Usage,
@@ -462,6 +469,7 @@ impl Task {
             session: None,
             permissions: Vec::new(),
             attempts: BTreeMap::new(),
+            retries: BTreeMap::new(),
             retired_runs: Vec::new(),
             retired_sessions: Vec::new(),
             prior_usage: Usage::default(),

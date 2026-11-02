@@ -163,6 +163,7 @@ struct State {
     command_output: HashMap<String, String>,
     statuses: Vec<(String, StatusReport)>,
     statuses_refused: bool,
+    push_outages: u32,
     launches: Vec<Launch>,
     repo_files: BTreeMap<String, String>,
     toolchain_scripts: HashMap<Tool, VecDeque<ToolchainScript>>,
@@ -244,6 +245,7 @@ impl FakeWorld {
                 command_output: HashMap::new(),
                 statuses: Vec::new(),
                 statuses_refused: false,
+                push_outages: 0,
                 launches: Vec::new(),
                 repo_files: BTreeMap::new(),
                 toolchain_scripts: HashMap::new(),
@@ -417,6 +419,10 @@ impl FakeWorld {
 
     pub fn refuse_statuses(&self) {
         self.state().statuses_refused = true;
+    }
+
+    pub fn fail_pushes(&self, times: u32) {
+        self.state().push_outages = times;
     }
 
     pub fn command_output(&self, command: &str, output: &str) {
@@ -947,6 +953,10 @@ impl Scm for FakeWorld {
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {
         let mut s = self.state();
+        if s.push_outages > 0 {
+            s.push_outages -= 1;
+            return Err(PortError::retryable("scm_unavailable", json!({})));
+        }
         let local = request.local_sha.clone();
         match s.remote.get(&request.branch).cloned() {
             Some(remote) if remote == local => Ok(PushOutcome::Pushed { sha: local }),

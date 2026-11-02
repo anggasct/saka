@@ -2431,3 +2431,37 @@ fn a_task_shows_the_exact_work_packet_once_its_environment_is_ready() {
     ));
     problem(&missing, StatusCode::NOT_FOUND, "not_found");
 }
+
+#[test]
+fn a_fourth_manual_retry_in_a_stage_is_refused_and_cancel_still_works() {
+    let mut cfg = SimConfig {
+        ci: CiScript::Fail(vec!["test".into()]),
+        ..SimConfig::default()
+    };
+    cfg.operator.retry = vec![];
+    let mut api = Api::new(cfg);
+    let (spec, revision) = (api.sim.spec_id, api.sim.revision_id);
+    api.sim.approve_spec(spec, revision).unwrap();
+    let id = api.sim.task(1).item.id.0;
+    let retry = format!("/api/v1/work-items/{id}/actions/retry");
+    let blocked = |s: &Sim| s.task(1).item.state == WorkItemState::Blocked;
+    for n in 1..=3 {
+        assert!(api.sim.run_until(STEPS, blocked), "block {n}");
+        let r = api.post(&retry, &[], json!({ "reason": format!("try {n}") }));
+        assert_eq!(r.status, StatusCode::ACCEPTED, "retry {n}: {}", r.body);
+    }
+    assert!(api.sim.run_until(STEPS, blocked));
+    let before = api.last_seq();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["available_actions"], json!(["cancel"]));
+    let r = api.post(&retry, &[], json!({ "reason": "once more" }));
+    problem(&r, StatusCode::CONFLICT, "retry_limit_reached");
+    assert_eq!(r.body["params"], json!({ "stage": "dev", "limit": 3 }));
+    assert_eq!(api.last_seq(), before);
+    let cancel = api.post(
+        &format!("/api/v1/work-items/{id}/actions/cancel"),
+        &[],
+        json!({ "reason": "giving up" }),
+    );
+    assert_eq!(cancel.status, StatusCode::ACCEPTED, "{}", cancel.body);
+}

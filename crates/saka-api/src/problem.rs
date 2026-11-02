@@ -104,7 +104,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::ProjectExists { .. }
         | R::SpecSlugConflict { .. }
         | R::TaskBranchConflict { .. }
-        | R::WorkPacketUnavailable { .. } => StatusCode::CONFLICT,
+        | R::WorkPacketUnavailable { .. }
+        | R::RetryLimitReached { .. } => StatusCode::CONFLICT,
     }
 }
 

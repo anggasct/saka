@@ -12,8 +12,8 @@ use crate::ids::{
 use crate::job::JobKind;
 use crate::model::{
     AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, EnvironmentSetup, GateResult,
-    PermissionRequest, PermissionRule, Session, StageRun, Task, ToolchainUse, Usage, UsageRecord,
-    WorkItem,
+    PermissionRequest, PermissionRule, Retries, Session, StageRun, Task, ToolchainUse, Usage,
+    UsageRecord, WorkItem,
 };
 use crate::policy::{Decision, Effect};
 use crate::rejection::Rejection;
@@ -42,6 +42,9 @@ pub struct LoopConfig {
 }
 
 pub const SESSION_ENDED_SOURCE: &str = "system:session_ended";
+pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";
+pub const MANUAL_RETRY_LIMIT: u32 = 3;
+pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
 pub const WAIT_LIMIT_SOURCE: &str = "system:wait_limit";
 const DENIED_BY_OPERATOR: &str = "Denied by the operator.";
 const PERMISSION_EXPIRED_MESSAGE: &str = "The permission request expired.";
@@ -163,6 +166,7 @@ pub enum TaskInput {
     SakaGateStarted {
         head_sha: String,
     },
+    AutoRetry,
     SakaGateObserved {
         head_sha: String,
         checks: Vec<Check>,
@@ -413,6 +417,7 @@ pub fn decide(
         I::MergeVerified { found } => d.merge_verified(found, ctx),
         I::EnvironmentTornDown { teardown_failures } => d.environment_torn_down(teardown_failures),
         I::Retry { reason } => return d.retry(reason, ctx),
+        I::AutoRetry => d.auto_retry(ctx),
         I::Cancel { reason } => return d.cancel(reason),
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
     })
@@ -1789,6 +1794,27 @@ impl Decider<'_> {
     }
 
     fn retry(&self, reason: String, ctx: &mut Ctx<'_>) -> Result<Vec<Event>, Rejection> {
+        self.retry_as(Trigger::Manual, reason, ctx)
+    }
+
+    fn auto_retry(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Some(blocker) = self.task.open_blocker() else {
+            return vec![];
+        };
+        if !auto_retry_due(self.task, self.now) {
+            return vec![];
+        }
+        let reason = format!("{AUTO_RETRY_PREFIX}{}", blocker.code.as_str());
+        self.retry_as(Trigger::Auto, reason, ctx)
+            .unwrap_or_default()
+    }
+
+    fn retry_as(
+        &self,
+        trigger: Trigger,
+        reason: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
         let blocked = self.item().state == WorkItemState::Blocked;
         let Some(blocker) = self.task.open_blocker().filter(|_| blocked) else {
             return Err(Rejection::InvalidState {
@@ -1800,6 +1826,14 @@ impl Decider<'_> {
                 state: self.state_name(),
             });
         };
+        if trigger == Trigger::Manual
+            && self.task.retries.get(&stage).map_or(0, |r| r.manual) >= MANUAL_RETRY_LIMIT
+        {
+            return Err(Rejection::RetryLimitReached {
+                stage: stage.as_str().to_string(),
+                limit: MANUAL_RETRY_LIMIT,
+            });
+        }
         let env_ready = self.task.ready_environment().is_some();
         if entry == StagePhase::RunningSession && !env_ready {
             entry = StagePhase::PreparingEnvironment;
@@ -1810,22 +1844,45 @@ impl Decider<'_> {
             code: blocker.code.as_str().to_string(),
             params: blocker.params.clone(),
         };
-        Ok(vec![
-            Event::BlockerResolved {
-                work_item_id: self.item().id,
-                blocker_id: blocker.id,
-                resolution: BlockerResolution::Retried,
-                reason: Some(reason.clone()),
+        let pushed_head = self
+            .task
+            .stage_run
+            .as_ref()
+            .filter(|r| r.stage == stage && entry == StagePhase::Pushing)
+            .and_then(|r| r.head_sha.clone());
+        let run = self.new_run(
+            stage,
+            trigger,
+            entry,
+            Some(reason.clone()),
+            Some(retry_of),
+            ctx,
+        );
+        let mut events = vec![Event::BlockerResolved {
+            work_item_id: self.item().id,
+            blocker_id: blocker.id,
+            resolution: if trigger == Trigger::Auto {
+                BlockerResolution::Auto
+            } else {
+                BlockerResolution::Retried
             },
-            self.new_run(
-                stage,
-                Trigger::Manual,
-                entry,
-                Some(reason),
-                Some(retry_of),
-                ctx,
-            ),
-        ])
+            reason: Some(reason),
+        }];
+        // A new run starts without a head; pushing again needs the commit the failed run produced.
+        let repush = match (&run, pushed_head) {
+            (Event::StageRunCreated { stage_run_id, .. }, Some(head_sha)) => {
+                Some(Event::StagePhaseChanged {
+                    work_item_id: self.item().id,
+                    stage_run_id: *stage_run_id,
+                    phase: StagePhase::Pushing,
+                    head_sha: Some(head_sha),
+                })
+            }
+            _ => None,
+        };
+        events.push(run);
+        events.extend(repush);
+        Ok(events)
     }
 
     fn cancel(&self, reason: String) -> Result<Vec<Event>, Rejection> {
@@ -1922,8 +1979,11 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::PermissionExpired
         | B::BudgetExhausted
         | B::QuotaExhausted
-        | B::NoChanges
-        | B::CiRed => (Stage::Dev, StagePhase::RunningSession),
+        | B::NoChanges => (Stage::Dev, StagePhase::RunningSession),
+        B::CiRed if params.get("reason").and_then(Value::as_str) == Some("runner_failed") => {
+            (Stage::Merge, StagePhase::AwaitingCi)
+        }
+        B::CiRed => (Stage::Dev, StagePhase::RunningSession),
         B::PushRejected => (Stage::Dev, StagePhase::Pushing),
         B::MergeConflict => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
@@ -2041,6 +2101,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             budget,
             ..
         } => {
+            count_retry(&mut t.retries, *stage, *trigger, reason.as_deref());
             if let Some(old) = t.stage_run.take() {
                 t.retired_runs.push(old);
             }
@@ -2619,9 +2680,11 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
         actions.push("merge");
     }
     let retryable = task.item.state == WorkItemState::Blocked
-        && task
-            .open_blocker()
-            .is_some_and(|b| retry_entry(b.code, &b.params).is_some());
+        && task.open_blocker().is_some_and(|b| {
+            retry_entry(b.code, &b.params).is_some_and(|(stage, _)| {
+                task.retries.get(&stage).map_or(0, |r| r.manual) < MANUAL_RETRY_LIMIT
+            })
+        });
     if retryable {
         actions.push("retry");
     }
@@ -2644,6 +2707,60 @@ pub fn session_actions(session: &Session) -> Vec<&'static str> {
         SessionState::Starting | SessionState::Waiting | SessionState::Interrupted => vec!["stop"],
         _ => vec![],
     }
+}
+
+pub fn count_retry(
+    retries: &mut BTreeMap<Stage, Retries>,
+    stage: Stage,
+    trigger: Trigger,
+    reason: Option<&str>,
+) {
+    let entry = retries.entry(stage).or_default();
+    match trigger {
+        Trigger::Manual => {
+            entry.manual += 1;
+            entry.auto = 0;
+        }
+        Trigger::Auto if reason.is_some_and(|r| r.starts_with(AUTO_RETRY_PREFIX)) => {
+            entry.auto += 1;
+        }
+        Trigger::Auto => {}
+    }
+}
+
+pub fn auto_retryable(code: BlockerCode, params: &Value) -> bool {
+    let text = |key: &str| params.get(key).and_then(Value::as_str);
+    match code {
+        BlockerCode::SessionLost | BlockerCode::ScmUnavailable => true,
+        BlockerCode::EnvSetupFailed => {
+            params.pointer("/error/code").and_then(Value::as_str) != Some("setup_command_failed")
+        }
+        BlockerCode::MergeConflict => text("reason") == Some("head_changed"),
+        BlockerCode::CiRed => {
+            text("source") == Some("saka") && text("reason") == Some("runner_failed")
+        }
+        _ => false,
+    }
+}
+
+pub fn auto_retry_due(task: &Task, now: Timestamp) -> bool {
+    let Some(blocker) = task.open_blocker() else {
+        return false;
+    };
+    if task.item.state != WorkItemState::Blocked || !auto_retryable(blocker.code, &blocker.params) {
+        return false;
+    }
+    let Some((stage, _)) = retry_entry(blocker.code, &blocker.params) else {
+        return false;
+    };
+    let done = task.retries.get(&stage).map_or(0, |r| r.auto);
+    let Some(delay) = usize::try_from(done)
+        .ok()
+        .and_then(|i| AUTO_RETRY_DELAYS_MS.get(i))
+    else {
+        return false;
+    };
+    now.since(blocker.opened_at) >= *delay
 }
 
 pub fn needs_tick(task: &Task, cfg: &LoopConfig, now: Timestamp) -> bool {
@@ -2679,5 +2796,95 @@ pub fn awaits_delivery(p: &PermissionRequest) -> bool {
         PermissionState::Allowed | PermissionState::Denied => true,
         PermissionState::Expired => p.answer_source.as_deref() == Some(WAIT_LIMIT_SOURCE),
         PermissionState::Pending => false,
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn only_transient_blockers_are_retried_automatically() {
+        let yes = [
+            (BlockerCode::SessionLost, json!({})),
+            (BlockerCode::ScmUnavailable, json!({ "phase": "pushing" })),
+            (
+                BlockerCode::EnvSetupFailed,
+                json!({ "error": { "code": "worktree_failed" } }),
+            ),
+            (
+                BlockerCode::MergeConflict,
+                json!({ "reason": "head_changed" }),
+            ),
+            (
+                BlockerCode::CiRed,
+                json!({ "source": "saka", "reason": "runner_failed" }),
+            ),
+        ];
+        for (code, params) in yes {
+            assert!(auto_retryable(code, &params), "{code}");
+        }
+        let no = [
+            (
+                BlockerCode::CiRed,
+                json!({ "source": "scm", "checks": ["test"] }),
+            ),
+            (
+                BlockerCode::CiRed,
+                json!({ "source": "saka", "command": "make test" }),
+            ),
+            (BlockerCode::PushRejected, json!({})),
+            (BlockerCode::NoChanges, json!({})),
+            (BlockerCode::BudgetExhausted, json!({})),
+            (
+                BlockerCode::MergeConflict,
+                json!({ "reason": "not_mergeable" }),
+            ),
+            (
+                BlockerCode::EnvSetupFailed,
+                json!({ "error": { "code": "setup_command_failed" } }),
+            ),
+        ];
+        for (code, params) in no {
+            assert!(!auto_retryable(code, &params), "{code} {params}");
+        }
+    }
+
+    #[test]
+    fn a_runner_failure_re_runs_the_gate_instead_of_the_session() {
+        let params = json!({ "source": "saka", "reason": "runner_failed" });
+        assert_eq!(
+            retry_entry(BlockerCode::CiRed, &params),
+            Some((Stage::Merge, StagePhase::AwaitingCi))
+        );
+        assert_eq!(
+            retry_entry(
+                BlockerCode::CiRed,
+                &json!({ "source": "saka", "command": "x" })
+            ),
+            Some((Stage::Dev, StagePhase::RunningSession))
+        );
+    }
+
+    #[test]
+    fn manual_retries_reset_the_automatic_count() {
+        let mut r = BTreeMap::new();
+        count_retry(&mut r, Stage::Merge, Trigger::Auto, None);
+        assert_eq!(r[&Stage::Merge], Retries::default());
+        count_retry(
+            &mut r,
+            Stage::Merge,
+            Trigger::Auto,
+            Some("auto retry: ci_red"),
+        );
+        count_retry(
+            &mut r,
+            Stage::Merge,
+            Trigger::Auto,
+            Some("auto retry: ci_red"),
+        );
+        assert_eq!(r[&Stage::Merge], Retries { auto: 2, manual: 0 });
+        count_retry(&mut r, Stage::Merge, Trigger::Manual, Some("try again"));
+        assert_eq!(r[&Stage::Merge], Retries { auto: 0, manual: 1 });
     }
 }

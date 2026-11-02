@@ -219,6 +219,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     }
 
     t.family(
+        "saka_auto_retries_total",
+        "counter",
+        "Blockers retried automatically, by code.",
+    );
+    for (code, n) in &m.auto_retries {
+        t.sample("saka_auto_retries_total", &[("code", code)], n);
+    }
+    t.family(
         "saka_gate_runs_total",
         "counter",
         "Gate runs by source and outcome.",

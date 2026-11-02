@@ -18,6 +18,7 @@ pub struct Counters {
     packet_bytes: Mutex<Vec<u64>>,
     webhooks: Mutex<BTreeMap<(String, String, String), u64>>,
     gate_runs: Mutex<BTreeMap<(String, String), u64>>,
+    auto_retries: Mutex<BTreeMap<(String, String), u64>>,
     gate_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
@@ -69,6 +70,10 @@ pub struct PacketBytes {
 }
 
 impl Counters {
+    pub(crate) fn auto_retry(&self, code: &str) {
+        bump(&self.auto_retries, code, "");
+    }
+
     pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
         bump(&self.gate_runs, source, outcome);
         if let Ok(mut h) = self.gate_seconds.lock() {
@@ -224,6 +229,7 @@ pub struct MetricsSnapshot {
     pub work_packet_bytes: PacketBytes,
     pub webhook_deliveries: Vec<(String, String, String, u64)>,
     pub gate_runs: Vec<(String, String, u64)>,
+    pub auto_retries: Vec<(String, u64)>,
     pub gate_seconds: SecondsHistogram,
 }
 
@@ -279,6 +285,10 @@ impl Engine {
             work_packet_bytes: self.counters.packet_bytes(),
             webhook_deliveries: self.counters.webhook_counts(),
             gate_runs: copy(&self.counters.gate_runs),
+            auto_retries: copy(&self.counters.auto_retries)
+                .into_iter()
+                .map(|(code, _, n)| (code, n))
+                .collect(),
             gate_seconds: self
                 .counters
                 .gate_seconds
