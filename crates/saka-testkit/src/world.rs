@@ -11,14 +11,14 @@ use saka_core::secret::{SecretText, SecretVar, aad};
 use saka_core::time::Timestamp;
 use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
-use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
+use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
     Agents, Blob, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession,
     Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
-    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, Sealed,
-    SecretStore, SessionLaunch, SessionRef, Toolchains, WebhookDelivery, WebhookTarget,
-    WorktreeState,
+    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
+    Sealed, SecretStore, SessionLaunch, SessionRef, Toolchains, WebhookDelivery, WebhookSignature,
+    WebhookTarget, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -166,6 +166,7 @@ struct State {
     toolchain_installs: Vec<(Tool, String, bool)>,
     secrets_unreadable: bool,
     webhook_secret: Option<Vec<u8>>,
+    capabilities: ScmCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,6 +244,7 @@ impl FakeWorld {
                 toolchain_installs: Vec::new(),
                 secrets_unreadable: false,
                 webhook_secret: None,
+                capabilities: FAKE_CAPABILITIES,
                 next_sha: 1,
                 parents,
                 remote,
@@ -370,6 +372,10 @@ impl FakeWorld {
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
         commit
+    }
+
+    pub fn set_capabilities(&self, capabilities: ScmCapabilities) {
+        self.state().capabilities = capabilities;
     }
 
     pub fn set_webhook_secret(&self, secret: &[u8]) {
@@ -997,6 +1003,10 @@ impl Scm for FakeWorld {
         Ok(())
     }
 
+    fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities> {
+        (integration_id == FAKE_INTEGRATION).then(|| self.state().capabilities.clone())
+    }
+
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool> {
         if integration_id != FAKE_INTEGRATION {
             return Err(PortError::permanent(
@@ -1049,6 +1059,14 @@ impl Scm for FakeWorld {
 }
 
 pub const FAKE_INTEGRATION: &str = "github";
+pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
+    provider: "fake",
+    merge_methods: &[MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase],
+    webhook_signature: Some(WebhookSignature::HmacSha256),
+    check_kinds: &[CheckKind::CheckRun, CheckKind::CommitStatus],
+    draft_change_requests: true,
+    delete_branch_after_merge: true,
+};
 pub const FAKE_SIGNATURE_HEADER: &str = "x-fake-signature";
 
 pub fn fake_signature(secret: &[u8], body: &[u8]) -> String {

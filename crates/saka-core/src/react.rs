@@ -323,12 +323,14 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                     now,
                 ));
             }
-            jobs.push(Job::new(
-                JobKind::ScmDeleteBranch,
-                id,
-                json!({ "work_item_id": id, "repo_id": item.repo_id, "branch": item.branch }),
-                now,
-            ));
+            if cfg.delete_branch_after_merge {
+                jobs.push(Job::new(
+                    JobKind::ScmDeleteBranch,
+                    id,
+                    json!({ "work_item_id": id, "repo_id": item.repo_id, "branch": item.branch }),
+                    now,
+                ));
+            }
         }
         _ => {}
     }
