@@ -100,8 +100,9 @@ impl World {
             .unwrap()
             .trim()
             .to_string();
+        let source = root.join("git-wrapper.sh");
         std::fs::write(
-            &wrapper,
+            &source,
             format!(
                 "#!/bin/sh\n\
                  {{ printf 'argv'; for a in \"$@\"; do printf ' %s' \"$a\"; done; printf '\\n'; \
@@ -111,7 +112,16 @@ impl World {
             ),
         )
         .unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A child forked by a parallel test keeps our write fd until it execs, and running the
+        // wrapper then fails with ETXTBSY. `install` writes it in its own process instead.
+        let installed = Command::new("install")
+            .arg("-m")
+            .arg("755")
+            .arg(&source)
+            .arg(&wrapper)
+            .status()
+            .unwrap();
+        assert!(installed.success());
 
         let access = Arc::new(StaticAccess {
             url: remote.to_string_lossy().into_owned(),
