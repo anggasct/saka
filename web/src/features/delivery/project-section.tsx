@@ -45,6 +45,7 @@ export function ProjectSection({
             key={spec.id}
             spec={spec}
             tasks={(workItems.data ?? []).filter((w) => w.spec_id === spec.id)}
+            projectTasks={workItems.data ?? []}
           />
         ))
       )}

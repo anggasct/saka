@@ -9,7 +9,9 @@ import {
   PROJECT_ID,
   queuedTask,
   spec,
+  SPEC_ID,
   supersededTask,
+  task,
 } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 
@@ -30,10 +32,12 @@ function readyRoutes() {
 }
 
 describe("DeliveryPage", () => {
-  it("shows a busy skeleton while loading", () => {
+  it("shows a busy skeleton while loading", async () => {
     fakeApi({ [PROJECTS]: pending, [PERMISSIONS]: pending });
     renderWithProviders(<DeliveryPage />);
-    const busy = screen.getByRole("status", { name: "Loading delivery" });
+    const busy = await screen.findByRole("status", {
+      name: "Loading delivery",
+    });
     expect(busy).toHaveAttribute("aria-busy", "true");
   });
 
@@ -141,5 +145,85 @@ describe("DeliveryPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Stopped (future_code).")).toBeInTheDocument();
     });
+  });
+
+  it("links each task to its page and says what it waits for", async () => {
+    const waiting = task(2, {
+      waiting_on: [
+        { kind: "step", step_id: "S1", work_item_id: blockedTask.id },
+        { kind: "spec", slug: "tasks-store", spec_id: SPEC_ID },
+        { kind: "port_block" },
+      ],
+      pending_permission_count: 1,
+    });
+    const quota = task(3, {
+      waiting_on: [
+        {
+          kind: "quota",
+          account: "claude:default",
+          window: "five_hour",
+          utilization: 0.97,
+          resets_at: null,
+        },
+      ],
+    });
+    const ports = task(4, { waiting_on: [{ kind: "port_block" }] });
+    const other = {
+      ...task(5, { spec_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344dd" }),
+      waiting_on: [
+        { kind: "step" as const, step_id: "S1", work_item_id: blockedTask.id },
+      ],
+    };
+    fakeApi({
+      ...readyRoutes(),
+      [WORK_ITEMS]: {
+        body: page([blockedTask, waiting, quota, ports, other]),
+      },
+    });
+    renderWithProviders(<DeliveryPage />);
+    const link = await screen.findByRole("link", { name: "Step S1" });
+    expect(link).toHaveAttribute("href", `/delivery/tasks/${blockedTask.id}`);
+    const rows = screen.getAllByRole("listitem");
+    const row = (name: string) => {
+      const found = rows.find(
+        (r) => within(r).queryByRole("link", { name }) !== null,
+      );
+      if (found === undefined) {
+        throw new Error(`no row for ${name}`);
+      }
+      return found;
+    };
+    expect(
+      within(row("Step S1")).getByText("Holds 2 waiting steps"),
+    ).toBeInTheDocument();
+    expect(
+      within(row("Step S2")).getByText(/Waiting for step S1 to be done\./),
+    ).toHaveTextContent("Waiting for step S1 to be done. +2 more");
+    expect(
+      within(row("Step S2")).getByText("1 permission request waiting"),
+    ).toBeInTheDocument();
+    expect(
+      within(row("Step S3")).getByText(
+        "Waiting for the agent account claude:default: its five_hour window is at 97%.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(row("Step S4")).getByText("Waiting for a free port block."),
+    ).toBeInTheDocument();
+  });
+
+  it("dims tasks that will not run", async () => {
+    fakeApi({
+      ...readyRoutes(),
+      [WORK_ITEMS]: {
+        body: page([supersededTask, task(4, { state: "cancelled" })]),
+      },
+    });
+    renderWithProviders(<DeliveryPage />);
+    const rows = await screen.findAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r).toHaveClass("text-muted-foreground");
+    }
   });
 });

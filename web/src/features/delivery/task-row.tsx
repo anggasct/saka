@@ -1,50 +1,62 @@
+import { Link } from "@tanstack/react-router";
+
 import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
-import type { BadgeTone } from "@/ui/badge";
 
+import { useFormat } from "./format";
 import type { WorkItem } from "./queries";
-import { blockerText, label } from "./text";
+import { isRetired, placeText, stateTone } from "./task-state";
+import { blockerText, holdsCount, label, record, waitingText } from "./text";
 
-function tone(state: string): BadgeTone {
-  switch (state) {
-    case "done":
-      return "success";
-    case "blocked":
-      return "danger";
-    case "in_stage":
-    case "admitted":
-      return "progress";
-    default:
-      return "neutral";
-  }
-}
-
-export function TaskRow({ task }: { task: WorkItem }) {
+export function TaskRow({
+  task,
+  tasks,
+}: {
+  task: WorkItem;
+  tasks: readonly WorkItem[];
+}) {
   const t = useT();
-  const place =
-    task.stage && task.stage_phase
-      ? t("task.place", {
-          stage: label(t, "stage", task.stage),
-          phase: label(t, "phase", task.stage_phase),
-        })
-      : task.stage
-        ? label(t, "stage", task.stage)
-        : null;
+  const format = useFormat();
+  const place = placeText(t, task);
   const blocker = task.blocker;
+  const waiting = task.state === "queued" ? task.waiting_on : [];
+  const first = waiting[0];
+  const holds = task.state === "blocked" ? holdsCount(task, tasks) : 0;
   return (
-    <li className="flex flex-col gap-2 border-t border-border p-4 first:border-t-0 sm:flex-row sm:items-start sm:gap-4">
+    <li
+      className={`flex flex-col gap-2 border-t border-border p-4 first:border-t-0 sm:flex-row sm:items-start sm:gap-4 ${isRetired(task.state) ? "text-muted-foreground" : ""}`}
+    >
       <div className="flex shrink-0 items-center gap-2 sm:w-40 sm:flex-col sm:items-start">
-        <span className="text-sm font-semibold">
+        <Link
+          to="/delivery/tasks/$workItemId"
+          params={{ workItemId: task.id }}
+          className="inline-flex min-h-11 items-center text-sm font-semibold text-primary underline underline-offset-4"
+        >
           {t("task.step", { step: task.step_id ?? task.task_key })}
-        </span>
-        <Badge tone={tone(task.state)}>
+        </Link>
+        <Badge tone={stateTone(task.state)}>
           {label(t, "task.state", task.state)}
         </Badge>
+        {task.pending_permission_count > 0 && (
+          <Badge tone="attention">
+            {t("task.pendingPermissions", {
+              count: task.pending_permission_count,
+            })}
+          </Badge>
+        )}
       </div>
       <div className="min-w-0 flex-1 space-y-1">
         <p className="break-words">{task.work}</p>
         {place !== null && (
           <p className="text-sm text-muted-foreground">{place}</p>
+        )}
+        {first !== undefined && (
+          <p className="text-sm break-words text-muted-foreground">
+            {waitingText(t, first, format.relative, format.percent)}
+            {waiting.length > 1 && (
+              <> {t("waiting.more", { count: waiting.length - 1 })}</>
+            )}
+          </p>
         )}
         {blocker && (
           <p
@@ -55,12 +67,18 @@ export function TaskRow({ task }: { task: WorkItem }) {
               {blockerText(
                 t,
                 blocker.code,
-                blocker.params as Record<string, unknown>,
+                record(blocker.params),
+                format.relative,
               )}
             </span>
             <code className="rounded bg-danger px-1 text-xs">
               {blocker.code}
             </code>
+          </p>
+        )}
+        {holds > 0 && (
+          <p className="text-sm font-medium">
+            {t("task.holds", { count: holds })}
           </p>
         )}
       </div>

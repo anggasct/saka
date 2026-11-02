@@ -66,7 +66,8 @@ function task(step: number, extra: Record<string, unknown>) {
     stage_phase: null,
     priority: 0,
     change_request: null,
-    gate: null,
+    gates: [],
+    waiting_on: [],
     blocker: null,
     session: null,
     pending_permission_count: 0,
@@ -125,6 +126,18 @@ async function mockApi(page: Page, empty: boolean) {
       await json(page_([spec]));
     } else if (path === "/api/v1/work-items") {
       await json(page_(tasks));
+    } else if (path.startsWith("/api/v1/work-items/")) {
+      const found = tasks.find((t) => path.endsWith(t.id));
+      await (found === undefined
+        ? route.fulfill({
+            status: 404,
+            json: { code: "not_found", params: {} },
+          })
+        : json({ ...found, stage_runs: [] }));
+    } else if (path === `/api/v1/specs/${SPEC_ID}`) {
+      await json(spec);
+    } else if (path === `/api/v1/projects/${PROJECT_ID}`) {
+      await json(project);
     } else if (path === "/api/v1/permission-requests") {
       await json(page_([{ id: "p" }]));
     } else {
@@ -162,3 +175,56 @@ for (const empty of [false, true]) {
     expect(results.violations).toEqual([]);
   });
 }
+
+const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+async function noOverflow(page: Page) {
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+}
+
+for (const width of [375, 1280]) {
+  test(`task page opens from the list at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page, false);
+    await page.goto("/delivery");
+    await page.getByRole("link", { name: "Step S1" }).click();
+    await expect(page).toHaveURL(/\/delivery\/tasks\/[0-9a-f-]+$/);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Step S1" }),
+    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "Blocker" })).toBeVisible();
+    await noOverflow(page);
+    const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    expect(results.violations).toEqual([]);
+  });
+}
+
+test("a missing task says so", async ({ page }) => {
+  await mockApi(page, false);
+  await page.goto("/delivery/tasks/0193f0c4-1b2a-7c3d-9e8f-0011223344ff");
+  await expect(
+    page.getByRole("heading", { name: "Task not found" }),
+  ).toBeVisible();
+});
+
+test("the chosen language survives a reload", async ({ page }) => {
+  await mockApi(page, false);
+  await page.goto("/delivery");
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await page
+    .getByRole("combobox", { name: "Language" })
+    .selectOption("Bahasa Indonesia");
+  await expect(page.getByText("Terhenti")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "id");
+  await page.reload();
+  await expect(page.getByText("Terhenti")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "id");
+  await expect(page.getByRole("combobox", { name: "Bahasa" })).toHaveValue(
+    "id",
+  );
+});

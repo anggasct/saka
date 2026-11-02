@@ -2,6 +2,7 @@ import type {
   ProjectItem,
   SpecItem,
   WorkItem,
+  WorkItemDetail,
 } from "@/features/delivery/queries";
 
 export const PROJECT_ID = "0193f0c4-1b2a-7c3d-9e8f-001122334455";
@@ -53,7 +54,7 @@ export const spec: SpecItem = {
   updated_at: "2026-10-31T10:01:00.000Z",
 };
 
-function task(step: number, extra: Partial<WorkItem>): WorkItem {
+export function task(step: number, extra: Partial<WorkItem>): WorkItem {
   return {
     id: `0193f0c4-1b2a-7c3d-9e8f-00112233450${step}`,
     project_id: PROJECT_ID,
@@ -114,3 +115,25 @@ export const supersededTask = task(3, {
   state: "superseded",
   available_actions: [],
 });
+
+export function detail(
+  item: WorkItem,
+  extra: Partial<WorkItemDetail> = {},
+): WorkItemDetail {
+  return { ...item, stage_runs: [], ...extra };
+}
+
+export function specWithSteps(steps: [string, string[]][]): SpecItem {
+  return {
+    ...spec,
+    steps: steps.map(([id, after], i) => ({
+      id,
+      index: i + 1,
+      work: `Work of step ${id}`,
+      ac: [],
+      commands: [],
+      after,
+      work_item_id: null,
+    })),
+  };
+}

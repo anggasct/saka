@@ -1,7 +1,15 @@
 import type { MessageKey } from "@/i18n/messages";
 import { CATALOGS } from "@/i18n/messages";
 
-type T = (key: MessageKey, values?: Record<string, string | number>) => string;
+import type { WaitingOn, WorkItem } from "./queries";
+
+export type T = (
+  key: MessageKey,
+  values?: Record<string, string | number>,
+) => string;
+export type Relative = (iso: string) => string;
+
+const NONE = "none";
 
 function known(key: string): key is MessageKey {
   return key in CATALOGS.en;
@@ -12,7 +20,7 @@ export function label(t: T, prefix: string, code: string): string {
   return known(key) ? t(key) : code;
 }
 
-function text(value: unknown): string {
+export function text(value: unknown): string {
   if (Array.isArray(value)) {
     return value.map(String).join(", ");
   }
@@ -21,26 +29,68 @@ function text(value: unknown): string {
     : "";
 }
 
+export function sha(value: unknown): string {
+  return text(value).slice(0, 12);
+}
+
+export function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function number(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
+
+const GATE_REASONS = [
+  "no_checks",
+  "required_missing",
+  "worktree_moved",
+  "runner_failed",
+  "not_in_base",
+];
+
+function gateCase(code: string, params: Record<string, unknown>): string {
+  const reason = text(params.reason);
+  if (GATE_REASONS.includes(reason)) {
+    return reason;
+  }
+  if (text(params.command) !== "") {
+    return params.timed_out === true ? "command_timed_out" : "command_failed";
+  }
+  if (code === "dod_failed" && !Array.isArray(params.checks)) {
+    return "not_in_base";
+  }
+  return "checks";
+}
+
 export function blockerText(
   t: T,
   code: string,
   params: Record<string, unknown>,
+  relative?: Relative,
 ): string {
   const key = `blocker.${code}`;
   if (!known(key)) {
     return t("blocker.unknown", { code });
   }
-  const number = (value: unknown) => (typeof value === "number" ? value : 0);
-  const record = (value: unknown): Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
   const error = record(params.error);
   const errorParams = record(error.params);
   const field = text(params.field);
+  const phase = text(params.phase);
+  const resetsAt = text(params.resets_at);
+  const remote = sha(params.remote_sha);
+  const local = sha(params.local_sha);
   const values: Record<string, string | number> = {
+    case: gateCase(code, params),
     reason: text(params.reason) || "failed",
     checks: text(params.checks),
+    missing: text(params.missing),
+    command: text(params.command),
+    exit_code: text(params.exit_code),
+    head: sha(params.head_sha),
+    base: text(params.base_branch) || NONE,
     minutes: number(params.minutes),
     hours: number(params.hours),
     cause: text(params.cause) || "other",
@@ -51,21 +101,88 @@ export function blockerText(
     summary: text(params.summary),
     account: text(params.account),
     window: text(params.window),
+    resets:
+      resetsAt !== "" && relative !== undefined ? relative(resetsAt) : NONE,
     error: text(error.code) || "other",
-    command: number(errorParams.command_index) + 1,
+    command_index: number(errorParams.command_index) + 1,
     timed_out: errorParams.timed_out === true ? "yes" : "no",
     issue: field ? `${text(params.code)} ${field}` : text(params.code),
-    line: text(params.line) || "none",
+    line: text(params.line) || NONE,
     source: text(params.source) || "other",
     value: text(params.value),
     version: text(params.version),
     name: text(params.name),
     names: Array.isArray(params.names) ? params.names.map(text).join(", ") : "",
+    phase_known: phase !== "" ? "yes" : "no",
+    phase: label(t, "phase", phase),
+    dirty: params.dirty === true ? "yes" : "no",
+    shas: remote !== "" && local !== "" ? "yes" : "no",
+    remote,
+    local,
   };
   return t(key, values);
 }
 
-export function errorText(t: T, code: string): string {
+export function errorText(
+  t: T,
+  code: string,
+  params: Record<string, unknown> = {},
+): string {
   const key = `error.${code}`;
-  return known(key) ? t(key) : t("error.unknown", { code });
+  if (!known(key)) {
+    return t("error.unknown", { code });
+  }
+  return t(key, {
+    field: text(params.field),
+    issue: text(params.code),
+    head: sha(params.head_sha),
+    outcome: label(t, "gate.outcome", text(params.gate_outcome)),
+    stage: label(t, "stage", text(params.stage)),
+    limit: number(params.limit),
+    reason: text(params.reason) || "other",
+  });
+}
+
+export function waitingText(
+  t: T,
+  item: WaitingOn,
+  relative: Relative,
+  percent: (value: number) => string,
+): string {
+  switch (item.kind) {
+    case "step":
+      return t("waiting.step", { step: item.step_id });
+    case "spec":
+      return t("waiting.spec", { slug: item.slug });
+    case "quota":
+      return t("waiting.quota", {
+        account: item.account,
+        window: item.window,
+        percent: percent(item.utilization),
+        resets:
+          item.resets_at !== null && item.resets_at !== undefined
+            ? relative(item.resets_at)
+            : NONE,
+      });
+    case "port_block":
+      return t("waiting.port_block");
+  }
+}
+
+export function holdsCount(task: WorkItem, tasks: readonly WorkItem[]): number {
+  if (task.state === "done") {
+    return 0;
+  }
+  return tasks.filter(
+    (other) =>
+      other.id !== task.id &&
+      other.waiting_on.some(
+        (w) =>
+          (w.kind === "step" && w.work_item_id === task.id) ||
+          (w.kind === "spec" &&
+            task.spec_id !== null &&
+            task.spec_id !== undefined &&
+            w.spec_id === task.spec_id),
+      ),
+  ).length;
 }
