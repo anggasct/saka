@@ -146,6 +146,11 @@ impl ClaudeAgents {
         for (k, v) in &launch.environment.vars {
             spec.env.entry(k.clone()).or_insert_with(|| v.clone());
         }
+        if !launch.environment.path_prefix.is_empty()
+            && let Some(path) = spec.env.get_mut("PATH")
+        {
+            *path = format!("{}:{path}", launch.environment.path_prefix.join(":"));
+        }
         Ok((spec, paths))
     }
 }
@@ -442,6 +447,10 @@ mod tests {
                     .iter()
                     .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
                     .collect(),
+                path_prefix: vec![
+                    "/data/toolchains/go/1.26.3-linux-x64/bin".into(),
+                    "/data/toolchains/node/26.13.0-linux-x64/bin".into(),
+                ],
             },
             resume_cli_session_id: None,
         };
@@ -471,6 +480,10 @@ mod tests {
             ]
         );
         assert_eq!(spec.env["SAKA_PORT_BASE"], "41000");
+        assert_eq!(
+            spec.env["PATH"],
+            "/data/toolchains/go/1.26.3-linux-x64/bin:/data/toolchains/node/26.13.0-linux-x64/bin:/usr/bin:/bin"
+        );
         assert_eq!(
             spec.env["HOME"],
             root.join("home").to_string_lossy(),

@@ -4,6 +4,7 @@ pub mod env;
 pub mod git;
 pub mod scm;
 pub mod supervisor;
+pub mod toolchain;
 
 use saka_core::ids::IdSource;
 use saka_core::time::Timestamp;
@@ -27,6 +28,7 @@ pub use scm::{
 pub use supervisor::{
     COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, RunnerUnit, Supervisor, UnitLimits,
 };
+pub use toolchain::Toolchains;
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;

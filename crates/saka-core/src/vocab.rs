@@ -91,6 +91,8 @@ vocab!(
     BlockerCode {
         EnvSetupFailed => "env_setup_failed",
         EnvRecipeInvalid => "env_recipe_invalid",
+        ToolchainUnpinned => "toolchain_unpinned",
+        ToolchainUnavailable => "toolchain_unavailable",
         SessionFailed => "session_failed",
         SessionLost => "session_lost",
         SessionTimeout => "session_timeout",
@@ -110,6 +112,7 @@ vocab!(
         BudgetExhausted => "budget_exhausted",
     }
 );
+vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
 vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });
 vocab!(SessionState {

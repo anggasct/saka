@@ -31,6 +31,7 @@ pub struct EnvRef {
     pub root_path: String,
     pub worktree_path: String,
     pub vars: BTreeMap<String, String>,
+    pub path_prefix: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,13 @@ pub trait Environments: Send + Sync {
     async fn teardown(&self, env: &EnvRef) -> PortResult<()>;
 
     async fn read_recipe(&self, repo: &RepoRef, commit: &str) -> PortResult<Option<String>>;
+
+    async fn read_repo_file(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        path: &str,
+    ) -> PortResult<Option<String>>;
 
     async fn run_recipe_command(
         &self,

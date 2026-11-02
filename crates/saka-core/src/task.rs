@@ -12,7 +12,8 @@ use crate::ids::{
 use crate::job::JobKind;
 use crate::model::{
     AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, EnvironmentSetup, GateResult,
-    PermissionRequest, PermissionRule, Session, StageRun, Task, Usage, UsageRecord, WorkItem,
+    PermissionRequest, PermissionRule, Session, StageRun, Task, ToolchainUse, Usage, UsageRecord,
+    WorkItem,
 };
 use crate::policy::{Decision, Effect};
 use crate::rejection::Rejection;
@@ -796,6 +797,7 @@ impl Decider<'_> {
             recipe: setup.recipe,
             recipe_sha256: setup.recipe_sha256,
             setup: setup.setup,
+            toolchains: setup.toolchains,
         }];
         events.extend(self.phase(StagePhase::RunningSession, None));
         events
@@ -1677,6 +1679,10 @@ impl Decider<'_> {
         if kind == JobKind::SessionReattach {
             return self.session_gone("runner_silent", json!({}), ctx);
         }
+        // A toolchain download that kept failing names the tool, not the job.
+        if kind == JobKind::EnvPrepare && error.code == "toolchain_unavailable" {
+            return self.environment_failed(BlockerCode::ToolchainUnavailable, error.params, ctx);
+        }
         let Some((code, mut params)) = kind.exhausted_blocker() else {
             return vec![];
         };
@@ -1719,7 +1725,10 @@ impl Decider<'_> {
 pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
     use BlockerCode as B;
     Some(match code {
-        B::EnvSetupFailed | B::EnvRecipeInvalid => (Stage::Dev, StagePhase::PreparingEnvironment),
+        B::EnvSetupFailed
+        | B::EnvRecipeInvalid
+        | B::ToolchainUnpinned
+        | B::ToolchainUnavailable => (Stage::Dev, StagePhase::PreparingEnvironment),
         B::SessionFailed
         | B::SessionLost
         | B::SessionTimeout
@@ -1998,6 +2007,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             port_count,
             recipe,
             recipe_sha256,
+            toolchains,
             ..
         } => {
             t.environment = Some(Environment {
@@ -2015,6 +2025,13 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 port_count: *port_count,
                 recipe: recipe.clone(),
                 recipe_sha256: recipe_sha256.clone(),
+                toolchains: toolchains
+                    .iter()
+                    .map(|t| ToolchainUse {
+                        downloaded: false,
+                        ..t.clone()
+                    })
+                    .collect(),
             });
         }
         E::EnvironmentTornDown { environment_id, .. } => {

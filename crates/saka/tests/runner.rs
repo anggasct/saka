@@ -692,6 +692,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
             root_path: root.to_string_lossy().into_owned(),
             worktree_path: root.join("worktree").to_string_lossy().into_owned(),
             vars: Default::default(),
+            path_prefix: Vec::new(),
         },
         resume_cli_session_id: None,
     }

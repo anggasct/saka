@@ -3,7 +3,7 @@ use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId, Work
 use saka_core::job::{Job, JobKind};
 use std::collections::BTreeMap;
 
-use saka_core::model::{Coded, Environment, EnvironmentSetup, Task};
+use saka_core::model::{Coded, Environment, EnvironmentSetup, Task, ToolchainUse};
 use saka_core::task::TaskInput;
 use saka_core::vocab::{
     BlockerCode, ChangeState, EnvironmentState, PermissionState, Stage, StagePhase,
@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tracing::Instrument;
 
 use crate::recipe::{self, Recipe};
+use crate::toolchain;
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, text};
 
 pub const VERIFY_ROUNDS: u32 = 3;
@@ -48,6 +49,11 @@ pub enum Effect {
 }
 
 pub type Execution = std::result::Result<Effect, PortError>;
+
+enum Refusal {
+    Block(BlockerCode, Value),
+    Fail(PortError),
+}
 
 fn field<T: DeserializeOwned>(payload: &Value, name: &str) -> std::result::Result<T, PortError> {
     payload
@@ -376,7 +382,8 @@ impl Engine {
             branch: env.branch.clone(),
             root_path: env.root_path.clone(),
             worktree_path: env.worktree_path.clone(),
-            vars: self.env_vars(task, env.id, env.port_start, &recipe),
+            vars: self.env_vars(task, env.id, env.port_start, &recipe, &env.toolchains),
+            path_prefix: env.toolchains.iter().map(|t| t.bin_dir.clone()).collect(),
         })
     }
 
@@ -386,8 +393,12 @@ impl Engine {
         environment_id: EnvironmentId,
         port_start: Option<u16>,
         recipe: &Recipe,
+        toolchains: &[ToolchainUse],
     ) -> BTreeMap<String, String> {
         let mut vars = recipe.env.clone();
+        for t in toolchains {
+            vars.extend(t.env.clone());
+        }
         vars.insert("SAKA_TASK_KEY".into(), task.item.task_key.clone());
         vars.insert("SAKA_ENVIRONMENT_ID".into(), environment_id.to_string());
         let wanted = recipe.ports_or(self.cfg.env.ports_per_env);
@@ -491,6 +502,40 @@ impl Engine {
             })
     }
 
+    async fn install_toolchains(
+        &self,
+        repo: &RepoRef,
+        base_sha: &str,
+        recipe: &Recipe,
+    ) -> std::result::Result<Vec<ToolchainUse>, Refusal> {
+        let mut files = toolchain::Files::default();
+        for path in toolchain::FILES {
+            match self.ports.env.read_repo_file(repo, base_sha, path).await {
+                Ok(text) => files.set(path, text),
+                Err(e) if !e.retryable => {
+                    return Err(Refusal::Block(
+                        BlockerCode::EnvSetupFailed,
+                        json!({ "error": e.to_json() }),
+                    ));
+                }
+                Err(e) => return Err(Refusal::Fail(e)),
+            }
+        }
+        let wanted = toolchain::detect(&recipe.toolchain, &files)
+            .map_err(|u| Refusal::Block(BlockerCode::ToolchainUnpinned, u.to_json()))?;
+        let mut installed = Vec::new();
+        for (tool, version) in wanted {
+            match self.ports.toolchains.install(tool, &version).await {
+                Ok(t) => installed.push(t),
+                Err(e) if !e.retryable && e.code == "toolchain_unavailable" => {
+                    return Err(Refusal::Block(BlockerCode::ToolchainUnavailable, e.params));
+                }
+                Err(e) => return Err(Refusal::Fail(e)),
+            }
+        }
+        Ok(installed)
+    }
+
     async fn env_prepare(&self, task: &Task, run: StageRunId) -> Execution {
         let current = task.stage_run.as_ref().is_some_and(|r| r.id == run);
         if !current || task.ready_environment().is_some() {
@@ -517,6 +562,7 @@ impl Engine {
             root_path: prepared.root_path.clone(),
             worktree_path: prepared.worktree_path.clone(),
             vars: BTreeMap::new(),
+            path_prefix: Vec::new(),
         };
         let text = match self.ports.env.read_recipe(&repo, &prepared.base_sha).await {
             Ok(text) => text,
@@ -557,8 +603,21 @@ impl Engine {
                     .await;
             }
         };
+        let toolchains = match self
+            .install_toolchains(&repo, &prepared.base_sha, &recipe)
+            .await
+        {
+            Ok(t) => t,
+            Err(Refusal::Block(code, params)) => {
+                return self
+                    .abandon_environment(&env, &Recipe::default(), code, params)
+                    .await;
+            }
+            Err(Refusal::Fail(e)) => return Err(e),
+        };
         let port_start = self.reserve_ports(environment_id)?;
-        env.vars = self.env_vars(task, environment_id, Some(port_start), &recipe);
+        env.vars = self.env_vars(task, environment_id, Some(port_start), &recipe, &toolchains);
+        env.path_prefix = toolchains.iter().map(|t| t.bin_dir.clone()).collect();
         let mut setup = Vec::new();
         for (index, command) in recipe.setup.iter().enumerate() {
             let run = RecipeCommand {
@@ -598,6 +657,7 @@ impl Engine {
                 recipe: text.as_ref().map(|_| recipe.to_json()),
                 recipe_sha256: text.as_deref().map(recipe::sha256),
                 setup,
+                toolchains,
             },
         }))
     }

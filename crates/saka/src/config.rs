@@ -39,6 +39,54 @@ pub struct Config {
     pub permission: Permission,
     #[serde(default)]
     pub env: Env,
+    #[serde(default)]
+    pub toolchain: Toolchain,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Toolchain {
+    #[serde(default = "go_dl_url")]
+    pub go_dl_url: String,
+    #[serde(default = "node_dist_url")]
+    pub node_dist_url: String,
+    #[serde(default = "npm_registry_url")]
+    pub npm_registry_url: String,
+    #[serde(default = "six_hundred")]
+    pub download_timeout_secs: u64,
+}
+
+impl Default for Toolchain {
+    fn default() -> Toolchain {
+        Toolchain {
+            go_dl_url: go_dl_url(),
+            node_dist_url: node_dist_url(),
+            npm_registry_url: npm_registry_url(),
+            download_timeout_secs: six_hundred(),
+        }
+    }
+}
+
+fn go_dl_url() -> String {
+    "https://go.dev/dl".into()
+}
+fn node_dist_url() -> String {
+    "https://nodejs.org/dist".into()
+}
+fn npm_registry_url() -> String {
+    "https://registry.npmjs.org".into()
+}
+
+fn url_ok(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or("").trim_matches(['[', ']']);
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    url.scheme() == "https" || (url.scheme() == "http" && loopback)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -502,6 +550,25 @@ impl Config {
                 "env.setup_timeout_minutes must be 1..=240",
             ));
         }
+        let t = &self.toolchain;
+        for (name, value) in [
+            ("toolchain.go_dl_url", &t.go_dl_url),
+            ("toolchain.node_dist_url", &t.node_dist_url),
+            ("toolchain.npm_registry_url", &t.npm_registry_url),
+        ] {
+            if !url_ok(value) {
+                return Err(err(
+                    "config_invalid_url",
+                    format!("{name} {value:?} must be https, or http on a loopback host"),
+                ));
+            }
+        }
+        if !(30..=3600).contains(&t.download_timeout_secs) {
+            return Err(err(
+                "config_invalid",
+                "toolchain.download_timeout_secs must be 30..=3600",
+            ));
+        }
         let (first, last) = e.ports()?;
         let span = usize::from(last - first) + 1;
         let needed = usize::from(e.ports_per_env) * self.scheduler.max_active_tasks;
@@ -675,6 +742,36 @@ mod tests {
     }
 
     #[test]
+    fn toolchain_mirrors_must_be_https_or_loopback() {
+        let cfg = Config::parse("").unwrap();
+        assert_eq!(cfg.toolchain.go_dl_url, "https://go.dev/dl");
+        assert_eq!(cfg.toolchain.download_timeout_secs, 600);
+        assert!(
+            Config::parse("[toolchain]\nnode_dist_url = \"http://127.0.0.1:8080/dist\"\n").is_ok()
+        );
+        assert!(
+            Config::parse("[toolchain]\nnpm_registry_url = \"http://localhost:4873\"\n").is_ok()
+        );
+        for bad in [
+            "[toolchain]\ngo_dl_url = \"http://mirror.example/dl\"\n",
+            "[toolchain]\nnode_dist_url = \"ftp://127.0.0.1/dist\"\n",
+            "[toolchain]\nnpm_registry_url = \"not a url\"\n",
+        ] {
+            assert_eq!(
+                Config::parse(bad).unwrap_err().code,
+                "config_invalid_url",
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            Config::parse("[toolchain]\ndownload_timeout_secs = 10\n")
+                .unwrap_err()
+                .code,
+            "config_invalid"
+        );
+    }
+
+    #[test]
     fn the_example_config_parses_with_every_field_set() {
         let cfg = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
         assert_eq!(cfg.scm.len(), 1);
@@ -683,5 +780,6 @@ mod tests {
         assert_eq!(cfg.permission.rule.len(), 3);
         assert_eq!(cfg.env.ports_per_env, 10);
         assert_eq!(cfg.env.limits.tasks_max, 512);
+        assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
     }
 }

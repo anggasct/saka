@@ -199,6 +199,7 @@ impl Engine {
                     root_path: env.root_path.clone(),
                     worktree_path: env.worktree_path.clone(),
                     vars: std::collections::BTreeMap::new(),
+                    path_prefix: Vec::new(),
                 },
                 raw,
             )),

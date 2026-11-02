@@ -15,7 +15,10 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::{MergeMethod, Stage};
 use saka_docs::GitDocs;
 use saka_engine::{Engine, EngineConfig, EnvConfig, Integration, Ports};
-use saka_env::{Git, GitRepos, RecipeRunner, ReposConfig, SystemdSupervisor};
+use saka_env::{
+    Git, GitRepos, Platform, RecipeRunner, ReposConfig, SystemdSupervisor, ToolchainConfig,
+    ToolchainInstaller,
+};
 use saka_ports::{
     ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
     OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
@@ -356,6 +359,24 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
             web_url: s.web_url.clone(),
         });
     }
+    let toolchains = match ToolchainInstaller::new(ToolchainConfig {
+        root: data_dir.join("toolchains"),
+        caches: data_dir.join("caches"),
+        go_dl_url: cfg.toolchain.go_dl_url.clone(),
+        node_dist_url: cfg.toolchain.node_dist_url.clone(),
+        npm_registry_url: cfg.toolchain.npm_registry_url.clone(),
+        timeout: Duration::from_secs(cfg.toolchain.download_timeout_secs),
+        user_agent: format!("saka/{VERSION}"),
+        platform: Platform::current(),
+    }) {
+        Ok(t) => Arc::new(t),
+        Err(e) => {
+            tracing::error!(code = %e.code, "toolchain installer refused");
+            let _ = stop.send(true);
+            let _ = http.await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
     let repos = Arc::new(GitRepos::new(
         ReposConfig {
@@ -422,6 +443,7 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
             scm: Arc::new(scm),
             agents: Arc::new(agents),
             docs: Arc::new(GitDocs::new(repos)),
+            toolchains,
         },
         EngineConfig {
             loop_cfg: loop_config(cfg),

@@ -980,8 +980,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(6));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(7));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1376,6 +1376,13 @@ fn two_live_environments_never_hold_the_same_port_block() {
                 recipe: Some(json!({ "ports": 3, "env": {}, "setup": [], "teardown": [] })),
                 recipe_sha256: Some("f".repeat(64)),
                 setup: Vec::new(),
+                toolchains: vec![saka_core::model::ToolchainUse {
+                    tool: saka_core::vocab::Tool::Node,
+                    version: "26.13.0".into(),
+                    bin_dir: "/data/toolchains/node/26.13.0-linux-x64/bin".into(),
+                    env: Default::default(),
+                    downloaded: true,
+                }],
             },
         },
     );
@@ -1388,6 +1395,11 @@ fn two_live_environments_never_hold_the_same_port_block() {
         .unwrap();
     assert_eq!((env.port_start, env.port_count), (Some(41000), Some(10)));
     assert_eq!(env.recipe.unwrap()["ports"], json!(3));
+    assert_eq!(env.toolchains[0].version, "26.13.0");
+    assert!(
+        !env.toolchains[0].downloaded,
+        "a download is a fact of the event, not of the row"
+    );
     assert_eq!(w.store.read(read::live_port_blocks).unwrap(), [(41000, 10)]);
 
     let conn = rusqlite_conn(&w);

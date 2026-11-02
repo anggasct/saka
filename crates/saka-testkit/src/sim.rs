@@ -209,6 +209,7 @@ impl Sim {
             scm: self.world.clone(),
             agents: self.world.clone(),
             docs: self.world.clone(),
+            toolchains: self.world.clone(),
         };
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),

@@ -131,4 +131,39 @@ describe("blockerText", () => {
       "Resep environment .saka/environment.toml ditolak: env_recipe_too_large.",
     );
   });
+
+  it("says which toolchain is unpinned or unavailable", () => {
+    expect(
+      blockerText(en, "toolchain_unpinned", {
+        tool: "node",
+        source: "nvmrc",
+        value: "lts/*",
+      }),
+    ).toBe(
+      "The repo asks for node lts/*; pin an exact version (for example 1.2.3) in nvmrc.",
+    );
+    expect(
+      blockerText(id, "toolchain_unpinned", {
+        tool: "node",
+        source: "pnpm_requires_node",
+        value: null,
+      }),
+    ).toBe(
+      "pnpm butuh versi Node yang dipin; deklarasikan di package.json devEngines, .node-version, atau .nvmrc.",
+    );
+    expect(
+      blockerText(en, "toolchain_unavailable", {
+        tool: "go",
+        version: "1.26.3",
+        cause: "checksum_mismatch",
+      }),
+    ).toBe("The go 1.26.3 download did not match its published checksum.");
+    expect(
+      blockerText(id, "toolchain_unavailable", {
+        tool: "pnpm",
+        version: "12.16.1",
+        cause: "download_failed",
+      }),
+    ).toBe("pnpm 12.16.1 tidak bisa diunduh.");
+  });
 });

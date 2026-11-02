@@ -56,6 +56,9 @@ export function blockerText(
     timed_out: errorParams.timed_out === true ? "yes" : "no",
     issue: field ? `${text(params.code)} ${field}` : text(params.code),
     line: text(params.line) || "none",
+    source: text(params.source) || "other",
+    value: text(params.value),
+    version: text(params.version),
   };
   return t(key, values);
 }
