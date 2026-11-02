@@ -1,20 +1,14 @@
 import { useT } from "@/i18n/use-t";
-import { ApiError } from "@/api/client";
 import { Badge } from "@/ui/badge";
-import { Button } from "@/ui/button";
 import { Card } from "@/ui/card";
 import { Skeleton } from "@/ui/skeleton";
 
+import { PageError } from "./page-error";
 import { ProjectSection } from "./project-section";
 import { usePendingPermissionCount, useProjects, useSpecsOf } from "./queries";
-import { errorText } from "./text";
 
 const ADD_PROJECT = "saka project add <repo-url> --path docs";
 const APPROVE_SPEC = "saka spec approve <project> docs/specs/<spec>.md";
-
-function codeOf(error: unknown): string {
-  return error instanceof ApiError ? error.code : "network_error";
-}
 
 export function DeliveryPage() {
   const t = useT();
@@ -43,13 +37,11 @@ export function DeliveryPage() {
         )}
       </div>
       {failed !== null ? (
-        <Card role="alert" className="space-y-3 p-4">
-          <h2 className="font-semibold">{t("delivery.error.title")}</h2>
-          <p className="text-sm text-muted-foreground">
-            {errorText(t, codeOf(failed))}
-          </p>
-          <Button onClick={retry}>{t("delivery.error.retry")}</Button>
-        </Card>
+        <PageError
+          title="delivery.error.title"
+          error={failed}
+          onRetry={retry}
+        />
       ) : loading ? (
         <div
           aria-busy="true"

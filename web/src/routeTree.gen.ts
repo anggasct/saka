@@ -10,43 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as DeliveryRouteImport } from './routes/delivery'
+import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
+import { Route as DeliveryTasksWorkItemIdRouteImport } from './routes/delivery.tasks.$workItemId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DeliveryRoute = DeliveryRouteImport.update({
-  id: '/delivery',
-  path: '/delivery',
+const DeliveryIndexRoute = DeliveryIndexRouteImport.update({
+  id: '/delivery/',
+  path: '/delivery/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeliveryTasksWorkItemIdRoute = DeliveryTasksWorkItemIdRouteImport.update({
+  id: '/delivery/tasks/$workItemId',
+  path: '/delivery/tasks/$workItemId',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/delivery': typeof DeliveryRoute
+  '/delivery/': typeof DeliveryIndexRoute
+  '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/delivery': typeof DeliveryRoute
+  '/delivery': typeof DeliveryIndexRoute
+  '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/delivery': typeof DeliveryRoute
+  '/delivery/': typeof DeliveryIndexRoute
+  '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/delivery'
+  fullPaths: '/' | '/delivery/' | '/delivery/tasks/$workItemId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/delivery'
-  id: '__root__' | '/' | '/delivery'
+  to: '/' | '/delivery' | '/delivery/tasks/$workItemId'
+  id: '__root__' | '/' | '/delivery/' | '/delivery/tasks/$workItemId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  DeliveryRoute: typeof DeliveryRoute
+  DeliveryIndexRoute: typeof DeliveryIndexRoute
+  DeliveryTasksWorkItemIdRoute: typeof DeliveryTasksWorkItemIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -58,11 +68,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/delivery': {
-      id: '/delivery'
+    '/delivery/': {
+      id: '/delivery/'
       path: '/delivery'
-      fullPath: '/delivery'
-      preLoaderRoute: typeof DeliveryRouteImport
+      fullPath: '/delivery/'
+      preLoaderRoute: typeof DeliveryIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/delivery/tasks/$workItemId': {
+      id: '/delivery/tasks/$workItemId'
+      path: '/delivery/tasks/$workItemId'
+      fullPath: '/delivery/tasks/$workItemId'
+      preLoaderRoute: typeof DeliveryTasksWorkItemIdRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -70,7 +87,8 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  DeliveryRoute: DeliveryRoute,
+  DeliveryIndexRoute: DeliveryIndexRoute,
+  DeliveryTasksWorkItemIdRoute: DeliveryTasksWorkItemIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

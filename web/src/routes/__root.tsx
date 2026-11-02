@@ -5,6 +5,7 @@ import {
   createRootRouteWithContext,
 } from "@tanstack/react-router";
 
+import { LanguageSelect } from "@/i18n/language-select";
 import { initialLocale } from "@/i18n/locale";
 import { useT } from "@/i18n/use-t";
 import { Providers } from "@/providers";
@@ -30,6 +31,7 @@ function Layout() {
           >
             {t("nav.delivery")}
           </Link>
+          <LanguageSelect />
         </nav>
       </header>
       <main id="content">

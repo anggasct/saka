@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { CATALOGS } from "@/i18n/messages";
 
-import { blockerText } from "./text";
+import { blockerText, errorText, label } from "./text";
 
 function translator(locale: Locale) {
   const intl = createIntl({ locale, messages: CATALOGS[locale] });
@@ -175,6 +175,348 @@ describe("blockerText", () => {
     );
     expect(blockerText(id, "secret_unreadable", { name: "NPM_TOKEN" })).toBe(
       "Secret NPM_TOKEN tidak bisa didekripsi dengan key server ini; simpan ulang, lalu coba lagi.",
+    );
+  });
+});
+
+const HEAD = "a1b2c3d4e5f6".padEnd(40, "0");
+
+const VARIANTS: [string, Record<string, unknown>][] = [
+  [
+    "env_setup_failed",
+    {
+      error: {
+        code: "setup_command_failed",
+        params: { command_index: 0, exit_code: 1 },
+      },
+    },
+  ],
+  [
+    "env_setup_failed",
+    {
+      error: {
+        code: "setup_command_failed",
+        params: { command_index: 0, timed_out: true },
+      },
+    },
+  ],
+  ["env_setup_failed", { error: { code: "port_block_unavailable" } }],
+  ["env_setup_failed", { error: { code: "worktree_add_failed" } }],
+  ["env_recipe_invalid", { code: "env_recipe_too_large", line: 3 }],
+  ["toolchain_unpinned", { tool: "go", source: "go.mod", value: "1.26" }],
+  ["toolchain_unpinned", { source: "pnpm_requires_node" }],
+  ["toolchain_unavailable", { tool: "go", version: "1", cause: "not_found" }],
+  [
+    "toolchain_unavailable",
+    { tool: "go", version: "1", cause: "checksum_mismatch" },
+  ],
+  [
+    "toolchain_unavailable",
+    { tool: "go", version: "1", cause: "download_failed" },
+  ],
+  [
+    "toolchain_unavailable",
+    { tool: "go", version: "1", cause: "unsupported_platform" },
+  ],
+  [
+    "toolchain_unavailable",
+    { tool: "go", version: "1", cause: "archive_invalid" },
+  ],
+  ["secret_missing", { names: ["A"] }],
+  ["secret_unreadable", { name: "A" }],
+  ["session_failed", { cause: "operator_stop", reason: "stop" }],
+  ["session_failed", { subtype: "error_during_execution" }],
+  ["session_lost", { cause: "runner_silent" }],
+  ["session_timeout", { cause: "idle", minutes: 30 }],
+  ["session_timeout", { minutes: 60 }],
+  ["permission_expired", { tool: "Bash", summary: "ls", hours: 24 }],
+  ["budget_exhausted", { dimension: "running_minutes", used: 60, limit: 60 }],
+  ["budget_exhausted", { dimension: "turns", used: 10, limit: 10 }],
+  ["budget_exhausted", { dimension: "tokens", used: 9, limit: 9 }],
+  ["budget_exhausted", { dimension: "cost_usd", used: "1", limit: "1" }],
+  ["quota_exhausted", { account: "claude:default", window: "five_hour" }],
+  [
+    "quota_exhausted",
+    {
+      account: "claude:default",
+      window: "five_hour",
+      resets_at: "2026-10-31T13:00:00.000Z",
+    },
+  ],
+  ["no_changes", { dirty: true, commits: 0 }],
+  ["no_changes", { dirty: false, commits: 0 }],
+  ["push_rejected", { remote_sha: HEAD, local_sha: "f".repeat(40) }],
+  ["push_rejected", {}],
+  ["scm_unavailable", { phase: "awaiting_ci" }],
+  ["scm_unavailable", { phase: "verifying" }],
+  ["scm_unavailable", {}],
+  ["ci_red", { source: "scm", checks: ["test"], head_sha: HEAD }],
+  ["ci_red", { source: "scm", reason: "no_checks", head_sha: HEAD }],
+  [
+    "ci_red",
+    {
+      source: "scm",
+      reason: "required_missing",
+      missing: ["build"],
+      head_sha: HEAD,
+    },
+  ],
+  [
+    "ci_red",
+    {
+      source: "saka",
+      checks: ["make test"],
+      command: "make test",
+      exit_code: 2,
+      head_sha: HEAD,
+    },
+  ],
+  [
+    "ci_red",
+    {
+      source: "saka",
+      checks: ["make test"],
+      command: "make test",
+      timed_out: true,
+      head_sha: HEAD,
+    },
+  ],
+  ["ci_red", { source: "saka", reason: "worktree_moved", head_sha: HEAD }],
+  ["ci_red", { source: "saka", reason: "runner_failed" }],
+  ["merge_conflict", { reason: "not_mergeable", head_sha: HEAD }],
+  ["merge_conflict", { reason: "head_changed", head_sha: HEAD }],
+  ["change_closed", { number: 12 }],
+  [
+    "dod_failed",
+    {
+      reason: "not_in_base",
+      merge_commit_sha: HEAD,
+      base_branch: "main",
+    },
+  ],
+  ["dod_failed", {}],
+  [
+    "dod_failed",
+    {
+      reason: "verify_failed",
+      source: "scm",
+      checks: ["test"],
+      head_sha: HEAD,
+    },
+  ],
+  [
+    "dod_failed",
+    {
+      reason: "verify_failed",
+      source: "saka",
+      command: "make test",
+      exit_code: 1,
+      head_sha: HEAD,
+    },
+  ],
+  [
+    "dod_failed",
+    {
+      reason: "verify_failed",
+      source: "saka",
+      command: "make test",
+      timed_out: true,
+      head_sha: HEAD,
+    },
+  ],
+  ["dod_failed", { reason: "no_checks", source: "scm", head_sha: HEAD }],
+  [
+    "dod_failed",
+    {
+      reason: "required_missing",
+      source: "scm",
+      missing: ["build"],
+      head_sha: HEAD,
+    },
+  ],
+  ["dod_failed", { reason: "runner_failed", source: "saka", head_sha: HEAD }],
+  ["dod_failed", { reason: "worktree_moved", source: "saka", head_sha: HEAD }],
+];
+
+const LABELS: Record<string, string[]> = {
+  "task.state": [
+    "queued",
+    "awaiting_start",
+    "admitted",
+    "in_stage",
+    "blocked",
+    "taken_over",
+    "done",
+    "cancelled",
+    "superseded",
+  ],
+  stage: ["dev", "review", "fix", "merge", "sync"],
+  phase: [
+    "preparing_environment",
+    "running_session",
+    "pushing",
+    "opening_change",
+    "awaiting_ci",
+    "awaiting_merge",
+    "merging",
+    "verifying",
+    "tearing_down",
+  ],
+  "run.state": [
+    "pending",
+    "running",
+    "succeeded",
+    "failed",
+    "blocked",
+    "cancelled",
+  ],
+  "run.trigger": ["auto", "manual"],
+  "gate.source": ["scm", "saka"],
+  "gate.outcome": ["pending", "passed", "failed"],
+  "check.conclusion": [
+    "success",
+    "failure",
+    "neutral",
+    "cancelled",
+    "skipped",
+    "timed_out",
+    "action_required",
+    "stale",
+    "error",
+  ],
+  "check.status": ["queued", "in_progress", "completed"],
+  "change.state": ["open", "merged", "closed"],
+  "env.state": ["preparing", "ready", "failed", "teardown_failed", "torn_down"],
+  "budget.dimension": ["running_minutes", "turns", "tokens", "cost_usd"],
+  "session.state": [
+    "starting",
+    "running",
+    "waiting",
+    "idle",
+    "interrupted",
+    "lost",
+    "resumed",
+    "ended",
+    "failed",
+  ],
+  "timeline.kind": [
+    "system",
+    "thought",
+    "message",
+    "action",
+    "output",
+    "permission",
+    "result",
+    "steer",
+  ],
+  "permission.state": ["pending", "allowed", "denied", "expired"],
+  "packet.kind": ["spec", "context"],
+  "packet.origin": ["link", "always"],
+};
+
+const ERRORS = [
+  "network_error",
+  "internal",
+  "not_ready",
+  "not_found",
+  "validation_failed",
+  "invalid_state",
+  "version_stale",
+  "precondition_required",
+  "merge_not_ready",
+  "retry_limit_reached",
+  "permission_already_answered",
+  "idempotency_key_reused",
+  "work_packet_unavailable",
+];
+
+describe("catalog coverage", () => {
+  for (const locale of ["en", "id"] as const) {
+    const t = translator(locale);
+    const relative = () => "in 3 hours";
+
+    it(`gives every blocker variant its own sentence in ${locale}`, () => {
+      const seen = new Map<string, string>();
+      for (const [code, params] of VARIANTS) {
+        const sentence = blockerText(t, code, params, relative);
+        const where = `${code} ${JSON.stringify(params)}`;
+        expect(sentence, where).not.toBe(t("blocker.unknown", { code }));
+        expect(sentence, where).not.toMatch(/[{}]/);
+        expect(seen.get(sentence), where).toBeUndefined();
+        seen.set(sentence, where);
+      }
+    });
+
+    it(`labels every rendered value in ${locale}`, () => {
+      for (const [prefix, values] of Object.entries(LABELS)) {
+        for (const value of values) {
+          expect(CATALOGS[locale], `${prefix}.${value}`).toHaveProperty([
+            `${prefix}.${value}`,
+          ]);
+        }
+      }
+      expect(label(t, "run.state", "future_state")).toBe("future_state");
+    });
+
+    it(`explains every error code in ${locale}`, () => {
+      for (const code of ERRORS) {
+        expect(errorText(t, code), code).not.toBe(t("error.unknown", { code }));
+        expect(errorText(t, code), code).not.toMatch(/[{}]/);
+      }
+      expect(errorText(t, "future_error")).toBe(
+        t("error.unknown", { code: "future_error" }),
+      );
+    });
+  }
+
+  it("fills the parameters of an error", () => {
+    const en = translator("en");
+    expect(
+      errorText(en, "retry_limit_reached", { stage: "dev", limit: 3 }),
+    ).toBe("Stage Development already used its 3 manual retries.");
+    expect(
+      errorText(en, "merge_not_ready", {
+        gate_outcome: "pending",
+        head_sha: HEAD,
+      }),
+    ).toBe(
+      "The gate at a1b2c3d4e5f6 is Pending, so the pull request cannot be merged yet.",
+    );
+  });
+
+  it("names the evidence of a failed verification after the merge", () => {
+    const en = translator("en");
+    expect(
+      blockerText(en, "dod_failed", {
+        reason: "verify_failed",
+        source: "saka",
+        command: "make test",
+        exit_code: 1,
+        head_sha: HEAD,
+      }),
+    ).toBe(
+      "After the merge, the Done when command make test failed at a1b2c3d4e5f6 with exit code 1.",
+    );
+    expect(
+      blockerText(en, "dod_failed", {
+        reason: "not_in_base",
+        merge_commit_sha: HEAD,
+        base_branch: "main",
+      }),
+    ).toBe("The merge is not on main.");
+    expect(
+      blockerText(
+        en,
+        "quota_exhausted",
+        {
+          account: "claude:default",
+          window: "five_hour",
+          resets_at: "2026-10-31T13:00:00.000Z",
+        },
+        () => "in 3 hours",
+      ),
+    ).toBe(
+      "The agent account claude:default hit its five_hour rate limit; it resets in 3 hours.",
     );
   });
 });

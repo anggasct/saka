@@ -8,9 +8,11 @@ import { label } from "./text";
 export function SpecGroup({
   spec,
   tasks,
+  projectTasks,
 }: {
   spec: SpecItem;
   tasks: readonly WorkItem[];
+  projectTasks: readonly WorkItem[];
 }) {
   const t = useT();
   const ordered = [...tasks].sort(
@@ -34,7 +36,7 @@ export function SpecGroup({
       ) : (
         <ul>
           {ordered.map((task) => (
-            <TaskRow key={task.id} task={task} />
+            <TaskRow key={task.id} task={task} tasks={projectTasks} />
           ))}
         </ul>
       )}
