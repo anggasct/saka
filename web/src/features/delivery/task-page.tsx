@@ -103,7 +103,9 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />
       <SessionSection
-        task={item}
+        owner={{ kind: "work_item", id: item.id }}
+        title={t("task.session.title")}
+        empty={t("task.session.none")}
         project={project.data?.name}
         permissions={permissions.data ?? []}
       />

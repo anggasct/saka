@@ -68,13 +68,15 @@ export function FileView({
   projectId,
   path,
   branch,
-  draft,
+  buffer,
+  notice,
   onSaved,
 }: {
   projectId: string;
   path: string;
   branch: string;
-  draft: string | undefined;
+  buffer: string | undefined;
+  notice?: string | undefined;
   onSaved: (path: string) => void;
 }) {
   const t = useT();
@@ -85,15 +87,15 @@ export function FileView({
     [intl],
   );
   const queryClient = useQueryClient();
-  const isDraft = draft !== undefined;
-  const file = useDocFile(projectId, path, !isDraft);
+  const isBuffer = buffer !== undefined;
+  const file = useDocFile(projectId, path, !isBuffer);
   const server = useMemo(
-    () => (isDraft ? undefined : serverSource(file.data, file.error)),
-    [isDraft, file.data, file.error],
+    () => (isBuffer ? undefined : serverSource(file.data, file.error)),
+    [isBuffer, file.data, file.error],
   );
 
   const [base, setBase] = useState<Source | null>(() =>
-    isDraft ? { content: draft, blob: null, commit: null } : null,
+    isBuffer ? { content: buffer, blob: null, commit: null } : null,
   );
   const [opened, setOpened] = useState<Source | null>(base);
   const [seen, setSeen] = useState<Source | null | undefined>(undefined);
@@ -350,7 +352,7 @@ export function FileView({
       <>
         <div className="min-w-0">
           <FileState
-            loading={!isDraft && server === undefined && file.isPending}
+            loading={!isBuffer && server === undefined && file.isPending}
             error={server === undefined ? file.error : null}
             missing={server === null}
             path={path}
@@ -406,6 +408,11 @@ export function FileView({
         <p role="status" className="min-h-5 text-sm text-muted-foreground">
           {statusText}
         </p>
+        {notice !== undefined && (
+          <p className="rounded-md border border-border bg-muted p-3 text-sm">
+            {notice}
+          </p>
+        )}
         {conflictBlob !== undefined && (
           <Card role="alert" className="space-y-3 border-attention p-3">
             <p className="text-sm">

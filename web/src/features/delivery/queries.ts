@@ -16,8 +16,12 @@ export type Blocker = components["schemas"]["Blocker"];
 export type Session = components["schemas"]["Session"];
 export type PermissionRequest = components["schemas"]["PermissionRequest"];
 export type Decision = components["schemas"]["Decision"];
+export type Measure = components["schemas"]["Measure"];
 
 const LIMIT = 200;
+
+export type SessionsOf =
+  { kind: "work_item"; id: string } | { kind: "spec_draft"; id: string };
 
 export const deliveryKeys = {
   projects: () => [QUERY_ROOTS.projects] as const,
@@ -27,7 +31,8 @@ export const deliveryKeys = {
   workItems: (projectId: string) => [QUERY_ROOTS.workItems, projectId] as const,
   workItem: (id: string) => [QUERY_ROOTS.workItems, "detail", id] as const,
   workPacket: (id: string) => [QUERY_ROOTS.workItems, "packet", id] as const,
-  sessions: (workItemId: string) => [QUERY_ROOTS.sessions, workItemId] as const,
+  sessions: (owner: SessionsOf) =>
+    [QUERY_ROOTS.sessions, owner.kind, owner.id] as const,
   pendingPermissions: () => [QUERY_ROOTS.permissions, "pending"] as const,
   taskPermissions: (workItemId: string) =>
     [QUERY_ROOTS.permissions, "pending", workItemId] as const,
@@ -175,13 +180,18 @@ export function useWorkPacket(id: string, enabled: boolean) {
   });
 }
 
-export function useSessions(workItemId: string) {
+export function useSessions(owner: SessionsOf) {
   return useQuery({
-    queryKey: deliveryKeys.sessions(workItemId),
+    queryKey: deliveryKeys.sessions(owner),
     queryFn: async ({ signal }) =>
       unwrap(
         await api.GET("/api/v1/sessions", {
-          params: { query: { work_item_id: workItemId } },
+          params: {
+            query:
+              owner.kind === "work_item"
+                ? { work_item_id: owner.id }
+                : { spec_draft_id: owner.id },
+          },
           signal,
         }),
       ).items,

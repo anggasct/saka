@@ -31,6 +31,7 @@ export function SessionControls({ session }: { session: Session }) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: [QUERY_ROOTS.sessions] }),
       queryClient.invalidateQueries({ queryKey: [QUERY_ROOTS.workItems] }),
+      queryClient.invalidateQueries({ queryKey: [QUERY_ROOTS.specDrafts] }),
     ]);
   };
 

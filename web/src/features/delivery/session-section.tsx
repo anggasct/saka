@@ -4,7 +4,7 @@ import { useT } from "@/i18n/use-t";
 import { Skeleton } from "@/ui/skeleton";
 
 import { useFormat } from "./format";
-import type { PermissionRequest, Session, WorkItem } from "./queries";
+import type { PermissionRequest, Session, SessionsOf } from "./queries";
 import { useSessions } from "./queries";
 import { Section } from "./section";
 import { SessionControls } from "./session-controls";
@@ -82,31 +82,39 @@ function Summary({ session }: { session: Session }) {
 }
 
 export function SessionSection({
-  task,
+  owner,
+  attemptId,
+  title,
+  empty,
   project,
   permissions,
 }: {
-  task: WorkItem;
+  owner: SessionsOf;
+  attemptId?: string | null;
+  title: string;
+  empty: string;
   project: string | undefined;
   permissions: readonly PermissionRequest[];
 }) {
-  const t = useT();
   const format = useFormat();
-  const sessions = useSessions(task.id);
+  const t = useT();
+  const sessions = useSessions(owner);
   const [chosen, setChosen] = useState<string | null>(null);
   const pickerId = useId();
-  const list = sessions.data ?? [];
+  const list = (sessions.data ?? []).filter(
+    (s) =>
+      attemptId === undefined ||
+      (s.owner.kind === "draft_attempt" && s.owner.attempt_id === attemptId),
+  );
   const session = list.find((s) => s.id === chosen) ?? list.at(-1);
   return (
-    <Section title={t("task.session.title")}>
+    <Section title={title}>
       {sessions.isPending ? (
         <Skeleton className="h-24" />
       ) : sessions.isError ? (
         <p className="text-sm text-muted-foreground">{t("session.error")}</p>
       ) : session === undefined ? (
-        <p className="text-sm text-muted-foreground">
-          {t("task.session.none")}
-        </p>
+        <p className="text-sm text-muted-foreground">{empty}</p>
       ) : (
         <>
           {list.length > 1 && (

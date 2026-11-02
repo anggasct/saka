@@ -15,6 +15,15 @@ export const EVENT_KINDS = [
   "spec.spec.approved",
   "spec.spec.withdrawn",
   "spec.spec.shipped",
+  "spec.draft.requested",
+  "spec.draft.attempt_started",
+  "spec.draft.packet_rendered",
+  "spec.draft.linted",
+  "spec.draft.committing",
+  "spec.draft.succeeded",
+  "spec.draft.failed",
+  "spec.draft.retried",
+  "spec.draft.cancelled",
   "delivery.work_item.created",
   "delivery.work_item.repinned",
   "delivery.work_item.superseded",
@@ -67,6 +76,7 @@ export const QUERY_ROOTS = {
   sessions: "sessions",
   timeline: "timeline",
   docs: "docs",
+  specDrafts: "spec-drafts",
 } as const;
 
 const AFFECTS: Record<string, readonly string[]> = {
@@ -74,7 +84,12 @@ const AFFECTS: Record<string, readonly string[]> = {
   project: [QUERY_ROOTS.projects, QUERY_ROOTS.docs],
   spec: [QUERY_ROOTS.specs],
   work_item: [QUERY_ROOTS.workItems, QUERY_ROOTS.specs],
-  session: [QUERY_ROOTS.workItems, QUERY_ROOTS.sessions],
+  spec_draft: [QUERY_ROOTS.specDrafts, QUERY_ROOTS.specs],
+  session: [
+    QUERY_ROOTS.workItems,
+    QUERY_ROOTS.sessions,
+    QUERY_ROOTS.specDrafts,
+  ],
   permission_request: [QUERY_ROOTS.permissions, QUERY_ROOTS.workItems],
 };
 
