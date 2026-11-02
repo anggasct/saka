@@ -49,6 +49,7 @@ job_kinds! {
     ScmWebhookPrune => "scm.webhook_prune", 3;
     GateVerify => "gate.verify", 3;
     ScmReportStatus => "scm.report_status", 3;
+    ScmPollCommit => "scm.poll_commit", 5;
 }
 
 impl JobKind {
@@ -74,6 +75,7 @@ impl JobKind {
             JobKind::ScmOpenChangeRequest => scm(StagePhase::OpeningChange),
             JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
             JobKind::ScmMerge => scm(StagePhase::Merging),
+            JobKind::ScmPollCommit => scm(StagePhase::Verifying),
             JobKind::EnvVerifyMerged => Some((BlockerCode::DodFailed, json!({}))),
             JobKind::GateVerify => Some((
                 BlockerCode::CiRed,
@@ -138,5 +140,6 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmWebhookPrune => "scm.webhook_prune",
         JobKind::GateVerify => "gate.verify",
         JobKind::ScmReportStatus => "scm.report_status",
+        JobKind::ScmPollCommit => "scm.poll_commit",
     }
 }

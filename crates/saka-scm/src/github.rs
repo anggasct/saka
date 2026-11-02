@@ -228,6 +228,14 @@ impl Scm for GitHub {
         })
     }
 
+    async fn commit_checks(
+        &self,
+        repo: &RepoRef,
+        sha: &str,
+    ) -> PortResult<Vec<saka_core::gate::Check>> {
+        self.checks(&repo.full_name, sha).await
+    }
+
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         let n = request.number.to_string();
         let body = json!({

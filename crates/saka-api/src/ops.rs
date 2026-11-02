@@ -255,6 +255,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         "Duration of Saka gate runs.",
         &m.gate_seconds,
     );
+    t.family(
+        "saka_dod_verifications_total",
+        "counter",
+        "Definition of Done checks after a merge, by outcome.",
+    );
+    for (outcome, n) in &m.dod_verifications {
+        t.sample("saka_dod_verifications_total", &[("outcome", outcome)], n);
+    }
     histogram(
         &mut t,
         "saka_step_advance_seconds",

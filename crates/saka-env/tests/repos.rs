@@ -498,7 +498,13 @@ async fn sync_checks_the_merge_on_the_base_branch_and_teardown_cleans_up() {
     let wt = PathBuf::from(&env.worktree_path);
     let sha = commit(&wt, "a.txt", "a\n");
     w.push(&sha, None).await;
-    assert!(!w.repos.is_merged(&w.repo, &sha, "main").await.unwrap());
+    assert_eq!(
+        w.repos
+            .contains_commit(&w.repo, &sha, "main")
+            .await
+            .unwrap(),
+        None
+    );
 
     git(&w.other, &["checkout", "-q", "main"]);
     git(&w.other, &["fetch", "-q", "origin"]);
@@ -515,13 +521,36 @@ async fn sync_checks_the_merge_on_the_base_branch_and_teardown_cleans_up() {
     );
     let merge = git(&w.other, &["rev-parse", "HEAD"]);
     git(&w.other, &["push", "-q", "origin", "main"]);
-    assert!(w.repos.is_merged(&w.repo, &merge, "main").await.unwrap());
-    assert!(
-        !w.repos
-            .is_merged(&w.repo, &"0".repeat(40), "main")
+    assert_eq!(
+        w.repos
+            .contains_commit(&w.repo, &merge, "main")
             .await
-            .unwrap()
+            .unwrap(),
+        Some(merge.clone())
     );
+    assert_eq!(
+        w.repos
+            .contains_commit(&w.repo, &"0".repeat(40), "main")
+            .await
+            .unwrap(),
+        None
+    );
+
+    std::fs::write(wt.join("a.txt"), "changed\n").unwrap();
+    std::fs::create_dir_all(wt.join("node_modules")).unwrap();
+    std::fs::write(wt.join("node_modules/kept.js"), "kept\n").unwrap();
+    std::fs::write(wt.join("stray.txt"), "stray\n").unwrap();
+    let exclude = wt.join(git(&wt, &["rev-parse", "--git-path", "info/exclude"]));
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    std::fs::write(&exclude, "node_modules/\n").unwrap();
+    w.repos.check_out(&env, &merge).await.unwrap();
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), merge);
+    assert_eq!(git(&wt, &["status", "--porcelain"]), "");
+    assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "a\n");
+    assert!(!wt.join("stray.txt").exists());
+    assert!(wt.join("node_modules/kept.js").exists());
+    let missing = w.repos.check_out(&env, &"1".repeat(40)).await.unwrap_err();
+    assert_eq!(missing.code, "commit_missing");
 
     w.repos.teardown(&env).await.unwrap();
     assert!(!Path::new(&env.root_path).exists());

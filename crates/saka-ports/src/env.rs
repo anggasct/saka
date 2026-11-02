@@ -116,7 +116,14 @@ pub trait Environments: Send + Sync {
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState>;
 
-    async fn is_merged(&self, repo: &RepoRef, commit: &str, base_branch: &str) -> PortResult<bool>;
+    async fn contains_commit(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        base_branch: &str,
+    ) -> PortResult<Option<String>>;
+
+    async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()>;
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()>;
 

@@ -59,7 +59,10 @@ trait Harness: Sync {
     async fn missing_repository(&self, full_name: &str);
     async fn change_already_open(&self, number: u64);
     async fn change(&self, number: u64, state: Change);
-    async fn checks(&self, checks: &[Check], pending_status: &str);
+    async fn checks(&self, checks: &[Check], pending_status: &str) {
+        self.checks_at(HEAD, checks, pending_status).await;
+    }
+    async fn checks_at(&self, sha: &str, checks: &[Check], pending_status: &str);
     async fn merge_answers(&self, number: u64, answer: MergeAnswer);
     async fn branch_missing(&self);
     async fn status_accepted(&self, state: &str, description: &str);
@@ -183,7 +186,7 @@ impl Harness for GitHubHarness {
             .await;
     }
 
-    async fn checks(&self, checks: &[Check], pending_status: &str) {
+    async fn checks_at(&self, sha: &str, checks: &[Check], pending_status: &str) {
         let runs: Vec<Value> = checks
             .iter()
             .map(|c| {
@@ -196,7 +199,7 @@ impl Harness for GitHubHarness {
             .collect();
         Mock::given(method("GET"))
             .and(path(
-                format!("/repos/acme/app/commits/{HEAD}/check-runs").as_str(),
+                format!("/repos/acme/app/commits/{sha}/check-runs").as_str(),
             ))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -205,7 +208,7 @@ impl Harness for GitHubHarness {
             .mount(&self.w.server)
             .await;
         Mock::given(method("GET"))
-            .and(path(format!("/repos/acme/app/commits/{HEAD}/status").as_str()))
+            .and(path(format!("/repos/acme/app/commits/{sha}/status").as_str()))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "state": "pending",
                 "statuses": [{ "context": pending_status, "state": "pending", "target_url": "https://ci.example/1" }],
@@ -397,6 +400,48 @@ async fn latest_rerun_of_a_check_wins(h: &dyn Harness) {
     assert_eq!(tests[0].conclusion, Some(CheckConclusion::Success));
 }
 
+async fn checks_are_read_for_a_commit(h: &dyn Harness) {
+    h.checks_at(
+        MERGED,
+        &[
+            Check {
+                id: 30,
+                name: "test",
+                done: Some("failure"),
+            },
+            Check {
+                id: 31,
+                name: "test",
+                done: Some("success"),
+            },
+            Check {
+                id: 32,
+                name: "lint",
+                done: Some("success"),
+            },
+        ],
+        saka_core::gate::SAKA_STATUS_CONTEXT,
+    )
+    .await;
+    let checks = h.scm().commit_checks(&h.repo(), MERGED).await.unwrap();
+    let summary: Vec<(&str, CheckKind, Option<CheckConclusion>)> = checks
+        .iter()
+        .map(|c| (c.name.as_str(), c.kind, c.conclusion))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("lint", CheckKind::CheckRun, Some(CheckConclusion::Success)),
+            ("test", CheckKind::CheckRun, Some(CheckConclusion::Success)),
+            (
+                saka_core::gate::SAKA_STATUS_CONTEXT,
+                CheckKind::CommitStatus,
+                None
+            ),
+        ]
+    );
+}
+
 async fn merged_change_reports_its_merge_commit(h: &dyn Harness) {
     h.change(7, Change::Merged).await;
     h.change(8, Change::Closed).await;
@@ -547,6 +592,7 @@ conformance!(GitHubHarness:
     open_change_request_is_idempotent_for_the_same_branch,
     change_request_snapshot_normalizes_checks_and_statuses,
     latest_rerun_of_a_check_wins,
+    checks_are_read_for_a_commit,
     merged_change_reports_its_merge_commit,
     merge_reports_its_outcomes,
     merge_at_a_stale_head_is_head_changed,

@@ -90,6 +90,8 @@ pub trait Scm: Send + Sync {
 
     async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot>;
 
+    async fn commit_checks(&self, repo: &RepoRef, sha: &str) -> PortResult<Vec<Check>>;
+
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()>;

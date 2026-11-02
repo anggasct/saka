@@ -272,7 +272,13 @@ impl World {
                 merged_at: None,
             },
         );
-        self.decide(step, TaskInput::MergeVerified { found: true });
+        self.decide(
+            step,
+            TaskInput::MergeVerified {
+                found: true,
+                base_tip: None,
+            },
+        );
         self.jobs.clear();
     }
 
@@ -624,7 +630,13 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         )
     );
     assert_eq!(w.take_jobs(), vec![JobKind::EnvVerifyMerged]);
-    w.decide(1, TaskInput::MergeVerified { found: true });
+    w.decide(
+        1,
+        TaskInput::MergeVerified {
+            found: true,
+            base_tip: None,
+        },
+    );
     assert_eq!(
         w.take_jobs(),
         vec![JobKind::EnvTeardown, JobKind::ScmDeleteBranch]
@@ -655,7 +667,31 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         Some(StagePhase::Verifying),
         "merged outside Saka goes to sync"
     );
-    w.decide(2, TaskInput::MergeVerified { found: true });
+    w.decide(
+        2,
+        TaskInput::MergeVerified {
+            found: true,
+            base_tip: Some(sha('d')),
+        },
+    );
+    let run = w.task(2).stage_run.clone().unwrap();
+    assert_eq!(
+        (run.stage, run.head_sha.as_deref()),
+        (Stage::Sync, Some(sha('d').as_str())),
+        "a merge without proof is verified at its merge commit"
+    );
+    assert!(
+        w.take_jobs().contains(&JobKind::ScmPollCommit),
+        "the repo's gate is CI, so CI is read at the merge commit"
+    );
+    w.decide(
+        2,
+        TaskInput::CommitChecksObserved {
+            head_sha: sha('d'),
+            checks: vec![check("test", Some(CheckConclusion::Success))],
+        },
+    );
+    assert_eq!(w.place(2).2, Some(StagePhase::TearingDown));
     w.decide(
         2,
         TaskInput::EnvironmentTornDown {
@@ -1168,7 +1204,13 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
             checks: vec![],
         },
     );
-    w.decide(1, TaskInput::MergeVerified { found: false });
+    w.decide(
+        1,
+        TaskInput::MergeVerified {
+            found: false,
+            base_tip: None,
+        },
+    );
     assert_eq!(
         w.task(1).open_blocker().map(|b| b.code),
         Some(BlockerCode::DodFailed)
@@ -1246,6 +1288,56 @@ fn reconcile_recreates_the_job_of_the_current_phase() {
         })
         .collect();
     assert_eq!(again, polls);
+}
+
+#[test]
+fn saka_verify_read_back_at_the_merge_commit_is_not_ci() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Failure))]),
+    );
+    w.decide(
+        1,
+        TaskInput::ChangeObserved {
+            state: ChangeState::Merged,
+            head_sha: sha('b'),
+            merge_commit_sha: Some(sha('m')),
+            merged_at: None,
+            checks: vec![],
+        },
+    );
+    w.decide(
+        1,
+        TaskInput::MergeVerified {
+            found: true,
+            base_tip: Some(sha('m')),
+        },
+    );
+    let ours = Check {
+        name: saka_core::gate::SAKA_STATUS_CONTEXT.to_string(),
+        kind: CheckKind::CommitStatus,
+        status: CheckStatus::Completed,
+        conclusion: Some(CheckConclusion::Success),
+        url: None,
+    };
+    w.decide(
+        1,
+        TaskInput::CommitChecksObserved {
+            head_sha: sha('m'),
+            checks: vec![ours],
+        },
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::Verifying));
+    w.now = w.now.plus_ms(cfg().ci_appear_timeout_ms + 1);
+    w.decide(1, TaskInput::Tick);
+    let t = w.task(1);
+    let b = t.open_blocker().unwrap();
+    assert_eq!(b.code, BlockerCode::DodFailed);
+    assert_eq!(b.params["reason"], "no_checks");
+    assert_eq!(b.params["head_sha"], json!(sha('m')));
 }
 
 fn polls(w: &World) -> usize {
