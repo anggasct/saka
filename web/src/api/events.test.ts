@@ -1,28 +1,12 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-import type { EventStream } from "@/platform";
+import { fakeApi } from "@/test/fake-api";
+import type { Recorded } from "@/test/fake-api";
+import { fakeStream } from "@/test/fake-stream";
 
-import { EVENT_KINDS, startEventStream } from "./events";
-
-function fakeStream() {
-  const listeners = new Map<string, (event: MessageEvent<string>) => void>();
-  let closed = false;
-  const stream: EventStream = {
-    addEventListener: (type, listener) => {
-      listeners.set(type, listener);
-    },
-    close: () => {
-      closed = true;
-    },
-  };
-  const emit = (type: string, data: unknown) => {
-    listeners.get(type)?.(
-      new MessageEvent(type, { data: JSON.stringify(data) }),
-    );
-  };
-  return { stream, emit, listeners, closed: () => closed };
-}
+import { EVENT_KINDS, startEventStream, timelineKey } from "./events";
+import type { Activity, TimelineData } from "./events";
 
 describe("startEventStream", () => {
   it("listens to every event kind on one stream", () => {
@@ -30,9 +14,10 @@ describe("startEventStream", () => {
     const open = vi.fn(() => fake.stream);
     startEventStream(new QueryClient(), open);
     expect(open).toHaveBeenCalledWith("/api/v1/events");
-    expect([...fake.listeners.keys()]).toEqual(
-      EVENT_KINDS.map((k) => `${k}.v1`),
-    );
+    expect([...fake.listeners.keys()]).toEqual([
+      ...EVENT_KINDS.map((k) => `${k}.v1`),
+      "open",
+    ]);
     for (const kind of [
       "spec.spec.withdrawn",
       "delivery.work_item.repinned",
@@ -64,6 +49,14 @@ describe("startEventStream", () => {
       [["work-items"], ["specs"]],
     );
     invalidate.mockClear();
+    fake.emit("runtime.session.state_changed.v1", {
+      seq: 7,
+      stream_type: "session",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["work-items"], ["sessions"]],
+    );
+    invalidate.mockClear();
     fake.emit("runtime.permission.requested.v1", {
       seq: 8,
       stream_type: "permission_request",
@@ -91,5 +84,109 @@ describe("startEventStream", () => {
     ).toBe(true);
     stop();
     expect(fake.closed()).toBe(true);
+  });
+});
+
+const SESSION = "0193f0c4-1b2a-7c3d-9e8f-0011223344e1";
+const TIMELINE = `/api/v1/sessions/${SESSION}/timeline`;
+
+function row(offset: number): Activity {
+  return {
+    offset,
+    at: "2026-10-31T10:00:00.000Z",
+    kind: "message",
+    summary: `row ${offset}`,
+    data: {},
+  };
+}
+
+function liveServer(total: () => number) {
+  return fakeApi({
+    [TIMELINE]: async (request: Recorded) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const after = Number(request.search.get("after") ?? "-1");
+      const end = total();
+      const items = [];
+      for (let o = after + 1; o < end; o++) {
+        items.push(row(o));
+      }
+      return {
+        body: {
+          items,
+          next_after: null,
+          prev_before: after >= 0 ? after + 1 : null,
+        },
+      };
+    },
+  });
+}
+
+function seeded(): QueryClient {
+  const client = new QueryClient();
+  client.setQueryData<TimelineData>(timelineKey(SESSION), {
+    items: [row(0), row(1), row(2)],
+    prevBefore: null,
+  });
+  return client;
+}
+
+function offsets(client: QueryClient): number[] {
+  return (
+    client.getQueryData<TimelineData>(timelineKey(SESSION))?.items ?? []
+  ).map((a) => a.offset);
+}
+
+describe("live timeline", () => {
+  it("reads new activities at most once at a time and keeps each once", async () => {
+    let total = 3;
+    const { requests } = liveServer(() => total);
+    const client = seeded();
+    const fake = fakeStream();
+    startEventStream(client, () => fake.stream);
+    for (let o = 3; o < 8; o++) {
+      total = o + 1;
+      fake.emit("runtime.session.activity.v1", {
+        session_id: SESSION,
+        work_item_id: "w",
+        offset: o,
+        kind: "message",
+      });
+    }
+    await vi.waitFor(() => {
+      expect(offsets(client)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    });
+    const forward = requests.filter((r) => r.search.has("after"));
+    expect(forward.length).toBeLessThanOrEqual(2);
+    expect(forward[0]?.search.get("after")).toBe("2");
+  });
+
+  it("ignores activities of a session that is not open", async () => {
+    const { requests } = liveServer(() => 9);
+    const client = seeded();
+    const fake = fakeStream();
+    startEventStream(client, () => fake.stream);
+    fake.emit("runtime.session.activity.v1", {
+      session_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344e2",
+      work_item_id: "w",
+      offset: 9,
+      kind: "message",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(requests).toHaveLength(0);
+  });
+
+  it("catches up once after the stream reconnects", async () => {
+    const { requests } = liveServer(() => 5);
+    const client = seeded();
+    const fake = fakeStream();
+    startEventStream(client, () => fake.stream);
+    fake.emit("open", {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(requests).toHaveLength(0);
+    fake.emit("open", {});
+    await vi.waitFor(() => {
+      expect(offsets(client)).toEqual([0, 1, 2, 3, 4]);
+    });
+    expect(requests.map((r) => r.search.get("after"))).toEqual(["2"]);
   });
 });

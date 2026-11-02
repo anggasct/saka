@@ -22,7 +22,7 @@ async function rulesFor(file: string): Promise<string[]> {
 describe("lint fixtures", () => {
   it("refuse every browser global outside the platform layer", async () => {
     const rules = await rulesFor("browser-globals.ts");
-    expect(rules).toEqual(Array<string>(7).fill("no-restricted-globals"));
+    expect(rules).toEqual(Array<string>(8).fill("no-restricted-globals"));
   });
 
   it("refuse desktop imports outside the platform layer", async () => {

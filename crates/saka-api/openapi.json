@@ -1030,12 +1030,32 @@
           {
             "name": "after",
             "in": "query",
-            "description": "Return activities with a larger offset.",
+            "description": "Return the activities right after this offset. At most one of `after`, `before`, and `tail`.",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int64",
               "minimum": 0
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Return the activities right before this offset, still in ascending order.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "description": "`true` returns the last `limit` activities, in ascending order.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -3876,7 +3896,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/SessionActivity"
-            }
+            },
+            "description": "Ascending by `offset`."
           },
           "next_after": {
             "type": [
@@ -3884,7 +3905,16 @@
               "null"
             ],
             "format": "int64",
-            "description": "Pass as `after` for the next page; `null` when this page is the end.",
+            "description": "Offset of the last item when newer activities existed at read time; pass as `after`. `null` otherwise.",
+            "minimum": 0
+          },
+          "prev_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Offset of the first item when older activities exist; pass as `before`. `null` otherwise.",
             "minimum": 0
           }
         }

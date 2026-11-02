@@ -841,9 +841,12 @@ impl From<&CoreActivity> for SessionActivity {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Timeline {
+    /// Ascending by `offset`.
     pub items: Vec<SessionActivity>,
-    /// Pass as `after` for the next page; `null` when this page is the end.
+    /// Offset of the last item when newer activities existed at read time; pass as `after`. `null` otherwise.
     pub next_after: Option<u64>,
+    /// Offset of the first item when older activities exist; pass as `before`. `null` otherwise.
+    pub prev_before: Option<u64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1247,8 +1250,12 @@ pub struct SessionsQuery {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct TimelineQuery {
-    /// Return activities with a larger offset.
+    /// Return the activities right after this offset. At most one of `after`, `before`, and `tail`.
     pub after: Option<u64>,
+    /// Return the activities right before this offset, still in ascending order.
+    pub before: Option<u64>,
+    /// `true` returns the last `limit` activities, in ascending order.
+    pub tail: Option<String>,
     /// 1 to 500, default 200.
     pub limit: Option<u32>,
 }

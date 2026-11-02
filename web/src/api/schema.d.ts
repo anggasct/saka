@@ -1125,12 +1125,18 @@ export interface components {
       version: number;
     };
     Timeline: {
+      /** @description Ascending by `offset`. */
       items: components["schemas"]["SessionActivity"][];
       /**
        * Format: int64
-       * @description Pass as `after` for the next page; `null` when this page is the end.
+       * @description Offset of the last item when newer activities existed at read time; pass as `after`. `null` otherwise.
        */
       next_after?: number | null;
+      /**
+       * Format: int64
+       * @description Offset of the first item when older activities exist; pass as `before`. `null` otherwise.
+       */
+      prev_before?: number | null;
     };
     Toolchain: {
       /** @description `go`, `node` or `pnpm`. */
@@ -1977,8 +1983,12 @@ export interface operations {
   get_timeline: {
     parameters: {
       query?: {
-        /** @description Return activities with a larger offset. */
+        /** @description Return the activities right after this offset. At most one of `after`, `before`, and `tail`. */
         after?: number;
+        /** @description Return the activities right before this offset, still in ascending order. */
+        before?: number;
+        /** @description `true` returns the last `limit` activities, in ascending order. */
+        tail?: string;
         /** @description 1 to 500, default 200. */
         limit?: number;
       };

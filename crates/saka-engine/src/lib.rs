@@ -44,6 +44,7 @@ pub use register::{AddProject, Integration, parse_repo_url};
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
+pub use saka_store::read::{TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{
     AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
