@@ -108,7 +108,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::WorkPacketUnavailable { .. }
         | R::FilePathConflict { .. }
         | R::FilePushRejected { .. }
-        | R::RetryLimitReached { .. } => StatusCode::CONFLICT,
+        | R::RetryLimitReached { .. }
+        | R::SpecDraftTargetTaken { .. } => StatusCode::CONFLICT,
     }
 }
 
@@ -117,6 +118,7 @@ impl From<EngineError> for ApiError {
         match e {
             EngineError::Rejected(r) => ApiError::new(rejection_status(&r), r.code(), r.params()),
             EngineError::Invalid { field, code } => ApiError::validation(field, &code),
+            EngineError::InvalidItem { field, code } => ApiError::validation(&field, &code),
             EngineError::Port(p) if p.code == "scm_repo_inaccessible" => ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "scm_repo_inaccessible",

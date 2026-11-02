@@ -76,6 +76,12 @@ impl Default for AgentScript {
 pub const SIM_RUNNER_VERSION: &str = "sim";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DraftTurn {
+    Write { path: String, bytes: Vec<u8> },
+    Nothing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiScript {
     Pass,
     Fail(Vec<String>),
@@ -139,6 +145,7 @@ struct FakeSession {
     waiting_turn: Option<u32>,
     answered: BTreeSet<String>,
     steers: BTreeSet<u32>,
+    architect: bool,
 }
 
 struct State {
@@ -172,6 +179,7 @@ struct State {
     command_output: HashMap<String, String>,
     statuses: Vec<(String, StatusReport)>,
     statuses_refused: bool,
+    draft_turns: VecDeque<DraftTurn>,
     push_outages: u32,
     change_reads_fail: bool,
     launches: Vec<Launch>,
@@ -261,6 +269,7 @@ impl FakeWorld {
                 command_output: HashMap::new(),
                 statuses: Vec::new(),
                 statuses_refused: false,
+                draft_turns: VecDeque::new(),
                 push_outages: 0,
                 change_reads_fail: false,
                 launches: Vec::new(),
@@ -297,6 +306,30 @@ impl FakeWorld {
 
     pub fn stats(&self) -> Stats {
         self.state().stats.clone()
+    }
+
+    pub fn script_draft(&self, turns: Vec<DraftTurn>) {
+        self.state().draft_turns = turns.into();
+    }
+
+    pub fn worktree_file(&self, env: EnvironmentId, path: &str) -> Option<Vec<u8>> {
+        self.state()
+            .worktrees
+            .get(&env)
+            .and_then(|w| w.files.get(path).cloned())
+    }
+
+    pub fn link_in_worktree(&self, env: EnvironmentId, path: &str) {
+        if let Some(w) = self.state().worktrees.get_mut(&env) {
+            w.links.insert(path.to_string());
+        }
+    }
+
+    pub fn worktree_live(&self, env: EnvironmentId) -> bool {
+        self.state()
+            .worktrees
+            .get(&env)
+            .is_some_and(|w| !w.torn_down)
     }
 
     pub fn set_script(&self, script: AgentScript) {
@@ -397,6 +430,17 @@ impl FakeWorld {
         let commit = s.new_commit(vec![base]);
         s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
         s.docs.insert(path.to_string(), bytes.to_vec());
+        let snapshot = s.docs.clone();
+        s.doc_history.insert(commit.clone(), snapshot);
+        commit
+    }
+
+    pub fn remove_doc(&self, path: &str) -> String {
+        let mut s = self.state();
+        let base = s.remote[BASE_BRANCH].clone();
+        let commit = s.new_commit(vec![base]);
+        s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
+        s.docs.remove(path);
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
         commit
@@ -686,10 +730,32 @@ impl State {
     }
 
     fn work(&mut self, session: SessionId, turn: u32, at: Timestamp) {
-        let Some(env) = self.sessions.get(&session).map(|s| s.env) else {
+        let Some((env, architect)) = self.sessions.get(&session).map(|s| (s.env, s.architect))
+        else {
             return;
         };
         let outcome = self.script.outcome.clone();
+        let drafting = architect
+            && matches!(
+                outcome,
+                AgentOutcome::Commit
+                    | AgentOutcome::CommitOnFollowup
+                    | AgentOutcome::LeaveDirty
+                    | AgentOutcome::NoCommit
+            );
+        if drafting {
+            // The last scripted turn repeats, so a script of one turn covers every turn.
+            let next = if self.draft_turns.len() > 1 {
+                self.draft_turns.pop_front()
+            } else {
+                self.draft_turns.front().cloned()
+            };
+            if let Some(DraftTurn::Write { path, bytes }) = next
+                && let Some(w) = self.worktrees.get_mut(&env)
+            {
+                w.files.insert(path, bytes);
+            }
+        }
         let usage = self.script.usage;
         if let Some(info) = self.script.rate_limit.clone() {
             self.emit(session, at, RunnerEventKind::RateLimit { info });
@@ -728,6 +794,7 @@ impl State {
             }
         };
         match outcome {
+            _ if drafting => end(self, "success"),
             AgentOutcome::Commit => {
                 commit(self);
                 end(self, "success");
@@ -1004,6 +1071,7 @@ impl Environments for FakeWorld {
             return RequestPath {
                 path: raw.to_string(),
                 inside_worktree: false,
+                through_symlink: false,
             };
         } else if cwd.is_empty() {
             raw.to_string()
@@ -1019,15 +1087,27 @@ impl Environments for FakeWorld {
                         return RequestPath {
                             path: raw.to_string(),
                             inside_worktree: false,
+                            through_symlink: false,
                         };
                     }
                 }
                 p => parts.push(p),
             }
         }
+        let path = parts.join("/");
+        let through_symlink = self
+            .state()
+            .worktrees
+            .get(&env.environment_id)
+            .is_some_and(|w| {
+                w.links
+                    .iter()
+                    .any(|l| path == *l || path.starts_with(&format!("{l}/")))
+            });
         RequestPath {
-            path: parts.join("/"),
+            path,
             inside_worktree: true,
+            through_symlink,
         }
     }
 }
@@ -1487,6 +1567,7 @@ impl Agents for FakeWorld {
                 waiting_turn: None,
                 answered: BTreeSet::new(),
                 steers: BTreeSet::new(),
+                architect: matches!(launch.profile, LaunchProfile::Architect { .. }),
             },
         );
         s.stats.session_starts += 1;

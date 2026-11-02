@@ -1,5 +1,8 @@
 use serde_json::{Value, json};
 
+use crate::ids::{SpecDraftId, SpecId};
+use crate::vocab::TargetTaken;
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Rejection {
     #[error("invalid state: {state}")]
@@ -47,7 +50,9 @@ pub enum Rejection {
     #[error("spec file not found on the base branch")]
     SpecFileNotFound { path: String, base_branch: String },
     #[error("retry limit reached")]
-    RetryLimitReached { stage: String, limit: u32 },
+    RetryLimitReached { stage: Option<String>, limit: u32 },
+    #[error("draft target is taken")]
+    SpecDraftTargetTaken { path: String, taken: TargetTakenBy },
     #[error("work packet is not available")]
     WorkPacketUnavailable { reason: &'static str },
     #[error("secret value is too short")]
@@ -96,6 +101,7 @@ impl Rejection {
             Rejection::SpecFileNotFound { .. } => "spec_file_not_found",
             Rejection::WorkPacketUnavailable { .. } => "work_packet_unavailable",
             Rejection::RetryLimitReached { .. } => "retry_limit_reached",
+            Rejection::SpecDraftTargetTaken { .. } => "spec_draft_target_taken",
             Rejection::SecretTooShort => "secret_too_short",
             Rejection::SecretNameInvalid => "secret_name_invalid",
             Rejection::FileStale { .. } => "file_stale",
@@ -135,8 +141,15 @@ impl Rejection {
                 json!({ "path": path, "base_branch": base_branch })
             }
             Rejection::WorkPacketUnavailable { reason } => json!({ "reason": reason }),
-            Rejection::RetryLimitReached { stage, limit } => {
-                json!({ "stage": stage, "limit": limit })
+            Rejection::RetryLimitReached {
+                stage: Some(stage),
+                limit,
+            } => json!({ "stage": stage, "limit": limit }),
+            Rejection::RetryLimitReached { stage: None, limit } => json!({ "limit": limit }),
+            Rejection::SpecDraftTargetTaken { path, taken } => {
+                let mut params = taken.params();
+                params["path"] = json!(path);
+                params
             }
             Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
             Rejection::FilePathConflict { path } => json!({ "path": path }),
@@ -146,6 +159,49 @@ impl Rejection {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }
             _ => json!({}),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetTakenBy {
+    File {
+        blob: Option<String>,
+        commit: String,
+    },
+    Spec {
+        spec_id: SpecId,
+    },
+    Slug {
+        spec_id: SpecId,
+    },
+    Draft {
+        spec_draft_id: SpecDraftId,
+    },
+}
+
+impl TargetTakenBy {
+    pub fn reason(&self) -> TargetTaken {
+        match self {
+            TargetTakenBy::File { .. } => TargetTaken::FileExists,
+            TargetTakenBy::Spec { .. } => TargetTaken::SpecRegistered,
+            TargetTakenBy::Slug { .. } => TargetTaken::SlugTaken,
+            TargetTakenBy::Draft { .. } => TargetTaken::DraftActive,
+        }
+    }
+
+    pub fn params(&self) -> Value {
+        let reason = self.reason();
+        match self {
+            TargetTakenBy::File { blob, commit } => {
+                json!({ "reason": reason, "blob": blob, "commit": commit })
+            }
+            TargetTakenBy::Spec { spec_id } | TargetTakenBy::Slug { spec_id } => {
+                json!({ "reason": reason, "spec_id": spec_id })
+            }
+            TargetTakenBy::Draft { spec_draft_id } => {
+                json!({ "reason": reason, "spec_draft_id": spec_draft_id })
+            }
         }
     }
 }

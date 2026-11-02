@@ -4,16 +4,18 @@ use serde_json::Value;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    ProjectId, RepoId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
-    WorkItemId,
+    ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
+    StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::job::JobKind;
-use crate::model::{Budget, Coded, ContextRef, DependsOn, ProjectRepo, RunOwner, ToolchainUse};
+use crate::model::{
+    Budget, Coded, ContextRef, DependsOn, DraftDocument, ProjectRepo, RunOwner, ToolchainUse,
+};
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, BudgetDimension, GateOutcome, GateSource, InterruptBy,
-    MergeMethod, PermissionState, ResumeCause, ResumeReason, SessionState, Stage, StagePhase,
-    SupersedeReason, Trigger,
+    BlockerCode, BlockerResolution, BudgetDimension, DraftFailureCode, DraftLocale, GateOutcome,
+    GateSource, InterruptBy, LintOutcome, MergeMethod, PermissionState, ResumeCause, ResumeReason,
+    SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -73,6 +75,7 @@ pub enum Event {
         project_id: ProjectId,
         path: String,
         slug: String,
+        origin: SpecOrigin,
     },
     #[serde(rename = "spec.revision.recorded")]
     SpecRevisionRecorded {
@@ -111,6 +114,81 @@ pub enum Event {
     SpecShipped {
         spec_id: SpecId,
         revision_id: SpecRevisionId,
+    },
+
+    #[serde(rename = "spec.draft.requested")]
+    SpecDraftRequested {
+        spec_draft_id: SpecDraftId,
+        project_id: ProjectId,
+        path: String,
+        slug: String,
+        idea: String,
+        locale: DraftLocale,
+        context_paths: Vec<String>,
+    },
+    #[serde(rename = "spec.draft.attempt_started")]
+    SpecDraftAttemptStarted {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        attempt: u32,
+        trigger: Trigger,
+        reason: Option<String>,
+        note: Option<String>,
+        budget: Budget,
+    },
+    #[serde(rename = "spec.draft.packet_rendered")]
+    SpecDraftPacketRendered {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        base_sha: String,
+        packet_sha256: String,
+        documents: Vec<DraftDocument>,
+    },
+    #[serde(rename = "spec.draft.linted")]
+    SpecDraftLinted {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        round: u32,
+        session_id: SessionId,
+        turn: u32,
+        outcome: LintOutcome,
+        bytes: Option<u64>,
+        content_hash: Option<String>,
+        issue_codes: Vec<String>,
+        decisions_open: u32,
+    },
+    #[serde(rename = "spec.draft.committing")]
+    SpecDraftCommitting {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        round: u32,
+    },
+    #[serde(rename = "spec.draft.succeeded")]
+    SpecDraftSucceeded {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        spec_id: SpecId,
+        revision_id: SpecRevisionId,
+        commit: String,
+    },
+    #[serde(rename = "spec.draft.failed")]
+    SpecDraftFailed {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        code: DraftFailureCode,
+        params: Value,
+        commit: Option<String>,
+    },
+    #[serde(rename = "spec.draft.retried")]
+    SpecDraftRetried {
+        spec_draft_id: SpecDraftId,
+        reason: String,
+        note: Option<String>,
+    },
+    #[serde(rename = "spec.draft.cancelled")]
+    SpecDraftCancelled {
+        spec_draft_id: SpecDraftId,
+        reason: String,
     },
 
     #[serde(rename = "delivery.work_item.created")]
@@ -459,6 +537,15 @@ pub enum Prompt {
     Steer {
         text: String,
     },
+    DraftPacket,
+    DraftLint {
+        round: u32,
+        max_rounds: u32,
+    },
+    DraftMissing {
+        round: u32,
+        max_rounds: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -544,6 +631,15 @@ impl Event {
             | E::SpecApproved { spec_id, .. }
             | E::SpecWithdrawn { spec_id, .. }
             | E::SpecShipped { spec_id, .. } => Stream::Spec(*spec_id),
+            E::SpecDraftRequested { spec_draft_id, .. }
+            | E::SpecDraftAttemptStarted { spec_draft_id, .. }
+            | E::SpecDraftPacketRendered { spec_draft_id, .. }
+            | E::SpecDraftLinted { spec_draft_id, .. }
+            | E::SpecDraftCommitting { spec_draft_id, .. }
+            | E::SpecDraftSucceeded { spec_draft_id, .. }
+            | E::SpecDraftFailed { spec_draft_id, .. }
+            | E::SpecDraftRetried { spec_draft_id, .. }
+            | E::SpecDraftCancelled { spec_draft_id, .. } => Stream::SpecDraft(*spec_draft_id),
             E::SessionStarted { session_id, .. }
             | E::SessionReattached { session_id, .. }
             | E::SessionSteered { session_id, .. }

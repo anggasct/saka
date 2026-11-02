@@ -82,6 +82,9 @@ impl Engine {
                 })
             }
             Prompt::Steer { text } => Ok(text.clone()),
+            Prompt::DraftPacket | Prompt::DraftLint { .. } | Prompt::DraftMissing { .. } => Err(
+                EngineError::Internal("a task session has no draft prompt".into()),
+            ),
         }
     }
 

@@ -1,10 +1,10 @@
 use rusqlite::{Transaction, params};
-use saka_core::ids::{ProjectId, SpecId, WorkItemId};
+use saka_core::ids::{ProjectId, SpecDraftAttemptId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
-    AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, GateResult, PermissionRequest,
-    PermissionRule, Project, Repo, Session, SessionActivity, Spec, SpecDependency, StageRun, Task,
-    UsageRecord, WorkItemDependency,
+    AccountQuota, Blocker, ChangeRequest, ContextRef, Draft, Environment, GateResult, LintRound,
+    PermissionRequest, PermissionRule, Project, Repo, Session, SessionActivity, Spec,
+    SpecDependency, StageRun, Task, UsageRecord, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::GateSource;
@@ -132,6 +132,9 @@ pub struct Batch {
     pub revisions: Vec<SpecRevisionRow>,
     pub context_blobs: Vec<ContextBlobRow>,
     pub tasks: Vec<Task>,
+    pub drafts: Vec<Draft>,
+    pub draft_rounds: Vec<LintRound>,
+    pub draft_packets: Vec<(SpecDraftAttemptId, String)>,
     pub spec_dependencies: Vec<SpecDependency>,
     pub work_item_dependencies: Vec<WorkItemDependency>,
     pub replaced_spec_dependencies: Vec<SpecId>,
@@ -277,6 +280,18 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for t in &b.tasks {
         task(tx, t)?;
+    }
+    for d in &b.drafts {
+        draft(tx, d, &b.draft_packets)?;
+    }
+    for r in &b.draft_rounds {
+        let project = b
+            .drafts
+            .iter()
+            .find(|d| d.draft.id == r.spec_draft_id)
+            .map(|d| d.draft.project_id)
+            .ok_or_else(|| StoreError::Corrupt("lint round without its draft".into()))?;
+        lint_round(tx, project, r)?;
     }
     for id in &b.replaced_spec_dependencies {
         tx.execute(
@@ -594,28 +609,168 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
             }
         }
     }
-    if let Some(e) = &t.environment {
-        environment(tx, t, e)?;
-    }
-    for s in t.retired_sessions.iter().chain(t.session.iter()) {
-        session(tx, t, s)?;
-    }
-    for p in &t.permissions {
-        permission(tx, t, p)?;
-    }
-    for u in &t.usage_records {
-        usage_record(tx, t, u)?;
-    }
-    for q in &t.quota_observations {
-        account_quota(tx, q)?;
-    }
+    run(
+        tx,
+        i.project_id,
+        RunRows {
+            environment: t.environment.as_ref(),
+            sessions: &t.retired_sessions,
+            session: t.session.as_ref(),
+            permissions: &t.permissions,
+            usage_records: &t.usage_records,
+            quotas: &t.quota_observations,
+        },
+    )?;
     for r in &t.added_rules {
         permission_rule(tx, r)?;
     }
     Ok(())
 }
 
-fn usage_record(tx: &Transaction<'_>, t: &Task, u: &UsageRecord) -> Result<()> {
+struct RunRows<'a> {
+    environment: Option<&'a Environment>,
+    sessions: &'a [Session],
+    session: Option<&'a Session>,
+    permissions: &'a [PermissionRequest],
+    usage_records: &'a [UsageRecord],
+    quotas: &'a [AccountQuota],
+}
+
+fn run(tx: &Transaction<'_>, project: ProjectId, rows: RunRows<'_>) -> Result<()> {
+    if let Some(e) = rows.environment {
+        environment(tx, project, e)?;
+    }
+    for s in rows.sessions.iter().chain(rows.session) {
+        session(tx, project, s)?;
+    }
+    for p in rows.permissions {
+        permission(tx, project, p)?;
+    }
+    for u in rows.usage_records {
+        usage_record(tx, project, u)?;
+    }
+    for q in rows.quotas {
+        account_quota(tx, q)?;
+    }
+    Ok(())
+}
+
+fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String)]) -> Result<()> {
+    let x = &d.draft;
+    tx.execute(
+        "INSERT INTO spec_draft (id, project_id, path, slug, idea, locale, context_paths, state, attempt,
+           current_attempt_id, retries, queued_at, failure, spec_id, commit_sha, version, created_by, created_at,
+           updated_at, finished_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+         ON CONFLICT (id) DO UPDATE SET state = excluded.state, attempt = excluded.attempt,
+           current_attempt_id = excluded.current_attempt_id, retries = excluded.retries,
+           queued_at = excluded.queued_at, failure = excluded.failure, spec_id = excluded.spec_id,
+           commit_sha = excluded.commit_sha, version = excluded.version, updated_at = excluded.updated_at,
+           finished_at = excluded.finished_at",
+        params![
+            x.id.to_string(),
+            x.project_id.to_string(),
+            x.path,
+            x.slug,
+            x.idea,
+            x.locale.as_str(),
+            to_json(&x.context_paths)?,
+            x.state.as_str(),
+            x.attempt,
+            x.current_attempt_id.map(|id| id.to_string()),
+            x.retries,
+            x.queued_at.0,
+            x.failure.as_ref().map(to_json).transpose()?,
+            x.spec_id.map(|id| id.to_string()),
+            x.commit_sha,
+            i64_of(x.version)?,
+            x.created_by,
+            x.created_at.0,
+            x.updated_at.0,
+            x.finished_at.map(|t| t.0),
+        ],
+    )?;
+    if let Some(a) = &d.attempt {
+        let packet = packets
+            .iter()
+            .find(|(id, _)| *id == a.id)
+            .map(|(_, text)| text.as_str());
+        tx.execute(
+            "INSERT INTO spec_draft_attempt (id, spec_draft_id, project_id, attempt, trigger, reason, note, state,
+               base_sha, budget, budget_warnings, resumed_lost, rounds, packet, packet_sha256, failure, started_at,
+               ended_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ON CONFLICT (id) DO UPDATE SET state = excluded.state, base_sha = excluded.base_sha,
+               budget_warnings = excluded.budget_warnings, resumed_lost = excluded.resumed_lost,
+               rounds = excluded.rounds, packet = coalesce(spec_draft_attempt.packet, excluded.packet),
+               packet_sha256 = coalesce(spec_draft_attempt.packet_sha256, excluded.packet_sha256),
+               failure = excluded.failure, ended_at = excluded.ended_at",
+            params![
+                a.id.to_string(),
+                x.id.to_string(),
+                x.project_id.to_string(),
+                a.attempt,
+                a.trigger.as_str(),
+                a.reason,
+                a.note,
+                a.state.as_str(),
+                a.base_sha,
+                to_json(&a.budget)?,
+                to_json(&a.budget_warnings)?,
+                a.resumed_lost,
+                a.rounds,
+                packet,
+                packet.and(a.packet_sha256.as_deref()),
+                a.failure.as_ref().map(to_json).transpose()?,
+                a.started_at.0,
+                a.ended_at.map(|t| t.0),
+            ],
+        )?;
+    }
+    for e in &d.retired_environments {
+        environment(tx, x.project_id, e)?;
+    }
+    run(
+        tx,
+        x.project_id,
+        RunRows {
+            environment: d.environment.as_ref(),
+            sessions: &d.retired_sessions,
+            session: d.session.as_ref(),
+            permissions: &d.permissions,
+            usage_records: &d.usage_records,
+            quotas: &d.quota_observations,
+        },
+    )
+}
+
+fn lint_round(tx: &Transaction<'_>, project: ProjectId, r: &LintRound) -> Result<()> {
+    tx.execute(
+        "INSERT INTO spec_draft_lint_round (attempt_id, round, spec_draft_id, project_id, session_id, turn, outcome,
+           bytes, content, content_hash, parser_version, issues, decisions_open, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT DO NOTHING",
+        params![
+            r.attempt_id.to_string(),
+            r.round,
+            r.spec_draft_id.to_string(),
+            project.to_string(),
+            r.session_id.to_string(),
+            r.turn,
+            r.outcome.as_str(),
+            r.bytes.map(i64_of).transpose()?,
+            r.content,
+            r.content_hash,
+            r.parser_version,
+            to_json(&r.issues)?,
+            r.decisions_open,
+            r.created_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+fn usage_record(tx: &Transaction<'_>, project: ProjectId, u: &UsageRecord) -> Result<()> {
     let owner = owner_columns(&u.owner);
     tx.execute(
         "INSERT INTO usage_record (id, project_id, work_item_id, stage_run_id, spec_draft_id, spec_draft_attempt_id,
@@ -624,7 +779,7 @@ fn usage_record(tx: &Transaction<'_>, t: &Task, u: &UsageRecord) -> Result<()> {
          ON CONFLICT (session_id, turn) DO NOTHING",
         params![
             u.id.to_string(),
-            t.item.project_id.to_string(),
+            project.to_string(),
             owner.work_item_id,
             owner.stage_run_id,
             u.session_id.to_string(),
@@ -785,7 +940,7 @@ fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<(
     Ok(())
 }
 
-fn environment(tx: &Transaction<'_>, t: &Task, e: &Environment) -> Result<()> {
+fn environment(tx: &Transaction<'_>, project: ProjectId, e: &Environment) -> Result<()> {
     let owner = owner_columns(&e.owner);
     tx.execute(
         "INSERT INTO environment (id, project_id, work_item_id, spec_draft_id, spec_draft_attempt_id, repo_id,
@@ -796,7 +951,7 @@ fn environment(tx: &Transaction<'_>, t: &Task, e: &Environment) -> Result<()> {
            updated_at = excluded.updated_at",
         params![
             e.id.to_string(),
-            t.item.project_id.to_string(),
+            project.to_string(),
             owner.work_item_id,
             e.repo_id.to_string(),
             e.root_path,
@@ -818,7 +973,7 @@ fn environment(tx: &Transaction<'_>, t: &Task, e: &Environment) -> Result<()> {
     Ok(())
 }
 
-fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
+fn session(tx: &Transaction<'_>, project: ProjectId, s: &Session) -> Result<()> {
     let owner = owner_columns(&s.owner);
     tx.execute(
         "INSERT INTO session (id, project_id, work_item_id, stage_run_id, spec_draft_id, spec_draft_attempt_id,
@@ -836,7 +991,7 @@ fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
            idle_since = excluded.idle_since, interrupt_requested = excluded.interrupt_requested",
         params![
             s.id.to_string(),
-            t.item.project_id.to_string(),
+            project.to_string(),
             owner.work_item_id,
             owner.stage_run_id,
             s.environment_id.to_string(),
@@ -871,7 +1026,7 @@ fn session(tx: &Transaction<'_>, t: &Task, s: &Session) -> Result<()> {
     Ok(())
 }
 
-fn permission(tx: &Transaction<'_>, t: &Task, p: &PermissionRequest) -> Result<()> {
+fn permission(tx: &Transaction<'_>, project: ProjectId, p: &PermissionRequest) -> Result<()> {
     let owner = owner_columns(&p.owner);
     tx.execute(
         "INSERT INTO permission_request (id, project_id, work_item_id, spec_draft_id, session_id, cli_request_id,
@@ -881,7 +1036,7 @@ fn permission(tx: &Transaction<'_>, t: &Task, p: &PermissionRequest) -> Result<(
            message = excluded.message, answered_at = excluded.answered_at, delivered_at = excluded.delivered_at",
         params![
             p.id.to_string(),
-            t.item.project_id.to_string(),
+            project.to_string(),
             owner.work_item_id,
             p.session_id.to_string(),
             p.cli_request_id,

@@ -230,10 +230,39 @@ fn env_config(cfg: &Config, store: &Store) -> Result<EnvConfig, ConfigError> {
     }
 }
 
+fn micros_of(usd: f64) -> i64 {
+    let micros = (usd * 1_000_000.0).round();
+    if micros.is_finite() && micros < i64::MAX as f64 {
+        micros as i64
+    } else {
+        0
+    }
+}
+
+fn draft_config(cfg: &Config) -> saka_core::draft::DraftConfig {
+    let budget = &cfg.budget.architect;
+    saka_core::draft::DraftConfig {
+        max_active: cfg.architect.max_active,
+        lint_rounds: cfg.architect.lint_rounds,
+        budget: Budget {
+            running_minutes: budget.running_minutes,
+            turns: budget.turns,
+            tokens: budget.tokens,
+            cost_usd_micros: micros_of(budget.cost_usd),
+        },
+        session: saka_core::session::SessionConfig {
+            permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
+            idle_ms: cfg.agent.idle_minutes * 60_000,
+            budget_warn_percent: cfg.budget.warn_percent,
+            rate_limit_pause: cfg.agent.rate_limit_pause,
+            account: format!("{}:{}", cfg.agent.cli, cfg.account_name()),
+        },
+    }
+}
+
 fn loop_config(cfg: &Config) -> LoopConfig {
     let first = cfg.scm.first();
     let dev = &cfg.budget.dev;
-    let micros = (dev.cost_usd * 1_000_000.0).round();
     LoopConfig {
         max_followup_turns: cfg.agent.max_followup_turns,
         permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
@@ -244,11 +273,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
                 running_minutes: dev.running_minutes,
                 turns: dev.turns,
                 tokens: dev.tokens,
-                cost_usd_micros: if micros.is_finite() && micros < i64::MAX as f64 {
-                    micros as i64
-                } else {
-                    0
-                },
+                cost_usd_micros: micros_of(dev.cost_usd),
             },
         )]),
         budget_warn_percent: cfg.budget.warn_percent,
@@ -578,6 +603,8 @@ async fn run(
                 name: cfg.git.author_name.clone(),
                 email: cfg.git.author_email.clone(),
             },
+            draft: draft_config(cfg),
+            architect_model: Some(cfg.architect.model.clone()).filter(|m| !m.is_empty()),
         },
     ));
     match engine.recover() {

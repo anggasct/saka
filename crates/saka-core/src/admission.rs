@@ -23,6 +23,7 @@ pub enum Waiting {
         resets_at: Option<Timestamp>,
     },
     PortBlock,
+    ArchitectSlot,
 }
 
 impl Waiting {
@@ -32,6 +33,7 @@ impl Waiting {
             Waiting::Spec { .. } => "spec",
             Waiting::Quota { .. } => "quota",
             Waiting::PortBlock => "port_block",
+            Waiting::ArchitectSlot => "architect_slot",
         }
     }
 }

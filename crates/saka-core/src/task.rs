@@ -5,12 +5,11 @@ use serde_json::{Value, json};
 use crate::Ctx;
 use crate::event::{Event, Prompt};
 use crate::gate::{self, Check, GatePolicy};
-use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, GateResultId, SessionId, StageRunId};
+use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, GateResultId, StageRunId};
 use crate::job::{JobKind, exhausted_code};
 use crate::model::{
-    AccountQuota, Blocker, Budget, ChangeRequest, Coded, Environment, EnvironmentSetup, GateResult,
-    PermissionRequest, Retries, RunOwner, Session, StageRun, Task, ToolchainUse, Usage,
-    UsageRecord, WorkItem,
+    Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, GateResult, Retries, RunOwner,
+    StageRun, Task, Usage, WorkItem,
 };
 use crate::rejection::Rejection;
 use crate::session::{
@@ -19,8 +18,8 @@ use crate::session::{
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome, GateSource,
-    InterruptBy, MergeMethod, PermissionState, ResumeCause, SessionState, Stage, StagePhase,
-    StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    MergeMethod, ResumeCause, SessionState, Stage, StagePhase, StageRunState, Trigger,
+    WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1206,7 +1205,7 @@ impl Decider<'_> {
             && self.task.retries.get(&stage).map_or(0, |r| r.manual) >= MANUAL_RETRY_LIMIT
         {
             return Err(Rejection::RetryLimitReached {
-                stage: stage.as_str().to_string(),
+                stage: Some(stage.as_str().to_string()),
                 limit: MANUAL_RETRY_LIMIT,
             });
         }
@@ -1446,6 +1445,21 @@ fn set_place(item: &mut WorkItem, state: WorkItemState, place: Option<(Stage, St
 
 fn apply(t: &mut Task, event: &Event, now: Timestamp) {
     use Event as E;
+    if let E::SessionStarted {
+        owner,
+        resume_cause: Some(ResumeCause::Lost),
+        ..
+    } = event
+        && let Some(run) = t
+            .stage_run
+            .as_mut()
+            .filter(|r| owner.stage_run_id() == Some(r.id))
+    {
+        run.resumed_lost = true;
+    }
+    if session::apply(t.run_parts(), event, now) {
+        return;
+    }
     match event {
         E::WorkItemRepinned {
             spec_revision_id,
@@ -1661,224 +1675,6 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             set_place(&mut t.item, WorkItemState::Done, None);
             t.item.done_at = Some(now);
         }
-        E::EnvironmentPrepared {
-            owner,
-            environment_id,
-            repo_id,
-            root_path,
-            worktree_path,
-            branch,
-            base_sha,
-            port_start,
-            port_count,
-            recipe,
-            recipe_sha256,
-            toolchains,
-            ..
-        } => {
-            t.environment = Some(Environment {
-                id: *environment_id,
-                owner: *owner,
-                repo_id: *repo_id,
-                root_path: root_path.clone(),
-                worktree_path: worktree_path.clone(),
-                branch: branch.clone(),
-                base_sha: Some(base_sha.clone()),
-                state: EnvironmentState::Ready,
-                created_at: now,
-                updated_at: now,
-                port_start: *port_start,
-                port_count: *port_count,
-                recipe: recipe.clone(),
-                recipe_sha256: recipe_sha256.clone(),
-                toolchains: toolchains
-                    .iter()
-                    .map(|t| ToolchainUse {
-                        downloaded: false,
-                        ..t.clone()
-                    })
-                    .collect(),
-            });
-        }
-        E::EnvironmentTornDown { environment_id, .. } => {
-            if let Some(env) = t.environment.as_mut().filter(|e| e.id == *environment_id) {
-                env.state = EnvironmentState::TornDown;
-                env.updated_at = now;
-            }
-        }
-        E::EnvironmentTeardownFailed { environment_id, .. } => {
-            if let Some(env) = t.environment.as_mut().filter(|e| e.id == *environment_id) {
-                env.state = EnvironmentState::TeardownFailed;
-                env.updated_at = now;
-            }
-        }
-        E::SessionStarted {
-            owner,
-            session_id,
-            environment_id,
-            cli,
-            cli_version,
-            model,
-            account,
-            runner_unit,
-            socket_path,
-            log_path,
-            resumed_from_session_id,
-            resume_cause,
-            ..
-        } => {
-            t.permissions.clear();
-            if let Some(old) = t.session.take() {
-                if old.owner == *owner {
-                    t.prior_usage.add(old.usage_at(now));
-                }
-                t.retired_sessions.push(old);
-            }
-            if *resume_cause == Some(ResumeCause::Lost)
-                && let Some(run) = t
-                    .stage_run
-                    .as_mut()
-                    .filter(|r| owner.stage_run_id() == Some(r.id))
-            {
-                run.resumed_lost = true;
-            }
-            t.session = Some(Session {
-                id: *session_id,
-                owner: *owner,
-                environment_id: *environment_id,
-                cli: cli.clone(),
-                cli_version: cli_version.clone(),
-                cli_session_id: None,
-                model: model.clone(),
-                account: account.clone(),
-                state: SessionState::Starting,
-                runner_unit: runner_unit.clone(),
-                socket_path: socket_path.clone(),
-                log_path: log_path.clone(),
-                turns: 0,
-                followups: 0,
-                running_ms: 0,
-                running_since: None,
-                cost_usd_micros: None,
-                input_tokens: None,
-                output_tokens: None,
-                end_reason: None,
-                resumed_from_session_id: *resumed_from_session_id,
-                resume_cause: *resume_cause,
-                idle_since: None,
-                interrupt_requested: None,
-                steers: 0,
-                last_offset: 0,
-                recorded_turn: 0,
-                recorded_running_ms: 0,
-                started_at: Some(now),
-                ended_at: None,
-                created_at: now,
-                updated_at: now,
-            });
-        }
-        E::SessionInitialized {
-            session_id,
-            cli_session_id,
-            model,
-            ..
-        } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.cli_session_id = Some(cli_session_id.clone());
-                if model.is_some() {
-                    s.model.clone_from(model);
-                }
-            }
-        }
-        E::SessionStateChanged {
-            session_id,
-            state,
-            running_ms,
-            ..
-        } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.idle_since = match (*state, s.state) {
-                    (SessionState::Idle, SessionState::Idle) => s.idle_since.or(Some(now)),
-                    (SessionState::Idle, _) => Some(now),
-                    _ => None,
-                };
-                s.state = *state;
-                s.running_ms = *running_ms;
-                s.running_since =
-                    matches!(*state, SessionState::Running | SessionState::Interrupted)
-                        .then_some(now);
-                if !state.is_live() {
-                    s.ended_at = Some(now);
-                }
-            }
-        }
-        E::SessionTurnRequested {
-            session_id,
-            turn,
-            prompt,
-            ..
-        } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.turns = *turn;
-                if matches!(prompt, Prompt::Uncommitted { .. }) {
-                    s.followups += 1;
-                }
-                if s.interrupt_requested == Some(InterruptBy::Operator) {
-                    s.interrupt_requested = None;
-                }
-            }
-        }
-        E::SessionTurnEnded {
-            session_id,
-            turn,
-            status,
-            cost_usd_micros,
-            input_tokens,
-            output_tokens,
-            running_ms,
-            account,
-            usage_record_id,
-            ..
-        } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.recorded_turn = *turn;
-                s.recorded_running_ms += running_ms;
-                let record = UsageRecord {
-                    id: *usage_record_id,
-                    owner: s.owner,
-                    session_id: s.id,
-                    account: account.clone(),
-                    turn: *turn,
-                    status: status.clone(),
-                    input_tokens: *input_tokens,
-                    output_tokens: *output_tokens,
-                    cost_usd_micros: *cost_usd_micros,
-                    running_ms: *running_ms,
-                    ended_at: now,
-                };
-                let add = |acc: &mut Option<i64>, v: &Option<i64>| {
-                    if let Some(v) = v {
-                        *acc = Some(acc.unwrap_or(0) + v);
-                    }
-                };
-                add(&mut s.cost_usd_micros, cost_usd_micros);
-                add(&mut s.input_tokens, input_tokens);
-                add(&mut s.output_tokens, output_tokens);
-                t.usage_records.push(record);
-            }
-        }
-        E::SessionSteered { session_id, n, .. } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.steers = *n;
-            }
-        }
-        E::SessionInterruptRequested {
-            session_id, actor, ..
-        } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.interrupt_requested = Some(*actor);
-            }
-        }
         E::BudgetWarned {
             owner, dimension, ..
         } => {
@@ -1892,94 +1688,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 run.updated_at = now;
             }
         }
-        E::QuotaObserved {
-            account,
-            window,
-            utilization,
-            status,
-            resets_at,
-            ..
-        } => t.quota_observations.push(AccountQuota {
-            account: account.clone(),
-            window: window.clone(),
-            utilization: *utilization,
-            status: status.clone(),
-            resets_at: *resets_at,
-            observed_at: now,
-        }),
         E::PermissionRuleAdded { .. } => {
             t.added_rules.extend(crate::rule::evolve(None, event, now));
         }
-        E::SessionReattached { .. }
-        | E::SessionStopRequested { .. }
-        | E::PermissionRuleRevoked { .. } => {}
-        E::SessionEnded {
-            session_id,
-            end_reason,
-            ..
-        } => {
-            if let Some(s) = session_mut(t, *session_id, now) {
-                s.end_reason = Some(end_reason.clone());
-                s.ended_at = Some(now);
-            }
-        }
-        E::SessionLost { .. } => {}
-        E::PermissionRequested {
-            owner,
-            session_id,
-            permission_request_id,
-            cli_request_id,
-            tool,
-            summary,
-            input,
-            ..
-        } => {
-            t.permissions.push(PermissionRequest {
-                id: *permission_request_id,
-                owner: *owner,
-                session_id: *session_id,
-                cli_request_id: cli_request_id.clone(),
-                tool: tool.clone(),
-                input: input.clone(),
-                summary: summary.clone(),
-                state: PermissionState::Pending,
-                answer_source: None,
-                message: None,
-                requested_at: now,
-                answered_at: None,
-                delivered_at: None,
-            });
-        }
-        E::PermissionAnswered {
-            permission_request_id,
-            state,
-            answer_source,
-            message,
-            ..
-        } => {
-            if let Some(p) = t
-                .permissions
-                .iter_mut()
-                .find(|p| p.id == *permission_request_id)
-            {
-                p.state = *state;
-                p.answer_source = Some(answer_source.clone());
-                p.message.clone_from(message);
-                p.answered_at = Some(now);
-            }
-        }
-        E::PermissionDelivered {
-            permission_request_id,
-            ..
-        } => {
-            if let Some(p) = t
-                .permissions
-                .iter_mut()
-                .find(|p| p.id == *permission_request_id)
-            {
-                p.delivered_at = Some(now);
-            }
-        }
+        E::PermissionRuleRevoked { .. } => {}
         E::BranchPushed { .. } => {}
         E::ChangeRequestOpened {
             change_request_id,
@@ -2051,14 +1763,35 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SpecApproved { .. }
         | E::SpecWithdrawn { .. }
         | E::SpecShipped { .. }
-        | E::JobExhausted { .. } => {}
+        | E::JobExhausted { .. }
+        | E::SpecDraftRequested { .. }
+        | E::SpecDraftAttemptStarted { .. }
+        | E::SpecDraftPacketRendered { .. }
+        | E::SpecDraftLinted { .. }
+        | E::SpecDraftCommitting { .. }
+        | E::SpecDraftSucceeded { .. }
+        | E::SpecDraftFailed { .. }
+        | E::SpecDraftRetried { .. }
+        | E::SpecDraftCancelled { .. } => {}
+        E::EnvironmentPrepared { .. }
+        | E::EnvironmentTornDown { .. }
+        | E::EnvironmentTeardownFailed { .. }
+        | E::SessionStarted { .. }
+        | E::SessionInitialized { .. }
+        | E::SessionStateChanged { .. }
+        | E::SessionTurnRequested { .. }
+        | E::SessionTurnEnded { .. }
+        | E::SessionSteered { .. }
+        | E::SessionInterruptRequested { .. }
+        | E::QuotaObserved { .. }
+        | E::SessionReattached { .. }
+        | E::SessionStopRequested { .. }
+        | E::SessionEnded { .. }
+        | E::SessionLost { .. }
+        | E::PermissionRequested { .. }
+        | E::PermissionAnswered { .. }
+        | E::PermissionDelivered { .. } => {}
     }
-}
-
-fn session_mut(t: &mut Task, id: SessionId, now: Timestamp) -> Option<&mut Session> {
-    let s = t.session.as_mut().filter(|s| s.id == id)?;
-    s.updated_at = now;
-    Some(s)
 }
 
 pub fn gates_clear(task: &Task) -> bool {

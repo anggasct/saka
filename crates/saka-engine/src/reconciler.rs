@@ -95,8 +95,9 @@ impl Engine {
                 }
             }
         }
+        report.decisions += self.reconcile_drafts(&snapshot.quotas, &cause, &mut jobs)?;
         self.push_job(&mut jobs, crate::webhooks::prune_job(now), None, &cause);
-        for job in self.monitor(&snapshot.tasks) {
+        for job in self.monitor_sessions(snapshot.tasks.iter().filter_map(Task::live_session)) {
             let project = project_of(&snapshot.tasks, &job);
             self.push_job(&mut jobs, job, project, &cause);
         }
@@ -144,10 +145,11 @@ impl Engine {
             .read(|c| read::load_tasks(c, TaskSet::Reconcile))?;
         let cause = self.cause("system:recovery");
         let mut batch = Batch::new(self.now());
-        for job in self.monitor(&tasks) {
+        for job in self.monitor_sessions(tasks.iter().filter_map(Task::live_session)) {
             let project = Some(project_of(&tasks, &job));
             self.push_job(&mut batch, job, project.flatten(), &cause);
         }
+        self.recover_drafts(&cause, &mut batch)?;
         let queued = batch.jobs.len();
         if queued > 0 {
             self.commit(&batch)?;
@@ -155,9 +157,12 @@ impl Engine {
         Ok(queued)
     }
 
-    fn monitor(&self, tasks: &[Task]) -> Vec<Job> {
+    pub(crate) fn monitor_sessions<'a>(
+        &self,
+        sessions: impl Iterator<Item = &'a saka_core::model::Session>,
+    ) -> Vec<Job> {
         let mut jobs = Vec::new();
-        for session in tasks.iter().filter_map(Task::live_session) {
+        for session in sessions {
             match self.ports.agents.link(session.id) {
                 Link::Open { silent_ms } if silent_ms > RUNNER_SILENCE_MS => {
                     tracing::info!(session_id = %session.id, silent_ms, "runner is silent; reconnecting");

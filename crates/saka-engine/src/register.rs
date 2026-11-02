@@ -264,6 +264,7 @@ impl Engine {
             path,
             source_commit: &file.commit,
             bytes: &file.bytes,
+            origin: saka_core::vocab::SpecOrigin::Manual,
         };
         self.register_at(&project, &repo_ref, spec_file, cause, action)
             .await

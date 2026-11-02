@@ -1320,6 +1320,10 @@ export interface components {
       | {
           /** @enum {string} */
           kind: "port_block";
+        }
+      | {
+          /** @enum {string} */
+          kind: "architect_slot";
         };
     WorkItem: {
       admitted_at?: string | null;

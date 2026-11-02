@@ -46,6 +46,17 @@ turns = 10                         # 1..=100; turns sent to the CLI in a stage r
 tokens = 0                         # 0 = no limit; input + output
 cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
 
+[budget.architect]
+running_minutes = 30               # 1..=1440; running time of all sessions of one draft attempt
+turns = 6                          # 1..=100, and at least architect.lint_rounds
+tokens = 0                         # 0 = no limit; input + output
+cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
+
+[architect]
+max_active = 1                     # 1..=4; drafts preparing, drafting, or committing at once
+lint_rounds = 4                    # 1..=10; lint checks per attempt (the first after the first turn)
+model = ""                         # empty = agent.model
+
 [env]
 port_range = "41000-48999"         # inclusive, 1024..=65535; must hold ports_per_env x scheduler.max_active_tasks ports
 ports_per_env = 10                 # 1..=100; block size per environment; a recipe may ask for fewer

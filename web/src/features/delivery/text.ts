@@ -166,6 +166,8 @@ export function waitingText(
       });
     case "port_block":
       return t("waiting.port_block");
+    case "architect_slot":
+      return t("waiting.architect_slot");
   }
 }
 

@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use saka_core::draft::DraftConfig;
+use saka_core::ids::SpecDraftId;
 use saka_core::ids::{ProjectId, SpecId, SpecRevisionId, WorkItemId};
+use saka_core::model::{Draft, LintRound};
 use saka_core::model::{Spec, Task, WorkItem};
 use saka_core::policy::{Policy, RuleSpec};
 use saka_core::task::LoopConfig;
@@ -10,8 +13,8 @@ use saka_core::vocab::{
 };
 use saka_core::vocab::{SpecOrigin, WorkItemOrigin};
 use saka_engine::{
-    Engine, EngineConfig, EngineError, EnvConfig, Integration, JobReport, NewProject, Ports,
-    RegisteredSpec,
+    Engine, EngineConfig, EngineError, EnvConfig, Integration, JobReport, NewProject, NewSpecDraft,
+    Ports, RegisteredSpec,
 };
 use saka_ports::Clock;
 use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, list, read};
@@ -50,6 +53,28 @@ pub struct SimConfig {
     pub agent: AgentScript,
     pub ci: CiScript,
     pub operator: Operator,
+    pub draft: DraftConfig,
+    pub architect_model: Option<String>,
+}
+
+pub fn draft_config() -> DraftConfig {
+    DraftConfig {
+        max_active: 1,
+        lint_rounds: 4,
+        budget: saka_core::model::Budget {
+            running_minutes: 30,
+            turns: 6,
+            tokens: 0,
+            cost_usd_micros: 0,
+        },
+        session: saka_core::session::SessionConfig {
+            permission_wait_ms: 24 * 3_600_000,
+            idle_ms: 30 * 60_000,
+            budget_warn_percent: 80,
+            rate_limit_pause: 0.9,
+            account: "claude:default".into(),
+        },
+    }
 }
 
 impl Default for SimConfig {
@@ -87,6 +112,8 @@ impl Default for SimConfig {
             agent: AgentScript::default(),
             ci: CiScript::Pass,
             operator: Operator::default(),
+            draft: draft_config(),
+            architect_model: None,
         }
     }
 }
@@ -230,6 +257,8 @@ impl Sim {
                 name: "Saka Agent".into(),
                 email: "agent@saka.invalid".into(),
             },
+            draft: self.cfg.draft.clone(),
+            architect_model: self.cfg.architect_model.clone(),
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();
@@ -418,6 +447,52 @@ impl Sim {
             .unwrap()
             .expect("spec with this slug")
             .id
+    }
+
+    pub fn create_draft(
+        &self,
+        path: &str,
+        idea: &str,
+        context_paths: &[&str],
+    ) -> Result<Draft, EngineError> {
+        let engine = self.engine();
+        let cause = engine.cause("human:operator:local");
+        self.rt.block_on(engine.create_spec_draft(
+            self.project_id,
+            NewSpecDraft {
+                path: path.into(),
+                idea: idea.into(),
+                locale: saka_core::vocab::DraftLocale::En,
+                context_paths: context_paths.iter().map(|p| (*p).to_string()).collect(),
+            },
+            &cause,
+            None,
+        ))
+    }
+
+    pub fn draft(&self, id: SpecDraftId) -> Draft {
+        self.engine()
+            .store()
+            .read(|c| saka_store::draft::load_draft(c, id))
+            .unwrap()
+            .expect("draft")
+    }
+
+    pub fn draft_rounds(&self, id: SpecDraftId) -> Vec<(u32, LintRound)> {
+        self.engine()
+            .store()
+            .read(|c| saka_store::draft::lint_rounds(c, id))
+            .unwrap()
+    }
+
+    pub fn draft_sessions(&self, id: SpecDraftId) -> Vec<saka_core::model::Session> {
+        self.engine()
+            .store()
+            .read(|c| read::sessions(c, read::RunOf::SpecDraft(id)))
+            .unwrap()
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect()
     }
 
     pub fn tasks(&self) -> Vec<Task> {

@@ -129,6 +129,7 @@ impl World {
         let project = workspace::evolve_project(None, &project_event, now).unwrap();
 
         let revision = NewRevision {
+            origin: saka_core::vocab::SpecOrigin::Manual,
             source_commit: "a".repeat(40),
             content_hash: "sha256:abc".into(),
             context_hash: "sha256:none".into(),
@@ -493,6 +494,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             decision: Decision {
                 effect: Effect::Ask,
                 source: DecisionSource::Default,
+                message: None,
             },
         }),
     );
@@ -1267,6 +1269,7 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
             decision: Decision {
                 effect: Effect::Ask,
                 source: DecisionSource::Default,
+                message: None,
             },
         }),
     );
@@ -1531,4 +1534,95 @@ fn two_live_environments_never_hold_the_same_port_block() {
         "a second live row took the block"
     );
     assert_eq!(copy("torn_down").unwrap(), 1);
+}
+
+#[test]
+fn a_draft_attempt_and_its_packet_round_trip_and_one_live_draft_holds_a_path() {
+    use saka_core::draft::{self, NewDraft};
+    use saka_core::ids::{SpecDraftAttemptId, SpecDraftId};
+    use saka_core::model::Budget;
+    use saka_core::vocab::{DraftLocale, SpecDraftState, Trigger};
+    use saka_store::draft as rows;
+
+    let mut w = World::new();
+    let path = "docs/specs/export.md";
+    let request = |id: SpecDraftId| {
+        draft::request(NewDraft {
+            spec_draft_id: id,
+            project_id: w.project.id,
+            path: path.into(),
+            slug: "export".into(),
+            idea: "Export tasks.".into(),
+            locale: DraftLocale::En,
+            context_paths: vec!["docs/prd.md".into()],
+        })
+    };
+    let id = SpecDraftId(w.ids.next_id());
+    let mut d = draft::evolve(None, &request(id), w.now).unwrap();
+    d.draft.created_by = "operator:local".into();
+    let mut batch = Batch::new(w.now);
+    batch.drafts.push(d.clone());
+    w.store.commit(&batch).unwrap();
+    let loaded = w.store.read(|c| rows::load_draft(c, id)).unwrap().unwrap();
+    assert_eq!(loaded.draft, d.draft);
+    assert_eq!(
+        w.store
+            .read(|c| rows::live_draft_at(c, w.project.id, path))
+            .unwrap(),
+        Some(id)
+    );
+    assert_eq!(w.store.read(rows::active_count).unwrap(), 0);
+
+    let attempt_id = SpecDraftAttemptId(w.ids.next_id());
+    let budget = Budget {
+        running_minutes: 30,
+        turns: 6,
+        tokens: 0,
+        cost_usd_micros: 0,
+    };
+    for e in [
+        Event::SpecDraftAttemptStarted {
+            spec_draft_id: id,
+            attempt_id,
+            attempt: 1,
+            trigger: Trigger::Auto,
+            reason: None,
+            note: None,
+            budget,
+        },
+        Event::SpecDraftPacketRendered {
+            spec_draft_id: id,
+            attempt_id,
+            base_sha: sha('b'),
+            packet_sha256: "c".repeat(64),
+            documents: vec![],
+        },
+    ] {
+        d = draft::evolve(Some(d), &e, w.now).unwrap();
+    }
+    for text in ["packet one", "packet two"] {
+        let mut batch = Batch::new(w.now);
+        batch.drafts.push(d.clone());
+        batch.draft_packets.push((attempt_id, text.into()));
+        w.store.commit(&batch).unwrap();
+    }
+    assert_eq!(
+        w.store.read(|c| rows::packet(c, attempt_id)).unwrap(),
+        Some("packet one".into()),
+        "the packet is written once"
+    );
+    let loaded = w.store.read(|c| rows::load_draft(c, id)).unwrap().unwrap();
+    assert_eq!(loaded.draft.state, SpecDraftState::Drafting);
+    assert_eq!(loaded.attempt, d.attempt);
+    assert_eq!(w.store.read(rows::active_count).unwrap(), 1);
+
+    let other = SpecDraftId(w.ids.next_id());
+    let mut batch = Batch::new(w.now);
+    batch
+        .drafts
+        .push(draft::evolve(None, &request(other), w.now).unwrap());
+    assert!(
+        w.store.commit(&batch).is_err(),
+        "a second live draft for the path"
+    );
 }

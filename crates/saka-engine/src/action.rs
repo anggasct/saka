@@ -1,5 +1,5 @@
 use saka_core::ids::ProjectId;
-use saka_core::model::{PermissionRule, Session, Task};
+use saka_core::model::{Draft, PermissionRule, Session, Task};
 use saka_store::{ActionRecord, Batch, read};
 use serde_json::Value;
 use uuid::Uuid;
@@ -19,6 +19,7 @@ pub enum Produced<'a> {
     Project(&'a ProjectView),
     Spec(&'a SpecView, bool),
     Task(&'a Task),
+    Draft(&'a Draft),
     Permission(&'a PermissionView),
     Session(&'a Session),
     Rule(&'a PermissionRule),

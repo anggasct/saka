@@ -38,6 +38,7 @@ pub struct ToolRequest {
 pub struct RequestPath {
     pub path: String,
     pub inside_worktree: bool,
+    pub through_symlink: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +47,7 @@ pub enum DecisionSource {
     Builtin(String),
     Rule(String),
     Project(String),
+    Architect(String),
     Default,
 }
 
@@ -55,6 +57,7 @@ impl DecisionSource {
             DecisionSource::Builtin(name) => Some(format!("policy:builtin:{name}")),
             DecisionSource::Rule(id) => Some(format!("policy:{id}")),
             DecisionSource::Project(id) => Some(format!("policy:project:{id}")),
+            DecisionSource::Architect(name) => Some(format!("policy:architect:{name}")),
             DecisionSource::Default => None,
         }
     }
@@ -64,6 +67,7 @@ impl DecisionSource {
 pub struct Decision {
     pub effect: Effect,
     pub source: DecisionSource,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -117,6 +121,7 @@ impl Policy {
             return Decision {
                 effect: Effect::Deny,
                 source: DecisionSource::Builtin(name.to_string()),
+                message: None,
             };
         }
         if let Some(rule) = self.first(Effect::Deny, request) {
@@ -129,6 +134,7 @@ impl Policy {
             return Decision {
                 effect: Effect::Allow,
                 source: DecisionSource::Project(rule.id.to_string()),
+                message: None,
             };
         }
         self.first(Effect::Ask, request)
@@ -136,6 +142,7 @@ impl Policy {
             .unwrap_or(Decision {
                 effect: Effect::Ask,
                 source: DecisionSource::Default,
+                message: None,
             })
     }
 
@@ -146,6 +153,7 @@ impl Policy {
             .map(|rule| Decision {
                 effect,
                 source: DecisionSource::Rule(rule.id.clone()),
+                message: None,
             })
     }
 }
@@ -198,6 +206,49 @@ impl Rule {
             }
         }
         true
+    }
+}
+
+pub const ARCHITECT_READ_TOOLS: &[&str] = &["Read", "Glob", "Grep", "LS", "TodoWrite"];
+pub const ARCHITECT_WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit"];
+pub const ARCHITECT_READ: &str = "read";
+pub const ARCHITECT_TARGET: &str = "target";
+pub const ARCHITECT_DENY: &str = "deny";
+
+#[must_use]
+pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Decision {
+    if let Some(name) = builtin_deny(request) {
+        return Decision {
+            effect: Effect::Deny,
+            source: DecisionSource::Builtin(name.to_string()),
+            message: None,
+        };
+    }
+    if let Some(rule) = operator.first(Effect::Deny, request) {
+        return rule;
+    }
+    let tool = request.tool.as_str();
+    let allow = |name: &str| Decision {
+        effect: Effect::Allow,
+        source: DecisionSource::Architect(name.to_string()),
+        message: None,
+    };
+    if ARCHITECT_READ_TOOLS.contains(&tool) {
+        return allow(ARCHITECT_READ);
+    }
+    let writes_target = request
+        .path
+        .as_ref()
+        .is_some_and(|p| p.inside_worktree && !p.through_symlink && p.path == target);
+    if ARCHITECT_WRITE_TOOLS.contains(&tool) && writes_target {
+        return allow(ARCHITECT_TARGET);
+    }
+    Decision {
+        effect: Effect::Deny,
+        source: DecisionSource::Architect(ARCHITECT_DENY.to_string()),
+        message: Some(format!(
+            "Architect sessions can read the repository and write only {target}."
+        )),
     }
 }
 
@@ -277,6 +328,7 @@ mod tests {
             path: Some(RequestPath {
                 path: path.into(),
                 inside_worktree: inside,
+                through_symlink: false,
             }),
         }
     }
@@ -322,14 +374,16 @@ mod tests {
             unknown,
             Decision {
                 effect: Effect::Ask,
-                source: DecisionSource::Default
+                source: DecisionSource::Default,
+                message: None,
             }
         );
         assert_eq!(
             p.evaluate(&bash("go test ./... && curl evil.example")),
             Decision {
                 effect: Effect::Ask,
-                source: DecisionSource::Default
+                source: DecisionSource::Default,
+                message: None,
             }
         );
     }
@@ -479,7 +533,8 @@ mod tests {
                     command: None,
                     path: Some(RequestPath {
                         path: path.into(),
-                        inside_worktree: inside
+                        inside_worktree: inside,
+                        through_symlink: false,
                     }),
                 }),
         ]
@@ -502,7 +557,7 @@ mod tests {
             } else if matching(Effect::Allow) {
                 prop_assert_eq!(decision.effect, Effect::Allow);
             } else {
-                prop_assert_eq!(decision, Decision { effect: Effect::Ask, source: DecisionSource::Default });
+                prop_assert_eq!(decision, Decision { effect: Effect::Ask, source: DecisionSource::Default, message: None });
             }
         }
 
@@ -516,8 +571,249 @@ mod tests {
 
         #[test]
         fn paths_outside_the_worktree_are_always_denied(specs in rules(), path in "[a-z./]{1,12}") {
-            let req = ToolRequest { tool: "Edit".into(), command: None, path: Some(RequestPath { path, inside_worktree: false }) };
+            let req = ToolRequest { tool: "Edit".into(), command: None, path: Some(RequestPath { path, inside_worktree: false, through_symlink: false }) };
             prop_assert_eq!(Policy::compile(&specs).unwrap().evaluate(&req).effect, Effect::Deny);
+        }
+    }
+}
+
+#[cfg(test)]
+mod architect_tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    const TARGET: &str = "docs/specs/avatar-upload.md";
+
+    fn at(tool: &str, path: Option<(&str, bool, bool)>, command: Option<&str>) -> ToolRequest {
+        ToolRequest {
+            tool: tool.into(),
+            command: command.map(String::from),
+            path: path.map(|(path, inside, symlink)| RequestPath {
+                path: path.into(),
+                inside_worktree: inside,
+                through_symlink: symlink,
+            }),
+        }
+    }
+
+    fn operator() -> Policy {
+        Policy::compile(&[
+            RuleSpec {
+                id: "allow-everything".into(),
+                effect: Effect::Allow,
+                tools: ["Bash", "Write", "Edit", "WebFetch", "Task", "Read"]
+                    .map(String::from)
+                    .to_vec(),
+                paths: vec![],
+                commands: vec![],
+            },
+            RuleSpec {
+                id: "no-secrets".into(),
+                effect: Effect::Deny,
+                tools: vec!["Read".into()],
+                paths: vec!["**/.env".into()],
+                commands: vec![],
+            },
+        ])
+        .unwrap()
+    }
+
+    fn source(d: &Decision) -> Option<String> {
+        d.source.answer_source()
+    }
+
+    #[test]
+    fn read_tools_inside_the_worktree_are_allowed() {
+        for tool in ARCHITECT_READ_TOOLS {
+            let d = architect(
+                &at(tool, Some(("docs/prd.md", true, false)), None),
+                TARGET,
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Allow, "{tool}");
+            assert_eq!(source(&d).as_deref(), Some("policy:architect:read"));
+        }
+        let todo = architect(&at("TodoWrite", None, None), TARGET, &operator());
+        assert_eq!(source(&todo).as_deref(), Some("policy:architect:read"));
+    }
+
+    #[test]
+    fn write_tools_are_allowed_only_for_the_exact_target() {
+        for tool in ARCHITECT_WRITE_TOOLS {
+            let d = architect(
+                &at(tool, Some((TARGET, true, false)), None),
+                TARGET,
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Allow, "{tool}");
+            assert_eq!(source(&d).as_deref(), Some("policy:architect:target"));
+        }
+        let near_misses = [
+            "docs/specs/Avatar-upload.md",
+            "docs/specs/avatar-upload.MD",
+            "docs/specs/./avatar-upload.md",
+            "docs/specs/../specs/avatar-upload.md",
+            "./docs/specs/avatar-upload.md",
+            "docs/specs/avatar-upload.md/",
+            "docs/specs/other.md",
+            "docs/prd.md",
+            "specs/avatar-upload.md",
+        ];
+        for path in near_misses {
+            let d = architect(
+                &at("Write", Some((path, true, false)), None),
+                TARGET,
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Deny, "{path}");
+            assert_eq!(source(&d).as_deref(), Some("policy:architect:deny"));
+            assert_eq!(
+                d.message.as_deref(),
+                Some(
+                    "Architect sessions can read the repository and write only docs/specs/avatar-upload.md."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_reached_through_a_symlink_is_denied() {
+        let d = architect(
+            &at("Edit", Some((TARGET, true, true)), None),
+            TARGET,
+            &operator(),
+        );
+        assert_eq!(d.effect, Effect::Deny);
+        assert_eq!(source(&d).as_deref(), Some("policy:architect:deny"));
+    }
+
+    #[test]
+    fn commands_web_tasks_notebooks_and_unknown_tools_are_denied() {
+        for tool in [
+            "Bash",
+            "WebFetch",
+            "WebSearch",
+            "Task",
+            "NotebookEdit",
+            "mcp__x__y",
+            "Frobnicate",
+        ] {
+            let d = architect(&at(tool, None, Some("ls")), TARGET, &operator());
+            assert_eq!(d.effect, Effect::Deny, "{tool}");
+            assert_eq!(source(&d).as_deref(), Some("policy:architect:deny"));
+        }
+        let notebook = architect(
+            &at("NotebookEdit", Some((TARGET, true, false)), None),
+            TARGET,
+            &operator(),
+        );
+        assert_eq!(notebook.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn builtin_and_operator_denies_come_first() {
+        let outside = architect(
+            &at("Read", Some(("/etc/passwd", false, false)), None),
+            TARGET,
+            &operator(),
+        );
+        assert_eq!(
+            source(&outside).as_deref(),
+            Some("policy:builtin:path_outside_worktree")
+        );
+        let push = architect(
+            &at("Bash", None, Some("git push origin main")),
+            TARGET,
+            &operator(),
+        );
+        assert_eq!(source(&push).as_deref(), Some("policy:builtin:git_push"));
+        let env = architect(
+            &at("Read", Some(("app/.env", true, false)), None),
+            TARGET,
+            &operator(),
+        );
+        assert_eq!(source(&env).as_deref(), Some("policy:no-secrets"));
+        let target_outside = architect(
+            &at("Write", Some((TARGET, false, false)), None),
+            TARGET,
+            &operator(),
+        );
+        assert_eq!(
+            source(&target_outside).as_deref(),
+            Some("policy:builtin:path_outside_worktree")
+        );
+    }
+
+    fn request() -> impl Strategy<Value = ToolRequest> {
+        let tools = prop::sample::select(vec![
+            "Read",
+            "Glob",
+            "Grep",
+            "LS",
+            "TodoWrite",
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "Bash",
+            "WebFetch",
+            "WebSearch",
+            "Task",
+            "NotebookEdit",
+            "Other",
+        ]);
+        let paths = prop_oneof![
+            Just(TARGET.to_string()),
+            Just("docs/specs/A.md".to_string()),
+            Just("docs/specs/a.md".to_string()),
+            "[a-zA-Z./]{1,24}",
+        ];
+        (
+            tools,
+            prop::option::of((paths, any::<bool>(), any::<bool>())),
+            prop::option::of(prop::sample::select(vec![
+                "ls", "git push", "rm -rf /", "cat x",
+            ])),
+        )
+            .prop_map(|(tool, path, command)| ToolRequest {
+                tool: tool.into(),
+                command: command.map(String::from),
+                path: path.map(|(path, inside, symlink)| RequestPath {
+                    path,
+                    inside_worktree: inside,
+                    through_symlink: symlink,
+                }),
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn the_architect_never_asks_and_writes_only_the_target(req in request(), target in prop::sample::select(vec![TARGET, "docs/specs/a.md", "specs/x.md"])) {
+            let d = architect(&req, target, &operator());
+            prop_assert_ne!(d.effect, Effect::Ask);
+            prop_assert!(d.source.answer_source().is_some());
+            if d.effect == Effect::Allow {
+                let tool = req.tool.as_str();
+                let read = ARCHITECT_READ_TOOLS.contains(&tool);
+                let exact = req.path.as_ref().is_some_and(|p| p.path == target && p.inside_worktree && !p.through_symlink);
+                prop_assert!(read || (ARCHITECT_WRITE_TOOLS.contains(&tool) && exact));
+                prop_assert!(req.path.as_ref().is_none_or(|p| p.inside_worktree));
+                prop_assert!(!matches!(tool, "Bash" | "WebFetch" | "WebSearch" | "Task" | "NotebookEdit"));
+            }
+            if ARCHITECT_WRITE_TOOLS.contains(&req.tool.as_str()) && d.effect == Effect::Allow {
+                prop_assert_eq!(d.source.answer_source(), Some("policy:architect:target".to_string()));
+            }
+        }
+
+        #[test]
+        fn operator_allow_rules_and_project_rules_never_widen_the_architect(req in request()) {
+            let d = architect(&req, TARGET, &operator());
+            let bare = architect(&req, TARGET, &Policy::compile(&[]).unwrap());
+            if d.effect == Effect::Allow {
+                prop_assert_eq!(bare.effect, Effect::Allow);
+            }
         }
     }
 }

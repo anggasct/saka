@@ -147,6 +147,7 @@
   "waiting.spec": "Waiting for spec {slug} to ship.",
   "waiting.quota": "Waiting for the agent account {account}: its {window} window is at {percent}{resets, select, none {} other {, and resets {resets}}}.",
   "waiting.port_block": "Waiting for a free port block.",
+  "waiting.architect_slot": "Waiting for a free architect slot.",
   "waiting.more": "+{count, number} more",
   "task.holds": "{count, plural, one {Holds # waiting step} other {Holds # waiting steps}}",
   "task.back": "Back to Delivery",

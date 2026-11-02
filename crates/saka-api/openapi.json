@@ -4689,6 +4689,21 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Every architect slot (`architect.max_active`) is held by another draft.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "architect_slot"
+                ]
+              }
+            }
           }
         ]
       },
