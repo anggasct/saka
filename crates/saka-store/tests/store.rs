@@ -302,6 +302,7 @@ impl World {
                 root_path: format!("/e{n}"),
                 worktree_path: format!("/e{n}/w"),
                 base_sha: sha('a'),
+                setup: Default::default(),
             },
         );
         self.step(
@@ -389,6 +390,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             root_path: "/e".into(),
             worktree_path: "/e/w".into(),
             base_sha: sha('a'),
+            setup: Default::default(),
         },
     );
     w.step(
@@ -518,7 +520,12 @@ fn a_whole_task_round_trips_through_the_schema() {
         },
     );
     w.step(id, TaskInput::MergeVerified { found: true });
-    w.step(id, TaskInput::EnvironmentTornDown);
+    w.step(
+        id,
+        TaskInput::EnvironmentTornDown {
+            teardown_failures: Vec::new(),
+        },
+    );
 
     let done = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
     assert_eq!(done.item.state, WorkItemState::Done);
@@ -973,8 +980,8 @@ fn events_stream_in_order_and_actions_replay() {
 #[test]
 fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
-    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5]);
-    assert_eq!(w.store.schema_version().unwrap(), Some(5));
+    assert_eq!(w.store.migration().applied, vec![1, 2, 3, 4, 5, 6]);
+    assert_eq!(w.store.schema_version().unwrap(), Some(6));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1075,7 +1082,12 @@ fn reconcile_keeps_loading_shipped_tasks_whose_environment_still_needs_cleanup()
         },
     );
     w.run_to_tearing_down(second, 400);
-    w.step(second, TaskInput::EnvironmentTornDown);
+    w.step(
+        second,
+        TaskInput::EnvironmentTornDown {
+            teardown_failures: Vec::new(),
+        },
+    );
 
     let shipped = spec::ship(&w.spec, true).unwrap();
     w.spec = spec::evolve(Some(w.spec.clone()), &shipped[0], w.now).unwrap();
@@ -1128,6 +1140,7 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
             root_path: "/e".into(),
             worktree_path: "/e/w".into(),
             base_sha: "a".repeat(40),
+            setup: Default::default(),
         },
     );
     w.step(id, launched(77));
@@ -1342,4 +1355,58 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
         0.4,
         "an older observation does not replace a newer one"
     );
+}
+
+#[test]
+fn two_live_environments_never_hold_the_same_port_block() {
+    let mut w = World::new();
+    let tasks = w.approve();
+    let id = tasks[0].item.id;
+    w.step(id, TaskInput::Admit);
+    w.step(
+        id,
+        TaskInput::EnvironmentPrepared {
+            environment_id: EnvironmentId(Uuid::from_u128(76)),
+            root_path: "/e".into(),
+            worktree_path: "/e/w".into(),
+            base_sha: sha('a'),
+            setup: saka_core::model::EnvironmentSetup {
+                port_start: Some(41000),
+                port_count: Some(10),
+                recipe: Some(json!({ "ports": 3, "env": {}, "setup": [], "teardown": [] })),
+                recipe_sha256: Some("f".repeat(64)),
+                setup: Vec::new(),
+            },
+        },
+    );
+    let env = w
+        .store
+        .read(|c| read::load_task(c, id))
+        .unwrap()
+        .unwrap()
+        .environment
+        .unwrap();
+    assert_eq!((env.port_start, env.port_count), (Some(41000), Some(10)));
+    assert_eq!(env.recipe.unwrap()["ports"], json!(3));
+    assert_eq!(w.store.read(read::live_port_blocks).unwrap(), [(41000, 10)]);
+
+    let conn = rusqlite_conn(&w);
+    let copy = |state: &str| {
+        conn.execute(
+            &format!(
+                "INSERT INTO environment (id, project_id, work_item_id, repo_id, root_path, worktree_path,
+                   branch, base_sha, state, created_at, updated_at, port_start, port_count)
+                 SELECT '{}', project_id, work_item_id, repo_id, root_path, worktree_path, branch, base_sha,
+                   '{state}', created_at, updated_at, port_start, port_count
+                 FROM environment WHERE port_start = 41000 LIMIT 1",
+                Uuid::from_u128(900 + state.len() as u128)
+            ),
+            [],
+        )
+    };
+    assert!(
+        copy("teardown_failed").is_err(),
+        "a second live row took the block"
+    );
+    assert_eq!(copy("torn_down").unwrap(), 1);
 }

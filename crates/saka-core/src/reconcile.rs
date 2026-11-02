@@ -5,7 +5,7 @@ use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency}
 use crate::react::phase_jobs;
 use crate::task::{LoopConfig, TaskInput};
 use crate::time::Timestamp;
-use crate::vocab::{SpecState, WorkItemState};
+use crate::vocab::{EnvironmentState, SpecState, WorkItemState};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -21,6 +21,26 @@ pub struct Snapshot {
     pub work_item_dependencies: Vec<WorkItemDependency>,
     pub spec_dependencies: Vec<SpecDependency>,
     pub quotas: Vec<AccountQuota>,
+    pub port_blocks: Option<usize>,
+}
+
+fn holds_port_block(task: &Task) -> bool {
+    let live_env = task.environment.as_ref().is_some_and(|e| {
+        matches!(
+            e.state,
+            EnvironmentState::Ready | EnvironmentState::TeardownFailed
+        )
+    });
+    live_env || task.item.state == WorkItemState::Admitted
+}
+
+pub fn free_port_blocks(snapshot: &Snapshot) -> Option<usize> {
+    let held = snapshot
+        .tasks
+        .iter()
+        .filter(|t| holds_port_block(t))
+        .count();
+    snapshot.port_blocks.map(|total| total.saturating_sub(held))
 }
 
 pub fn waiting(
@@ -28,7 +48,11 @@ pub fn waiting(
     cfg: &LoopConfig,
     now: Timestamp,
 ) -> Vec<(WorkItemId, Vec<Waiting>)> {
-    let quota = admission::quota_waits(&snapshot.quotas, &cfg.account, cfg.rate_limit_pause, now);
+    let mut quota =
+        admission::quota_waits(&snapshot.quotas, &cfg.account, cfg.rate_limit_pause, now);
+    if free_port_blocks(snapshot) == Some(0) {
+        quota.push(Waiting::PortBlock);
+    }
     snapshot
         .tasks
         .iter()
@@ -92,7 +116,10 @@ pub fn reconcile(
             })
         })
         .collect();
-    for id in admission::select(&candidates, active, max_active_tasks) {
+    let slots = max_active_tasks
+        .saturating_sub(active)
+        .min(free_port_blocks(snapshot).unwrap_or(usize::MAX));
+    for id in admission::select(&candidates, 0, slots) {
         actions.push(Action::Decide(id, TaskInput::Admit));
     }
 

@@ -2430,6 +2430,17 @@
                     "null"
                   ]
                 },
+                "environment": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkItemEnvironment",
+                      "description": "The latest environment of the task; `null` before one was prepared."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "gate": {
                   "oneOf": [
                     {
@@ -2723,6 +2734,27 @@
               "null"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "PortBlock": {
+        "type": "object",
+        "required": [
+          "start",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Ports the recipe asked for, starting at `start`.",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32",
+            "description": "First port of the block.",
+            "minimum": 0
           }
         }
       },
@@ -3558,6 +3590,22 @@
           }
         }
       },
+      "Toolchain": {
+        "type": "object",
+        "required": [
+          "tool",
+          "version"
+        ],
+        "properties": {
+          "tool": {
+            "type": "string",
+            "description": "`go`, `node` or `pnpm`."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "UsageRecord": {
         "type": "object",
         "required": [
@@ -3719,6 +3767,21 @@
                 "type": "string"
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Every port block in `env.port_range` is held by a live environment.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "port_block"
+                ]
+              }
+            }
           }
         ]
       },
@@ -3796,6 +3859,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "environment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkItemEnvironment",
+                "description": "The latest environment of the task; `null` before one was prepared."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "gate": {
@@ -3965,6 +4039,49 @@
             }
           }
         ]
+      },
+      "WorkItemEnvironment": {
+        "type": "object",
+        "required": [
+          "id",
+          "state",
+          "toolchains"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ports": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PortBlock",
+                "description": "`null` when the recipe asks for no ports or the environment is torn down."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of `.saka/environment.toml` at the base commit; `null` when the repo has no recipe."
+          },
+          "state": {
+            "type": "string",
+            "description": "`preparing`, `ready`, `failed`, `teardown_failed` or `torn_down`."
+          },
+          "toolchains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Toolchain"
+            },
+            "description": "Toolchains on `PATH`; empty when the repo declares no versions."
+          }
+        }
       },
       "Workspace": {
         "type": "object",

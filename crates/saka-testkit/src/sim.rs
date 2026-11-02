@@ -10,7 +10,8 @@ use saka_core::vocab::{
 };
 use saka_core::vocab::{SpecOrigin, WorkItemOrigin};
 use saka_engine::{
-    Engine, EngineConfig, EngineError, Integration, JobReport, NewProject, Ports, RegisteredSpec,
+    Engine, EngineConfig, EngineError, EnvConfig, Integration, JobReport, NewProject, Ports,
+    RegisteredSpec,
 };
 use saka_ports::Clock;
 use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, list, read};
@@ -44,6 +45,7 @@ impl Default for Operator {
 pub struct SimConfig {
     pub loop_cfg: LoopConfig,
     pub max_active_tasks: usize,
+    pub env: EnvConfig,
     pub rules: Vec<RuleSpec>,
     pub agent: AgentScript,
     pub ci: CiScript,
@@ -74,6 +76,11 @@ impl Default for SimConfig {
                 merge_method: MergeMethod::Squash,
             },
             max_active_tasks: 2,
+            env: EnvConfig {
+                port_first: 41000,
+                port_last: 41099,
+                ports_per_env: 10,
+            },
             rules: Vec::new(),
             agent: AgentScript::default(),
             ci: CiScript::Pass,
@@ -206,6 +213,7 @@ impl Sim {
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),
             max_active_tasks: self.cfg.max_active_tasks,
+            env: self.cfg.env,
             policy: Policy::compile(&self.cfg.rules).unwrap(),
             worker_id: format!("sim-{}", self.restarts),
             integrations: vec![Integration {

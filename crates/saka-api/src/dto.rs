@@ -1,10 +1,12 @@
 use saka_core::admission::Waiting;
 use saka_core::gate::Check;
 use saka_core::model::{
-    PermissionRule as CoreRule, SessionActivity as CoreActivity, StageRun, Task,
+    Environment as CoreEnvironment, PermissionRule as CoreRule, SessionActivity as CoreActivity,
+    StageRun, Task,
 };
 use saka_core::task::{available_actions, session_actions};
 use saka_core::time::Timestamp;
+use saka_core::vocab::EnvironmentState;
 use saka_engine::{
     AccountView, BudgetView, PermissionView, ProjectView, SessionView, SpecView, TaskDetail,
     TaskView, UsageView,
@@ -394,6 +396,60 @@ pub struct SessionBrief {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct PortBlock {
+    /// First port of the block.
+    pub start: u16,
+    /// Ports the recipe asked for, starting at `start`.
+    pub count: u16,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Toolchain {
+    /// `go`, `node` or `pnpm`.
+    pub tool: String,
+    pub version: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkItemEnvironment {
+    pub id: Uuid,
+    /// `preparing`, `ready`, `failed`, `teardown_failed` or `torn_down`.
+    pub state: String,
+    /// `null` when the recipe asks for no ports or the environment is torn down.
+    pub ports: Option<PortBlock>,
+    /// SHA-256 of `.saka/environment.toml` at the base commit; `null` when the repo has no recipe.
+    pub recipe_sha256: Option<String>,
+    /// Toolchains on `PATH`; empty when the repo declares no versions.
+    pub toolchains: Vec<Toolchain>,
+}
+
+impl WorkItemEnvironment {
+    fn from_env(e: &CoreEnvironment) -> WorkItemEnvironment {
+        let wanted = e
+            .recipe
+            .as_ref()
+            .and_then(|r| r.get("ports"))
+            .and_then(Value::as_u64)
+            .and_then(|p| u16::try_from(p).ok());
+        let ports = match (e.port_start, e.port_count, e.state) {
+            (_, _, EnvironmentState::TornDown) => None,
+            (Some(start), Some(block), _) => match wanted.unwrap_or(block) {
+                0 => None,
+                count => Some(PortBlock { start, count }),
+            },
+            _ => None,
+        };
+        WorkItemEnvironment {
+            id: e.id.0,
+            state: e.state.as_str().to_string(),
+            ports,
+            recipe_sha256: e.recipe_sha256.clone(),
+            toolchains: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WorkItem {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -422,6 +478,8 @@ pub struct WorkItem {
     pub available_actions: Vec<String>,
     /// Use and limits of the running stage run; `null` when no stage run with a session runs.
     pub budget: Option<WorkItemBudget>,
+    /// The latest environment of the task; `null` before one was prepared.
+    pub environment: Option<WorkItemEnvironment>,
     pub version: u64,
     pub created_at: String,
     pub updated_at: String,
@@ -443,6 +501,8 @@ pub enum WaitingOn {
         utilization: f64,
         resets_at: Option<String>,
     },
+    /// Every port block in `env.port_range` is held by a live environment.
+    PortBlock,
 }
 
 impl From<&Waiting> for WaitingOn {
@@ -470,6 +530,7 @@ impl From<&Waiting> for WaitingOn {
                 utilization: *utilization,
                 resets_at: resets_at.map(time),
             },
+            Waiting::PortBlock => WaitingOn::PortBlock,
         }
     }
 }
@@ -582,6 +643,7 @@ impl WorkItem {
             .unwrap_or(u32::MAX),
             available_actions: available_actions(t).into_iter().map(String::from).collect(),
             budget: budget.map(WorkItemBudget::from_view),
+            environment: t.environment.as_ref().map(WorkItemEnvironment::from_env),
             version: i.version,
             created_at: time(i.created_at),
             updated_at: time(i.updated_at),

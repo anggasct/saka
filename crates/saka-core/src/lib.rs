@@ -9,6 +9,7 @@ pub mod plan;
 pub mod policy;
 pub mod react;
 pub mod reconcile;
+pub mod redact;
 pub mod rejection;
 pub mod resume;
 pub mod rule;

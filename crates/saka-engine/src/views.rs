@@ -299,12 +299,25 @@ impl Engine {
             cfg.rate_limit_pause,
             self.now(),
         );
+        let ports_full = {
+            let live = self
+                .store
+                .read(|c| read::load_tasks(c, TaskSet::Reconcile))?;
+            saka_core::reconcile::free_port_blocks(&saka_core::reconcile::Snapshot {
+                tasks: live,
+                port_blocks: Some(self.cfg.env.port_blocks()),
+                ..Default::default()
+            }) == Some(0)
+        };
         Ok(tasks
             .iter()
             .map(|t| {
                 let mut waits = waiting_on(t, &dep_tasks, &specs, &item_deps, &spec_deps);
                 if t.item.state == WorkItemState::Queued {
                     waits.extend(quota.iter().cloned());
+                    if ports_full {
+                        waits.push(Waiting::PortBlock);
+                    }
                 }
                 waits
             })

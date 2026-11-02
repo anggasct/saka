@@ -42,6 +42,12 @@ turns = 10                         # 1..=100; turns sent to the CLI in a stage r
 tokens = 0                         # 0 = no limit; input + output
 cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
 
+[env]
+port_range = "41000-48999"         # inclusive, 1024..=65535; must hold ports_per_env x scheduler.max_active_tasks ports
+ports_per_env = 10                 # 1..=100; block size per environment; a recipe may ask for fewer
+setup_timeout_minutes = 15         # 1..=240; per setup or teardown command
+limits = { memory_max = "4G", cpu_quota = "200%", tasks_max = 512 }   # cgroup of each recipe command
+
 [git]
 author_name = "Saka Agent"
 author_email = "agent@saka.invalid"

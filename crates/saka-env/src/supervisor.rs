@@ -4,8 +4,12 @@ use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use std::io::Read;
+
 use async_trait::async_trait;
-use saka_ports::{PortError, PortResult, RunnerUnit, Supervisor};
+use saka_ports::{
+    COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, PortError, PortResult, RunnerUnit, Supervisor,
+};
 use serde_json::json;
 use tokio::process::{Child, Command};
 
@@ -13,8 +17,65 @@ const STOP_WAIT: Duration = Duration::from_secs(10);
 const KILL_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(100);
 
+const RUN_BACKSTOP: Duration = Duration::from_secs(30);
+
 fn failed(code: &str, detail: impl Into<String>) -> PortError {
     PortError::retryable(code, json!({ "detail": detail.into() }))
+}
+
+struct Captured {
+    output: Vec<u8>,
+    truncated: bool,
+}
+
+fn keep_tail(buf: &mut Vec<u8>, truncated: &mut bool) {
+    if buf.len() > COMMAND_OUTPUT_MAX {
+        let cut = buf.len() - COMMAND_OUTPUT_MAX;
+        buf.drain(..cut);
+        *truncated = true;
+    }
+}
+
+fn read_tail(mut reader: std::io::PipeReader) -> Captured {
+    let mut output = Vec::new();
+    let mut truncated = false;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                output.extend_from_slice(&chunk[..n]);
+                keep_tail(&mut output, &mut truncated);
+            }
+        }
+    }
+    Captured { output, truncated }
+}
+
+// stdout and stderr share one pipe so the log keeps the order the command wrote them in.
+fn merged_pipe() -> PortResult<(std::io::PipeReader, Stdio, Stdio)> {
+    let (reader, writer) =
+        std::io::pipe().map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+    let err = writer
+        .try_clone()
+        .map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+    Ok((reader, Stdio::from(writer), Stdio::from(err)))
+}
+
+async fn collect(
+    reader: std::io::PipeReader,
+    exit_code: Option<i32>,
+    timed_out: bool,
+) -> PortResult<CommandOutcome> {
+    let captured = tokio::task::spawn_blocking(move || read_tail(reader))
+        .await
+        .map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+    Ok(CommandOutcome {
+        exit_code,
+        timed_out,
+        output: captured.output,
+        truncated: captured.truncated,
+    })
 }
 
 #[derive(Debug, Clone, Default)]
@@ -126,6 +187,51 @@ impl Supervisor for SystemdSupervisor {
     async fn is_active(&self, name: &str) -> PortResult<bool> {
         Ok(Self::is_active(name).await)
     }
+
+    async fn run(&self, unit: &CommandUnit) -> PortResult<CommandOutcome> {
+        if Self::is_active(&unit.name).await {
+            self.stop(&unit.name).await?;
+        }
+        let _ = Self::systemctl(&["reset-failed", &Self::service(&unit.name)]).await;
+        let (reader, stdout, stderr) = merged_pipe()?;
+        let backstop = (unit.timeout + RUN_BACKSTOP).as_secs();
+        let mut command = Command::new("systemd-run");
+        command
+            .args(["--user", "--wait", "--pipe", "--collect", "--quiet"])
+            .arg(format!("--unit={}", unit.name))
+            .arg(format!("--working-directory={}", unit.cwd))
+            .args(["-p", &format!("MemoryMax={}", unit.limits.memory_max)])
+            .args(["-p", &format!("CPUQuota={}", unit.limits.cpu_quota)])
+            .args(["-p", &format!("TasksMax={}", unit.limits.tasks_max)])
+            .args(["-p", &format!("RuntimeMaxSec={backstop}")])
+            .args(["-p", "KillMode=control-group"])
+            // The user manager's environment would leak into the unit; `env -i` starts from nothing.
+            .args(["--", "/usr/bin/env", "-i"]);
+        for (key, value) in &unit.env {
+            command.arg(format!("{key}={value}"));
+        }
+        let mut child = command
+            .arg(&unit.program)
+            .args(&unit.args)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+        drop(command);
+        match tokio::time::timeout(unit.timeout, child.wait()).await {
+            Ok(status) => {
+                let status = status.map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+                collect(reader, status.code(), false).await
+            }
+            Err(_) => {
+                self.stop(&unit.name).await?;
+                let _ = child.wait().await;
+                collect(reader, None, true).await
+            }
+        }
+    }
 }
 
 pub struct DirectSupervisor {
@@ -209,5 +315,43 @@ impl Supervisor for DirectSupervisor {
         Ok(children
             .get_mut(name)
             .is_some_and(|c| matches!(c.try_wait(), Ok(None))))
+    }
+
+    async fn run(&self, unit: &CommandUnit) -> PortResult<CommandOutcome> {
+        let (reader, stdout, stderr) = merged_pipe()?;
+        let mut command = Command::new(&unit.program);
+        command
+            .args(&unit.args)
+            .current_dir(&unit.cwd)
+            .env_clear()
+            .envs(&unit.env)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .process_group(0);
+        let mut child = command
+            .spawn()
+            .map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+        drop(command);
+        let group = child
+            .id()
+            .and_then(|p| rustix::process::Pid::from_raw(p as i32));
+        match tokio::time::timeout(unit.timeout, child.wait()).await {
+            Ok(status) => {
+                let status = status.map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
+                // Background children left by the command still hold the pipe open.
+                if let Some(pid) = group {
+                    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+                }
+                collect(reader, status.code(), false).await
+            }
+            Err(_) => {
+                if let Some(pid) = group {
+                    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+                }
+                let _ = child.wait().await;
+                collect(reader, None, true).await
+            }
+        }
     }
 }

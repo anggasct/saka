@@ -90,6 +90,7 @@ vocab!(Trigger { Auto => "auto", Manual => "manual" });
 vocab!(
     BlockerCode {
         EnvSetupFailed => "env_setup_failed",
+        EnvRecipeInvalid => "env_recipe_invalid",
         SessionFailed => "session_failed",
         SessionLost => "session_lost",
         SessionTimeout => "session_timeout",

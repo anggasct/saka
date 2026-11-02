@@ -309,6 +309,15 @@ pub struct ChangeRequest {
     pub updated_at: Timestamp,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct EnvironmentSetup {
+    pub port_start: Option<u16>,
+    pub port_count: Option<u16>,
+    pub recipe: Option<Value>,
+    pub recipe_sha256: Option<String>,
+    pub setup: Vec<Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Environment {
     pub id: EnvironmentId,
@@ -321,6 +330,10 @@ pub struct Environment {
     pub state: EnvironmentState,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    pub port_start: Option<u16>,
+    pub port_count: Option<u16>,
+    pub recipe: Option<Value>,
+    pub recipe_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

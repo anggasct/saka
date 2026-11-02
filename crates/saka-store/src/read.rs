@@ -106,7 +106,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         TaskSet::Reconcile => (
             "SELECT id FROM work_item WHERE state NOT IN ('done', 'cancelled')
                OR spec_id IN (SELECT id FROM spec WHERE state = 'approved')
-               OR id IN (SELECT work_item_id FROM environment WHERE state = 'teardown_failed')",
+               OR id IN (SELECT work_item_id FROM environment WHERE state IN ('ready', 'teardown_failed'))",
             vec![],
         ),
         TaskSet::Spec(id) => {
@@ -405,6 +405,10 @@ fn environment(row: &Row<'_>) -> Result<Environment> {
         state: vocab(row, "state")?,
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,
+        port_start: row.get("port_start")?,
+        port_count: row.get("port_count")?,
+        recipe: opt_json(row, "recipe_json")?,
+        recipe_sha256: row.get("recipe_sha256")?,
     })
 }
 
@@ -600,6 +604,20 @@ fn permission_rule(row: &Row<'_>) -> Result<PermissionRule> {
         revoked_at: opt_ts(row, "revoked_at")?,
         revoke_reason: row.get("revoke_reason")?,
     })
+}
+
+pub fn live_port_blocks(conn: &Connection) -> Result<Vec<(u16, u16)>> {
+    let mut stmt = conn.prepare(
+        "SELECT port_start, port_count FROM environment
+          WHERE port_start IS NOT NULL AND state IN ('preparing', 'ready', 'teardown_failed')
+          ORDER BY port_start",
+    )?;
+    let mut q = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push((row.get("port_start")?, row.get("port_count")?));
+    }
+    Ok(out)
 }
 
 pub fn account_quotas(conn: &Connection) -> Result<Vec<AccountQuota>> {

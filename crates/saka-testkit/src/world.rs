@@ -10,8 +10,9 @@ use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus};
 use saka_ports::{
     Agents, ChangeSnapshot, Clock, DocFile, DocSource, EnvRef, Environments, LaunchedSession, Link,
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RepoInfo, RepoRef,
-    RunnerEvent, RunnerEventKind, Scm, SessionLaunch, SessionRef, WorktreeState,
+    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
+    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, SessionLaunch,
+    SessionRef, WorktreeState,
 };
 use serde_json::{Value, json};
 
@@ -148,11 +149,31 @@ struct State {
     inaccessible: BTreeSet<String>,
     prompts: Vec<String>,
     resumes: Vec<Option<String>>,
+    recipe: Option<String>,
+    recipe_runs: Vec<RecipeRun>,
+    command_scripts: HashMap<String, VecDeque<CommandScript>>,
+    launches: Vec<BTreeMap<String, String>>,
 }
 
 pub struct FakeWorld {
     clock: Arc<FakeClock>,
     state: Mutex<State>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeRun {
+    pub environment_id: EnvironmentId,
+    pub phase: &'static str,
+    pub index: usize,
+    pub command: String,
+    pub vars: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandScript {
+    Exit(i32),
+    Timeout,
+    Crash,
 }
 
 pub const BASE_BRANCH: &str = "main";
@@ -171,6 +192,10 @@ impl FakeWorld {
                 ci,
                 lose_merges: false,
                 refuse_teardowns: false,
+                recipe: None,
+                recipe_runs: Vec::new(),
+                command_scripts: HashMap::new(),
+                launches: Vec::new(),
                 next_sha: 1,
                 parents,
                 remote,
@@ -308,6 +333,26 @@ impl FakeWorld {
 
     pub fn refuse_teardowns(&self, refuse: bool) {
         self.state().refuse_teardowns = refuse;
+    }
+
+    pub fn set_recipe(&self, recipe: Option<&str>) {
+        self.state().recipe = recipe.map(String::from);
+    }
+
+    pub fn script_command(&self, command: &str, script: CommandScript) {
+        self.state()
+            .command_scripts
+            .entry(command.to_string())
+            .or_default()
+            .push_back(script);
+    }
+
+    pub fn recipe_runs(&self) -> Vec<RecipeRun> {
+        self.state().recipe_runs.clone()
+    }
+
+    pub fn launch_vars(&self) -> Vec<BTreeMap<String, String>> {
+        self.state().launches.clone()
     }
 
     pub fn close_outside(&self, number: u64) {
@@ -600,6 +645,57 @@ impl Environments for FakeWorld {
         Ok(())
     }
 
+    async fn read_recipe(&self, _repo: &RepoRef, _commit: &str) -> PortResult<Option<String>> {
+        Ok(self.state().recipe.clone())
+    }
+
+    async fn run_recipe_command(
+        &self,
+        env: &EnvRef,
+        command: &RecipeCommand,
+    ) -> PortResult<RecipeCommandOutcome> {
+        let mut s = self.state();
+        let live = s
+            .worktrees
+            .get(&env.environment_id)
+            .is_some_and(|w| !w.torn_down);
+        if !live {
+            return Err(PortError::permanent("worktree_missing", json!({})));
+        }
+        let script = s
+            .command_scripts
+            .get_mut(&command.command)
+            .and_then(VecDeque::pop_front)
+            .unwrap_or(CommandScript::Exit(0));
+        if script == CommandScript::Crash {
+            return Err(PortError::retryable(
+                "supervisor_run_failed",
+                json!({ "detail": "simulated crash" }),
+            ));
+        }
+        s.recipe_runs.push(RecipeRun {
+            environment_id: env.environment_id,
+            phase: command.phase.as_str(),
+            index: command.index,
+            command: command.command.clone(),
+            vars: env.vars.clone(),
+        });
+        Ok(RecipeCommandOutcome {
+            exit_code: match script {
+                CommandScript::Exit(code) => Some(code),
+                _ => None,
+            },
+            timed_out: script == CommandScript::Timeout,
+            duration_ms: 5,
+            log_path: format!(
+                "/sim/logs/environments/{}/{}-{}.log",
+                env.environment_id,
+                command.phase.as_str(),
+                command.index
+            ),
+        })
+    }
+
     fn resolve_path(&self, env: &EnvRef, raw: &str) -> RequestPath {
         let root = env.worktree_path.trim_end_matches('/');
         let relative = if let Some(rest) = raw.strip_prefix(&format!("{root}/")) {
@@ -763,6 +859,7 @@ impl Scm for FakeWorld {
 impl Agents for FakeWorld {
     async fn start(&self, launch: &SessionLaunch) -> PortResult<LaunchedSession> {
         let mut s = self.state();
+        s.launches.push(launch.environment.vars.clone());
         let id = launch.session_id;
         if s.sessions.get(&id).is_some_and(|old| old.running) {
             s.stats.stale_runners_stopped += 1;

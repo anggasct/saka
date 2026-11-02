@@ -27,6 +27,7 @@ impl Engine {
                 work_item_dependencies: read::queued_work_item_dependencies(c)?,
                 spec_dependencies: read::spec_dependencies(c, None)?,
                 quotas: read::account_quotas(c)?,
+                port_blocks: Some(self.cfg.env.port_blocks()),
             })
         })?;
         self.counters

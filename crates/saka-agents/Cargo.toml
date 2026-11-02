@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-regex.workspace = true
 rustix = { workspace = true, features = ["process"] }
 saka-core = { path = "../saka-core" }
 saka-ports = { path = "../saka-ports" }

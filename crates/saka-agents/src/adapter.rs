@@ -143,6 +143,9 @@ impl ClaudeAgents {
         for (k, v) in &self.cfg.extra_env {
             spec.env.insert(k.clone(), v.clone());
         }
+        for (k, v) in &launch.environment.vars {
+            spec.env.entry(k.clone()).or_insert_with(|| v.clone());
+        }
         Ok((spec, paths))
     }
 }
@@ -347,5 +350,131 @@ impl Agents for ClaudeAgents {
             .map(String::from)
             .unwrap_or_else(|| unit_name(session_id));
         self.supervisor.stop(&name).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use saka_ports::{CommandOutcome, CommandUnit, EnvRef, RepoRef};
+    use serde::de::DeserializeOwned;
+
+    use super::*;
+
+    struct NoSupervisor;
+
+    #[async_trait]
+    impl Supervisor for NoSupervisor {
+        async fn start(&self, _unit: &RunnerUnit) -> PortResult<()> {
+            Ok(())
+        }
+        async fn stop(&self, _name: &str) -> PortResult<()> {
+            Ok(())
+        }
+        async fn is_active(&self, _name: &str) -> PortResult<bool> {
+            Ok(false)
+        }
+        async fn run(&self, _unit: &CommandUnit) -> PortResult<CommandOutcome> {
+            Err(PortError::permanent("not_used", json!({})))
+        }
+    }
+
+    fn id<T: DeserializeOwned>(n: u8) -> T {
+        serde_json::from_value(json!(format!("00000000-0000-0000-0000-0000000000{n:02}")))
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn the_session_env_is_the_allowlist_plus_the_recipe_env_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir.path().join("e-1");
+        std::fs::create_dir_all(root.join("worktree")).unwrap_or_else(|e| panic!("{e}"));
+        let (sink, _events) = mpsc::unbounded_channel();
+        let agents = ClaudeAgents::new(
+            AgentsConfig {
+                claude: ClaudeSettings {
+                    command: "claude".into(),
+                    account: "default".into(),
+                    account_dir: "/data/agents/claude/default".into(),
+                    model: None,
+                    path: vec!["/usr/bin".into(), "/bin".into()],
+                    author_name: "Saka Agent".into(),
+                    author_email: "agent@saka.invalid".into(),
+                },
+                sessions_dir: dir.path().join("sessions"),
+                runtime_dir: dir.path().join("run"),
+                runner_program: "/usr/bin/saka".into(),
+                limits: UnitLimits {
+                    memory_max: "1G".into(),
+                    cpu_quota: "100%".into(),
+                    tasks_max: 64,
+                },
+                known_values: Vec::new(),
+                server_version: "0.0.0".into(),
+                extra_env: Vec::new(),
+            },
+            Arc::new(NoSupervisor),
+            sink,
+        );
+        let vars = [
+            ("APP_ENV", "test"),
+            ("PORT", "41000"),
+            ("SAKA_ENVIRONMENT_ID", "e-1"),
+            ("SAKA_PORT_BASE", "41000"),
+            ("SAKA_PORT_COUNT", "3"),
+            ("SAKA_TASK_KEY", "a/s1"),
+            ("HOME", "/somewhere/else"),
+        ];
+        let launch = SessionLaunch {
+            session_id: id(1),
+            work_item_id: id(2),
+            environment: EnvRef {
+                environment_id: id(3),
+                repo: RepoRef {
+                    repo_id: id(4),
+                    integration_id: "github".into(),
+                    full_name: "acme/app".into(),
+                    url: "https://github.com/acme/app".into(),
+                },
+                branch: "saka/a/s1".into(),
+                root_path: root.to_string_lossy().into_owned(),
+                worktree_path: root.join("worktree").to_string_lossy().into_owned(),
+                vars: vars
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+            },
+            resume_cli_session_id: None,
+        };
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &launch)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let keys: Vec<&str> = spec.env.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "APP_ENV",
+                "CLAUDE_CONFIG_DIR",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
+                "HOME",
+                "LANG",
+                "PATH",
+                "PORT",
+                "SAKA_ENVIRONMENT_ID",
+                "SAKA_PORT_BASE",
+                "SAKA_PORT_COUNT",
+                "SAKA_TASK_KEY",
+                "TERM",
+                "TMPDIR",
+            ]
+        );
+        assert_eq!(spec.env["SAKA_PORT_BASE"], "41000");
+        assert_eq!(
+            spec.env["HOME"],
+            root.join("home").to_string_lossy(),
+            "a recipe var never replaces a Saka-owned one"
+        );
     }
 }

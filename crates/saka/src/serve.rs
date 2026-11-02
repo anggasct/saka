@@ -14,8 +14,8 @@ use saka_core::task::LoopConfig;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{MergeMethod, Stage};
 use saka_docs::GitDocs;
-use saka_engine::{Engine, EngineConfig, Integration, Ports};
-use saka_env::{Git, GitRepos, ReposConfig, SystemdSupervisor};
+use saka_engine::{Engine, EngineConfig, EnvConfig, Integration, Ports};
+use saka_env::{Git, GitRepos, RecipeRunner, ReposConfig, SystemdSupervisor};
 use saka_ports::{
     ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
     OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
@@ -163,6 +163,36 @@ pub fn migrate(cfg: &Config) -> ExitCode {
     }
 }
 
+fn env_config(cfg: &Config, store: &Store) -> Result<EnvConfig, ConfigError> {
+    let (port_first, port_last) = cfg.env.ports()?;
+    let env = EnvConfig {
+        port_first,
+        port_last,
+        ports_per_env: cfg.env.ports_per_env,
+    };
+    let live = store
+        .read(saka_store::read::live_port_blocks)
+        .map_err(|e| ConfigError {
+            code: e.code(),
+            detail: e.to_string(),
+        })?;
+    let fits = |(start, count): &(u16, u16)| {
+        *count == env.ports_per_env
+            && *start >= port_first
+            && (*start - port_first) % env.ports_per_env == 0
+            && usize::from((*start - port_first) / env.ports_per_env) < env.port_blocks()
+    };
+    match live.iter().find(|b| !fits(b)) {
+        None => Ok(env),
+        Some((start, count)) => Err(ConfigError {
+            code: "config_port_layout_in_use",
+            detail: format!(
+                "a live environment holds ports {start}+{count}; tear it down before changing env.port_range or env.ports_per_env"
+            ),
+        }),
+    }
+}
+
 fn loop_config(cfg: &Config) -> LoopConfig {
     let first = cfg.scm.first();
     let dev = &cfg.budget.dev;
@@ -288,6 +318,14 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
             return code;
         }
     };
+    let env_cfg = match env_config(cfg, &store) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = stop.send(true);
+            let _ = http.await;
+            return refuse(&e);
+        }
+    };
 
     let mut apps = HashMap::new();
     let mut integrations = Vec::new();
@@ -324,6 +362,17 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
             repos_dir: data_dir.join("repos"),
             envs_dir: data_dir.join("envs"),
             git: Git::new("git", path),
+            recipe: RecipeRunner {
+                supervisor: Arc::new(SystemdSupervisor),
+                limits: UnitLimits {
+                    memory_max: cfg.env.limits.memory_max.clone(),
+                    cpu_quota: cfg.env.limits.cpu_quota.clone(),
+                    tasks_max: cfg.env.limits.tasks_max,
+                },
+                timeout: Duration::from_secs(u64::from(cfg.env.setup_timeout_minutes) * 60),
+                logs_dir: data_dir.join("logs").join("environments"),
+                path: config::paths_of(&cfg.agent.path),
+            },
         },
         Arc::new(AccessRouter(apps.clone())),
     ));
@@ -380,6 +429,7 @@ async fn run(cfg: &Config, listen: std::net::SocketAddr, policy: Policy) -> Exit
             policy,
             worker_id: format!("serve-{}", std::process::id()),
             integrations,
+            env: env_cfg,
         },
     ));
     match engine.recover() {

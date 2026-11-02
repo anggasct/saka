@@ -528,6 +528,7 @@ fn superseded_tasks_never_run_and_never_hold_the_spec() {
     let spec = approved_spec(FROM);
     let snapshot = Snapshot {
         quotas: Vec::new(),
+        port_blocks: None,
         specs: vec![spec.clone()],
         tasks: vec![task_of(item(1, WorkItemState::Queued)), superseded.clone()],
         work_item_dependencies: vec![],
@@ -762,6 +763,7 @@ proptest! {
             .collect();
         let snapshot = Snapshot {
         quotas: Vec::new(),
+        port_blocks: None,
             specs: vec![approved_spec(FROM)],
             tasks: tasks.clone(),
             work_item_dependencies: vec![],

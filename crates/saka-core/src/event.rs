@@ -192,11 +192,17 @@ pub enum Event {
         worktree_path: String,
         branch: String,
         base_sha: String,
+        port_start: Option<u16>,
+        port_count: Option<u16>,
+        recipe: Option<Value>,
+        recipe_sha256: Option<String>,
+        setup: Vec<Value>,
     },
     #[serde(rename = "runtime.environment.torn_down")]
     EnvironmentTornDown {
         work_item_id: WorkItemId,
         environment_id: EnvironmentId,
+        teardown_failures: Vec<Value>,
     },
     #[serde(rename = "runtime.environment.teardown_failed")]
     EnvironmentTeardownFailed {

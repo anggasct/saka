@@ -206,6 +206,7 @@ impl World {
         reconcile(
             &Snapshot {
                 quotas: Vec::new(),
+                port_blocks: None,
                 specs: vec![self.spec.clone()],
                 tasks: self.tasks.clone(),
                 work_item_dependencies: self.deps.clone(),
@@ -306,6 +307,7 @@ fn prepared(step: u32) -> TaskInput {
         root_path: format!("/envs/{step}"),
         worktree_path: format!("/envs/{step}/worktree"),
         base_sha: sha('a'),
+        setup: Default::default(),
     }
 }
 
@@ -617,7 +619,12 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         vec![JobKind::EnvTeardown, JobKind::ScmDeleteBranch]
     );
     assert_eq!(w.admits(), Vec::<u32>::new(), "S2 waits until S1 is done");
-    w.decide(1, TaskInput::EnvironmentTornDown);
+    w.decide(
+        1,
+        TaskInput::EnvironmentTornDown {
+            teardown_failures: Vec::new(),
+        },
+    );
     assert_eq!(w.place(1).0, WorkItemState::Done);
 
     assert_eq!(w.admits(), vec![2]);
@@ -638,7 +645,12 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         "merged outside Saka goes to sync"
     );
     w.decide(2, TaskInput::MergeVerified { found: true });
-    w.decide(2, TaskInput::EnvironmentTornDown);
+    w.decide(
+        2,
+        TaskInput::EnvironmentTornDown {
+            teardown_failures: Vec::new(),
+        },
+    );
     assert_eq!(w.place(2).0, WorkItemState::Done);
     let ship: Vec<Action> = w
         .reconcile()
@@ -1277,7 +1289,12 @@ fn a_leftover_environment_gets_one_cleanup_job_per_hour_until_it_is_torn_down() 
     assert_eq!(next.len(), 1);
     assert_eq!(next[0].idempotency_key, format!("env.teardown:{env}:4"));
 
-    let events = w.decide(1, TaskInput::EnvironmentTornDown);
+    let events = w.decide(
+        1,
+        TaskInput::EnvironmentTornDown {
+            teardown_failures: Vec::new(),
+        },
+    );
     assert!(
         matches!(&events[..], [Event::EnvironmentTornDown { environment_id, .. }] if *environment_id == env),
         "{events:?}"
