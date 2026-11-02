@@ -148,7 +148,8 @@ vocab!(PermissionState { Pending => "pending", Allowed => "allowed", Denied => "
 vocab!(ChangeState { Open => "open", Merged => "merged", Closed => "closed" });
 vocab!(GateSource { Scm => "scm", Saka => "saka" });
 vocab!(GateOutcome { Pending => "pending", Passed => "passed", Failed => "failed" });
-vocab!(CheckKind { CheckRun => "check_run", CommitStatus => "commit_status" });
+vocab!(CheckKind { CheckRun => "check_run", CommitStatus => "commit_status", Command => "command" });
+vocab!(GateMode { Auto => "auto", Scm => "scm", Saka => "saka", Both => "both" });
 vocab!(CheckStatus { Queued => "queued", InProgress => "in_progress", Completed => "completed" });
 vocab!(CheckConclusion {
     Success => "success",

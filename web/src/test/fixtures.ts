@@ -72,7 +72,7 @@ function task(step: number, extra: Partial<WorkItem>): WorkItem {
     priority: 0,
     waiting_on: [],
     change_request: null,
-    gate: null,
+    gates: [],
     blocker: null,
     session: null,
     pending_permission_count: 0,

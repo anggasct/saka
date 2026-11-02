@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::Ctx;
 use crate::event::{Event, Prompt};
-use crate::gate::{self, Check};
+use crate::gate::{self, Check, GatePolicy};
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
     SessionId, StageRunId, UsageRecordId,
@@ -32,6 +32,7 @@ pub struct LoopConfig {
     pub poll_interval_ms: i64,
     pub merge_method: MergeMethod,
     pub delete_branch_after_merge: bool,
+    pub commit_status: bool,
     pub permission_wait_ms: i64,
     pub idle_ms: i64,
     pub budgets: BTreeMap<Stage, Budget>,
@@ -158,6 +159,14 @@ pub enum TaskInput {
         url: String,
         head_sha: String,
         base_branch: String,
+    },
+    SakaGateStarted {
+        head_sha: String,
+    },
+    SakaGateObserved {
+        head_sha: String,
+        checks: Vec<Check>,
+        failure: Option<Value>,
     },
     ChangeObserved {
         state: ChangeState,
@@ -369,6 +378,12 @@ pub fn decide(
             merged_at,
             checks,
         } => d.change_observed(state, head_sha, merge_commit_sha, merged_at, checks, ctx),
+        I::SakaGateStarted { head_sha } => d.saka_gate_started(head_sha, ctx),
+        I::SakaGateObserved {
+            head_sha,
+            checks,
+            failure,
+        } => d.saka_gate_observed(head_sha, checks, failure, ctx),
         I::RequestMerge {
             expected_version,
             reason,
@@ -1207,22 +1222,202 @@ impl Decider<'_> {
             }
         }
         if self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
-            && self.task.gate.as_ref().is_none_or(|g| g.checks.is_empty())
-            && let Some(started) = self.task.stage_run.as_ref().and_then(|r| r.started_at)
-            && self.now.since(started) > self.cfg.ci_appear_timeout_ms
+            && self.ci_timed_out()
+            && let Some(cr) = &self.task.change_request
         {
-            let head = self
+            let policy = self.gate_policy();
+            let seen = self
                 .task
-                .change_request
+                .gate_for(GateSource::Scm, &cr.head_sha)
+                .map(|g| g.checks.clone())
+                .unwrap_or_default();
+            let relevant = policy.scm_checks(&seen);
+            let missing = policy.missing_checks(&relevant);
+            if policy.uses(GateSource::Scm) && policy.scm_always_required() {
+                if !missing.is_empty() && !policy.required_checks.is_empty() {
+                    return self.block(
+                        BlockerCode::CiRed,
+                        json!({ "source": "scm", "reason": "required_missing", "missing": missing, "head_sha": cr.head_sha }),
+                        ctx,
+                    );
+                }
+                if relevant.is_empty() {
+                    return self.block(
+                        BlockerCode::CiRed,
+                        json!({ "source": "scm", "reason": "no_checks", "head_sha": cr.head_sha }),
+                        ctx,
+                    );
+                }
+            }
+            return self.settle_gate(&cr.head_sha, false, None, None, ctx);
+        }
+        vec![]
+    }
+
+    fn gate_policy(&self) -> GatePolicy {
+        GatePolicy::from_recipe(
+            self.task
+                .environment
                 .as_ref()
-                .map(|c| c.head_sha.clone());
+                .and_then(|e| e.recipe.as_ref()),
+        )
+    }
+
+    fn ci_timed_out(&self) -> bool {
+        self.task
+            .stage_run
+            .as_ref()
+            .and_then(|r| r.started_at)
+            .is_some_and(|started| self.now.since(started) > self.cfg.ci_appear_timeout_ms)
+    }
+
+    fn scm_required(&self, policy: &GatePolicy, scm: Option<(GateOutcome, &[Check])>) -> bool {
+        if !policy.uses(GateSource::Scm) {
+            return false;
+        }
+        if policy.scm_always_required() {
+            return true;
+        }
+        let has_checks = scm.is_some_and(|(_, checks)| !policy.scm_checks(checks).is_empty());
+        has_checks || !self.ci_timed_out()
+    }
+
+    fn settle_gate(
+        &self,
+        head_sha: &str,
+        head_changed: bool,
+        scm: Option<(GateOutcome, &[Check])>,
+        saka: Option<(GateOutcome, &[Check], Option<&Value>)>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        if self.task.is_at(Stage::Merge, StagePhase::Merging) {
+            return vec![];
+        }
+        let policy = self.gate_policy();
+        let scm = scm.or_else(|| {
+            self.task
+                .gate_for(GateSource::Scm, head_sha)
+                .map(|g| (g.outcome, g.checks.as_slice()))
+        });
+        let saka = saka.or_else(|| {
+            self.task
+                .gate_for(GateSource::Saka, head_sha)
+                .map(|g| (g.outcome, g.checks.as_slice(), None))
+        });
+        let scm_required = self.scm_required(&policy, scm);
+        let saka_required = policy.uses(GateSource::Saka);
+        let scm_outcome = scm.map(|(_, checks)| policy.scm_outcome(checks));
+        if scm_required && scm_outcome == Some(GateOutcome::Failed) {
+            let failing: Vec<String> = scm
+                .map(|(_, checks)| {
+                    policy
+                        .scm_checks(checks)
+                        .into_iter()
+                        .filter(Check::is_failure)
+                        .map(|c| c.name)
+                        .collect()
+                })
+                .unwrap_or_default();
             return self.block(
                 BlockerCode::CiRed,
-                json!({ "reason": "no_checks", "head_sha": head }),
+                json!({ "source": "scm", "checks": failing, "head_sha": head_sha }),
                 ctx,
             );
         }
+        if saka_required && let Some((GateOutcome::Failed, checks, failure)) = saka {
+            let failing: Vec<String> = checks
+                .iter()
+                .filter(|c| c.is_failure())
+                .map(|c| c.name.clone())
+                .collect();
+            let mut params = json!({ "source": "saka", "checks": failing, "head_sha": head_sha });
+            if let Some(Value::Object(extra)) = failure {
+                for (k, v) in extra {
+                    params[k.as_str()] = v.clone();
+                }
+            }
+            return self.block(BlockerCode::CiRed, params, ctx);
+        }
+        let scm_ok = !scm_required || scm_outcome == Some(GateOutcome::Passed);
+        let saka_ok = !saka_required || saka.is_some_and(|(o, _, _)| o == GateOutcome::Passed);
+        let awaiting_merge = self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
+        if scm_ok && saka_ok {
+            if !awaiting_merge || head_changed {
+                return self.phase(StagePhase::AwaitingMerge, Some(head_sha.to_string()));
+            }
+            return vec![];
+        }
+        if awaiting_merge {
+            return self.phase(StagePhase::AwaitingCi, Some(head_sha.to_string()));
+        }
         vec![]
+    }
+
+    fn saka_gate_started(&self, head_sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let in_gate = self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+            || self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
+        let current = self
+            .task
+            .change_request
+            .as_ref()
+            .is_some_and(|c| c.head_sha == head_sha);
+        if !in_gate || !current || self.task.gate_for(GateSource::Saka, &head_sha).is_some() {
+            return vec![];
+        }
+        let Some(run) = &self.task.stage_run else {
+            return vec![];
+        };
+        vec![Event::GateStarted {
+            work_item_id: self.item().id,
+            stage_run_id: run.id,
+            gate_result_id: GateResultId::new(ctx.ids),
+            source: GateSource::Saka,
+            head_sha,
+        }]
+    }
+
+    fn saka_gate_observed(
+        &self,
+        head_sha: String,
+        checks: Vec<Check>,
+        failure: Option<Value>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(run) = &self.task.stage_run else {
+            return vec![];
+        };
+        if run.stage != Stage::Merge {
+            return vec![];
+        }
+        let outcome = if failure.is_some() || checks.iter().any(Check::is_failure) {
+            GateOutcome::Failed
+        } else {
+            gate::outcome(&checks)
+        };
+        let mut events = vec![Event::GateObserved {
+            work_item_id: self.item().id,
+            stage_run_id: run.id,
+            gate_result_id: GateResultId::new(ctx.ids),
+            source: GateSource::Saka,
+            head_sha: head_sha.clone(),
+            outcome,
+            checks: checks.clone(),
+        }];
+        let current = self
+            .task
+            .change_request
+            .as_ref()
+            .is_some_and(|c| c.head_sha == head_sha && c.state == ChangeState::Open);
+        if current && self.item().state == WorkItemState::InStage {
+            events.extend(self.settle_gate(
+                &head_sha,
+                false,
+                None,
+                Some((outcome, &checks, failure.as_ref())),
+                ctx,
+            ));
+        }
+        events
     }
 
     fn session_tick(&self, session: &Session, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -1399,48 +1594,30 @@ impl Decider<'_> {
                 head_sha: head_sha.clone(),
             });
         }
-        let outcome = gate::outcome(&checks);
-        let unchanged =
-            self.task.gate.as_ref().is_some_and(|g| {
-                g.head_sha == head_sha && g.outcome == outcome && g.checks == checks
-            });
+        let unchanged = self
+            .task
+            .gate_for(GateSource::Scm, &head_sha)
+            .is_some_and(|g| g.checks == checks);
+        let policy = self.gate_policy();
+        let outcome = policy.scm_outcome(&checks);
         if !unchanged {
             events.push(Event::GateObserved {
                 work_item_id: self.item().id,
                 stage_run_id: run.id,
                 gate_result_id: GateResultId::new(ctx.ids),
+                source: GateSource::Scm,
                 head_sha: head_sha.clone(),
                 outcome,
                 checks: checks.clone(),
             });
         }
-        if self.task.is_at(Stage::Merge, StagePhase::Merging) {
-            return events;
-        }
-        let awaiting_merge = self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
-        match outcome {
-            GateOutcome::Passed if !awaiting_merge || head_changed => {
-                events.extend(self.phase(StagePhase::AwaitingMerge, Some(head_sha)));
-            }
-            GateOutcome::Passed => {}
-            GateOutcome::Failed => {
-                let failing: Vec<&str> = checks
-                    .iter()
-                    .filter(|c| c.is_failure())
-                    .map(|c| c.name.as_str())
-                    .collect();
-                events.extend(self.block(
-                    BlockerCode::CiRed,
-                    json!({ "checks": failing, "head_sha": head_sha }),
-                    ctx,
-                ));
-            }
-            GateOutcome::Pending => {
-                if awaiting_merge {
-                    events.extend(self.phase(StagePhase::AwaitingCi, Some(head_sha)));
-                }
-            }
-        }
+        events.extend(self.settle_gate(
+            &head_sha,
+            head_changed,
+            Some((outcome, &checks)),
+            None,
+            ctx,
+        ));
         events
     }
 
@@ -1469,14 +1646,21 @@ impl Decider<'_> {
             });
         }
         let cr = self.task.change_request.as_ref();
-        let gate = self.task.gate.as_ref();
-        let ready = self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
-            && gate.is_some_and(|g| {
-                g.outcome == GateOutcome::Passed && cr.is_some_and(|c| c.head_sha == g.head_sha)
-            });
+        let ready =
+            self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(self.task);
         let (Some(cr), true) = (cr, ready) else {
+            let gate_outcome = cr
+                .and_then(|c| {
+                    let mut at_head = self.task.gates.iter().filter(|g| g.head_sha == c.head_sha);
+                    at_head
+                        .clone()
+                        .find(|g| g.outcome == GateOutcome::Failed)
+                        .or_else(|| at_head.find(|g| g.outcome == GateOutcome::Pending))
+                        .or_else(|| self.task.gate_for(GateSource::Scm, &c.head_sha))
+                })
+                .map(|g| g.outcome.as_str().to_string());
             return Err(Rejection::MergeNotReady {
-                gate_outcome: gate.map(|g| g.outcome.as_str().to_string()),
+                gate_outcome,
                 head_sha: cr.map(|c| c.head_sha.clone()),
             });
         };
@@ -1886,7 +2070,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 updated_at: now,
             });
             t.attempts.insert(*stage, *attempt);
-            t.gate = None;
+            t.gates.clear();
             if waiting {
                 set_place(&mut t.item, WorkItemState::Admitted, None);
             } else {
@@ -1928,21 +2112,48 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::GateObserved {
             stage_run_id,
             gate_result_id,
+            source,
             head_sha,
             outcome,
             checks,
             ..
         } => {
-            t.gate = Some(GateResult {
-                id: *gate_result_id,
-                stage_run_id: *stage_run_id,
-                work_item_id: t.item.id,
-                source: GateSource::Scm,
-                head_sha: head_sha.clone(),
-                outcome: *outcome,
-                checks: checks.clone(),
-                observed_at: now,
-            });
+            t.gates.retain(|g| g.source != *source);
+            t.gates.insert(
+                t.gates.partition_point(|g| g.source < *source),
+                GateResult {
+                    id: *gate_result_id,
+                    stage_run_id: *stage_run_id,
+                    work_item_id: t.item.id,
+                    source: *source,
+                    head_sha: head_sha.clone(),
+                    outcome: *outcome,
+                    checks: checks.clone(),
+                    observed_at: now,
+                },
+            );
+        }
+        E::GateStarted {
+            stage_run_id,
+            gate_result_id,
+            source,
+            head_sha,
+            ..
+        } => {
+            t.gates.retain(|g| g.source != *source);
+            t.gates.insert(
+                t.gates.partition_point(|g| g.source < *source),
+                GateResult {
+                    id: *gate_result_id,
+                    stage_run_id: *stage_run_id,
+                    work_item_id: t.item.id,
+                    source: *source,
+                    head_sha: head_sha.clone(),
+                    outcome: GateOutcome::Pending,
+                    checks: Vec::new(),
+                    observed_at: now,
+                },
+            );
         }
         E::MergeRequested { .. } => {}
         E::WorkItemBlocked {
@@ -2387,16 +2598,23 @@ fn session_mut(t: &mut Task, id: SessionId, now: Timestamp) -> Option<&mut Sessi
     Some(s)
 }
 
+pub fn gates_clear(task: &Task) -> bool {
+    let Some(cr) = &task.change_request else {
+        return false;
+    };
+    let at_head: Vec<&GateResult> = task
+        .gates
+        .iter()
+        .filter(|g| g.head_sha == cr.head_sha)
+        .collect();
+    !at_head.is_empty()
+        && at_head.iter().all(|g| g.outcome != GateOutcome::Failed)
+        && at_head.iter().any(|g| g.outcome == GateOutcome::Passed)
+}
+
 pub fn available_actions(task: &Task) -> Vec<&'static str> {
     let mut actions = Vec::new();
-    let merge_ready = task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
-        && task.gate.as_ref().is_some_and(|g| {
-            g.outcome == GateOutcome::Passed
-                && task
-                    .change_request
-                    .as_ref()
-                    .is_some_and(|c| c.head_sha == g.head_sha)
-        });
+    let merge_ready = task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(task);
     if merge_ready {
         actions.push("merge");
     }

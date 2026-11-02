@@ -62,6 +62,7 @@ trait Harness: Sync {
     async fn checks(&self, checks: &[Check], pending_status: &str);
     async fn merge_answers(&self, number: u64, answer: MergeAnswer);
     async fn branch_missing(&self);
+    async fn status_accepted(&self, state: &str, description: &str);
     fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>);
 }
 
@@ -111,6 +112,7 @@ impl Harness for GitHubHarness {
             check_kinds: &[CheckKind::CheckRun, CheckKind::CommitStatus],
             draft_change_requests: true,
             delete_branch_after_merge: true,
+            commit_status: true,
         }
     }
 
@@ -230,6 +232,18 @@ impl Harness for GitHubHarness {
                 "commit_title": format!("Add the first step (#{number})"),
             })))
             .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn status_accepted(&self, state: &str, description: &str) {
+        Mock::given(method("POST"))
+            .and(path(format!("/repos/acme/app/statuses/{HEAD}").as_str()))
+            .and(body_json(json!({
+                "state": state, "context": "saka/verify", "description": description,
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 1 })))
             .expect(1)
             .mount(&self.w.server)
             .await;
@@ -487,6 +501,28 @@ async fn webhook_signature_compare_ignores_hex_case(h: &dyn Harness) {
     );
 }
 
+async fn commit_status_is_reported_for_a_head(h: &dyn Harness) {
+    if !h.declared().commit_status {
+        return;
+    }
+    h.status_accepted("success", "2 commands passed").await;
+    let report = saka_ports::StatusReport {
+        context: "saka/verify".into(),
+        state: saka_ports::StatusState::Success,
+        description: "2 commands passed".into(),
+    };
+    h.scm()
+        .report_status(&h.repo(), HEAD, &report)
+        .await
+        .unwrap();
+    let bad = h
+        .scm()
+        .report_status(&h.repo(), "HEAD", &report)
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code, "git_argument_invalid");
+}
+
 async fn capabilities_match_the_declared_matrix(h: &dyn Harness) {
     assert_eq!(h.scm().capabilities(h.integration()), Some(h.declared()));
 }
@@ -520,5 +556,6 @@ conformance!(GitHubHarness:
     webhook_with_a_valid_signature_parses_its_targets,
     webhook_with_a_bad_or_missing_signature_is_refused,
     webhook_signature_compare_ignores_hex_case,
+    commit_status_is_reported_for_a_head,
     capabilities_match_the_declared_matrix,
 );

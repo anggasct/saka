@@ -435,7 +435,7 @@ pub struct PermissionRequest {
 pub struct Task {
     pub item: WorkItem,
     pub stage_run: Option<StageRun>,
-    pub gate: Option<GateResult>,
+    pub gates: Vec<GateResult>,
     pub blocker: Option<Blocker>,
     pub change_request: Option<ChangeRequest>,
     pub environment: Option<Environment>,
@@ -455,7 +455,7 @@ impl Task {
         Task {
             item,
             stage_run: None,
-            gate: None,
+            gates: Vec::new(),
             blocker: None,
             change_request: None,
             environment: None,
@@ -477,6 +477,12 @@ impl Task {
 
     pub fn live_session(&self) -> Option<&Session> {
         self.session.as_ref().filter(|s| s.state.is_live())
+    }
+
+    pub fn gate_for(&self, source: GateSource, head_sha: &str) -> Option<&GateResult> {
+        self.gates
+            .iter()
+            .find(|g| g.source == source && g.head_sha == head_sha)
     }
 
     pub fn ready_environment(&self) -> Option<&Environment> {

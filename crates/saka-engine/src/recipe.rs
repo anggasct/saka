@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use saka_core::vocab::{SecretPurpose, Tool};
+use saka_core::gate::GatePolicy;
+use saka_core::vocab::{GateMode, SecretPurpose, Tool};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -35,7 +36,12 @@ pub struct Recipe {
     pub teardown: Vec<String>,
     pub toolchain: BTreeMap<Tool, String>,
     pub secrets: BTreeMap<String, Vec<SecretPurpose>>,
+    pub gate: Option<GatePolicy>,
 }
+
+const MAX_GATE_COMMANDS: usize = 20;
+const MAX_REQUIRED_CHECKS: usize = 64;
+const MAX_CHECK_NAME_BYTES: usize = 128;
 
 impl Recipe {
     pub fn ports_or(&self, default: u16) -> u16 {
@@ -50,6 +56,12 @@ impl Recipe {
             "teardown": self.teardown,
             "toolchain": self.toolchain,
             "secrets": self.secrets,
+            "gate": self.gate.as_ref().map(|g| json!({
+                "source": g.mode.as_str(),
+                "commands": g.commands,
+                "required_checks": g.required_checks,
+                "timeout_minutes": g.timeout_minutes,
+            })),
         })
     }
 
@@ -90,6 +102,10 @@ impl Recipe {
                 .get("secrets")
                 .and_then(|t| serde_json::from_value(t.clone()).ok())
                 .unwrap_or_default(),
+            gate: value
+                .get("gate")
+                .filter(|g| g.is_object())
+                .map(|_| GatePolicy::from_recipe(Some(value))),
         }
     }
 }
@@ -123,6 +139,16 @@ struct Raw {
     teardown: Option<Spanned<Commands>>,
     toolchain: Option<RawToolchain>,
     secrets: Option<Spanned<BTreeMap<String, Spanned<RawSecret>>>>,
+    gate: Option<RawGate>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGate {
+    source: Option<Spanned<String>>,
+    commands: Option<Spanned<Vec<Spanned<String>>>>,
+    required_checks: Option<Spanned<Vec<Spanned<String>>>>,
+    timeout_minutes: Option<Spanned<i64>>,
 }
 
 #[derive(Deserialize)]
@@ -238,6 +264,77 @@ fn secrets(
     out
 }
 
+fn gate(raw: RawGate, text: &str, issues: &mut Vec<Issue>) -> GatePolicy {
+    let mut policy = GatePolicy::default();
+    if let Some(source) = raw.source {
+        let at = source.span().start;
+        match source.get_ref().parse::<GateMode>() {
+            Ok(mode) => policy.mode = mode,
+            Err(_) => issues.push(issue("gate_source_invalid", "gate.source", text, at)),
+        }
+    }
+    if let Some(commands) = raw.commands {
+        let at = commands.span().start;
+        let list = commands.into_inner();
+        if list.len() > MAX_GATE_COMMANDS {
+            issues.push(issue("too_many_gate_commands", "gate.commands", text, at));
+        }
+        for (i, c) in list.into_iter().enumerate() {
+            let start = c.span().start;
+            let c = c.into_inner();
+            if c.trim().is_empty() || c.len() > MAX_COMMAND_BYTES || c.contains('\0') {
+                issues.push(issue(
+                    "gate_command_invalid",
+                    format!("gate.commands[{i}]"),
+                    text,
+                    start,
+                ));
+            } else {
+                policy.commands.push(c);
+            }
+        }
+    }
+    if let Some(checks) = raw.required_checks {
+        let at = checks.span().start;
+        let list = checks.into_inner();
+        if list.len() > MAX_REQUIRED_CHECKS {
+            issues.push(issue(
+                "too_many_required_checks",
+                "gate.required_checks",
+                text,
+                at,
+            ));
+        }
+        for (i, c) in list.into_iter().enumerate() {
+            let start = c.span().start;
+            let c = c.into_inner();
+            if c.is_empty() || c.len() > MAX_CHECK_NAME_BYTES {
+                issues.push(issue(
+                    "gate_check_invalid",
+                    format!("gate.required_checks[{i}]"),
+                    text,
+                    start,
+                ));
+            } else {
+                policy.required_checks.push(c);
+            }
+        }
+    }
+    if let Some(minutes) = raw.timeout_minutes {
+        let at = minutes.span().start;
+        match u32::try_from(*minutes.get_ref()) {
+            Ok(m) if (1..=240).contains(&m) => policy.timeout_minutes = m,
+            _ => issues.push(issue(
+                "gate_timeout_out_of_range",
+                "gate.timeout_minutes",
+                text,
+                at,
+            )),
+        }
+    }
+    policy
+}
+
 pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
     let raw: Raw = match toml::from_str(text) {
         Ok(raw) => raw,
@@ -310,6 +407,7 @@ pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
         }
     }
     let secrets = secrets(raw.secrets, &env, text, &mut issues);
+    let gate = raw.gate.map(|g| gate(g, text, &mut issues));
     if issues.is_empty() {
         Ok(Recipe {
             ports,
@@ -318,6 +416,7 @@ pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
             teardown,
             toolchain,
             secrets,
+            gate,
         })
     } else {
         Err(issues)
@@ -352,6 +451,81 @@ mod tests {
             Some("26.13.0")
         );
         assert_eq!(Recipe::from_json(&recipe.to_json()), recipe);
+    }
+
+    #[test]
+    fn a_gate_table_parses_with_defaults_and_round_trips() {
+        let recipe = parse(
+            "[gate]\nsource = \"both\"\ncommands = [\"make lint\"]\nrequired_checks = [\"test\"]\ntimeout_minutes = 5\n",
+            10,
+        )
+        .unwrap();
+        let gate = recipe.gate.clone().unwrap();
+        assert_eq!(gate.mode, GateMode::Both);
+        assert_eq!(gate.commands, ["make lint"]);
+        assert_eq!(gate.required_checks, ["test"]);
+        assert_eq!(gate.timeout_minutes, 5);
+        assert_eq!(Recipe::from_json(&recipe.to_json()), recipe);
+        let empty = parse("[gate]\n", 10).unwrap();
+        assert_eq!(empty.gate, Some(GatePolicy::default()));
+        assert_eq!(parse("", 10).unwrap().gate, None);
+    }
+
+    #[test]
+    fn a_bad_gate_names_the_field_and_line() {
+        let many: String = (0..21).map(|i| format!("\"c{i}\",")).collect();
+        let checks: String = (0..65).map(|i| format!("\"k{i}\",")).collect();
+        for (text, code, field, line) in [
+            (
+                "[gate]\nsource = \"ci\"\n",
+                "gate_source_invalid",
+                "gate.source",
+                2,
+            ),
+            (
+                "[gate]\ncommands = [\" \"]\n",
+                "gate_command_invalid",
+                "gate.commands[0]",
+                2,
+            ),
+            (
+                &format!("[gate]\ncommands = [{many}]\n"),
+                "too_many_gate_commands",
+                "gate.commands",
+                2,
+            ),
+            (
+                "[gate]\nrequired_checks = [\"\"]\n",
+                "gate_check_invalid",
+                "gate.required_checks[0]",
+                2,
+            ),
+            (
+                &format!("[gate]\nrequired_checks = [{checks}]\n"),
+                "too_many_required_checks",
+                "gate.required_checks",
+                2,
+            ),
+            (
+                "[gate]\n\ntimeout_minutes = 0\n",
+                "gate_timeout_out_of_range",
+                "gate.timeout_minutes",
+                3,
+            ),
+            (
+                "[gate]\ntimeout_minutes = 241\n",
+                "gate_timeout_out_of_range",
+                "gate.timeout_minutes",
+                2,
+            ),
+        ] {
+            assert_eq!(
+                first(text),
+                (code, Some(field.to_string()), Some(line)),
+                "{text}"
+            );
+        }
+        assert_eq!(first("[gate]\nretries = 1\n").0, "field_unknown");
     }
 
     #[test]

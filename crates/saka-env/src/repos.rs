@@ -770,9 +770,9 @@ impl Environments for GitRepos {
         for dir in ["home", "tmp"] {
             std::fs::create_dir_all(root.join(dir)).map_err(|e| io("create_env_dir", &e))?;
         }
-        let phase = command.phase.as_str();
+        let label = command.label();
         let unit = CommandUnit {
-            name: format!("saka-env-{}-{phase}-{}", env.environment_id, command.index),
+            name: format!("saka-env-{}-{label}", env.environment_id),
             program: "/bin/sh".into(),
             args: vec!["-c".into(), command.command.clone()],
             cwd: env.worktree_path.clone(),
@@ -784,7 +784,9 @@ impl Environments for GitRepos {
                 .map(|s| (s.name.clone(), s.value.clone()))
                 .collect(),
             limits: runner.limits.clone(),
-            timeout: runner.timeout,
+            timeout: command
+                .timeout_ms
+                .map_or(runner.timeout, std::time::Duration::from_millis),
         };
         let started = Instant::now();
         let outcome = runner.supervisor.run(&unit).await?;
@@ -799,13 +801,14 @@ impl Environments for GitRepos {
         let log = runner
             .logs_dir
             .join(env.environment_id.to_string())
-            .join(format!("{phase}-{}.log", command.index));
+            .join(format!("{label}.log"));
         write_log(&log, &redacted, outcome.truncated).map_err(|e| io("write_recipe_log", &e))?;
         Ok(RecipeCommandOutcome {
             exit_code: outcome.exit_code,
             timed_out: outcome.timed_out,
             duration_ms,
             log_path: log.to_string_lossy().into_owned(),
+            output_tail: saka_ports::output_tail(&redacted),
         })
     }
 

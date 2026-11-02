@@ -57,6 +57,7 @@ fn cfg() -> LoopConfig {
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
+        commit_status: true,
     }
 }
 
@@ -305,12 +306,19 @@ fn sha(c: char) -> String {
 }
 
 fn prepared(step: u32) -> TaskInput {
+    prepared_with(step, serde_json::json!({ "gate": { "source": "scm" } }))
+}
+
+fn prepared_with(step: u32, recipe: serde_json::Value) -> TaskInput {
     TaskInput::EnvironmentPrepared {
         environment_id: EnvironmentId(Uuid::from_u128(500 + u128::from(step))),
         root_path: format!("/envs/{step}"),
         worktree_path: format!("/envs/{step}/worktree"),
         base_sha: sha('a'),
-        setup: Default::default(),
+        setup: saka_core::model::EnvironmentSetup {
+            recipe: Some(recipe),
+            ..Default::default()
+        },
     }
 }
 

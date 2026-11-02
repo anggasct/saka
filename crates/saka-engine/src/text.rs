@@ -26,21 +26,21 @@ pub fn task_marker(task_key: &str) -> String {
     format!("<!-- saka-task: {task_key} -->")
 }
 
-struct Pinned {
+pub(crate) struct Pinned {
     revision: SpecRevisionRow,
     path: String,
     model: SpecModel,
 }
 
 impl Pinned {
-    fn step(&self, task: &Task) -> Option<&Step> {
+    pub(crate) fn step(&self, task: &Task) -> Option<&Step> {
         let id = task.item.step_id.as_deref()?;
         self.model.steps.iter().find(|s| s.id == id)
     }
 }
 
 impl Engine {
-    fn pinned(&self, task: &Task) -> Result<Pinned> {
+    pub(crate) fn pinned(&self, task: &Task) -> Result<Pinned> {
         let missing =
             || EngineError::Internal(format!("task {} has no pinned revision", task.item.id));
         let revision_id = task.item.spec_revision_id.ok_or_else(missing)?;
@@ -201,6 +201,9 @@ pub(crate) fn ci_failure(retry_of: &Coded) -> Option<String> {
     if retry_of.code != "ci_red" {
         return None;
     }
+    if retry_of.params.get("source").and_then(Value::as_str) == Some("saka") {
+        return saka_failure(&retry_of.params);
+    }
     let head = retry_of
         .params
         .get("head_sha")
@@ -223,6 +226,26 @@ pub(crate) fn ci_failure(retry_of: &Coded) -> Option<String> {
     ))
 }
 
+fn saka_failure(params: &Value) -> Option<String> {
+    let head = params
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("the head");
+    let command = params.get("command").and_then(Value::as_str)?;
+    let how = if params.get("timed_out").and_then(Value::as_bool) == Some(true) {
+        "timed out".to_string()
+    } else {
+        match params.get("exit_code").and_then(Value::as_i64) {
+            Some(code) => format!("exit code {code}"),
+            None => "no exit code".to_string(),
+        }
+    };
+    let tail = params.get("log_tail").and_then(Value::as_str).unwrap_or("");
+    Some(format!(
+        "Saka ran the Done when commands on {head}: `{command}` failed ({how}). Last output:\n```\n{tail}\n```\nFix the failure, run the Done when commands again, and commit. Do not push."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +257,32 @@ mod tests {
         let title = change_title(&long);
         assert_eq!(title.chars().count(), 72);
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn a_saka_gate_retry_quotes_the_failed_command_and_its_output() {
+        let retry = Coded {
+            code: "ci_red".into(),
+            params: serde_json::json!({
+                "source": "saka", "head_sha": "abc", "command": "make test",
+                "exit_code": 2, "log_tail": "FAIL x_test.go:3", "checks": ["make test"],
+            }),
+        };
+        assert_eq!(
+            ci_failure(&retry).as_deref(),
+            Some(
+                "Saka ran the Done when commands on abc: `make test` failed (exit code 2). Last output:\n```\nFAIL x_test.go:3\n```\nFix the failure, run the Done when commands again, and commit. Do not push."
+            )
+        );
+        let timed = Coded {
+            code: "ci_red".into(),
+            params: serde_json::json!({ "source": "saka", "head_sha": "abc", "command": "make e2e", "timed_out": true, "log_tail": "" }),
+        };
+        assert!(
+            ci_failure(&timed)
+                .unwrap()
+                .contains("`make e2e` failed (timed out)")
+        );
     }
 
     #[test]

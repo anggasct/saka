@@ -17,6 +17,8 @@ pub struct Counters {
     waiting: Mutex<BTreeMap<WorkItemId, Vec<Waiting>>>,
     packet_bytes: Mutex<Vec<u64>>,
     webhooks: Mutex<BTreeMap<(String, String, String), u64>>,
+    gate_runs: Mutex<BTreeMap<(String, String), u64>>,
+    gate_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -48,6 +50,15 @@ fn adapter(kind: JobKind) -> &'static str {
     }
 }
 
+pub const GATE_SECONDS_BUCKETS: [f64; 7] = [1.0, 10.0, 60.0, 300.0, 900.0, 1800.0, 3600.0];
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SecondsHistogram {
+    pub buckets: Vec<(f64, u64)>,
+    pub count: u64,
+    pub sum: f64,
+}
+
 pub const PACKET_BYTE_BUCKETS: [u64; 6] = [4_096, 16_384, 65_536, 131_072, 262_144, 524_288];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -58,6 +69,22 @@ pub struct PacketBytes {
 }
 
 impl Counters {
+    pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
+        bump(&self.gate_runs, source, outcome);
+        if let Ok(mut h) = self.gate_seconds.lock() {
+            if h.buckets.is_empty() {
+                h.buckets = GATE_SECONDS_BUCKETS.iter().map(|b| (*b, 0)).collect();
+            }
+            for (bound, n) in &mut h.buckets {
+                if seconds <= *bound {
+                    *n += 1;
+                }
+            }
+            h.count += 1;
+            h.sum += seconds;
+        }
+    }
+
     pub(crate) fn webhook(&self, integration: &str, event: &str, outcome: &str) {
         if let Ok(mut m) = self.webhooks.lock() {
             *m.entry((
@@ -196,6 +223,8 @@ pub struct MetricsSnapshot {
     pub account_utilization: Vec<(String, String, f64)>,
     pub work_packet_bytes: PacketBytes,
     pub webhook_deliveries: Vec<(String, String, String, u64)>,
+    pub gate_runs: Vec<(String, String, u64)>,
+    pub gate_seconds: SecondsHistogram,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +278,13 @@ impl Engine {
             admission_waiting: self.counters.waiting_counts(),
             work_packet_bytes: self.counters.packet_bytes(),
             webhook_deliveries: self.counters.webhook_counts(),
+            gate_runs: copy(&self.counters.gate_runs),
+            gate_seconds: self
+                .counters
+                .gate_seconds
+                .lock()
+                .map(|h| h.clone())
+                .unwrap_or_default(),
         })
     }
 

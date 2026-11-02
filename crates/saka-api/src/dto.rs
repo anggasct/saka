@@ -398,7 +398,10 @@ impl From<&Check> for GateCheck {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Gate {
+    /// `scm` or `saka`.
     pub source: String,
+    /// Whether this source decides merge readiness under the repo's `[gate] source`.
+    pub required: bool,
     pub head_sha: String,
     /// `pending | passed | failed`
     pub outcome: String,
@@ -506,7 +509,8 @@ pub struct WorkItem {
     /// Steps and specs this task still waits for; empty unless the task is queued.
     pub waiting_on: Vec<WaitingOn>,
     pub change_request: Option<ChangeRequest>,
-    pub gate: Option<Gate>,
+    /// Latest result per gate source for the current change request head, `scm` first.
+    pub gates: Vec<Gate>,
     pub blocker: Option<Blocker>,
     pub session: Option<SessionBrief>,
     pub pending_permission_count: u32,
@@ -649,13 +653,7 @@ impl WorkItem {
                 base_branch: c.base_branch.clone(),
                 merge_commit_sha: c.merge_commit_sha.clone(),
             }),
-            gate: t.gate.as_ref().map(|g| Gate {
-                source: g.source.as_str().to_string(),
-                head_sha: g.head_sha.clone(),
-                outcome: g.outcome.as_str().to_string(),
-                checks: g.checks.iter().map(GateCheck::from).collect(),
-                observed_at: time(g.observed_at),
-            }),
+            gates: gates_at_head(t),
             blocker: t.open_blocker().map(|b| Blocker {
                 id: b.id.0,
                 code: b.code.as_str().to_string(),
@@ -1350,4 +1348,28 @@ impl WebhookAccepted {
             change_requests: a.change_requests,
         }
     }
+}
+
+fn gates_at_head(t: &saka_core::model::Task) -> Vec<Gate> {
+    let Some(cr) = &t.change_request else {
+        return Vec::new();
+    };
+    let policy = saka_core::gate::GatePolicy::from_recipe(
+        t.environment.as_ref().and_then(|e| e.recipe.as_ref()),
+    );
+    [
+        saka_core::vocab::GateSource::Scm,
+        saka_core::vocab::GateSource::Saka,
+    ]
+    .into_iter()
+    .filter_map(|source| t.gate_for(source, &cr.head_sha))
+    .map(|g| Gate {
+        source: g.source.as_str().to_string(),
+        required: policy.required(g.source, &g.checks),
+        head_sha: g.head_sha.clone(),
+        outcome: g.outcome.as_str().to_string(),
+        checks: g.checks.iter().map(GateCheck::from).collect(),
+        observed_at: time(g.observed_at),
+    })
+    .collect()
 }

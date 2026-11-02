@@ -1,13 +1,15 @@
 use serde_json::json;
 
 use crate::event::Event;
+use crate::gate::GatePolicy;
 use crate::job::{Job, JobKind};
 use crate::model::Task;
 use crate::resume;
 use crate::task::{LoopConfig, WAIT_LIMIT_SOURCE};
 use crate::time::Timestamp;
 use crate::vocab::{
-    EnvironmentState, InterruptBy, PermissionState, SessionState, Stage, StagePhase, WorkItemState,
+    EnvironmentState, GateOutcome, GateSource, InterruptBy, PermissionState, SessionState, Stage,
+    StagePhase, WorkItemState,
 };
 
 const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
@@ -104,8 +106,64 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             .filter(|p| p.id == *permission_request_id)
             .map(|p| deliver(task, p.id, now))
             .collect(),
+        E::GateStarted {
+            gate_result_id,
+            source: GateSource::Saka,
+            ..
+        }
+        | E::GateObserved {
+            gate_result_id,
+            source: GateSource::Saka,
+            ..
+        } => report_status(task, *gate_result_id, cfg, now)
+            .into_iter()
+            .chain(phase_jobs(task, cfg, now))
+            .collect(),
         _ => vec![],
     }
+}
+
+fn report_status(
+    task: &Task,
+    gate_result_id: crate::ids::GateResultId,
+    cfg: &LoopConfig,
+    now: Timestamp,
+) -> Option<Job> {
+    let gate = task.gates.iter().find(|g| g.id == gate_result_id)?;
+    let cr = task.change_request.as_ref()?;
+    if !cfg.commit_status {
+        return None;
+    }
+    let (state, description) = match gate.outcome {
+        GateOutcome::Pending => ("pending", "Running the Done when commands".to_string()),
+        GateOutcome::Passed => ("success", format!("{} commands passed", gate.checks.len())),
+        GateOutcome::Failed => {
+            let failed = gate
+                .checks
+                .iter()
+                .find(|c| c.is_failure())
+                .map_or_else(|| "saka/verify".to_string(), |c| c.name.clone());
+            ("failure", format!("`{failed}` failed"))
+        }
+    };
+    let description: String = if description.chars().count() > 140 {
+        let cut: String = description.chars().take(139).collect();
+        format!("{cut}…")
+    } else {
+        description
+    };
+    Some(Job::new(
+        JobKind::ScmReportStatus,
+        gate_result_id,
+        json!({
+            "work_item_id": task.item.id,
+            "repo_id": cr.repo_id,
+            "sha": gate.head_sha,
+            "state": state,
+            "description": description,
+        }),
+        now,
+    ))
 }
 
 fn stop(task: &Task, session_id: crate::ids::SessionId, now: Timestamp) -> Job {
@@ -276,6 +334,20 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                     json!({ "work_item_id": id, "change_request_id": cr.id, "repo_id": cr.repo_id, "number": cr.number }),
                     now,
                 ));
+                let policy = GatePolicy::from_recipe(
+                    task.environment.as_ref().and_then(|e| e.recipe.as_ref()),
+                );
+                let unsettled = task
+                    .gate_for(GateSource::Saka, &cr.head_sha)
+                    .is_none_or(|g| g.outcome == GateOutcome::Pending);
+                if let (true, true, Some(run)) = (policy.runs_saka(), unsettled, run) {
+                    jobs.push(Job::new(
+                        JobKind::GateVerify,
+                        format!("{}:{}", run.id, cr.head_sha),
+                        json!({ "work_item_id": id, "stage_run_id": run.id, "head_sha": cr.head_sha }),
+                        now,
+                    ));
+                }
             }
         }
         (Stage::Merge, StagePhase::Merging) => {

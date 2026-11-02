@@ -511,7 +511,18 @@ fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     }));
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
     assert_eq!(detail.body["available_actions"], json!(["merge", "cancel"]));
-    assert_eq!(detail.body["gate"]["outcome"], "passed");
+    let gates = detail.body["gates"].as_array().unwrap();
+    let sources: Vec<(&str, &str, bool)> = gates
+        .iter()
+        .map(|g| {
+            (
+                g["source"].as_str().unwrap(),
+                g["outcome"].as_str().unwrap(),
+                g["required"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(sources, [("scm", "passed", true), ("saka", "passed", true)]);
     let etag = detail.headers["etag"].to_str().unwrap().to_string();
     let r = api.post(&merge, &[("if-match", &etag)], json!({ "reason": null }));
     assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);

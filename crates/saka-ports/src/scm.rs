@@ -94,6 +94,13 @@ pub trait Scm: Send + Sync {
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()>;
 
+    async fn report_status(
+        &self,
+        repo: &RepoRef,
+        sha: &str,
+        report: &StatusReport,
+    ) -> PortResult<()>;
+
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities>;
 
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool>;
@@ -109,6 +116,39 @@ pub trait Scm: Send + Sync {
 pub const MAX_WEBHOOK_TARGETS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusState {
+    Pending,
+    Success,
+    Failure,
+}
+
+impl StatusState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StatusState::Pending => "pending",
+            StatusState::Success => "success",
+            StatusState::Failure => "failure",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<StatusState> {
+        match s {
+            "pending" => Some(StatusState::Pending),
+            "success" => Some(StatusState::Success),
+            "failure" => Some(StatusState::Failure),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusReport {
+    pub context: String,
+    pub state: StatusState,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebhookSignature {
     HmacSha256,
 }
@@ -121,6 +161,7 @@ pub struct ScmCapabilities {
     pub check_kinds: &'static [saka_core::vocab::CheckKind],
     pub draft_change_requests: bool,
     pub delete_branch_after_merge: bool,
+    pub commit_status: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
