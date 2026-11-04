@@ -499,6 +499,69 @@ const VARIANTS: [string, Record<string, unknown>][] = [
       phase: "opening_change",
     },
   ],
+  [
+    "push_rejected",
+    { target: "docs", remote_sha: HEAD, local_sha: "f".repeat(40) },
+  ],
+  ["push_rejected", { target: "docs" }],
+  [
+    "path_scope_violation",
+    {
+      target: "docs",
+      stage: "dev",
+      reason: "outside_scope",
+      paths: ["other/x.md"],
+      count: 1,
+      scope: ["docs/**"],
+    },
+  ],
+  [
+    "path_scope_violation",
+    {
+      target: "docs",
+      stage: "sync",
+      head_sha: HEAD,
+      reason: "outside_scope",
+      paths: ["other/x.md"],
+      count: 1,
+      scope: ["docs/**"],
+    },
+  ],
+  [
+    "path_scope_violation",
+    {
+      target: "docs",
+      stage: "dev",
+      reason: "too_many_paths",
+      scope: ["docs/**"],
+    },
+  ],
+  [
+    "path_scope_violation",
+    {
+      target: "docs",
+      stage: "sync",
+      head_sha: HEAD,
+      reason: "too_many_paths",
+      scope: ["docs/**"],
+    },
+  ],
+  [
+    "docs_merge_failed",
+    { reason: "not_mergeable", number: 13, head_sha: HEAD, status: 405 },
+  ],
+  [
+    "docs_merge_failed",
+    { reason: "head_changed", number: 13, head_sha: HEAD, status: 409 },
+  ],
+  [
+    "docs_merge_failed",
+    { reason: "rejected", number: 13, head_sha: HEAD, status: 422 },
+  ],
+  [
+    "dod_failed",
+    { reason: "docs_not_in_base", merge_commit_sha: HEAD, base_branch: "main" },
+  ],
 ];
 
 const LABELS: Record<string, string[]> = {
@@ -522,6 +585,7 @@ const LABELS: Record<string, string[]> = {
     "awaiting_ci",
     "awaiting_merge",
     "merging",
+    "merging_docs",
     "verifying",
     "tearing_down",
   ],
@@ -682,6 +746,62 @@ describe("catalog coverage", () => {
       }),
     ).toBe(
       "The commits change 1 file outside the allowed paths: services/web/a.ts. Allowed paths: services/api/**.",
+    );
+  });
+
+  it("says when the blocker is about the docs pull request", () => {
+    const en = translator("en");
+    const id = translator("id");
+    const refused = {
+      reason: "not_mergeable",
+      number: 13,
+      head_sha: HEAD,
+      status: 405,
+    };
+    expect(blockerText(en, "docs_merge_failed", refused)).toBe(
+      "The docs pull request #13 cannot be merged (HTTP 405); make it mergeable, then retry.",
+    );
+    expect(blockerText(id, "docs_merge_failed", refused)).toBe(
+      "Pull request docs #13 tidak bisa di-merge (HTTP 405); buat agar bisa di-merge, lalu retry.",
+    );
+    expect(
+      blockerText(en, "path_scope_violation", {
+        target: "docs",
+        stage: "sync",
+        head_sha: HEAD,
+        reason: "outside_scope",
+        paths: ["other/x.md"],
+        count: 1,
+        scope: ["docs/**"],
+      }),
+    ).toBe(
+      "The docs pull request head a1b2c3d4e5f6 changes 1 file outside the docs folder: other/x.md. Allowed paths: docs/**.",
+    );
+    expect(
+      blockerText(en, "push_rejected", {
+        target: "docs",
+        remote_sha: HEAD,
+        local_sha: "f".repeat(40),
+      }),
+    ).toBe(
+      "The docs branch on the remote is at a1b2c3d4e5f6, not ffffffffffff; Saka did not overwrite it.",
+    );
+    expect(
+      blockerText(en, "dod_failed", {
+        reason: "docs_not_in_base",
+        merge_commit_sha: HEAD,
+        base_branch: "main",
+      }),
+    ).toBe("The docs merge is not on main.");
+    expect(label(en, "phase", "merging_docs")).toBe(
+      "merging the docs pull request",
+    );
+    expect(label(id, "phase", "merging_docs")).toBe("merge PR docs berjalan");
+    expect(en("event.delivery.docs_change.skipped", { number: 13 })).toBe(
+      "The docs pull request #13 was closed without merging; the task went on without it.",
+    );
+    expect(id("event.delivery.docs_change.skipped", { number: 13 })).toBe(
+      "Pull request docs #13 ditutup tanpa merge; task berlanjut tanpanya.",
     );
   });
 

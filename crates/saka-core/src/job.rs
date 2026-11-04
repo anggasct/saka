@@ -57,6 +57,9 @@ job_kinds! {
     WorkspaceReloadConfig => "workspace.reload_config", 3;
     ScmUserLinkPoll => "scm.user_link_poll", 3;
     ScmUserLinkRefresh => "scm.user_link_refresh", 3;
+    ScmPushDocsBranch => "scm.push_docs_branch", 5;
+    ScmOpenDocsChangeRequest => "scm.open_docs_change_request", 5;
+    ScmMergeDocs => "scm.merge_docs", 5;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -80,6 +83,15 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         JobKind::ScmOpenChangeRequest => scm(StagePhase::OpeningChange),
         JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
         JobKind::ScmMerge => scm(StagePhase::Merging),
+        JobKind::ScmPushDocsBranch => Some((
+            BlockerCode::ScmUnavailable,
+            json!({ "phase": StagePhase::Pushing, "target": "docs" }),
+        )),
+        JobKind::ScmOpenDocsChangeRequest => Some((
+            BlockerCode::ScmUnavailable,
+            json!({ "phase": StagePhase::OpeningChange, "target": "docs" }),
+        )),
+        JobKind::ScmMergeDocs => scm(StagePhase::MergingDocs),
         JobKind::ScmPollCommit => scm(StagePhase::Verifying),
         JobKind::EnvVerifyMerged => Some((BlockerCode::DodFailed, json!({}))),
         JobKind::GateVerify => Some((
@@ -170,5 +182,8 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::WorkspaceReloadConfig => "workspace.reload_config",
         JobKind::ScmUserLinkPoll => "scm.user_link_poll",
         JobKind::ScmUserLinkRefresh => "scm.user_link_refresh",
+        JobKind::ScmPushDocsBranch => "scm.push_docs",
+        JobKind::ScmOpenDocsChangeRequest => "scm.open_cr",
+        JobKind::ScmMergeDocs => "scm.merge_docs",
     }
 }

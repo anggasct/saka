@@ -16,7 +16,7 @@ use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    Blob, Checkout, DocsRequest, EnvRef, Environments, GitAccess, GitRemote, PortResult,
+    Blob, Checkout, DocsRequest, EnvRef, Environments, ExtraDir, GitAccess, GitRemote, PortResult,
     PrepareRequest, PreparedDocs, PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef,
     Repos, UnitLimits, WorktreeFile,
 };
@@ -232,8 +232,22 @@ impl World {
                 repo: self.docs_repo(),
                 commit: commit.into(),
                 project_path: project_path.into(),
+                branch: None,
             })
             .await
+    }
+
+    async fn prepare_writable_docs(&self, env: &EnvRef, commit: &str) -> PreparedDocs {
+        self.repos
+            .prepare_docs(&DocsRequest {
+                environment_id: env.environment_id,
+                repo: self.docs_repo(),
+                commit: commit.into(),
+                project_path: "docs".into(),
+                branch: Some(format!("{BRANCH}-docs")),
+            })
+            .await
+            .unwrap()
     }
 
     async fn run(
@@ -1250,4 +1264,89 @@ async fn a_docs_checkout_of_the_whole_repo_and_its_refusals() {
     assert!(!Path::new(&env.root_path).join("docs").exists());
     let other = w.prepare_docs(&env, &big, "other").await.unwrap();
     assert!(Path::new(&other.path).join("x.md").exists());
+}
+
+#[tokio::test]
+async fn a_writable_docs_checkout_is_a_branch_whose_commits_are_inspected_pushed_and_resumed() {
+    let w = World::new();
+    let pinned = docs_layout(&w);
+    let env = w.prepare(1).await;
+    let docs = w.prepare_writable_docs(&env, &pinned).await;
+    let wt = PathBuf::from(&docs.worktree_path);
+    let branch = format!("{BRANCH}-docs");
+    assert_eq!(git(&wt, &["branch", "--show-current"]), branch);
+    assert_eq!(docs.base_sha, pinned);
+    assert!(!wt.join("other").exists());
+    assert_eq!(mode(Path::new(&docs.path)) & 0o200, 0o200);
+
+    let state = w
+        .repos
+        .inspect_docs(env.environment_id, &pinned)
+        .await
+        .unwrap();
+    assert_eq!((state.dirty, state.commits_ahead), (false, 0));
+    std::fs::write(Path::new(&docs.path).join("api.md"), "api\n").unwrap();
+    assert!(
+        w.repos
+            .inspect_docs(env.environment_id, &pinned)
+            .await
+            .unwrap()
+            .dirty
+    );
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-q", "-m", "docs: api"]);
+    let head = git(&wt, &["rev-parse", "HEAD"]);
+    let state = w
+        .repos
+        .inspect_docs(env.environment_id, &pinned)
+        .await
+        .unwrap();
+    assert_eq!(
+        (state.dirty, state.commits_ahead, state.head_sha.as_str()),
+        (false, 1, head.as_str())
+    );
+    let changed = w
+        .repos
+        .changed_paths(&w.docs_repo(), &pinned, &head, false)
+        .await
+        .unwrap();
+    assert_eq!(changed.paths, ["docs/api.md"]);
+
+    let mut writable = env.clone();
+    writable.extra_dirs = vec![ExtraDir {
+        path: docs.path.clone(),
+        writable: true,
+    }];
+    let file = format!("{}/api.md", docs.path);
+    assert!(w.repos.resolve_path(&writable, "", &file).inside_worktree);
+    writable.extra_dirs[0].writable = false;
+    assert!(!w.repos.resolve_path(&writable, "", &file).inside_worktree);
+
+    let pushed = w
+        .repos
+        .push(&PushRequest {
+            repo: w.docs_repo(),
+            branch: branch.clone(),
+            local_sha: head.clone(),
+            expected_remote_sha: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(pushed, PushOutcome::Pushed { sha: head.clone() });
+    assert_eq!(w.remote_branch(&branch), Some(head.clone()));
+
+    w.repos
+        .teardown_docs(env.environment_id, &w.docs_repo())
+        .await
+        .unwrap();
+    w.repos.teardown(&env).await.unwrap();
+    let bare = w.repos.mirror_path(w.docs_repo().repo_id);
+    assert_eq!(git(&bare, &["branch", "--list", &branch]), "");
+
+    let again = w.prepare(2).await;
+    let resumed = w.prepare_writable_docs(&again, &head).await;
+    let wt = PathBuf::from(&resumed.worktree_path);
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&wt, &["branch", "--show-current"]), branch);
+    assert!(Path::new(&resumed.path).join("api.md").exists());
 }

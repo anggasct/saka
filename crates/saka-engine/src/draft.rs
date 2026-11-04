@@ -724,6 +724,9 @@ impl Engine {
                 )
                 .await
             }
+            K::ScmPushDocsBranch | K::ScmOpenDocsChangeRequest | K::ScmMergeDocs => {
+                Ok(Effect::Skipped)
+            }
             K::SessionDeliverPermissionAnswer
             | K::SessionInterrupt
             | K::SessionSteer
@@ -1030,7 +1033,11 @@ impl Engine {
             ),
             Prompt::Resume { cause, .. } => saka_core::resume::text(*cause),
             Prompt::Steer { text } => text.clone(),
-            Prompt::WorkPacket { .. } | Prompt::Uncommitted { .. } | Prompt::OutOfScope { .. } => {
+            Prompt::WorkPacket { .. }
+            | Prompt::Uncommitted { .. }
+            | Prompt::OutOfScope { .. }
+            | Prompt::DocsUncommitted { .. }
+            | Prompt::DocsOutOfScope { .. } => {
                 return Err(PortError::permanent(
                     "prompt_invalid",
                     json!({ "prompt": "task" }),

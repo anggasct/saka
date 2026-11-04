@@ -8,6 +8,7 @@ import { When } from "./when";
 export function ChangeSection({ task }: { task: WorkItem }) {
   const t = useT();
   const change = task.change_request;
+  const docs = task.docs_change_request;
   if (!change) {
     return null;
   }
@@ -49,6 +50,37 @@ export function ChangeSection({ task }: { task: WorkItem }) {
             <dd>
               <code>{sha(change.merge_commit_sha)}</code>
             </dd>
+          </>
+        )}
+        {docs && (
+          <>
+            <dt className="font-medium">{t("task.change.docs")}</dt>
+            <dd>
+              <a
+                className="inline-flex min-h-11 items-center font-medium text-primary underline underline-offset-4"
+                href={docs.url}
+                rel="noreferrer"
+                target="_blank"
+              >
+                {t("task.change", { number: docs.number })}
+              </a>
+            </dd>
+            <dt className="font-medium">{t("task.change.docsState")}</dt>
+            <dd>
+              {docs.skipped
+                ? t("task.change.docsSkipped")
+                : label(t, "change.state", docs.state)}
+            </dd>
+            {docs.merge_commit_sha && (
+              <>
+                <dt className="font-medium">
+                  {t("task.change.docsMergeCommit")}
+                </dt>
+                <dd>
+                  <code>{sha(docs.merge_commit_sha)}</code>
+                </dd>
+              </>
+            )}
           </>
         )}
       </dl>

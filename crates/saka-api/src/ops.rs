@@ -270,6 +270,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_path_scope_violations_total", &[("stage", stage)], n);
     }
     t.family(
+        "saka_docs_changes_total",
+        "counter",
+        "Docs pull requests that finished, by whether Saka merged them or they were closed and skipped.",
+    );
+    for (outcome, n) in &m.docs_changes {
+        t.sample("saka_docs_changes_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_user_link_authorizations_total",
         "counter",
         "Device-flow authorizations that link an SCM account, by integration and the state reached.",

@@ -19,9 +19,9 @@ use crate::session::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeState, EnvironmentState,
-    GateOutcome, GateSource, MergeMethod, ResumeCause, ResumeTrigger, ScopeStage, SessionState,
-    Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
+    EnvironmentState, GateOutcome, GateSource, MergeMethod, ResumeCause, ResumeTrigger, ScopeStage,
+    SessionState, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +65,14 @@ enum Verdict {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DocsInspection {
+    pub dirty: bool,
+    pub commits_ahead: u32,
+    pub head_sha: String,
+    pub outside: Option<ScopeViolation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TaskInput {
     Admit,
     EnvironmentPrepared {
@@ -85,20 +93,25 @@ pub enum TaskInput {
         commits_ahead: u32,
         head_sha: String,
         outside: Option<ScopeViolation>,
+        docs: Option<DocsInspection>,
     },
     PathScopeViolated {
+        role: ChangeRole,
         head_sha: String,
         violation: ScopeViolation,
     },
     Tick,
     BranchPushed {
+        target: ChangeRole,
         sha: String,
     },
     PushRejected {
+        target: ChangeRole,
         remote_sha: String,
         local_sha: String,
     },
     ChangeOpened {
+        role: ChangeRole,
         change_request_id: ChangeRequestId,
         number: u64,
         url: String,
@@ -108,6 +121,7 @@ pub enum TaskInput {
     },
     CredentialBlocked {
         block: CredentialBlock,
+        target: ChangeRole,
     },
     SakaGateStarted {
         head_sha: String,
@@ -122,6 +136,7 @@ pub enum TaskInput {
         failure: Option<Value>,
     },
     ChangeObserved {
+        role: ChangeRole,
         state: ChangeState,
         head_sha: String,
         merge_commit_sha: Option<String>,
@@ -133,15 +148,18 @@ pub enum TaskInput {
         reason: Option<String>,
     },
     MergeSucceeded {
+        role: ChangeRole,
         merge_commit_sha: String,
         merged_at: Option<Timestamp>,
     },
     MergeRejected {
+        role: ChangeRole,
         reason: String,
     },
     MergeVerified {
         found: bool,
         base_tip: Option<String>,
+        docs_found: Option<bool>,
     },
     CommitChecksObserved {
         head_sha: String,
@@ -199,8 +217,35 @@ pub fn decide(
             commits_ahead,
             head_sha,
             outside,
-        } => d.worktree_inspected(turn, dirty, commits_ahead, head_sha, outside, ctx),
+            docs,
+        } => d.worktree_inspected(
+            turn,
+            Inspected {
+                dirty,
+                commits_ahead,
+                head_sha,
+                outside,
+            },
+            docs,
+            ctx,
+        ),
         I::PathScopeViolated {
+            role: ChangeRole::Docs,
+            head_sha,
+            violation,
+        } => {
+            if task.is_at(Stage::Sync, StagePhase::MergingDocs) {
+                d.block(
+                    BlockerCode::PathScopeViolation,
+                    with_target(violation.params(ScopeStage::Sync, &head_sha)),
+                    ctx,
+                )
+            } else {
+                vec![]
+            }
+        }
+        I::PathScopeViolated {
+            role: ChangeRole::Code,
             head_sha,
             violation,
         } => {
@@ -215,15 +260,23 @@ pub fn decide(
             }
         }
         I::Tick => d.tick(ctx),
-        I::BranchPushed { sha } => d.branch_pushed(sha, ctx),
+        I::BranchPushed {
+            target: ChangeRole::Code,
+            sha,
+        } => d.branch_pushed(sha, ctx),
+        I::BranchPushed {
+            target: ChangeRole::Docs,
+            sha,
+        } => d.docs_pushed(sha),
         I::PushRejected {
+            target,
             remote_sha,
             local_sha,
         } => {
             if task.is_at(Stage::Dev, StagePhase::Pushing) {
                 d.block(
                     BlockerCode::PushRejected,
-                    json!({ "remote_sha": remote_sha, "local_sha": local_sha }),
+                    json!({ "target": target, "remote_sha": remote_sha, "local_sha": local_sha }),
                     ctx,
                 )
             } else {
@@ -231,6 +284,7 @@ pub fn decide(
             }
         }
         I::ChangeOpened {
+            role,
             change_request_id,
             number,
             url,
@@ -239,6 +293,7 @@ pub fn decide(
             opened_with,
         } => d.change_opened(
             Opened {
+                role,
                 id: change_request_id,
                 number,
                 url,
@@ -248,14 +303,23 @@ pub fn decide(
             },
             ctx,
         ),
-        I::CredentialBlocked { block } => d.credential_blocked(&block, ctx),
+        I::CredentialBlocked { block, target } => d.credential_blocked(&block, target, ctx),
         I::ChangeObserved {
+            role: ChangeRole::Code,
             state,
             head_sha,
             merge_commit_sha,
             merged_at,
             checks,
         } => d.change_observed(state, head_sha, merge_commit_sha, merged_at, checks, ctx),
+        I::ChangeObserved {
+            role: ChangeRole::Docs,
+            state,
+            head_sha,
+            merge_commit_sha,
+            merged_at,
+            ..
+        } => d.docs_observed(state, head_sha, merge_commit_sha, merged_at, false),
         I::SakaGateStarted { head_sha } => d.saka_gate_started(head_sha, ctx),
         I::SakaGateObserved {
             head_sha,
@@ -267,6 +331,22 @@ pub fn decide(
             reason,
         } => return d.request_merge(expected_version, reason),
         I::MergeSucceeded {
+            role: ChangeRole::Docs,
+            merge_commit_sha,
+            merged_at,
+        } => d.docs_observed(
+            ChangeState::Merged,
+            String::new(),
+            Some(merge_commit_sha),
+            merged_at,
+            true,
+        ),
+        I::MergeRejected {
+            role: ChangeRole::Docs,
+            reason,
+        } => d.docs_merge_rejected(reason, ctx),
+        I::MergeSucceeded {
+            role: ChangeRole::Code,
             merge_commit_sha,
             merged_at,
         } => {
@@ -276,7 +356,10 @@ pub fn decide(
                 vec![]
             }
         }
-        I::MergeRejected { reason } => {
+        I::MergeRejected {
+            role: ChangeRole::Code,
+            reason,
+        } => {
             if task.is_at(Stage::Merge, StagePhase::Merging) {
                 let head = task.change_request.as_ref().map(|c| c.head_sha.clone());
                 d.block(
@@ -288,7 +371,11 @@ pub fn decide(
                 vec![]
             }
         }
-        I::MergeVerified { found, base_tip } => d.merge_verified(found, base_tip, ctx),
+        I::MergeVerified {
+            found,
+            base_tip,
+            docs_found,
+        } => d.merge_verified(found, base_tip, docs_found, ctx),
         I::CommitChecksObserved { head_sha, checks } => {
             d.commit_checks_observed(head_sha, checks, ctx)
         }
@@ -301,7 +388,20 @@ pub fn decide(
     })
 }
 
+struct Inspected {
+    dirty: bool,
+    commits_ahead: u32,
+    head_sha: String,
+    outside: Option<ScopeViolation>,
+}
+
+fn with_target(mut params: Value) -> Value {
+    params["target"] = json!(ChangeRole::Docs);
+    params
+}
+
 struct Opened {
+    role: ChangeRole,
     id: ChangeRequestId,
     number: u64,
     url: String,
@@ -352,6 +452,15 @@ impl Decider<'_> {
     }
 
     fn phase(&self, phase: StagePhase, head_sha: Option<String>) -> Vec<Event> {
+        self.phase_docs(phase, head_sha, None)
+    }
+
+    fn phase_docs(
+        &self,
+        phase: StagePhase,
+        head_sha: Option<String>,
+        docs_head_sha: Option<String>,
+    ) -> Vec<Event> {
         match self.run_id() {
             Some(stage_run_id) => {
                 vec![Event::StagePhaseChanged {
@@ -359,6 +468,7 @@ impl Decider<'_> {
                     stage_run_id,
                     phase,
                     head_sha,
+                    docs_head_sha,
                 }]
             }
             None => vec![],
@@ -475,7 +585,7 @@ impl Decider<'_> {
             setup: setup.setup,
             toolchains: setup.toolchains,
             path_scope: setup.path_scope,
-            docs: setup.docs,
+            docs: setup.docs.map(Box::new),
         }];
         events.extend(self.phase(StagePhase::RunningSession, None));
         events
@@ -505,12 +615,16 @@ impl Decider<'_> {
     fn worktree_inspected(
         &self,
         turn: u32,
-        dirty: bool,
-        commits_ahead: u32,
-        head_sha: String,
-        outside: Option<ScopeViolation>,
+        code: Inspected,
+        docs: Option<DocsInspection>,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
+        let Inspected {
+            dirty,
+            commits_ahead,
+            head_sha,
+            outside,
+        } = code;
         let Some(session) = self.task.live_session() else {
             return vec![];
         };
@@ -522,26 +636,47 @@ impl Decider<'_> {
             return vec![];
         }
         let committed = !dirty && commits_ahead > 0;
-        if committed && outside.is_none() {
+        let docs_dirty = docs.as_ref().is_some_and(|d| d.dirty);
+        let docs_violation = docs
+            .as_ref()
+            .filter(|d| !d.dirty && d.commits_ahead > 0)
+            .and_then(|d| d.outside.clone().map(|v| (v, d.head_sha.clone())));
+        if committed && outside.is_none() && !docs_dirty && docs_violation.is_none() {
+            let docs_head = docs.filter(|d| d.commits_ahead > 0).map(|d| d.head_sha);
             let mut events = self.end_session(SessionState::Ended, "completed", json!({}));
-            events.extend(self.phase(StagePhase::Pushing, Some(head_sha)));
+            events.extend(self.phase_docs(StagePhase::Pushing, Some(head_sha), docs_head));
             return events;
         }
         let violation = outside.filter(|_| committed);
+        let code_ok = committed && violation.is_none();
+        let docs_path = self
+            .task
+            .environment
+            .as_ref()
+            .and_then(|e| e.docs.as_ref())
+            .map(|d| d.path.clone())
+            .unwrap_or_default();
         if session.followups < self.cfg.max_followup_turns {
             let Some(view) = run_view(self.task) else {
                 return vec![];
             };
-            let prompt = match violation {
-                Some(v) => Prompt::OutOfScope {
+            let prompt = match (violation, &docs_violation) {
+                (Some(v), _) => Prompt::OutOfScope {
                     paths: v.paths,
                     count: v.count,
                     scope: v.scope,
                 },
-                None => Prompt::Uncommitted {
+                (None, _) if !code_ok => Prompt::Uncommitted {
                     dirty,
                     commits_ahead,
                 },
+                (None, Some((v, _))) if !docs_dirty => Prompt::DocsOutOfScope {
+                    path: docs_path,
+                    paths: v.paths.clone(),
+                    count: v.count,
+                    scope: v.scope.clone(),
+                },
+                (None, _) => Prompt::DocsUncommitted { path: docs_path },
             };
             let outcome =
                 session::next_turn(&view, turn + 1, prompt, &self.cfg.session(), self.now);
@@ -554,7 +689,14 @@ impl Decider<'_> {
             events.extend(self.block(BlockerCode::PathScopeViolation, params, ctx));
             return events;
         }
-        let params = json!({ "dirty": dirty, "commits": commits_ahead });
+        if let Some((v, docs_head)) = docs_violation.filter(|_| code_ok && !docs_dirty) {
+            let params = with_target(v.params(ScopeStage::Dev, &docs_head));
+            let mut events =
+                self.end_session(SessionState::Ended, "path_scope_violation", params.clone());
+            events.extend(self.block(BlockerCode::PathScopeViolation, params, ctx));
+            return events;
+        }
+        let params = json!({ "dirty": dirty, "commits": commits_ahead, "docs_dirty": docs_dirty });
         let mut events = self.end_session(SessionState::Ended, "no_changes", params.clone());
         events.extend(self.block(BlockerCode::NoChanges, params, ctx));
         events
@@ -852,11 +994,12 @@ impl Decider<'_> {
     }
 
     fn branch_pushed(&self, sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
-        if !self.task.is_at(Stage::Dev, StagePhase::Pushing) {
+        if !self.task.is_at(Stage::Dev, StagePhase::Pushing) || docs_pending(self.task).is_some() {
             return vec![];
         }
         let mut events = vec![Event::BranchPushed {
             work_item_id: self.item().id,
+            target: ChangeRole::Code,
             branch: self.item().branch.clone(),
             sha: sha.clone(),
         }];
@@ -867,12 +1010,51 @@ impl Decider<'_> {
                     events.push(Event::ChangeRequestUpdated {
                         work_item_id: self.item().id,
                         change_request_id: cr.id,
+                        role: ChangeRole::Code,
                         head_sha: sha.clone(),
                     });
                 }
-                events.extend(self.dev_done(sha, ctx));
+                if needs_docs_change(self.task) {
+                    events.extend(self.phase(StagePhase::OpeningChange, Some(sha)));
+                } else {
+                    events.extend(self.dev_done(sha, ctx));
+                }
             }
             _ => events.extend(self.phase(StagePhase::OpeningChange, Some(sha))),
+        }
+        events
+    }
+
+    // Docs go first: the code push that follows is what moves the stage on.
+    fn docs_pushed(&self, sha: String) -> Vec<Event> {
+        let branch = self
+            .task
+            .environment
+            .as_ref()
+            .and_then(|e| e.docs.as_ref())
+            .and_then(|d| d.branch.clone());
+        let (true, Some(branch)) = (self.task.is_at(Stage::Dev, StagePhase::Pushing), branch)
+        else {
+            return vec![];
+        };
+        let mut events = vec![Event::BranchPushed {
+            work_item_id: self.item().id,
+            target: ChangeRole::Docs,
+            branch,
+            sha: sha.clone(),
+        }];
+        if let Some(cr) = self
+            .task
+            .docs_change
+            .as_ref()
+            .filter(|c| c.state == ChangeState::Open && c.head_sha != sha)
+        {
+            events.push(Event::ChangeRequestUpdated {
+                work_item_id: self.item().id,
+                change_request_id: cr.id,
+                role: ChangeRole::Docs,
+                head_sha: sha,
+            });
         }
         events
     }
@@ -900,6 +1082,7 @@ impl Decider<'_> {
 
     fn change_opened(&self, opened: Opened, ctx: &mut Ctx<'_>) -> Vec<Event> {
         let Opened {
+            role,
             id,
             number,
             url,
@@ -910,9 +1093,43 @@ impl Decider<'_> {
         if !self.task.is_at(Stage::Dev, StagePhase::OpeningChange) {
             return vec![];
         }
+        if role == ChangeRole::Docs {
+            let docs = self.task.environment.as_ref().and_then(|e| e.docs.as_ref());
+            let (Some(docs), Some(code), None) = (
+                docs,
+                self.task.change_request.as_ref(),
+                &self.task.docs_change,
+            ) else {
+                return vec![];
+            };
+            let mut events = vec![Event::ChangeRequestOpened {
+                work_item_id: self.item().id,
+                change_request_id: id,
+                role,
+                repo_id: docs.repo_id,
+                number,
+                url,
+                head_branch: docs.branch.clone().unwrap_or_default(),
+                base_branch,
+                head_sha,
+                opened_with,
+            }];
+            let code_head = self
+                .task
+                .stage_run
+                .as_ref()
+                .and_then(|r| r.head_sha.clone())
+                .unwrap_or_else(|| code.head_sha.clone());
+            events.extend(self.dev_done(code_head, ctx));
+            return events;
+        }
+        if self.task.change_request.is_some() {
+            return vec![];
+        }
         let mut events = vec![Event::ChangeRequestOpened {
             work_item_id: self.item().id,
             change_request_id: id,
+            role,
             repo_id: self.item().repo_id,
             number,
             url,
@@ -921,18 +1138,119 @@ impl Decider<'_> {
             head_sha: head_sha.clone(),
             opened_with,
         }];
-        events.extend(self.dev_done(head_sha, ctx));
+        if needs_docs_change(self.task) {
+            events.extend(self.phase(StagePhase::OpeningChange, Some(head_sha)));
+        } else {
+            events.extend(self.dev_done(head_sha, ctx));
+        }
         events
     }
 
-    fn credential_blocked(&self, block: &CredentialBlock, ctx: &mut Ctx<'_>) -> Vec<Event> {
+    fn credential_blocked(
+        &self,
+        block: &CredentialBlock,
+        target: ChangeRole,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
         let phase = block.phase();
         let waiting = self.task.is_at(Stage::Dev, phase)
             && (phase != StagePhase::RunningSession || self.task.live_session().is_none());
         if !waiting {
             return vec![];
         }
-        self.block(block.code(), block.params(), ctx)
+        let params = match target {
+            ChangeRole::Docs => with_target(block.params()),
+            ChangeRole::Code => block.params(),
+        };
+        self.block(block.code(), params, ctx)
+    }
+
+    fn docs_observed(
+        &self,
+        state: ChangeState,
+        head_sha: String,
+        merge_commit_sha: Option<String>,
+        merged_at: Option<Timestamp>,
+        by_saka: bool,
+    ) -> Vec<Event> {
+        let Some(cr) = self
+            .task
+            .docs_change
+            .as_ref()
+            .filter(|c| c.state == ChangeState::Open)
+        else {
+            return vec![];
+        };
+        if self.item().state.is_terminal() {
+            return vec![];
+        }
+        let id = self.item().id;
+        let mut events = match state {
+            ChangeState::Open if !head_sha.is_empty() && head_sha != cr.head_sha => {
+                return vec![Event::ChangeRequestUpdated {
+                    work_item_id: id,
+                    change_request_id: cr.id,
+                    role: ChangeRole::Docs,
+                    head_sha,
+                }];
+            }
+            ChangeState::Open => return vec![],
+            ChangeState::Closed => vec![
+                Event::ChangeRequestClosed {
+                    work_item_id: id,
+                    change_request_id: cr.id,
+                    role: ChangeRole::Docs,
+                },
+                Event::DocsChangeSkipped {
+                    work_item_id: id,
+                    change_request_id: cr.id,
+                    number: cr.number,
+                    reason: "closed".into(),
+                },
+            ],
+            ChangeState::Merged => {
+                let Some(merge_commit_sha) = merge_commit_sha else {
+                    return vec![];
+                };
+                vec![Event::ChangeRequestMerged {
+                    work_item_id: id,
+                    change_request_id: cr.id,
+                    role: ChangeRole::Docs,
+                    merge_commit_sha,
+                    merged_at,
+                    merged_by_saka: by_saka,
+                }]
+            }
+        };
+        if self.task.is_at(Stage::Sync, StagePhase::MergingDocs) {
+            events.extend(self.phase(StagePhase::Verifying, None));
+        }
+        events
+    }
+
+    fn docs_merge_rejected(&self, reason: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Some(cr) = self
+            .task
+            .docs_change
+            .as_ref()
+            .filter(|_| self.task.is_at(Stage::Sync, StagePhase::MergingDocs))
+        else {
+            return vec![];
+        };
+        let status = merge_status(&reason);
+        self.block(
+            BlockerCode::DocsMergeFailed,
+            json!({ "reason": reason, "number": cr.number, "head_sha": cr.head_sha, "status": status }),
+            ctx,
+        )
+    }
+
+    fn sync_entry(&self) -> StagePhase {
+        if docs_open(self.task) {
+            StagePhase::MergingDocs
+        } else {
+            StagePhase::Verifying
+        }
     }
 
     fn change_observed(
@@ -976,6 +1294,7 @@ impl Decider<'_> {
                 let mut events = vec![Event::ChangeRequestClosed {
                     work_item_id: self.item().id,
                     change_request_id: cr.id,
+                    role: ChangeRole::Code,
                 }];
                 events.extend(self.block(
                     BlockerCode::ChangeClosed,
@@ -992,6 +1311,7 @@ impl Decider<'_> {
             events.push(Event::ChangeRequestUpdated {
                 work_item_id: self.item().id,
                 change_request_id: cr.id,
+                role: ChangeRole::Code,
                 head_sha: head_sha.clone(),
             });
         }
@@ -1089,6 +1409,7 @@ impl Decider<'_> {
             Event::ChangeRequestMerged {
                 work_item_id: self.item().id,
                 change_request_id: cr.id,
+                role: ChangeRole::Code,
                 merge_commit_sha: merge_commit_sha.clone(),
                 merged_at,
                 merged_by_saka: by_saka,
@@ -1101,7 +1422,7 @@ impl Decider<'_> {
             self.new_run(
                 Stage::Sync,
                 Trigger::Auto,
-                StagePhase::Verifying,
+                self.sync_entry(),
                 None,
                 None,
                 ctx,
@@ -1131,6 +1452,7 @@ impl Decider<'_> {
         events.push(Event::ChangeRequestMerged {
             work_item_id: self.item().id,
             change_request_id: cr.id,
+            role: ChangeRole::Code,
             merge_commit_sha,
             merged_at,
             merged_by_saka: false,
@@ -1138,7 +1460,7 @@ impl Decider<'_> {
         events.push(self.new_run(
             Stage::Sync,
             Trigger::Auto,
-            StagePhase::Verifying,
+            self.sync_entry(),
             Some(MERGED_ON_HOST.to_string()),
             None,
             ctx,
@@ -1150,6 +1472,7 @@ impl Decider<'_> {
         &self,
         found: bool,
         base_tip: Option<String>,
+        docs_found: Option<bool>,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let targeted = self
@@ -1168,6 +1491,18 @@ impl Decider<'_> {
                     "reason": "not_in_base",
                     "merge_commit_sha": cr.and_then(|c| c.merge_commit_sha.clone()),
                     "base_branch": cr.map(|c| c.base_branch.clone()),
+                }),
+                ctx,
+            );
+        }
+        if docs_found == Some(false) {
+            let docs = self.task.docs_change.as_ref();
+            return self.block(
+                BlockerCode::DodFailed,
+                json!({
+                    "reason": "docs_not_in_base",
+                    "merge_commit_sha": docs.and_then(|c| c.merge_commit_sha.clone()),
+                    "base_branch": docs.map(|c| c.base_branch.clone()),
                 }),
                 ctx,
             );
@@ -1307,12 +1642,13 @@ impl Decider<'_> {
             code: blocker.code.as_str().to_string(),
             params: blocker.params.clone(),
         };
-        let pushed_head = self
+        let pushing = self
             .task
             .stage_run
             .as_ref()
-            .filter(|r| r.stage == stage && entry == StagePhase::Pushing)
-            .and_then(|r| r.head_sha.clone());
+            .filter(|r| r.stage == stage && entry == StagePhase::Pushing);
+        let pushed_head = pushing.and_then(|r| r.head_sha.clone());
+        let pushed_docs = pushing.and_then(|r| r.docs_head_sha.clone());
         let run = self.new_run(
             stage,
             trigger,
@@ -1339,6 +1675,7 @@ impl Decider<'_> {
                     stage_run_id: *stage_run_id,
                     phase: StagePhase::Pushing,
                     head_sha: Some(head_sha),
+                    docs_head_sha: pushed_docs,
                 })
             }
             _ => None,
@@ -1445,8 +1782,12 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::PermissionExpired
         | B::BudgetExhausted
         | B::QuotaExhausted
-        | B::NoChanges
-        | B::PathScopeViolation => (Stage::Dev, StagePhase::RunningSession),
+        | B::NoChanges => (Stage::Dev, StagePhase::RunningSession),
+        B::PathScopeViolation if params.get("stage").and_then(Value::as_str) == Some("sync") => {
+            (Stage::Sync, StagePhase::MergingDocs)
+        }
+        B::PathScopeViolation => (Stage::Dev, StagePhase::RunningSession),
+        B::DocsMergeFailed => (Stage::Sync, StagePhase::MergingDocs),
         B::UserLinkRequired | B::UserTokenInvalid => {
             match params.get("phase").and_then(Value::as_str)?.parse().ok()? {
                 StagePhase::OpeningChange => (Stage::Dev, StagePhase::OpeningChange),
@@ -1471,7 +1812,9 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
                 StagePhase::AwaitingCi | StagePhase::AwaitingMerge | StagePhase::Merging => {
                     Stage::Merge
                 }
-                StagePhase::Verifying | StagePhase::TearingDown => Stage::Sync,
+                StagePhase::MergingDocs | StagePhase::Verifying | StagePhase::TearingDown => {
+                    Stage::Sync
+                }
             };
             // Merging again needs a fresh look at the change and its checks.
             let phase = if phase == StagePhase::Merging {
@@ -1613,6 +1956,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 reason: reason.clone(),
                 entry_phase: *entry_phase,
                 head_sha: None,
+                docs_head_sha: None,
                 failure: None,
                 budget: *budget,
                 budget_warnings: Vec::new(),
@@ -1642,7 +1986,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::StagePhaseChanged {
-            phase, head_sha, ..
+            phase,
+            head_sha,
+            docs_head_sha,
+            ..
         } => {
             if let Some(run) = &mut t.stage_run {
                 if run.stage == Stage::Sync && head_sha.is_some() && run.head_sha != *head_sha {
@@ -1652,6 +1999,9 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 run.started_at.get_or_insert(now);
                 if head_sha.is_some() {
                     run.head_sha.clone_from(head_sha);
+                }
+                if docs_head_sha.is_some() {
+                    run.docs_head_sha.clone_from(docs_head_sha);
                 }
                 run.updated_at = now;
                 let stage = run.stage;
@@ -1790,9 +2140,19 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             t.added_rules.extend(crate::rule::evolve(None, event, now));
         }
         E::PermissionRuleRevoked { .. } => {}
+        E::BranchPushed {
+            target: ChangeRole::Docs,
+            sha,
+            ..
+        } => {
+            if let Some(docs) = t.environment.as_mut().and_then(|e| e.docs.as_mut()) {
+                docs.pushed_sha = Some(sha.clone());
+            }
+        }
         E::BranchPushed { .. } => {}
         E::ChangeRequestOpened {
             change_request_id,
+            role,
             repo_id,
             number,
             url,
@@ -1801,9 +2161,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             head_sha,
             ..
         } => {
-            t.change_request = Some(ChangeRequest {
+            let cr = Some(ChangeRequest {
                 id: *change_request_id,
                 work_item_id: t.item.id,
+                role: *role,
                 repo_id: *repo_id,
                 number: *number,
                 url: url.clone(),
@@ -1813,30 +2174,37 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 state: ChangeState::Open,
                 merge_commit_sha: None,
                 merged_at: None,
+                skipped_at: None,
                 last_polled_at: None,
                 created_at: now,
                 updated_at: now,
             });
+            match role {
+                ChangeRole::Code => t.change_request = cr,
+                ChangeRole::Docs => t.docs_change = cr,
+            }
         }
-        E::ChangeRequestUpdated { head_sha, .. } => {
-            if let Some(cr) = &mut t.change_request {
+        E::ChangeRequestUpdated { role, head_sha, .. } => {
+            if let Some(cr) = t.change_of(*role) {
                 cr.head_sha.clone_from(head_sha);
                 cr.updated_at = now;
             }
         }
         E::ChangeRequestMerged {
+            role,
             merge_commit_sha,
             merged_at,
             ..
         } => {
-            if let Some(cr) = &mut t.change_request {
+            if let Some(cr) = t.change_of(*role) {
                 cr.state = ChangeState::Merged;
                 cr.merge_commit_sha = Some(merge_commit_sha.clone());
                 cr.merged_at = merged_at.or(Some(now));
                 cr.updated_at = now;
             }
             if let Some(run) = t.stage_run.as_mut().filter(|r| {
-                r.stage == Stage::Dev
+                *role == ChangeRole::Code
+                    && r.stage == Stage::Dev
                     && matches!(r.state, StageRunState::Pending | StageRunState::Running)
             }) {
                 run.state = StageRunState::Cancelled;
@@ -1844,9 +2212,15 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 run.updated_at = now;
             }
         }
-        E::ChangeRequestClosed { .. } => {
-            if let Some(cr) = &mut t.change_request {
+        E::ChangeRequestClosed { role, .. } => {
+            if let Some(cr) = t.change_of(*role) {
                 cr.state = ChangeState::Closed;
+                cr.updated_at = now;
+            }
+        }
+        E::DocsChangeSkipped { .. } => {
+            if let Some(cr) = &mut t.docs_change {
+                cr.skipped_at = Some(now);
                 cr.updated_at = now;
             }
         }
@@ -1974,7 +2348,9 @@ pub fn auto_retryable(code: BlockerCode, params: &Value) -> bool {
             params.pointer("/error/code").and_then(Value::as_str),
             Some("setup_command_failed" | "docs_commit_missing" | "docs_checkout_too_large")
         ),
-        BlockerCode::MergeConflict => text("reason") == Some("head_changed"),
+        BlockerCode::MergeConflict | BlockerCode::DocsMergeFailed => {
+            text("reason") == Some("head_changed")
+        }
         BlockerCode::CiRed => {
             text("source") == Some("saka") && text("reason") == Some("runner_failed")
         }
@@ -2001,6 +2377,41 @@ pub fn auto_retry_due(task: &Task, now: Timestamp) -> bool {
         return false;
     };
     now.since(blocker.opened_at) >= *delay
+}
+
+pub fn docs_pending(task: &Task) -> Option<String> {
+    let pushed = task
+        .environment
+        .as_ref()
+        .and_then(|e| e.docs.as_ref())
+        .and_then(|d| d.pushed_sha.as_ref());
+    task.stage_run
+        .as_ref()
+        .and_then(|r| r.docs_head_sha.clone())
+        .filter(|h| Some(h) != pushed)
+}
+
+pub fn needs_docs_change(task: &Task) -> bool {
+    task.docs_change.is_none()
+        && task
+            .environment
+            .as_ref()
+            .and_then(|e| e.docs.as_ref())
+            .is_some_and(|d| d.pushed_sha.is_some())
+}
+
+pub fn docs_open(task: &Task) -> bool {
+    task.docs_change
+        .as_ref()
+        .is_some_and(|c| c.state == ChangeState::Open && c.skipped_at.is_none())
+}
+
+pub fn watches_docs_change(task: &Task) -> bool {
+    docs_open(task)
+        && matches!(
+            task.item.state,
+            WorkItemState::Blocked | WorkItemState::InStage
+        )
 }
 
 pub fn watches_change(task: &Task) -> bool {
@@ -2063,6 +2474,14 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
                 .map(coded),
         },
     })
+}
+
+pub fn merge_status(reason: &str) -> u16 {
+    match reason {
+        "head_changed" => 409,
+        "rejected" => 422,
+        _ => 405,
+    }
 }
 
 #[cfg(test)]

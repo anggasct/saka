@@ -13,18 +13,18 @@ use saka_core::model::{
 use saka_core::rejection::Rejection;
 use saka_core::scope::{PathScope, ScopeViolation};
 use saka_core::session::SessionInput;
-use saka_core::task::TaskInput;
+use saka_core::task::{DocsInspection, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    AuthorshipMode, BlockerCode, ChangeCredentialKind, ChangeState, CheckConclusion, CheckKind,
-    CheckStatus, DocsMode, EnvironmentState, PermissionState, RefreshReason, ScopeStage, Stage,
-    StagePhase, TokenInvalidCause, UserLinkCause, UserTokenCause, WorkItemOrigin,
+    AuthorshipMode, BlockerCode, ChangeCredentialKind, ChangeRole, ChangeState, CheckConclusion,
+    CheckKind, CheckStatus, DocsMode, EnvironmentState, PermissionState, RefreshReason, ScopeStage,
+    Stage, StagePhase, TokenInvalidCause, UserLinkCause, UserTokenCause, WorkItemOrigin,
 };
 use saka_ports::{
-    ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnvRef, LaunchProfile, MergeOutcome,
-    MergeRequest, OpenChangeRequest, PortError, PortResult, PrepareRequest, PushOutcome,
-    PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef, StatusReport,
-    StatusState,
+    ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnvRef, ExtraDir, LaunchProfile,
+    MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult, PrepareRequest,
+    PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef,
+    StatusReport, StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
@@ -37,6 +37,20 @@ use crate::toolchain;
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, text};
 
 pub const VERIFY_ROUNDS: u32 = 3;
+const DOCS_TITLE_MAX: usize = 256;
+
+pub(crate) fn docs_branch(branch: &str) -> String {
+    format!("{branch}-docs")
+}
+
+fn extra_dirs(docs: Option<&DocsCheckout>) -> Vec<ExtraDir> {
+    docs.iter()
+        .map(|d| ExtraDir {
+            path: d.path.clone(),
+            writable: d.mode == DocsMode::Writable,
+        })
+        .collect()
+}
 pub const VERIFY_PAUSE_MS: i64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -383,7 +397,10 @@ impl Engine {
                     .await
             }
             JobKind::ScmPushBranch => self.push(&task, field(p, "local_sha")?).await,
+            JobKind::ScmPushDocsBranch => self.push_docs(&task, field(p, "local_sha")?).await,
             JobKind::ScmOpenChangeRequest => self.open_change(&task).await,
+            JobKind::ScmOpenDocsChangeRequest => self.open_docs_change(&task, job.id).await,
+            JobKind::ScmMergeDocs => self.merge_docs(&task).await,
             JobKind::ScmPollChangeRequest => self.poll(&task, field(p, "change_request_id")?).await,
             JobKind::ScmMerge => self.merge(&task, field(p, "head_sha")?).await,
             JobKind::EnvVerifyMerged => self.verify(&task, job).await,
@@ -406,11 +423,9 @@ impl Engine {
                 if !wanted {
                     return Ok(Effect::Skipped);
                 }
-                let repo = self.repo_ref(&task)?;
-                self.ports
-                    .scm
-                    .delete_branch(&repo, &task.item.branch)
-                    .await?;
+                let repo = self.repo_ref_of(field(p, "repo_id")?)?;
+                let branch: String = field(p, "branch")?;
+                self.ports.scm.delete_branch(&repo, &branch).await?;
                 Ok(Effect::Nothing)
             }
         }
@@ -651,12 +666,61 @@ impl Engine {
             return Ok(None);
         }
         let pinned = self.pinned(task).map_err(internal)?;
+        // A docs change already pushed is where the next checkout continues.
+        let start = task.docs_change.as_ref().map_or_else(
+            || pinned.source_commit().to_string(),
+            |c| c.head_sha.clone(),
+        );
         Ok(Some(DocsRequest {
             environment_id,
             repo: self.repo_ref_of(project.workspace_repo_id)?,
-            commit: pinned.source_commit().to_string(),
+            commit: start,
             project_path: project.project_path,
+            branch: Some(docs_branch(&task.item.branch)),
         }))
+    }
+
+    fn docs_scope(docs: &DocsCheckout) -> Vec<String> {
+        if docs.project_path == "." {
+            vec![saka_core::scope::EVERYTHING.to_string()]
+        } else {
+            vec![format!("{}/**", docs.project_path)]
+        }
+    }
+
+    async fn docs_violation(
+        &self,
+        task: &Task,
+        docs: &DocsCheckout,
+        base: &str,
+        head_sha: &str,
+        fetch: bool,
+        stage: ScopeStage,
+    ) -> std::result::Result<Option<ScopeViolation>, PortError> {
+        let scope = PathScope::parse(&Self::docs_scope(docs))
+            .map_err(|_| PortError::permanent("path_scope_invalid", json!({ "target": "docs" })))?;
+        if scope.allows_everything() {
+            return Ok(None);
+        }
+        let repo = self.repo_ref_of(docs.repo_id)?;
+        let changed = self
+            .ports
+            .env
+            .changed_paths(&repo, base, head_sha, fetch)
+            .await?;
+        let violation = scope.violation(&changed.paths, changed.truncated);
+        if let Some(v) = &violation {
+            self.counters.path_scope_violation(stage.as_str());
+            tracing::warn!(
+                work_item_id = %task.item.id,
+                stage = stage.as_str(),
+                target = "docs",
+                head_sha,
+                count = v.count,
+                "delivery.path_scope.violated"
+            );
+        }
+        Ok(violation)
     }
 
     fn effective_scope(&self, task: &Task) -> std::result::Result<Vec<String>, PortError> {
@@ -725,7 +789,7 @@ impl Engine {
             ),
             path_prefix: env.toolchains.iter().map(|t| t.bin_dir.clone()).collect(),
             secrets: Vec::new(),
-            extra_dirs: env.docs.iter().map(|d| d.path.clone()).collect(),
+            extra_dirs: extra_dirs(env.docs.as_ref()),
         })
     }
 
@@ -919,12 +983,17 @@ impl Engine {
                 Ok(prepared) => Some(DocsCheckout {
                     repo_id: request.repo.repo_id,
                     full_name: request.repo.full_name.clone(),
-                    commit: request.commit.clone(),
+                    commit: self
+                        .pinned(task)
+                        .map_err(internal)?
+                        .source_commit()
+                        .to_string(),
                     project_path: request.project_path.clone(),
                     path: prepared.path,
-                    mode: DocsMode::ReadOnly,
-                    branch: None,
+                    mode: DocsMode::Writable,
+                    branch: request.branch.clone(),
                     base_sha: prepared.base_sha,
+                    pushed_sha: task.docs_change.as_ref().map(|c| c.head_sha.clone()),
                 }),
                 Err(e) if !e.retryable => {
                     let params = json!({ "error": e.to_json() });
@@ -941,7 +1010,7 @@ impl Engine {
                 Err(e) => return Err(e),
             },
         };
-        env.extra_dirs = docs.iter().map(|d| d.path.clone()).collect();
+        env.extra_dirs = extra_dirs(docs.as_ref());
         let text = match self.ports.env.read_recipe(&repo, &prepared.base_sha).await {
             Ok(text) => text,
             Err(e) if !e.retryable => {
@@ -1087,7 +1156,12 @@ impl Engine {
         };
         let resolved = match self.session_author(task)? {
             Ok(resolved) => resolved,
-            Err(block) => return Ok(Effect::Fact(TaskInput::CredentialBlocked { block })),
+            Err(block) => {
+                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                    target: saka_core::vocab::ChangeRole::Code,
+                    block,
+                }));
+            }
         };
         let launched = self
             .ports
@@ -1285,7 +1359,26 @@ impl Engine {
         } else {
             None
         };
+        let docs = match env.docs.as_ref().filter(|d| d.mode == DocsMode::Writable) {
+            None => None,
+            Some(d) => {
+                let state = self.ports.env.inspect_docs(env.id, &d.base_sha).await?;
+                let outside = if !state.dirty && state.commits_ahead > 0 {
+                    self.docs_violation(task, d, &d.commit, &state.head_sha, false, ScopeStage::Dev)
+                        .await?
+                } else {
+                    None
+                };
+                Some(DocsInspection {
+                    dirty: state.dirty,
+                    commits_ahead: state.commits_ahead,
+                    head_sha: state.head_sha,
+                    outside,
+                })
+            }
+        };
         Ok(Effect::Fact(TaskInput::WorktreeInspected {
+            docs,
             turn,
             dirty: state.dirty,
             commits_ahead: state.commits_ahead,
@@ -1441,6 +1534,122 @@ impl Engine {
         }
     }
 
+    async fn push_docs(&self, task: &Task, local_sha: String) -> Execution {
+        let docs = task.environment.as_ref().and_then(|e| e.docs.as_ref());
+        let (true, Some(docs)) = (task.is_at(Stage::Dev, StagePhase::Pushing), docs) else {
+            return Ok(Effect::Skipped);
+        };
+        if saka_core::task::docs_pending(task).as_deref() != Some(local_sha.as_str()) {
+            return Ok(Effect::Skipped);
+        }
+        let outcome = self
+            .ports
+            .scm
+            .push_branch(&PushRequest {
+                repo: self.repo_ref_of(docs.repo_id)?,
+                branch: docs.branch.clone().unwrap_or_default(),
+                local_sha: local_sha.clone(),
+                expected_remote_sha: docs.pushed_sha.clone(),
+            })
+            .await?;
+        Ok(Effect::Fact(match outcome {
+            PushOutcome::Pushed { sha } => TaskInput::BranchPushed {
+                target: ChangeRole::Docs,
+                sha,
+            },
+            PushOutcome::Rejected { remote_sha } => TaskInput::PushRejected {
+                target: ChangeRole::Docs,
+                remote_sha,
+                local_sha,
+            },
+        }))
+    }
+
+    // Read before merging: after a crash the docs change may already be merged or closed.
+    async fn merge_docs(&self, task: &Task) -> Execution {
+        let Some(change) = task
+            .docs_change
+            .as_ref()
+            .filter(|_| task.is_at(Stage::Sync, StagePhase::MergingDocs))
+        else {
+            return Ok(Effect::Skipped);
+        };
+        let docs = task.environment.as_ref().and_then(|e| e.docs.as_ref());
+        let repo = self.repo_ref_of(change.repo_id)?;
+        let snapshot = self.ports.scm.change_request(&repo, change.number).await?;
+        let observed = |snapshot: saka_ports::ChangeSnapshot| {
+            Ok(Effect::Fact(TaskInput::ChangeObserved {
+                role: ChangeRole::Docs,
+                state: snapshot.state,
+                head_sha: snapshot.head_sha,
+                merge_commit_sha: snapshot.merge_commit_sha,
+                merged_at: snapshot.merged_at,
+                checks: Vec::new(),
+            }))
+        };
+        match snapshot.state {
+            ChangeState::Merged | ChangeState::Closed => return observed(snapshot),
+            // A head pushed from outside is recorded first; the merge then names that head.
+            ChangeState::Open if snapshot.head_sha != change.head_sha => return observed(snapshot),
+            ChangeState::Open => {}
+        }
+        let head_sha = change.head_sha.clone();
+        let base = format!("refs/remotes/origin/{}", change.base_branch);
+        // The docs folder bounds what may be merged; without it nothing is merged.
+        let Some(docs) = docs else {
+            return Err(PortError::permanent("docs_checkout_missing", json!({})));
+        };
+        if let Some(violation) = self
+            .docs_violation(task, docs, &base, &head_sha, true, ScopeStage::Sync)
+            .await?
+        {
+            return Ok(Effect::Fact(TaskInput::PathScopeViolated {
+                role: ChangeRole::Docs,
+                head_sha,
+                violation,
+            }));
+        }
+        let title: String = format!(
+            "docs: {} (#{})",
+            text::change_title(&task.item.work),
+            change.number
+        );
+        let outcome = self
+            .ports
+            .scm
+            .merge(&MergeRequest {
+                repo,
+                number: change.number,
+                head_sha,
+                method: self.cfg.loop_cfg.merge_method,
+                commit_title: title,
+            })
+            .await?;
+        Ok(Effect::Fact(match outcome {
+            MergeOutcome::Merged {
+                merge_commit_sha,
+                merged_at,
+            } => TaskInput::MergeSucceeded {
+                role: ChangeRole::Docs,
+                merge_commit_sha,
+                merged_at,
+            },
+            MergeOutcome::Rejected { reason } => {
+                let status = saka_core::task::merge_status(&reason);
+                tracing::warn!(
+                    work_item_id = %task.item.id,
+                    number = change.number,
+                    status,
+                    "delivery.docs_change.merge_failed"
+                );
+                TaskInput::MergeRejected {
+                    role: ChangeRole::Docs,
+                    reason,
+                }
+            }
+        }))
+    }
+
     async fn push(&self, task: &Task, local_sha: String) -> Execution {
         if !task.is_at(Stage::Dev, StagePhase::Pushing) {
             return Ok(Effect::Skipped);
@@ -1456,8 +1665,12 @@ impl Engine {
             })
             .await?;
         Ok(Effect::Fact(match outcome {
-            PushOutcome::Pushed { sha } => TaskInput::BranchPushed { sha },
+            PushOutcome::Pushed { sha } => TaskInput::BranchPushed {
+                target: saka_core::vocab::ChangeRole::Code,
+                sha,
+            },
             PushOutcome::Rejected { remote_sha } => TaskInput::PushRejected {
+                target: saka_core::vocab::ChangeRole::Code,
                 remote_sha,
                 local_sha,
             },
@@ -1465,30 +1678,104 @@ impl Engine {
     }
 
     async fn open_change(&self, task: &Task) -> Execution {
-        if !task.is_at(Stage::Dev, StagePhase::OpeningChange) {
+        if !task.is_at(Stage::Dev, StagePhase::OpeningChange) || task.change_request.is_some() {
             return Ok(Effect::Skipped);
         }
         let base_branch = self.base_branch(task)?;
         let (title, body) = self.change_text(task).map_err(internal)?;
-        let repo = self.repo_ref(task)?;
-        let integration = repo.integration_id.clone();
+        let request = OpenChangeRequest {
+            repo: self.repo_ref(task)?,
+            head_branch: task.item.branch.clone(),
+            base_branch: base_branch.clone(),
+            title,
+            body,
+            credential: ChangeCredential::App,
+        };
+        let (opened, opened_with) = match self.open_with(task, request).await? {
+            Ok(opened) => opened,
+            Err(block) => {
+                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                    block,
+                    target: ChangeRole::Code,
+                }));
+            }
+        };
+        // One change request per task: a repeated job records the same id.
+        Ok(Effect::Fact(TaskInput::ChangeOpened {
+            role: ChangeRole::Code,
+            change_request_id: ChangeRequestId(task.item.id.0),
+            number: opened.number,
+            url: opened.url,
+            head_sha: opened.head_sha,
+            base_branch,
+            opened_with,
+        }))
+    }
+
+    async fn open_docs_change(&self, task: &Task, job: uuid::Uuid) -> Execution {
+        let docs = task.environment.as_ref().and_then(|e| e.docs.as_ref());
+        let (Some(docs), Some(code)) = (docs, task.change_request.as_ref()) else {
+            return Ok(Effect::Skipped);
+        };
+        if !task.is_at(Stage::Dev, StagePhase::OpeningChange)
+            || !saka_core::task::needs_docs_change(task)
+        {
+            return Ok(Effect::Skipped);
+        }
+        let (project, _) = self.bound(task)?;
+        let (code_title, _) = self.change_text(task).map_err(internal)?;
+        let title: String = format!("docs: {code_title}")
+            .chars()
+            .take(DOCS_TITLE_MAX)
+            .collect();
+        let body = format!(
+            "Docs for {}\n\nSaka-Task: {}\n",
+            code.url, task.item.task_key
+        );
+        let request = OpenChangeRequest {
+            repo: self.repo_ref_of(docs.repo_id)?,
+            head_branch: docs.branch.clone().unwrap_or_default(),
+            base_branch: project.base_branch.clone(),
+            title,
+            body,
+            credential: ChangeCredential::App,
+        };
+        let (opened, opened_with) = match self.open_with(task, request).await? {
+            Ok(opened) => opened,
+            Err(block) => {
+                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                    block,
+                    target: ChangeRole::Docs,
+                }));
+            }
+        };
+        // The job id is stable across its retries; a repeated fact is dropped by the decider.
+        Ok(Effect::Fact(TaskInput::ChangeOpened {
+            role: ChangeRole::Docs,
+            change_request_id: ChangeRequestId(job),
+            number: opened.number,
+            url: opened.url,
+            head_sha: opened.head_sha,
+            base_branch: project.base_branch,
+            opened_with,
+        }))
+    }
+
+    async fn open_with(
+        &self,
+        task: &Task,
+        mut request: OpenChangeRequest,
+    ) -> std::result::Result<
+        std::result::Result<(saka_ports::OpenedChange, ChangeCredentialKind), CredentialBlock>,
+        PortError,
+    > {
+        let integration = request.repo.integration_id.clone();
         let opener = match self.change_credential(task, &integration).await? {
             Ok(opener) => opener,
-            Err(block) => return Ok(Effect::Fact(TaskInput::CredentialBlocked { block })),
+            Err(block) => return Ok(Err(block)),
         };
-        let opening = self
-            .ports
-            .scm
-            .open_change_request(&OpenChangeRequest {
-                repo,
-                head_branch: task.item.branch.clone(),
-                base_branch: base_branch.clone(),
-                title,
-                body,
-                credential: opener.credential,
-            })
-            .await?;
-        let opened = match opening {
+        request.credential = opener.credential;
+        let opened = match self.ports.scm.open_change_request(&request).await? {
             ChangeOpening::Opened(opened) => opened,
             ChangeOpening::CredentialRejected => {
                 let block = match &opener.by {
@@ -1516,30 +1803,39 @@ impl Engine {
                         ));
                     }
                 };
-                return Ok(Effect::Fact(TaskInput::CredentialBlocked { block }));
+                return Ok(Err(block));
             }
             ChangeOpening::AccessDenied { status } => {
-                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
-                    block: CredentialBlock::AccessDenied {
-                        credential: opener.by.kind(),
-                        login: opener.by.login(),
-                        status,
-                    },
+                return Ok(Err(CredentialBlock::AccessDenied {
+                    credential: opener.by.kind(),
+                    login: opener.by.login(),
+                    status,
                 }));
             }
         };
-        // One change request per task: a repeated job records the same id.
-        Ok(Effect::Fact(TaskInput::ChangeOpened {
-            change_request_id: ChangeRequestId(task.item.id.0),
-            number: opened.number,
-            url: opened.url,
-            head_sha: opened.head_sha,
-            base_branch,
-            opened_with: opener.by.kind(),
-        }))
+        Ok(Ok((opened, opener.by.kind())))
     }
 
     async fn poll(&self, task: &Task, cr: ChangeRequestId) -> Execution {
+        if let Some(docs) = task
+            .docs_change
+            .as_ref()
+            .filter(|c| c.id == cr && saka_core::task::watches_docs_change(task))
+        {
+            let snapshot = self
+                .ports
+                .scm
+                .change_request(&self.repo_ref_of(docs.repo_id)?, docs.number)
+                .await?;
+            return Ok(Effect::Fact(TaskInput::ChangeObserved {
+                role: ChangeRole::Docs,
+                state: snapshot.state,
+                head_sha: snapshot.head_sha,
+                merge_commit_sha: snapshot.merge_commit_sha,
+                merged_at: snapshot.merged_at,
+                checks: Vec::new(),
+            }));
+        }
         let Some(change) = task
             .change_request
             .as_ref()
@@ -1552,7 +1848,18 @@ impl Engine {
             .scm
             .change_request(&self.repo_ref(task)?, change.number)
             .await?;
+        if snapshot.state == ChangeState::Merged
+            && task.item.stage == Some(Stage::Dev)
+            && let Some(docs_head_sha) = saka_core::task::docs_pending(task)
+        {
+            tracing::info!(
+                work_item_id = %task.item.id,
+                docs_head_sha,
+                "delivery.docs_change.discarded"
+            );
+        }
         Ok(Effect::Fact(TaskInput::ChangeObserved {
+            role: ChangeRole::Code,
             state: snapshot.state,
             head_sha: snapshot.head_sha,
             merge_commit_sha: snapshot.merge_commit_sha,
@@ -1596,6 +1903,7 @@ impl Engine {
             ChangeState::Merged => {
                 if let Some(merge_commit_sha) = snapshot.merge_commit_sha {
                     return Ok(Effect::Fact(TaskInput::MergeSucceeded {
+                        role: saka_core::vocab::ChangeRole::Code,
                         merge_commit_sha,
                         merged_at: snapshot.merged_at,
                     }));
@@ -1603,6 +1911,7 @@ impl Engine {
             }
             ChangeState::Closed => {
                 return Ok(Effect::Fact(TaskInput::ChangeObserved {
+                    role: saka_core::vocab::ChangeRole::Code,
                     state: snapshot.state,
                     head_sha: snapshot.head_sha,
                     merge_commit_sha: None,
@@ -1619,6 +1928,7 @@ impl Engine {
             .await?
         {
             return Ok(Effect::Fact(TaskInput::PathScopeViolated {
+                role: saka_core::vocab::ChangeRole::Code,
                 head_sha,
                 violation,
             }));
@@ -1643,10 +1953,14 @@ impl Engine {
                 merge_commit_sha,
                 merged_at,
             } => TaskInput::MergeSucceeded {
+                role: saka_core::vocab::ChangeRole::Code,
                 merge_commit_sha,
                 merged_at,
             },
-            MergeOutcome::Rejected { reason } => TaskInput::MergeRejected { reason },
+            MergeOutcome::Rejected { reason } => TaskInput::MergeRejected {
+                role: saka_core::vocab::ChangeRole::Code,
+                reason,
+            },
         }))
     }
 
@@ -1674,8 +1988,26 @@ impl Engine {
             None => None,
         };
         let found = base_tip.is_some();
-        if found || round >= VERIFY_ROUNDS {
-            return Ok(Effect::Fact(TaskInput::MergeVerified { found, base_tip }));
+        let docs_found = match task
+            .docs_change
+            .as_ref()
+            .and_then(|c| c.merge_commit_sha.as_ref().map(|sha| (c, sha)))
+        {
+            Some((docs, sha)) => Some(
+                self.ports
+                    .env
+                    .contains_commit(&self.repo_ref_of(docs.repo_id)?, sha, &docs.base_branch)
+                    .await?
+                    .is_some(),
+            ),
+            None => None,
+        };
+        if (found && docs_found != Some(false)) || round >= VERIFY_ROUNDS {
+            return Ok(Effect::Fact(TaskInput::MergeVerified {
+                found,
+                base_tip,
+                docs_found,
+            }));
         }
         let run = task.stage_run.as_ref().map(|r| r.id);
         let mut payload = job.payload.clone();

@@ -936,6 +936,21 @@ export interface components {
     };
     /** @enum {string} */
     Decision: "allow" | "deny";
+    DocsChangeRequest: {
+      base_branch: string;
+      head_sha: string;
+      /** Format: uuid */
+      id: string;
+      merge_commit_sha?: string | null;
+      merged_at?: string | null;
+      /** Format: int64 */
+      number: number;
+      /** @description `true` when it was closed without merge and the task went on without it. */
+      skipped: boolean;
+      /** @description `open`, `merged` or `closed`. */
+      state: string;
+      url: string;
+    };
     EmptyBody: Record<string, never>;
     EnvironmentDocs: {
       /** @description The commit the checkout started at. */
@@ -1225,6 +1240,7 @@ export interface components {
         budget?: components["schemas"]["WorkItemBudget"] | null;
         change_request?: components["schemas"]["ChangeRequest"] | null;
         created_at: string;
+        docs_change_request?: components["schemas"]["DocsChangeRequest"] | null;
         done_at?: string | null;
         environment?: components["schemas"]["WorkItemEnvironment"] | null;
         /** @description Latest result per gate source for the current change request head, `scm` first. */
@@ -2057,6 +2073,7 @@ export interface components {
       budget?: components["schemas"]["WorkItemBudget"] | null;
       change_request?: components["schemas"]["ChangeRequest"] | null;
       created_at: string;
+      docs_change_request?: components["schemas"]["DocsChangeRequest"] | null;
       done_at?: string | null;
       environment?: components["schemas"]["WorkItemEnvironment"] | null;
       /** @description Latest result per gate source for the current change request head, `scm` first. */

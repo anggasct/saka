@@ -3926,11 +3926,12 @@ fn a_task_shows_its_docs_checkout_in_the_environment_and_null_without_one() {
             "commit": docs.commit,
             "project_path": "docs",
             "path": docs.path,
-            "mode": "read_only",
-            "branch": null,
+            "mode": "writable",
+            "branch": "saka/tasks-done/s1-docs",
             "base_sha": docs.commit,
         })
     );
+    assert_eq!(r.body["docs_change_request"], Value::Null);
 
     let mut api = Api::new(SimConfig {
         agent: hang_script(),
@@ -4216,5 +4217,49 @@ fn config_checks_are_counted_and_logged() {
     assert!(
         !text.contains("[project]"),
         "the file content is never logged"
+    );
+}
+
+#[test]
+fn a_merged_docs_pr_shows_on_the_task_and_is_counted_in_the_metrics() {
+    let layout = Layout {
+        saka_toml: saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]),
+        ..Layout::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(SimConfig::default(), &layout));
+    api.sim
+        .world
+        .script_docs(vec![saka_testkit::DocsTurn::Commit(vec![(
+            "docs/api.md".into(),
+            Some("api\n".into()),
+        )])]);
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Done)
+    );
+    let task = api.sim.task(1);
+    let cr = task.docs_change.clone().unwrap();
+    let r = api.get(&format!("/api/v1/work-items/{}", task.item.id.0));
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let docs = &r.body["docs_change_request"];
+    assert_eq!(docs["id"], cr.id.0.to_string());
+    assert_eq!(docs["number"], cr.number);
+    assert_eq!(docs["url"], cr.url);
+    assert_eq!(docs["state"], "merged");
+    assert_eq!(docs["head_sha"], cr.head_sha);
+    assert_eq!(docs["base_branch"], "main");
+    assert_eq!(docs["merge_commit_sha"], json!(cr.merge_commit_sha));
+    assert_eq!(docs["skipped"], false);
+    assert_ne!(r.body["change_request"]["number"], docs["number"]);
+
+    let metrics = api.get_text("/metrics");
+    assert!(
+        metrics.contains("saka_docs_changes_total{outcome=\"merged\"} 1"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("saka_docs_changes_total{outcome=\"skipped\"} 0"),
+        "{metrics}"
     );
 }

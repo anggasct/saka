@@ -624,6 +624,9 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     if let Some(b) = &t.blocker {
         blocker(tx, t, b)?;
     }
+    if let Some(cr) = &t.docs_change {
+        change_request(tx, t, cr)?;
+    }
     if let Some(cr) = &t.change_request {
         change_request(tx, t, cr)?;
         if let Some(g) = t
@@ -883,9 +886,11 @@ fn permission_rule(tx: &Transaction<'_>, r: &PermissionRule) -> Result<()> {
 fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
     tx.execute(
         "INSERT INTO stage_run (id, work_item_id, project_id, stage, attempt, state, trigger, reason, entry_phase,
-           head_sha, failure, started_at, ended_at, created_at, updated_at, budget, budget_warnings)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+           head_sha, failure, started_at, ended_at, created_at, updated_at, budget, budget_warnings,
+           docs_head_sha)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, head_sha = excluded.head_sha,
+           docs_head_sha = excluded.docs_head_sha,
            failure = excluded.failure, started_at = excluded.started_at, ended_at = excluded.ended_at,
            updated_at = excluded.updated_at, budget_warnings = excluded.budget_warnings",
         params![
@@ -906,6 +911,7 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
             r.updated_at.0,
             budget_json(r.budget.as_ref())?,
             to_json(&r.budget_warnings)?,
+            r.docs_head_sha,
         ],
     )?;
     Ok(())
@@ -956,10 +962,11 @@ fn blocker(tx: &Transaction<'_>, t: &Task, b: &Blocker) -> Result<()> {
 fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<()> {
     tx.execute(
         "INSERT INTO change_request (id, project_id, work_item_id, repo_id, number, url, head_branch, base_branch,
-           head_sha, state, merge_commit_sha, merged_at, last_polled_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+           head_sha, state, merge_commit_sha, merged_at, last_polled_at, created_at, updated_at, role, skipped_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT (id) DO UPDATE SET head_sha = excluded.head_sha, state = excluded.state,
            merge_commit_sha = excluded.merge_commit_sha, merged_at = excluded.merged_at,
+           skipped_at = excluded.skipped_at,
            last_polled_at = excluded.last_polled_at, updated_at = excluded.updated_at",
         params![
             c.id.to_string(),
@@ -977,6 +984,8 @@ fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<(
             c.last_polled_at.map(|x| x.0),
             c.created_at.0,
             c.updated_at.0,
+            c.role.as_str(),
+            c.skipped_at.map(|x| x.0),
         ],
     )?;
     Ok(())
@@ -991,7 +1000,7 @@ fn environment(tx: &Transaction<'_>, project: ProjectId, e: &Environment) -> Res
          VALUES (?1, ?2, ?3, ?17, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?19,
            ?20)
          ON CONFLICT (id) DO UPDATE SET base_sha = excluded.base_sha, state = excluded.state,
-           updated_at = excluded.updated_at",
+           updated_at = excluded.updated_at, docs_json = excluded.docs_json",
         params![
             e.id.to_string(),
             project.to_string(),

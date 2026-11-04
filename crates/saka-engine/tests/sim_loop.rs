@@ -105,7 +105,7 @@ fn uncommitted_work_gets_one_follow_up_then_blocks_as_no_changes() {
     let t = sim.task(1);
     assert_eq!(
         t.open_blocker().unwrap().params,
-        json!({ "dirty": true, "commits": 0 })
+        json!({ "dirty": true, "commits": 0, "docs_dirty": false })
     );
     let session = t.session.unwrap();
     assert_eq!((session.turns, session.followups), (2, 1));
@@ -116,7 +116,7 @@ fn uncommitted_work_gets_one_follow_up_then_blocks_as_no_changes() {
     assert_eq!(run_to_block(&mut sim), BlockerCode::NoChanges);
     assert_eq!(
         sim.task(1).open_blocker().unwrap().params,
-        json!({ "dirty": false, "commits": 0 })
+        json!({ "dirty": false, "commits": 0, "docs_dirty": false })
     );
 }
 

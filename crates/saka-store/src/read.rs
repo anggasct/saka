@@ -11,7 +11,7 @@ use saka_core::model::{
     SpecDependency, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
-use saka_core::vocab::{SessionState, Stage, Trigger};
+use saka_core::vocab::{ChangeRole, SessionState, Stage, Trigger};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -250,7 +250,10 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         change_request,
     )? {
         if let Some(t) = tasks.get_mut(&c.work_item_id) {
-            t.change_request.get_or_insert(c);
+            match c.role {
+                ChangeRole::Code => t.change_request.get_or_insert(c),
+                ChangeRole::Docs => t.docs_change.get_or_insert(c),
+            };
         }
     }
     let mut seen = std::collections::HashSet::new();
@@ -419,6 +422,7 @@ pub(crate) fn stage_run(row: &Row<'_>) -> Result<StageRun> {
         reason: row.get("reason")?,
         entry_phase: vocab(row, "entry_phase")?,
         head_sha: row.get("head_sha")?,
+        docs_head_sha: row.get("docs_head_sha")?,
         failure: opt_json(row, "failure")?,
         budget: budget_col(row, "budget")?,
         budget_warnings: json(row, "budget_warnings")?,
@@ -460,6 +464,7 @@ fn change_request(row: &Row<'_>) -> Result<ChangeRequest> {
     Ok(ChangeRequest {
         id: ChangeRequestId(uuid(row, "id")?),
         work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        role: vocab(row, "role")?,
         repo_id: RepoId(uuid(row, "repo_id")?),
         number: u64_col(row, "number")?,
         url: row.get("url")?,
@@ -469,6 +474,7 @@ fn change_request(row: &Row<'_>) -> Result<ChangeRequest> {
         state: vocab(row, "state")?,
         merge_commit_sha: row.get("merge_commit_sha")?,
         merged_at: opt_ts(row, "merged_at")?,
+        skipped_at: opt_ts(row, "skipped_at")?,
         last_polled_at: opt_ts(row, "last_polled_at")?,
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,

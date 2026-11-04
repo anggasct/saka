@@ -11,9 +11,9 @@ use crate::ids::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, ContextOrigin,
-    DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome, GateSource,
-    InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState,
+    Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
+    ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome,
+    GateSource, InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState,
     SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
     WorkItemOrigin, WorkItemState, WorkflowPreset,
 };
@@ -264,6 +264,7 @@ pub struct StageRun {
     pub reason: Option<String>,
     pub entry_phase: StagePhase,
     pub head_sha: Option<String>,
+    pub docs_head_sha: Option<String>,
     pub failure: Option<Coded>,
     pub budget: Option<Budget>,
     pub budget_warnings: Vec<BudgetDimension>,
@@ -396,6 +397,7 @@ pub struct Blocker {
 pub struct ChangeRequest {
     pub id: ChangeRequestId,
     pub work_item_id: WorkItemId,
+    pub role: ChangeRole,
     pub repo_id: RepoId,
     pub number: u64,
     pub url: String,
@@ -405,6 +407,7 @@ pub struct ChangeRequest {
     pub state: ChangeState,
     pub merge_commit_sha: Option<String>,
     pub merged_at: Option<Timestamp>,
+    pub skipped_at: Option<Timestamp>,
     pub last_polled_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -432,6 +435,7 @@ pub struct DocsCheckout {
     pub mode: DocsMode,
     pub branch: Option<String>,
     pub base_sha: String,
+    pub pushed_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -545,6 +549,7 @@ pub struct Task {
     pub gates: Vec<GateResult>,
     pub blocker: Option<Blocker>,
     pub change_request: Option<ChangeRequest>,
+    pub docs_change: Option<ChangeRequest>,
     pub environment: Option<Environment>,
     pub session: Option<Session>,
     pub permissions: Vec<PermissionRequest>,
@@ -559,6 +564,13 @@ pub struct Task {
 }
 
 impl Task {
+    pub fn change_of(&mut self, role: ChangeRole) -> Option<&mut ChangeRequest> {
+        match role {
+            ChangeRole::Code => self.change_request.as_mut(),
+            ChangeRole::Docs => self.docs_change.as_mut(),
+        }
+    }
+
     pub fn new(item: WorkItem) -> Task {
         Task {
             item,
@@ -566,6 +578,7 @@ impl Task {
             gates: Vec::new(),
             blocker: None,
             change_request: None,
+            docs_change: None,
             environment: None,
             session: None,
             permissions: Vec::new(),

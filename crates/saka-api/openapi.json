@@ -3556,6 +3556,58 @@
           "deny"
         ]
       },
+      "DocsChangeRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "url",
+          "state",
+          "head_sha",
+          "base_branch",
+          "skipped"
+        ],
+        "properties": {
+          "base_branch": {
+            "type": "string"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "merge_commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merged_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "boolean",
+            "description": "`true` when it was closed without merge and the task went on without it."
+          },
+          "state": {
+            "type": "string",
+            "description": "`open`, `merged` or `closed`."
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "EmptyBody": {
         "type": "object",
         "additionalProperties": false
@@ -4619,6 +4671,17 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "docs_change_request": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DocsChangeRequest",
+                      "description": "The docs pull request in the workspace repo, for a task in another repo; `null` when none\nwas opened. Gates and merge readiness never read it."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "done_at": {
                   "type": [
@@ -7295,6 +7358,17 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "docs_change_request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DocsChangeRequest",
+                "description": "The docs pull request in the workspace repo, for a task in another repo; `null` when none\nwas opened. Gates and merge readiness never read it."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "done_at": {
             "type": [

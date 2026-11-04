@@ -270,21 +270,30 @@ impl Engine {
             .find(|(name, _)| *name == tool)
             .and_then(|(_, key)| input.get(*key).and_then(Value::as_str));
         let path = match (raw, environment, self.repo_for_paths(repo_id)) {
-            (Some(raw), Some(env), Some(repo)) => Some(self.ports.env.resolve_path(
-                &EnvRef {
-                    environment_id: env.id,
-                    repo,
-                    branch: env.branch.clone(),
-                    root_path: env.root_path.clone(),
-                    worktree_path: env.worktree_path.clone(),
-                    vars: std::collections::BTreeMap::new(),
-                    path_prefix: Vec::new(),
-                    secrets: Vec::new(),
-                    extra_dirs: Vec::new(),
-                },
-                cwd,
-                raw,
-            )),
+            (Some(raw), Some(env), Some(repo)) => Some(
+                self.ports.env.resolve_path(
+                    &EnvRef {
+                        environment_id: env.id,
+                        repo,
+                        branch: env.branch.clone(),
+                        root_path: env.root_path.clone(),
+                        worktree_path: env.worktree_path.clone(),
+                        vars: std::collections::BTreeMap::new(),
+                        path_prefix: Vec::new(),
+                        secrets: Vec::new(),
+                        extra_dirs: env
+                            .docs
+                            .iter()
+                            .map(|d| saka_ports::ExtraDir {
+                                path: d.path.clone(),
+                                writable: d.mode == saka_core::vocab::DocsMode::Writable,
+                            })
+                            .collect(),
+                    },
+                    cwd,
+                    raw,
+                ),
+            ),
             (Some(raw), _, _) => Some(saka_core::policy::RequestPath {
                 path: raw.to_string(),
                 inside_worktree: false,

@@ -308,20 +308,42 @@ impl Engine {
             batch.action = Some(action.record(self, cause, project, Some(id.0), reply));
         }
         let verification = metrics::dod_verification(&events, &after);
+        let docs_number = after.docs_change.as_ref().map(|c| c.number);
         if !events.is_empty() {
             batch.tasks.push(after);
         }
         self.commit(&batch)?;
         for e in &events {
-            if let Event::ChangeRequestOpened {
-                work_item_id,
-                number,
-                opened_with,
-                ..
-            } = e
-            {
-                self.counters.change_request_opened(opened_with.as_str());
-                tracing::info!(%work_item_id, number, credential = opened_with.as_str(), "scm.change_request.opened");
+            match e {
+                Event::ChangeRequestOpened {
+                    work_item_id,
+                    number,
+                    opened_with,
+                    ..
+                } => {
+                    self.counters.change_request_opened(opened_with.as_str());
+                    tracing::info!(%work_item_id, number, credential = opened_with.as_str(), "scm.change_request.opened");
+                }
+                Event::ChangeRequestMerged {
+                    work_item_id,
+                    role: saka_core::vocab::ChangeRole::Docs,
+                    merge_commit_sha,
+                    merged_by_saka,
+                    ..
+                } => {
+                    self.counters.docs_change("merged");
+                    tracing::info!(%work_item_id, number = docs_number, merge_commit_sha, merged_by_saka, "delivery.docs_change.merged");
+                }
+                Event::DocsChangeSkipped {
+                    work_item_id,
+                    number,
+                    reason,
+                    ..
+                } => {
+                    self.counters.docs_change("skipped");
+                    tracing::info!(%work_item_id, number, reason, "delivery.docs_change.skipped");
+                }
+                _ => {}
             }
         }
         match verification {

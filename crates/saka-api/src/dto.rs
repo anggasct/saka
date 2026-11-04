@@ -518,6 +518,21 @@ pub struct ChangeRequest {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct DocsChangeRequest {
+    pub id: Uuid,
+    pub number: u64,
+    pub url: String,
+    /// `open`, `merged` or `closed`.
+    pub state: String,
+    pub head_sha: String,
+    pub base_branch: String,
+    pub merge_commit_sha: Option<String>,
+    pub merged_at: Option<String>,
+    /// `true` when it was closed without merge and the task went on without it.
+    pub skipped: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct GateCheck {
     pub name: String,
     pub kind: String,
@@ -685,6 +700,9 @@ pub struct WorkItem {
     /// Steps and specs this task still waits for; empty unless the task is queued.
     pub waiting_on: Vec<WaitingOn>,
     pub change_request: Option<ChangeRequest>,
+    /// The docs pull request in the workspace repo, for a task in another repo; `null` when none
+    /// was opened. Gates and merge readiness never read it.
+    pub docs_change_request: Option<DocsChangeRequest>,
     /// Latest result per gate source for the current change request head, `scm` first.
     pub gates: Vec<Gate>,
     pub blocker: Option<Blocker>,
@@ -843,6 +861,17 @@ impl WorkItem {
                 base_branch: c.base_branch.clone(),
                 merge_commit_sha: c.merge_commit_sha.clone(),
                 merged_at: opt_time(c.merged_at),
+            }),
+            docs_change_request: t.docs_change.as_ref().map(|c| DocsChangeRequest {
+                id: c.id.0,
+                number: c.number,
+                url: c.url.clone(),
+                state: c.state.as_str().to_string(),
+                head_sha: c.head_sha.clone(),
+                base_branch: c.base_branch.clone(),
+                merge_commit_sha: c.merge_commit_sha.clone(),
+                merged_at: opt_time(c.merged_at),
+                skipped: c.skipped_at.is_some(),
             }),
             gates: gates_at_head(t),
             blocker: t.open_blocker().map(|b| Blocker {

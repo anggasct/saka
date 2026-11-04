@@ -262,6 +262,68 @@ describe("TaskPage", () => {
     expect(screen.getByText("Sync · checking the base branch")).toBeVisible();
   });
 
+  it("shows the docs pull request next to the code pull request", async () => {
+    const docsChange = {
+      id: "0193f0c4-1b2a-7c3d-9e8f-0011223344ee",
+      number: 13,
+      url: "https://github.com/acme/docs/pull/13",
+      state: "merged",
+      head_sha: HEAD,
+      base_branch: "main",
+      merge_commit_sha: MERGE,
+      merged_at: "2026-10-31T10:12:00.000Z",
+      skipped: false,
+    };
+    const merging = detail(
+      task(1, {
+        state: "in_stage",
+        stage: "sync",
+        stage_phase: "merging_docs",
+        change_request: { ...change, state: "merged", merge_commit_sha: HEAD },
+        docs_change_request: docsChange,
+      }),
+    );
+    fakeApi(routes(merging));
+    renderWithProviders(<TaskPage workItemId={merging.id} />);
+    const pr = await screen.findByRole("region", { name: "Pull request" });
+    expect(within(pr).getByRole("link", { name: "PR #13" })).toHaveAttribute(
+      "href",
+      docsChange.url,
+    );
+    expect(within(pr).getByText("Docs merge commit")).toBeInTheDocument();
+    expect(within(pr).getByText("9e8f7a6b5c4d")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sync · merging the docs pull request"),
+    ).toBeVisible();
+  });
+
+  it("says a docs pull request closed without merging was skipped", async () => {
+    const skipped = detail(
+      task(1, {
+        state: "done",
+        change_request: { ...change, state: "merged", merge_commit_sha: MERGE },
+        docs_change_request: {
+          id: "0193f0c4-1b2a-7c3d-9e8f-0011223344ee",
+          number: 13,
+          url: "https://github.com/acme/docs/pull/13",
+          state: "closed",
+          head_sha: HEAD,
+          base_branch: "main",
+          merge_commit_sha: null,
+          merged_at: null,
+          skipped: true,
+        },
+      }),
+    );
+    fakeApi(routes(skipped));
+    renderWithProviders(<TaskPage workItemId={skipped.id} />);
+    const pr = await screen.findByRole("region", { name: "Pull request" });
+    expect(
+      within(pr).getByText("Skipped: closed without merging"),
+    ).toBeInTheDocument();
+    expect(within(pr).queryByText("Docs merge commit")).toBeNull();
+  });
+
   it("says how long after the merge of its dependency the step started", async () => {
     const first = task(1, {
       state: "done",

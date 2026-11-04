@@ -6,10 +6,13 @@ use crate::job::{Job, JobKind};
 use crate::model::Task;
 use crate::resume;
 use crate::session;
-use crate::task::{LoopConfig, run_view, watches_change};
+use crate::task::{
+    LoopConfig, docs_pending, needs_docs_change, run_view, watches_change, watches_docs_change,
+};
 use crate::time::Timestamp;
 use crate::vocab::{
-    EnvironmentState, GateOutcome, GateSource, PermissionState, Stage, StagePhase, WorkItemState,
+    ChangeRole, ChangeState, EnvironmentState, GateOutcome, GateSource, PermissionState, Stage,
+    StagePhase, WorkItemState,
 };
 
 const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
@@ -17,9 +20,17 @@ const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
 pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     use Event as E;
     match event {
-        E::StageRunCreated { .. } | E::StagePhaseChanged { .. } | E::WorkItemCancelled { .. } => {
-            phase_jobs(task, cfg, now)
+        E::StageRunCreated { .. }
+        | E::StagePhaseChanged { .. }
+        | E::WorkItemCancelled { .. }
+        | E::BranchPushed {
+            target: ChangeRole::Docs,
+            ..
         }
+        | E::ChangeRequestUpdated {
+            role: ChangeRole::Docs,
+            ..
+        } => phase_jobs(task, cfg, now),
         E::SessionTurnEnded {
             owner,
             session_id,
@@ -107,7 +118,10 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     let run_id = run.map(|r| r.id);
     let mut jobs = Vec::new();
     if watches_change(task) {
-        jobs.extend(poll_job(task, cfg, now));
+        jobs.extend(poll_job(task.change_request.as_ref(), task, cfg, now));
+    }
+    if watches_docs_change(task) {
+        jobs.extend(poll_job(task.docs_change.as_ref(), task, cfg, now));
     }
 
     if item.state.is_terminal() || item.state == WorkItemState::Blocked {
@@ -196,7 +210,23 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
             }
         }
         (Stage::Dev, StagePhase::Pushing) => {
-            if let (Some(run_id), Some(sha)) = (run_id, run.and_then(|r| r.head_sha.clone())) {
+            let docs = task.environment.as_ref().and_then(|e| e.docs.as_ref());
+            if let (Some(run_id), Some(sha), Some(docs)) = (run_id, docs_pending(task), docs) {
+                jobs.push(Job::new(
+                    JobKind::ScmPushDocsBranch,
+                    format!("{run_id}:{sha}"),
+                    json!({
+                        "work_item_id": id,
+                        "stage_run_id": run_id,
+                        "repo_id": docs.repo_id,
+                        "branch": docs.branch,
+                        "local_sha": sha,
+                        "expected_remote_sha": docs.pushed_sha,
+                    }),
+                    now,
+                ));
+            } else if let (Some(run_id), Some(sha)) = (run_id, run.and_then(|r| r.head_sha.clone()))
+            {
                 jobs.push(Job::new(
                     JobKind::ScmPushBranch,
                     format!("{run_id}:{sha}"),
@@ -209,6 +239,17 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                         "expected_remote_sha": cr.map(|c| c.head_sha.clone()),
                         "environment_id": task.environment.as_ref().map(|e| e.id),
                     }),
+                    now,
+                ));
+            }
+        }
+        (Stage::Dev, StagePhase::OpeningChange) if cr.is_some() => {
+            if needs_docs_change(task) {
+                let run = run_id.map(|r| r.to_string()).unwrap_or_default();
+                jobs.push(Job::new(
+                    JobKind::ScmOpenDocsChangeRequest,
+                    format!("{id}:docs:{run}"),
+                    json!({ "work_item_id": id }),
                     now,
                 ));
             }
@@ -259,6 +300,23 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                         "number": cr.number,
                         "head_sha": cr.head_sha,
                         "merge_method": cfg.merge_method,
+                    }),
+                    now,
+                ));
+            }
+        }
+        (Stage::Sync, StagePhase::MergingDocs) => {
+            if let (Some(docs), Some(run)) = (&task.docs_change, run_id) {
+                // Keyed by run: a retried merge after a refusal names the same head again.
+                jobs.push(Job::new(
+                    JobKind::ScmMergeDocs,
+                    format!("{id}:{run}:{}", docs.head_sha),
+                    json!({
+                        "work_item_id": id,
+                        "change_request_id": docs.id,
+                        "repo_id": docs.repo_id,
+                        "number": docs.number,
+                        "head_sha": docs.head_sha,
                     }),
                     now,
                 ));
@@ -326,6 +384,17 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                     json!({ "work_item_id": id, "repo_id": item.repo_id, "branch": item.branch }),
                     now,
                 ));
+                let finished = |c: &&crate::model::ChangeRequest| {
+                    c.state == ChangeState::Merged || c.skipped_at.is_some()
+                };
+                if let Some(docs) = task.docs_change.as_ref().filter(finished) {
+                    jobs.push(Job::new(
+                        JobKind::ScmDeleteBranch,
+                        format!("{id}:docs"),
+                        json!({ "work_item_id": id, "repo_id": docs.repo_id, "branch": docs.head_branch }),
+                        now,
+                    ));
+                }
             }
         }
         _ => {}
@@ -333,8 +402,13 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     jobs
 }
 
-fn poll_job(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Option<Job> {
-    let cr = task.change_request.as_ref()?;
+fn poll_job(
+    cr: Option<&crate::model::ChangeRequest>,
+    task: &Task,
+    cfg: &LoopConfig,
+    now: Timestamp,
+) -> Option<Job> {
+    let cr = cr?;
     let bucket = now.0 / cfg.poll_interval_ms.max(1);
     Some(Job::new(
         JobKind::ScmPollChangeRequest,

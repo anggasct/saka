@@ -75,6 +75,7 @@ vocab!(
         AwaitingCi => "awaiting_ci",
         AwaitingMerge => "awaiting_merge",
         Merging => "merging",
+        MergingDocs => "merging_docs",
         Verifying => "verifying",
         TearingDown => "tearing_down",
     }
@@ -119,9 +120,11 @@ vocab!(
         UserLinkRequired => "user_link_required",
         UserTokenInvalid => "user_token_invalid",
         UserAccessDenied => "user_access_denied",
+        DocsMergeFailed => "docs_merge_failed",
     }
 );
-vocab!(ScopeStage { Dev => "dev", Merge => "merge" });
+vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
+vocab!(ChangeRole { Code => "code", Docs => "docs" });
 vocab!(ScopeViolationReason { OutsideScope => "outside_scope", TooManyPaths => "too_many_paths" });
 vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
 vocab!(SecretPurpose { Setup => "setup", Session => "session" });
