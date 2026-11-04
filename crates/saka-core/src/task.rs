@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::Ctx;
+use crate::authorship::CredentialBlock;
 use crate::event::{Event, Prompt};
 use crate::gate::{self, Check, GatePolicy};
 use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, GateResultId, StageRunId};
@@ -18,9 +19,9 @@ use crate::session::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome, GateSource,
-    MergeMethod, ResumeCause, ScopeStage, SessionState, Stage, StagePhase, StageRunState, Trigger,
-    WorkItemOrigin, WorkItemState,
+    BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeState, EnvironmentState,
+    GateOutcome, GateSource, MergeMethod, ResumeCause, ResumeTrigger, ScopeStage, SessionState,
+    Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,11 +104,18 @@ pub enum TaskInput {
         url: String,
         head_sha: String,
         base_branch: String,
+        opened_with: ChangeCredentialKind,
+    },
+    CredentialBlocked {
+        block: CredentialBlock,
     },
     SakaGateStarted {
         head_sha: String,
     },
     AutoRetry,
+    Resume {
+        trigger: ResumeTrigger,
+    },
     SakaGateObserved {
         head_sha: String,
         checks: Vec<Check>,
@@ -228,7 +236,19 @@ pub fn decide(
             url,
             head_sha,
             base_branch,
-        } => d.change_opened(change_request_id, number, url, head_sha, base_branch, ctx),
+            opened_with,
+        } => d.change_opened(
+            Opened {
+                id: change_request_id,
+                number,
+                url,
+                head_sha,
+                base_branch,
+                opened_with,
+            },
+            ctx,
+        ),
+        I::CredentialBlocked { block } => d.credential_blocked(&block, ctx),
         I::ChangeObserved {
             state,
             head_sha,
@@ -275,9 +295,19 @@ pub fn decide(
         I::EnvironmentTornDown { teardown_failures } => d.environment_torn_down(teardown_failures),
         I::Retry { reason } => return d.retry(reason, ctx),
         I::AutoRetry => d.auto_retry(ctx),
+        I::Resume { trigger } => d.resume(trigger, ctx),
         I::Cancel { reason } => return d.cancel(reason),
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
     })
+}
+
+struct Opened {
+    id: ChangeRequestId,
+    number: u64,
+    url: String,
+    head_sha: String,
+    base_branch: String,
+    opened_with: ChangeCredentialKind,
 }
 
 struct Decider<'a> {
@@ -867,15 +897,15 @@ impl Decider<'_> {
         ]
     }
 
-    fn change_opened(
-        &self,
-        id: ChangeRequestId,
-        number: u64,
-        url: String,
-        head_sha: String,
-        base_branch: String,
-        ctx: &mut Ctx<'_>,
-    ) -> Vec<Event> {
+    fn change_opened(&self, opened: Opened, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Opened {
+            id,
+            number,
+            url,
+            head_sha,
+            base_branch,
+            opened_with,
+        } = opened;
         if !self.task.is_at(Stage::Dev, StagePhase::OpeningChange) {
             return vec![];
         }
@@ -888,9 +918,20 @@ impl Decider<'_> {
             head_branch: self.item().branch.clone(),
             base_branch,
             head_sha: head_sha.clone(),
+            opened_with,
         }];
         events.extend(self.dev_done(head_sha, ctx));
         events
+    }
+
+    fn credential_blocked(&self, block: &CredentialBlock, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let phase = block.phase();
+        let waiting = self.task.is_at(Stage::Dev, phase)
+            && (phase != StagePhase::RunningSession || self.task.live_session().is_none());
+        if !waiting {
+            return vec![];
+        }
+        self.block(block.code(), block.params(), ctx)
     }
 
     fn change_observed(
@@ -1223,6 +1264,13 @@ impl Decider<'_> {
             .unwrap_or_default()
     }
 
+    // Resuming after the operator renewed a credential or changed the mode is not a blind
+    // retry, so it never uses up the stage's automatic retries.
+    fn resume(&self, trigger: ResumeTrigger, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        self.retry_as(Trigger::Auto, trigger.as_str().to_string(), ctx)
+            .unwrap_or_default()
+    }
+
     fn retry_as(
         &self,
         trigger: Trigger,
@@ -1398,6 +1446,11 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::QuotaExhausted
         | B::NoChanges
         | B::PathScopeViolation => (Stage::Dev, StagePhase::RunningSession),
+        B::UserLinkRequired => match params.get("phase").and_then(Value::as_str)?.parse().ok()? {
+            StagePhase::OpeningChange => (Stage::Dev, StagePhase::OpeningChange),
+            _ => (Stage::Dev, StagePhase::RunningSession),
+        },
+        B::UserAccessDenied => (Stage::Dev, StagePhase::OpeningChange),
         B::CiRed if params.get("reason").and_then(Value::as_str) == Some("runner_failed") => {
             (Stage::Merge, StagePhase::AwaitingCi)
         }
@@ -1824,7 +1877,8 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::UserLinked { .. }
         | E::UserLinkRefreshed { .. }
         | E::UserLinkRelinkRequired { .. }
-        | E::UserLinkRemoved { .. } => {}
+        | E::UserLinkRemoved { .. }
+        | E::ProjectAuthorshipSet { .. } => {}
         E::EnvironmentPrepared { .. }
         | E::EnvironmentTornDown { .. }
         | E::EnvironmentTeardownFailed { .. }
@@ -2071,6 +2125,40 @@ mod retry_tests {
             ),
             Some((Stage::Dev, StagePhase::RunningSession))
         );
+    }
+
+    #[test]
+    fn credential_blockers_resume_where_they_stopped_and_never_count_as_auto_retries() {
+        let link =
+            |phase: &str| json!({ "integration_id": "github", "cause": "revoked", "phase": phase });
+        assert_eq!(
+            retry_entry(BlockerCode::UserLinkRequired, &link("running_session")),
+            Some((Stage::Dev, StagePhase::RunningSession))
+        );
+        assert_eq!(
+            retry_entry(BlockerCode::UserLinkRequired, &link("opening_change")),
+            Some((Stage::Dev, StagePhase::OpeningChange))
+        );
+        assert_eq!(
+            retry_entry(BlockerCode::UserAccessDenied, &json!({ "status": 403 })),
+            Some((Stage::Dev, StagePhase::OpeningChange))
+        );
+        assert!(!auto_retryable(
+            BlockerCode::UserLinkRequired,
+            &link("opening_change")
+        ));
+        assert!(!auto_retryable(BlockerCode::UserAccessDenied, &json!({})));
+        let mut r = BTreeMap::new();
+        count_retry(
+            &mut r,
+            Stage::Dev,
+            Trigger::Auto,
+            Some("auto retry: session_lost"),
+        );
+        for trigger in ResumeTrigger::ALL {
+            count_retry(&mut r, Stage::Dev, Trigger::Auto, Some(trigger.as_str()));
+        }
+        assert_eq!(r[&Stage::Dev], Retries { auto: 1, manual: 0 });
     }
 
     #[test]

@@ -167,6 +167,35 @@ describe("blockerText", () => {
     ).toBe("pnpm 12.16.1 tidak bisa diunduh.");
   });
 
+  it("names the account a credential blocker needs and its one action", () => {
+    expect(
+      blockerText(en, "user_link_required", {
+        integration_id: "github",
+        cause: "revoked",
+        phase: "opening_change",
+      }),
+    ).toBe(
+      "The account linked to github revoked Saka's access. Link it again with saka scm link, or switch the project to bot mode; the task then continues by itself.",
+    );
+    expect(
+      blockerText(id, "user_access_denied", {
+        credential: "user_link",
+        login: "octo",
+        status: 403,
+        phase: "opening_change",
+      }),
+    ).toBe(
+      "Akun tertaut octo tidak bisa membuka pull request di repo ini (HTTP 403). Beri izin tulis pull request, atau ubah project ke mode bot, lalu coba lagi.",
+    );
+    expect(
+      errorText(en, "user_link_missing", {
+        integrations: [{ integration_id: "github", state: "missing" }],
+      }),
+    ).toBe(
+      "Every code host of the project needs a linked account first: github. Link it with saka scm link.",
+    );
+  });
+
   it("names the secrets a recipe is missing or cannot open", () => {
     expect(
       blockerText(en, "secret_missing", { names: ["NPM_TOKEN", "API_KEY"] }),
@@ -380,6 +409,21 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ],
   ["dod_failed", { reason: "runner_failed", source: "saka", head_sha: HEAD }],
   ["dod_failed", { reason: "worktree_moved", source: "saka", head_sha: HEAD }],
+  ...["missing", "refresh_failed", "revoked", "expired"].map(
+    (cause): [string, Record<string, unknown>] => [
+      "user_link_required",
+      { integration_id: "github", cause, phase: "opening_change" },
+    ],
+  ),
+  [
+    "user_access_denied",
+    {
+      credential: "user_link",
+      login: "octo",
+      status: 403,
+      phase: "opening_change",
+    },
+  ],
 ];
 
 const LABELS: Record<string, string[]> = {

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use saka_agents::claude;
 use saka_agents::launch::{self, ClaudeSettings, LaunchOptions, LaunchSpec, SessionPaths};
+use saka_core::authorship::GitIdentity;
 
 const WAIT: Duration = Duration::from_secs(90);
 const PARENT: &str = "parent-memory-7f3a";
@@ -74,8 +75,7 @@ impl Fixture {
                 .split(':')
                 .map(String::from)
                 .collect(),
-            author_name: "Saka Agent".into(),
-            author_email: "agent@saka.invalid".into(),
+            committer: saka(),
         };
         let program = settings
             .program()
@@ -92,8 +92,16 @@ impl Fixture {
             tools: None,
             model: None,
             resume: None,
+            author: &saka(),
         };
         launch::claude(&settings, &program, "conformance", &paths, vec![], &options).unwrap()
+    }
+}
+
+fn saka() -> GitIdentity {
+    GitIdentity {
+        name: "Saka Agent".into(),
+        email: "agent@saka.invalid".into(),
     }
 }
 

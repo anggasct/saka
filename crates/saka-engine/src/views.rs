@@ -22,6 +22,7 @@ pub struct ProjectView {
     pub project: Project,
     pub repos: Vec<Repo>,
     pub warnings: Vec<ScopeWarning>,
+    pub authorship_mode: saka_core::vocab::AuthorshipMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,10 +233,11 @@ impl Engine {
             }
         }
         let bound: Vec<RepoId> = project.repos.iter().map(|r| r.repo_id).collect();
-        let (mut repos, others) = self.store.read(|c| {
+        let (mut repos, others, authorship) = self.store.read(|c| {
             Ok((
                 list::repos(c, &ids)?,
                 list::projects_bound_to(c, &bound, project.id)?,
+                saka_store::authorship::project_authorship(c, project.id)?,
             ))
         })?;
         for r in unsaved {
@@ -249,6 +251,7 @@ impl Engine {
             project,
             repos,
             warnings,
+            authorship_mode: saka_core::authorship::mode_of(authorship.as_ref()),
         })
     }
 

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use saka_core::authorship::GitIdentity;
 use saka_core::ids::SessionId;
 use saka_core::model::RunOwner;
 use saka_core::time::Timestamp;
@@ -21,6 +22,7 @@ pub struct SessionLaunch {
     pub resume_cli_session_id: Option<String>,
     pub profile: LaunchProfile,
     pub model: Option<String>,
+    pub author: GitIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

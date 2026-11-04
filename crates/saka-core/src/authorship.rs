@@ -1,11 +1,15 @@
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::event::Event;
-use crate::ids::{UserLinkAuthorizationId, UserLinkId};
+use crate::ids::{ProjectId, UserLinkAuthorizationId, UserLinkId};
 use crate::job::{Job, JobKind};
-use crate::model::Coded;
+use crate::model::{Blocker, Coded};
 use crate::time::Timestamp;
-use crate::vocab::{AuthorizationFailure, AuthorizationState, RelinkCause, UserLinkState};
+use crate::vocab::{
+    AuthorSource, AuthorizationFailure, AuthorizationState, AuthorshipMode, BlockerCode,
+    ChangeCredentialKind, RelinkCause, ResumeTrigger, StagePhase, UserLinkCause, UserLinkState,
+};
 
 pub const REUSE_MIN_REMAINING_MS: i64 = 60_000;
 pub const ACCESS_REFRESH_MARGIN_MS: i64 = 5 * 60_000;
@@ -40,6 +44,22 @@ pub struct UserLink {
 impl UserLink {
     pub fn is_active(&self) -> bool {
         self.state == UserLinkState::Active
+    }
+
+    pub fn git_identity(&self) -> GitIdentity {
+        GitIdentity {
+            name: self
+                .display_name
+                .clone()
+                .unwrap_or_else(|| self.login.clone()),
+            email: self.email.clone(),
+        }
+    }
+
+    // A link that cannot be used says why; one that was never marked keeps the safest cause.
+    pub fn problem(&self) -> Option<UserLinkCause> {
+        (!self.is_active())
+            .then(|| UserLinkCause::from(self.relink_cause.unwrap_or(RelinkCause::RefreshFailed)))
     }
 
     pub fn access_fresh(&self, now: Timestamp) -> bool {
@@ -356,6 +376,189 @@ impl UserLinkAuthorization {
     }
 }
 
+impl From<RelinkCause> for UserLinkCause {
+    fn from(cause: RelinkCause) -> UserLinkCause {
+        match cause {
+            RelinkCause::RefreshFailed => UserLinkCause::RefreshFailed,
+            RelinkCause::Revoked => UserLinkCause::Revoked,
+            RelinkCause::Expired => UserLinkCause::Expired,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitIdentity {
+    pub name: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionAuthor {
+    pub source: AuthorSource,
+    pub login: Option<String>,
+}
+
+impl SessionAuthor {
+    pub fn saka() -> SessionAuthor {
+        SessionAuthor {
+            source: AuthorSource::Saka,
+            login: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAuthor {
+    pub identity: GitIdentity,
+    pub author: SessionAuthor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectAuthorship {
+    pub project_id: ProjectId,
+    pub mode: AuthorshipMode,
+    pub mode_updated_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+pub fn mode_of(authorship: Option<&ProjectAuthorship>) -> AuthorshipMode {
+    authorship.map_or(AuthorshipMode::Bot, |a| a.mode)
+}
+
+// Setting the mode a project already has changes nothing and records nothing.
+#[must_use]
+pub fn set_mode(
+    project_id: ProjectId,
+    current: Option<&ProjectAuthorship>,
+    mode: AuthorshipMode,
+    now: Timestamp,
+) -> Option<(Event, ProjectAuthorship)> {
+    if mode_of(current) == mode {
+        return None;
+    }
+    let event = Event::ProjectAuthorshipSet { project_id, mode };
+    let after = ProjectAuthorship {
+        project_id,
+        mode,
+        mode_updated_at: now,
+        updated_at: now,
+    };
+    Some((event, after))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialBlock {
+    LinkRequired {
+        integration_id: String,
+        cause: UserLinkCause,
+        phase: StagePhase,
+    },
+    AccessDenied {
+        credential: ChangeCredentialKind,
+        login: String,
+        status: u16,
+    },
+}
+
+impl CredentialBlock {
+    pub fn code(&self) -> BlockerCode {
+        match self {
+            CredentialBlock::LinkRequired { .. } => BlockerCode::UserLinkRequired,
+            CredentialBlock::AccessDenied { .. } => BlockerCode::UserAccessDenied,
+        }
+    }
+
+    pub fn phase(&self) -> StagePhase {
+        match self {
+            CredentialBlock::LinkRequired { phase, .. } => *phase,
+            CredentialBlock::AccessDenied { .. } => StagePhase::OpeningChange,
+        }
+    }
+
+    pub fn params(&self) -> Value {
+        match self {
+            CredentialBlock::LinkRequired {
+                integration_id,
+                cause,
+                phase,
+            } => json!({ "integration_id": integration_id, "cause": cause, "phase": phase }),
+            CredentialBlock::AccessDenied {
+                credential,
+                login,
+                status,
+            } => json!({
+                "credential": credential,
+                "login": login,
+                "status": status,
+                "phase": StagePhase::OpeningChange,
+            }),
+        }
+    }
+}
+
+pub fn link_problem(link: Option<&UserLink>) -> Option<UserLinkCause> {
+    match link {
+        None => Some(UserLinkCause::Missing),
+        Some(l) => l.problem(),
+    }
+}
+
+pub fn link_required(
+    integration_id: &str,
+    link: Option<&UserLink>,
+    phase: StagePhase,
+) -> Option<CredentialBlock> {
+    link_problem(link).map(|cause| CredentialBlock::LinkRequired {
+        integration_id: integration_id.to_string(),
+        cause,
+        phase,
+    })
+}
+
+// The author is fixed when a session starts, since a commit cannot change it afterwards.
+// The access token's lifetime does not matter here: the session never sees a token.
+pub fn user_link_author(
+    integration_id: &str,
+    link: Option<&UserLink>,
+) -> Result<ResolvedAuthor, CredentialBlock> {
+    match link.filter(|l| l.is_active()) {
+        Some(l) => Ok(ResolvedAuthor {
+            identity: l.git_identity(),
+            author: SessionAuthor {
+                source: AuthorSource::UserLink,
+                login: Some(l.login.clone()),
+            },
+        }),
+        None => Err(CredentialBlock::LinkRequired {
+            integration_id: integration_id.to_string(),
+            cause: link_problem(link).unwrap_or(UserLinkCause::Missing),
+            phase: StagePhase::RunningSession,
+        }),
+    }
+}
+
+// An operator's own action ends a credential blocker: a fresh link for its integration or any
+// later change of the project's mode. Nothing else does, so it is never retried blindly.
+pub fn resume_trigger(
+    blocker: &Blocker,
+    links: &[UserLink],
+    authorship: Option<&ProjectAuthorship>,
+) -> Option<ResumeTrigger> {
+    if blocker.code != BlockerCode::UserLinkRequired {
+        return None;
+    }
+    if authorship.is_some_and(|a| a.mode_updated_at > blocker.opened_at) {
+        return Some(ResumeTrigger::AuthorshipModeChanged);
+    }
+    let integration = blocker.params.get("integration_id")?.as_str()?;
+    links
+        .iter()
+        .any(|l| {
+            l.integration_id == integration && l.is_active() && l.linked_at > blocker.opened_at
+        })
+        .then_some(ResumeTrigger::CredentialRenewed)
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
@@ -464,6 +667,122 @@ mod tests {
             "{:?}",
             again.link
         );
+    }
+
+    fn linked_at(at: Timestamp, state: UserLinkState) -> UserLink {
+        let expiry = TokenExpiry::of(at, Some(28_800), Some(86_400)).unwrap();
+        let mut l = link(
+            &pending(),
+            None,
+            UserLinkId(Uuid::from_u128(9)),
+            Identity {
+                display_name: Some("Octo Cat".into()),
+                ..identity(1, "octo")
+            },
+            expiry,
+            at,
+        )
+        .link;
+        if state == UserLinkState::NeedsRelink {
+            l = l.relink(RelinkCause::Revoked, at).1;
+        }
+        l
+    }
+
+    #[test]
+    fn a_session_authors_as_the_active_link_or_says_why_it_cannot() {
+        let active = linked_at(NOW, UserLinkState::Active);
+        let resolved = user_link_author("github", Some(&active)).unwrap();
+        assert_eq!(
+            resolved.identity,
+            GitIdentity {
+                name: "Octo Cat".into(),
+                email: "1+octo@users.noreply.github.com".into()
+            }
+        );
+        assert_eq!(resolved.author.login.as_deref(), Some("octo"));
+        let nameless = UserLink {
+            display_name: None,
+            ..active.clone()
+        };
+        assert_eq!(nameless.git_identity().name, "octo");
+        for (link, cause) in [
+            (None, "missing"),
+            (Some(linked_at(NOW, UserLinkState::NeedsRelink)), "revoked"),
+        ] {
+            let block = user_link_author("github", link.as_ref()).unwrap_err();
+            assert_eq!(block.code(), BlockerCode::UserLinkRequired);
+            assert_eq!(
+                block.params(),
+                json!({ "integration_id": "github", "cause": cause, "phase": "running_session" })
+            );
+        }
+        let expired_access = UserLink {
+            access_expires_at: NOW.plus_ms(-1),
+            ..active
+        };
+        assert!(
+            user_link_author("github", Some(&expired_access)).is_ok(),
+            "the access token is not needed to author"
+        );
+    }
+
+    #[test]
+    fn only_a_later_link_or_mode_change_resumes_a_link_blocker() {
+        let blocker = |code, opened_at| Blocker {
+            id: crate::ids::BlockerId(Uuid::from_u128(1)),
+            work_item_id: crate::ids::WorkItemId(Uuid::from_u128(2)),
+            stage_run_id: None,
+            code,
+            params: json!({ "integration_id": "github", "cause": "revoked", "phase": "opening_change" }),
+            resolution: None,
+            opened_at,
+            resolved_at: None,
+        };
+        let b = blocker(BlockerCode::UserLinkRequired, NOW);
+        let later = linked_at(NOW.plus_ms(1), UserLinkState::Active);
+        let same = linked_at(NOW, UserLinkState::Active);
+        let broken = linked_at(NOW.plus_ms(1), UserLinkState::NeedsRelink);
+        let other = UserLink {
+            integration_id: "ghes".into(),
+            ..later.clone()
+        };
+        assert_eq!(
+            resume_trigger(&b, std::slice::from_ref(&later), None),
+            Some(ResumeTrigger::CredentialRenewed)
+        );
+        assert_eq!(resume_trigger(&b, &[same, broken, other], None), None);
+        let mode = |at| ProjectAuthorship {
+            project_id: ProjectId(Uuid::from_u128(3)),
+            mode: AuthorshipMode::Bot,
+            mode_updated_at: at,
+            updated_at: at,
+        };
+        assert_eq!(
+            resume_trigger(&b, &[], Some(&mode(NOW.plus_ms(1)))),
+            Some(ResumeTrigger::AuthorshipModeChanged)
+        );
+        assert_eq!(resume_trigger(&b, &[], Some(&mode(NOW))), None);
+        let denied = blocker(BlockerCode::UserAccessDenied, NOW);
+        assert_eq!(
+            resume_trigger(&denied, &[later], Some(&mode(NOW.plus_ms(1)))),
+            None
+        );
+    }
+
+    #[test]
+    fn setting_the_current_mode_records_nothing() {
+        let project = ProjectId(Uuid::from_u128(3));
+        assert!(set_mode(project, None, AuthorshipMode::Bot, NOW).is_none());
+        let (event, after) = set_mode(project, None, AuthorshipMode::User, NOW).unwrap();
+        assert_eq!(event.kind(), "workspace.project.authorship_set");
+        assert_eq!(
+            event.payload(),
+            json!({ "project_id": project, "mode": "user" })
+        );
+        assert!(set_mode(project, Some(&after), AuthorshipMode::User, NOW).is_none());
+        assert_eq!(mode_of(Some(&after)), AuthorshipMode::User);
+        assert_eq!(mode_of(None), AuthorshipMode::Bot);
     }
 
     #[test]

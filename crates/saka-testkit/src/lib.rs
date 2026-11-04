@@ -26,8 +26,8 @@ pub use sim::{
     ZERO_SHA256, draft_config,
 };
 pub use world::{
-    AgentOutcome, AgentScript, CiScript, CommandScript, DraftTurn, FAKE_CAPABILITIES,
-    FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, FileEdit, HOME_REPO, Launch, Prepared,
-    RecipeRun, SIM_RUNNER_VERSION, ScopeCheck, Stats, ToolchainScript, TurnUsage, fake_signature,
-    git_blob,
+    APP_CREDENTIAL, AgentOutcome, AgentScript, CiScript, CommandScript, DraftTurn,
+    FAKE_CAPABILITIES, FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, FileEdit, HOME_REPO,
+    Launch, Pr, Prepared, RecipeRun, SIM_RUNNER_VERSION, ScmCall, ScopeCheck, Stats,
+    ToolchainScript, TurnUsage, fake_signature, git_blob,
 };

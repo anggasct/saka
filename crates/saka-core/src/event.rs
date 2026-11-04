@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::authorship::SessionAuthor;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
@@ -13,10 +14,10 @@ use crate::model::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    AuthorizationState, BlockerCode, BlockerResolution, BudgetDimension, DraftFailureCode,
-    DraftLocale, GateOutcome, GateSource, InterruptBy, LintOutcome, MergeMethod, PermissionState,
-    RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, SessionState, SpecOrigin, Stage,
-    StagePhase, SupersedeReason, Trigger,
+    AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
+    ChangeCredentialKind, DraftFailureCode, DraftLocale, GateOutcome, GateSource, InterruptBy,
+    LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause,
+    ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -78,6 +79,11 @@ pub enum Event {
     ProjectConfigErrorCleared {
         project_id: ProjectId,
         commit: String,
+    },
+    #[serde(rename = "workspace.project.authorship_set")]
+    ProjectAuthorshipSet {
+        project_id: ProjectId,
+        mode: AuthorshipMode,
     },
     #[serde(rename = "workspace.secret.set")]
     SecretSet { project_id: ProjectId, name: String },
@@ -370,6 +376,7 @@ pub enum Event {
         log_path: String,
         resumed_from_session_id: Option<SessionId>,
         resume_cause: Option<ResumeCause>,
+        author: SessionAuthor,
     },
     #[serde(rename = "runtime.session.reattached")]
     SessionReattached {
@@ -518,6 +525,7 @@ pub enum Event {
         head_branch: String,
         base_branch: String,
         head_sha: String,
+        opened_with: ChangeCredentialKind,
     },
     #[serde(rename = "scm.change_request.updated")]
     ChangeRequestUpdated {
@@ -702,6 +710,7 @@ impl Event {
             | E::ProjectConfigChanged { project_id, .. }
             | E::ProjectConfigRejected { project_id, .. }
             | E::ProjectConfigErrorCleared { project_id, .. }
+            | E::ProjectAuthorshipSet { project_id, .. }
             | E::SecretSet { project_id, .. }
             | E::SecretRemoved { project_id, .. }
             | E::DocCommitted { project_id, .. } => Stream::Project(*project_id),

@@ -233,6 +233,7 @@ impl World {
                 tasks: self.tasks.clone(),
                 work_item_dependencies: self.deps.clone(),
                 spec_dependencies: vec![],
+                ..Snapshot::default()
             },
             &cfg(),
             2,
@@ -359,6 +360,7 @@ fn launched(step: u32) -> TaskInput {
         runner_unit: format!("saka-session-{step}"),
         socket_path: "/run/s.sock".into(),
         log_path: "/data/s/events.ndjson".into(),
+        author: saka_core::authorship::SessionAuthor::saka(),
     })
 }
 
@@ -373,6 +375,7 @@ fn launched_again(step: u32) -> TaskInput {
             runner_unit,
             socket_path,
             log_path,
+            author,
         }) => TaskInput::Session(SessionInput::Launched {
             session_id: SessionId(Uuid::from_u128(session_id.0.as_u128() + 50)),
             cli,
@@ -382,6 +385,7 @@ fn launched_again(step: u32) -> TaskInput {
             runner_unit,
             socket_path,
             log_path,
+            author,
         }),
         other => other,
     }
@@ -414,6 +418,7 @@ fn opened(step: u32) -> TaskInput {
         url: "https://example.test/pr".into(),
         head_sha: sha('b'),
         base_branch: "main".into(),
+        opened_with: saka_core::vocab::ChangeCredentialKind::App,
     }
 }
 
@@ -912,6 +917,7 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
         runner_unit: "u".into(),
         socket_path: "s".into(),
         log_path: "l".into(),
+        author: saka_core::authorship::SessionAuthor::saka(),
     });
     let events = w.decide(1, launch);
     assert!(

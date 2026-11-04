@@ -152,6 +152,7 @@ impl Run {
             runner_unit: format!("saka-session-{}", self.launches),
             socket_path: "/run/s.sock".into(),
             log_path: "/data/s/events.ndjson".into(),
+            author: saka_core::authorship::SessionAuthor::saka(),
         }))
     }
 

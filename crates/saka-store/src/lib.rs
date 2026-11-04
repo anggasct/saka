@@ -1,3 +1,4 @@
+pub mod authorship;
 mod codec;
 mod conn;
 pub mod draft;

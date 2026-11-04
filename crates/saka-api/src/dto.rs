@@ -92,6 +92,8 @@ pub struct Project {
     pub autonomy: String,
     /// `full_loop` in this version.
     pub workflow_preset: String,
+    /// `bot | user | user_pat`: who authors the agent's commits and opens its pull requests.
+    pub authorship_mode: String,
     pub config_commit: String,
     /// `sha256:<hex>` of the `saka.toml` content in force.
     pub config_sha256: String,
@@ -137,6 +139,7 @@ impl Project {
                 .collect(),
             autonomy: p.autonomy.as_str().to_string(),
             workflow_preset: p.workflow_preset.as_str().to_string(),
+            authorship_mode: v.authorship_mode.as_str().to_string(),
             config_commit: p.config_commit.clone(),
             config_sha256: p.config_sha256.clone(),
             config_error: p.config_error.as_ref().map(|e| ProjectConfigError {
@@ -2075,6 +2078,98 @@ fn gates_at_head(t: &saka_core::model::Task) -> Vec<Gate> {
         observed_at: time(g.observed_at),
     })
     .collect()
+}
+
+/// Request body that sets a project's authorship mode.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetAuthorshipBody {
+    /// `bot` (Saka authors and opens pull requests), `user` (the linked account of every
+    /// integration of the project authors commits and opens pull requests) or `user_pat` (the
+    /// owner of the project's user token).
+    pub mode: String,
+}
+
+/// Who authors a project's agent changes. Tokens are never part of it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectAuthorship {
+    pub project_id: Uuid,
+    /// `bot | user | user_pat`; `bot` for a project whose mode was never set.
+    pub mode: String,
+    /// When the mode last changed; `null` for a project whose mode was never set.
+    pub mode_updated_at: Option<String>,
+    /// The identity the next session commits as, for the project's default repo; `null` when
+    /// the mode's credential is not usable.
+    pub author: Option<AuthorshipAuthor>,
+    /// The integrations of the repos bound to the project, each with its linked account state.
+    pub integrations: Vec<AuthorshipIntegration>,
+    /// The project's user token; `null` without one. Its value is never returned.
+    pub user_token: Option<ProjectUserToken>,
+}
+
+/// A commit author identity.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthorshipAuthor {
+    /// `saka | user_link | user_token`
+    pub source: String,
+    pub name: String,
+    pub email: String,
+    /// The account login; `null` for `saka`.
+    pub login: Option<String>,
+}
+
+/// An integration of a project and the state of its linked account.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthorshipIntegration {
+    /// `[[scm]].id` from the operator config.
+    pub integration_id: String,
+    /// `active | needs_relink | missing`
+    pub user_link_state: String,
+}
+
+/// A stored user token, without its value.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectUserToken {
+    pub integration_id: String,
+    pub login: String,
+    pub provider_user_id: u64,
+    /// `null` for a token without an expiry.
+    pub expires_at: Option<String>,
+    pub set_at: String,
+    /// `active | invalid`
+    pub state: String,
+    /// Only with `invalid`: `expired | rejected`.
+    pub invalid_cause: Option<String>,
+}
+
+impl ProjectAuthorship {
+    pub fn from_view(v: &saka_engine::AuthorshipView) -> ProjectAuthorship {
+        ProjectAuthorship {
+            project_id: v.project_id.0,
+            mode: v.mode.as_str().to_string(),
+            mode_updated_at: opt_time(v.mode_updated_at),
+            author: v.author.as_ref().map(|a| AuthorshipAuthor {
+                source: a.source.as_str().to_string(),
+                name: a.identity.name.clone(),
+                email: a.identity.email.clone(),
+                login: a.login.clone(),
+            }),
+            integrations: v
+                .integrations
+                .iter()
+                .map(|i| AuthorshipIntegration {
+                    integration_id: i.integration_id.clone(),
+                    user_link_state: match i.problem {
+                        None => "active",
+                        Some(saka_core::vocab::UserLinkCause::Missing) => "missing",
+                        Some(_) => "needs_relink",
+                    }
+                    .to_string(),
+                })
+                .collect(),
+            user_token: None,
+        }
+    }
 }
 
 /// Request body that starts linking an account; no fields.

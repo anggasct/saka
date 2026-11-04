@@ -115,6 +115,8 @@ vocab!(
         HookFailed => "hook_failed",
         BudgetExhausted => "budget_exhausted",
         PathScopeViolation => "path_scope_violation",
+        UserLinkRequired => "user_link_required",
+        UserAccessDenied => "user_access_denied",
     }
 );
 vocab!(ScopeStage { Dev => "dev", Merge => "merge" });
@@ -142,6 +144,11 @@ vocab!(AuthorizationFailure {
 vocab!(RefreshReason { Use => "use", Proactive => "proactive" });
 vocab!(RefreshOutcome { Refreshed => "refreshed", Rejected => "rejected", Failed => "failed" });
 vocab!(UserTokenKind { Access => "access", Refresh => "refresh" });
+vocab!(AuthorshipMode { Bot => "bot", User => "user", UserPat => "user_pat" });
+vocab!(AuthorSource { Saka => "saka", UserLink => "user_link", UserToken => "user_token" });
+vocab!(ChangeCredentialKind { App => "app", UserLink => "user_link", UserToken => "user_token" });
+vocab!(UserLinkCause { Missing => "missing", RefreshFailed => "refresh_failed", Revoked => "revoked", Expired => "expired" });
+vocab!(ResumeTrigger { CredentialRenewed => "credential renewed", AuthorshipModeChanged => "authorship mode changed" });
 vocab!(ContextOrigin { Link => "link", Always => "always" });
 vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });

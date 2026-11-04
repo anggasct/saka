@@ -336,6 +336,7 @@ impl World {
                 runner_unit: format!("saka-session-{n}"),
                 socket_path: format!("/run/{n}.sock"),
                 log_path: format!("/data/{n}/events.ndjson"),
+                author: saka_core::authorship::SessionAuthor::saka(),
             }),
         );
         self.step(
@@ -371,6 +372,7 @@ impl World {
                 url: format!("https://github.com/acme/app/pull/{n}"),
                 head_sha: sha('b'),
                 base_branch: "main".into(),
+                opened_with: saka_core::vocab::ChangeCredentialKind::App,
             },
         );
         self.step(
@@ -468,6 +470,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             runner_unit: "saka-session-77".into(),
             socket_path: "/run/77.sock".into(),
             log_path: "/data/77/events.ndjson".into(),
+            author: saka_core::authorship::SessionAuthor::saka(),
         }),
     );
     w.step(
@@ -548,6 +551,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             url: "https://github.com/acme/app/pull/12".into(),
             head_sha: sha('b'),
             base_branch: "main".into(),
+            opened_with: saka_core::vocab::ChangeCredentialKind::App,
         },
     );
     let checks = vec![Check {
@@ -1077,9 +1081,9 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
     assert_eq!(
         w.store.migration().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(14));
+    assert_eq!(w.store.schema_version().unwrap(), Some(15));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1224,6 +1228,7 @@ fn launched(n: u128) -> TaskInput {
         runner_unit: format!("saka-session-{n}"),
         socket_path: format!("/run/{n}.sock"),
         log_path: format!("/data/{n}/events.ndjson"),
+        author: saka_core::authorship::SessionAuthor::saka(),
     })
 }
 

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
+use saka_core::authorship::GitIdentity;
 use saka_core::gate::Check;
 use saka_core::ids::{EnvironmentId, SessionId};
 use saka_core::model::{RunOwner, ToolchainUse};
@@ -12,14 +13,14 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
-    Agents, Blob, ChangeSnapshot, ChangedPaths, Clock, DeviceCode, DevicePoll, DocBlob, DocCommit,
-    DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments,
-    IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
-    OpenChangeRequest, OpenedChange, PortError, PortResult, PrepareRequest, PreparedEnvironment,
-    PushOutcome, PushRequest, Reattached, RecipeCommand, RecipeCommandOutcome, RepoInfo, RepoRef,
-    RunnerEvent, RunnerEventKind, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch,
-    SessionRef, StatusReport, TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature,
-    WebhookTarget, WorktreeFile, WorktreeState,
+    Agents, Blob, ChangeCredential, ChangeOpening, ChangeSnapshot, ChangedPaths, Clock, DeviceCode,
+    DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree,
+    DocWrite, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link,
+    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
+    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
+    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, TokenRefresh, Toolchains,
+    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -128,6 +129,15 @@ pub struct Pr {
     pub state: ChangeState,
     pub merge_commit_sha: Option<String>,
     pub merged_head: Option<String>,
+    pub opened_with: String,
+}
+
+pub const APP_CREDENTIAL: &str = "app";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScmCall {
+    pub op: &'static str,
+    pub credential: String,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +208,16 @@ struct State {
     trees: HashMap<String, BTreeMap<String, String>>,
     agent_edits: VecDeque<Vec<FileEdit>>,
     scope_checks: Vec<ScopeCheck>,
+    scm_calls: Vec<ScmCall>,
+}
+
+impl State {
+    fn call(&mut self, op: &'static str) {
+        self.scm_calls.push(ScmCall {
+            op,
+            credential: APP_CREDENTIAL.into(),
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +225,7 @@ pub struct Launch {
     pub owner: RunOwner,
     pub profile: LaunchProfile,
     pub model: Option<String>,
+    pub author: GitIdentity,
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
     pub secrets: BTreeMap<String, String>,
@@ -314,6 +335,7 @@ impl FakeWorld {
                 trees: HashMap::new(),
                 agent_edits: VecDeque::new(),
                 scope_checks: Vec::new(),
+                scm_calls: Vec::new(),
                 next_sha: 1,
                 parents,
                 home: HOME_REPO.to_string(),
@@ -341,6 +363,10 @@ impl FakeWorld {
 
     pub fn accounts(&self) -> &crate::accounts::FakeAccounts {
         &self.accounts
+    }
+
+    pub fn scm_calls(&self) -> Vec<ScmCall> {
+        self.state().scm_calls.clone()
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -1608,6 +1634,7 @@ impl Scm for FakeWorld {
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {
         let mut s = self.state();
+        s.call("push");
         if s.push_outages > 0 {
             s.push_outages -= 1;
             return Err(PortError::retryable("scm_unavailable", json!({})));
@@ -1627,8 +1654,25 @@ impl Scm for FakeWorld {
         }
     }
 
-    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<OpenedChange> {
+    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening> {
+        let credential = match &request.credential {
+            ChangeCredential::App => APP_CREDENTIAL.to_string(),
+            ChangeCredential::User(token) => token.expose().to_string(),
+        };
+        let refused = match &request.credential {
+            ChangeCredential::App => None,
+            ChangeCredential::User(token) => self.accounts.user_pull(token),
+        };
         let mut s = self.state();
+        s.scm_calls.push(ScmCall {
+            op: "open_change_request",
+            credential: credential.clone(),
+        });
+        match refused {
+            Some(401) => return Ok(ChangeOpening::CredentialRejected),
+            Some(status) => return Ok(ChangeOpening::AccessDenied { status }),
+            None => {}
+        }
         let repo = request.repo.full_name.clone();
         let head = s
             .refs(&repo)
@@ -1641,11 +1685,11 @@ impl Scm for FakeWorld {
             .iter()
             .find(|p| p.repo == repo && p.head_branch == request.head_branch)
         {
-            return Ok(OpenedChange {
+            return Ok(ChangeOpening::Opened(OpenedChange {
                 number: pr.number,
                 url: url(pr.number),
                 head_sha: head,
-            });
+            }));
         }
         let number = s.prs.len() as u64 + 1;
         s.prs.push(Pr {
@@ -1658,17 +1702,19 @@ impl Scm for FakeWorld {
             state: ChangeState::Open,
             merge_commit_sha: None,
             merged_head: None,
+            opened_with: credential,
         });
         s.stats.prs_opened += 1;
-        Ok(OpenedChange {
+        Ok(ChangeOpening::Opened(OpenedChange {
             number,
             url: url(number),
             head_sha: head,
-        })
+        }))
     }
 
     async fn commit_checks(&self, _repo: &RepoRef, _sha: &str) -> PortResult<Vec<Check>> {
-        let s = self.state();
+        let mut s = self.state();
+        s.call("commit_checks");
         if s.commit_reads_fail {
             return Err(PortError::retryable("scm_unavailable", json!({})));
         }
@@ -1677,6 +1723,7 @@ impl Scm for FakeWorld {
 
     async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot> {
         let mut s = self.state();
+        s.call("change_request");
         if s.change_reads_fail {
             return Err(PortError::retryable("scm_unavailable", json!({})));
         }
@@ -1709,11 +1756,13 @@ impl Scm for FakeWorld {
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         let mut s = self.state();
+        s.call("merge");
         Ok(s.merge(request.number, Some(&request.head_sha)))
     }
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {
         let mut s = self.state();
+        s.call("delete_branch");
         if s.refs(&repo.full_name).remove(branch).is_some() {
             s.stats.branches_deleted += 1;
         }
@@ -1727,6 +1776,7 @@ impl Scm for FakeWorld {
         report: &StatusReport,
     ) -> PortResult<()> {
         let mut s = self.state();
+        s.call("report_status");
         if s.statuses_refused {
             return Err(PortError::permanent(
                 "scm_status_refused",
@@ -1855,6 +1905,7 @@ impl Agents for FakeWorld {
             owner: launch.owner,
             profile: launch.profile.clone(),
             model: launch.model.clone(),
+            author: launch.author.clone(),
             vars: launch.environment.vars.clone(),
             path_prefix: launch.environment.path_prefix.clone(),
             secrets: injected(&launch.environment.secrets, SecretPurpose::Session),

@@ -3285,6 +3285,52 @@ fn linking_an_account_never_shows_a_token_in_events_jobs_actions_logs_or_respons
             assert!(metrics.contains(line), "{line}\n{metrics}");
         }
 
+        let authorship = format!("/api/v1/projects/{}/authorship", api.sim.project_id);
+        let key = api.key();
+        let user = keyed(
+            &api,
+            Method::PUT,
+            &authorship,
+            &key,
+            Some(&json!({ "mode": "user" })),
+        );
+        assert_eq!(user.status, StatusCode::OK, "{}", user.body);
+        api.sim.approve();
+        assert!(
+            api.sim
+                .run_until(STEPS, |s| s.task(1).change_request.is_some())
+        );
+        let opened_with: Vec<String> = api
+            .sim
+            .world
+            .scm_calls()
+            .into_iter()
+            .filter(|c| c.op == "open_change_request")
+            .map(|c| c.credential)
+            .collect();
+        assert!(
+            opened_with.iter().all(|c| c.starts_with("ghu_")),
+            "{opened_with:?}"
+        );
+        let id = api.sim.task(1).item.id;
+        let detail = api.get(&format!("/api/v1/work-items/{id}"));
+        assert_eq!(detail.status, StatusCode::OK);
+        let metrics = api.get_text("/metrics");
+        assert!(
+            metrics.contains("saka_change_requests_opened_total{credential=\"user_link\"} 1"),
+            "{metrics}"
+        );
+        bodies.extend([user.body, detail.body]);
+        let key = api.key();
+        let bot = keyed(
+            &api,
+            Method::PUT,
+            &authorship,
+            &key,
+            Some(&json!({ "mode": "bot" })),
+        );
+        assert_eq!(bot.status, StatusCode::OK, "{}", bot.body);
+
         let key = api.key();
         let gone = keyed(&api, Method::DELETE, LINK, &key, None);
         assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
@@ -3301,6 +3347,7 @@ fn linking_an_account_never_shows_a_token_in_events_jobs_actions_logs_or_respons
     assert!(secrets.iter().any(|s| s.starts_with("ghr_")));
     let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
     assert!(logs.contains("scm.user_link.linked"), "{logs}");
+    assert!(logs.contains("scm.change_request.opened"), "{logs}");
     let mut haystacks = vec![
         ("logs", logs),
         ("responses", bodies.iter().map(Value::to_string).collect()),
@@ -3357,4 +3404,146 @@ fn account_link_refusals_carry_their_codes() {
     problem(&r, StatusCode::CONFLICT, "user_authorship_unsupported");
     assert_eq!(r.body["params"]["integration_id"], "github");
     assert!(api.sim.world.accounts().calls_of("device_code").is_empty());
+}
+
+#[test]
+fn the_authorship_mode_needs_a_usable_link_and_is_recorded_once() {
+    let mut api = Api::new(SimConfig::default());
+    let project = api.sim.project_id;
+    let path = format!("/api/v1/projects/{project}/authorship");
+    let initial = api.get(&path);
+    assert_eq!(initial.status, StatusCode::OK, "{}", initial.body);
+    assert_eq!(
+        initial.body,
+        json!({
+            "project_id": project,
+            "mode": "bot",
+            "mode_updated_at": null,
+            "author": { "source": "saka", "name": "Saka Agent", "email": "agent@saka.invalid", "login": null },
+            "integrations": [{ "integration_id": "github", "user_link_state": "missing" }],
+            "user_token": null,
+        })
+    );
+    let put = |api: &mut Api, body: Value| {
+        let key = api.key();
+        keyed(api, Method::PUT, &path, &key, Some(&body))
+    };
+    let missing = put(&mut api, json!({ "mode": "user" }));
+    problem(&missing, StatusCode::CONFLICT, "user_link_missing");
+    assert_eq!(
+        missing.body["params"],
+        json!({ "integrations": [{ "integration_id": "github", "state": "missing" }] })
+    );
+    let robot = put(&mut api, json!({ "mode": "robot" }));
+    problem(
+        &robot,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    assert_eq!(robot.body["params"]["errors"][0]["field"], "mode");
+    let extra = put(&mut api, json!({ "mode": "bot", "why": "x" }));
+    problem(
+        &extra,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let token = put(&mut api, json!({ "mode": "user_pat" }));
+    problem(&token, StatusCode::CONFLICT, "user_token_missing");
+    let unkeyed = api.send(
+        Request::builder()
+            .method(Method::PUT)
+            .uri(&path)
+            .header("host", "127.0.0.1:7420")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "mode": "bot" }).to_string()))
+            .unwrap(),
+    );
+    problem(
+        &unkeyed,
+        StatusCode::BAD_REQUEST,
+        "idempotency_key_required",
+    );
+    problem(
+        &api.get(&format!(
+            "/api/v1/projects/{}/authorship",
+            uuid::Uuid::now_v7()
+        )),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+
+    let engine = api.sim.engine();
+    let cause = engine.cause(saka_engine::OPERATOR);
+    let started = api
+        .sim
+        .block_on(engine.start_user_link("github", &cause, None))
+        .unwrap();
+    api.sim
+        .world
+        .accounts()
+        .answer(saka_testkit::DeviceAnswer::Approve);
+    let auth = started.authorization.id;
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.engine()
+            .user_link_authorization("github", saka_engine::OPERATOR, auth)
+            .is_ok_and(|v| v.link.is_some())
+    }));
+    let key = api.key();
+    let set = keyed(
+        &api,
+        Method::PUT,
+        &path,
+        &key,
+        Some(&json!({ "mode": "user" })),
+    );
+    assert_eq!(set.status, StatusCode::OK, "{}", set.body);
+    assert_eq!(set.body["mode"], "user");
+    assert!(set.body["mode_updated_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(
+        set.body["author"],
+        json!({ "source": "user_link", "name": "Octo Cat", "email": "1+octo@users.noreply.github.com", "login": "octo" })
+    );
+    assert_eq!(
+        set.body["integrations"],
+        json!([{ "integration_id": "github", "user_link_state": "active" }])
+    );
+    let replay = keyed(
+        &api,
+        Method::PUT,
+        &path,
+        &key,
+        Some(&json!({ "mode": "user" })),
+    );
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    let again = put(&mut api, json!({ "mode": "user" }));
+    assert_eq!(again.status, StatusCode::OK);
+    assert_eq!(again.body["mode_updated_at"], set.body["mode_updated_at"]);
+    assert_eq!(
+        api.sim.events_of("workspace.project.authorship_set").len(),
+        1,
+        "the same mode twice is one event"
+    );
+    let shown = api.get(&format!("/api/v1/projects/{project}"));
+    assert_eq!(shown.body["authorship_mode"], "user");
+
+    let key = api.key();
+    let in_use = keyed(&api, Method::DELETE, LINK, &key, None);
+    problem(&in_use, StatusCode::CONFLICT, "user_link_in_use");
+    assert_eq!(
+        in_use.body["params"],
+        json!({ "projects": [{ "project_id": project, "name": "tasks" }] })
+    );
+    assert!(api.sim.events_of("scm.user_link.removed").is_empty());
+    let bot = put(&mut api, json!({ "mode": "bot" }));
+    assert_eq!(bot.status, StatusCode::OK);
+    assert_eq!(bot.body["author"]["source"], "saka");
+    let key = api.key();
+    let gone = keyed(&api, Method::DELETE, LINK, &key, None);
+    assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
+    let after = api.get(&path);
+    assert_eq!(
+        after.body["integrations"],
+        json!([{ "integration_id": "github", "user_link_state": "missing" }])
+    );
 }

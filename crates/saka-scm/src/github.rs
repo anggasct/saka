@@ -10,16 +10,16 @@ use reqwest::{Method, StatusCode};
 use saka_core::secret::SecretText;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
-    ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup, MergeOutcome, MergeRequest,
-    OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
-    RepoRef, Repos, Scm, ScmCapabilities, StatusReport, TokenRefresh, WebhookDelivery,
-    WebhookSignature,
+    ChangeCredential, ChangeOpening, ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup,
+    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities, StatusReport,
+    TokenRefresh, WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 pub use app::{API_VERSION, GitHubApp, GitHubConfig};
-use app::{Reply, inaccessible, parse_time, split_repo};
+use app::{As, Reply, inaccessible, parse_time, split_repo};
 
 pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     provider: "github",
@@ -155,7 +155,7 @@ impl Scm for GitHub {
         self.repos.push(request).await
     }
 
-    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<OpenedChange> {
+    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening> {
         let full_name = &request.repo.full_name;
         let body = json!({
             "title": request.title,
@@ -164,11 +164,37 @@ impl Scm for GitHub {
             "body": request.body,
             "draft": false,
         });
-        let reply = self
-            .repo_call(full_name, Method::POST, &["pulls"], Some(&body))
-            .await?;
+        let reply = match &request.credential {
+            ChangeCredential::App => {
+                self.repo_call(full_name, Method::POST, &["pulls"], Some(&body))
+                    .await?
+            }
+            ChangeCredential::User(token) => {
+                let (owner, name) = split_repo(full_name)?;
+                let url = self.app.url(&["repos", owner, name, "pulls"])?;
+                let reply = self
+                    .app
+                    .send(
+                        Method::POST,
+                        url,
+                        As::User,
+                        token.expose().to_string(),
+                        Some(&body),
+                    )
+                    .await?;
+                match reply.status {
+                    StatusCode::UNAUTHORIZED => return Ok(ChangeOpening::CredentialRejected),
+                    StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
+                        return Ok(ChangeOpening::AccessDenied {
+                            status: reply.status.as_u16(),
+                        });
+                    }
+                    _ => reply,
+                }
+            }
+        };
         if reply.status.is_success() {
-            return opened(&reply.body);
+            return opened(&reply.body).map(ChangeOpening::Opened);
         }
         if reply.status == StatusCode::NOT_FOUND {
             return Err(inaccessible(full_name, 404));
@@ -176,7 +202,8 @@ impl Scm for GitHub {
         if reply.status != StatusCode::UNPROCESSABLE_ENTITY {
             return Err(self.app.unexpected("open_change_request", &reply));
         }
-        // Usually "a pull request already exists": a repeated job finds the one it opened.
+        // Usually "a pull request already exists": a repeated job finds the one it opened. The
+        // lookup is the App's, whichever credential tried to open it.
         let (owner, name) = split_repo(full_name)?;
         let mut url = self.app.url(&["repos", owner, name, "pulls"])?;
         url.query_pairs_mut()
@@ -190,7 +217,7 @@ impl Scm for GitHub {
             .filter(|pr| pr["head"]["ref"] == request.head_branch.as_str())
             .max_by_key(|pr| pr["number"].as_u64().unwrap_or(0))
         {
-            Some(pr) => opened(pr),
+            Some(pr) => opened(pr).map(ChangeOpening::Opened),
             None => Err(self.app.unexpected("open_change_request", &reply)),
         }
     }

@@ -253,6 +253,33 @@ impl Client {
         }
     }
 
+    pub async fn project_authorship(&self, project: &str, mode: Option<&str>) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let path = format!("/api/v1/projects/{id}/authorship");
+        let answer = match mode {
+            Some(mode) => {
+                let body = json!({ "mode": mode });
+                self.keyed(reqwest::Method::PUT, &path, Some(&body)).await
+            }
+            None => self.get(&path).await,
+        };
+        match answer {
+            Ok(a) => self.finish(&a, |b| {
+                let author = match b["author"].as_object() {
+                    Some(author) => {
+                        format!("{} <{}>", text(&author["name"]), text(&author["email"]))
+                    }
+                    None => "unavailable".to_string(),
+                };
+                format!("mode {} author {author}", text(&b["mode"]))
+            }),
+            Err(code) => code,
+        }
+    }
+
     pub async fn project_list(&self) -> ExitCode {
         match self.get("/api/v1/projects?limit=200").await {
             Ok(a) => self.finish(&a, |b| {

@@ -150,6 +150,7 @@ pub struct Batch {
     pub user_link_authorizations: Vec<crate::user_link::AuthorizationRow>,
     pub user_links: Vec<crate::user_link::UserLinkRow>,
     pub removed_user_links: Vec<saka_core::ids::UserLinkId>,
+    pub project_authorships: Vec<saka_core::authorship::ProjectAuthorship>,
 }
 
 impl Batch {
@@ -237,6 +238,9 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for l in &b.user_links {
         crate::user_link::write_link(tx, l)?;
+    }
+    for a in &b.project_authorships {
+        crate::authorship::write_authorship(tx, a)?;
     }
     for (project, name) in &b.removed_secrets {
         tx.execute(

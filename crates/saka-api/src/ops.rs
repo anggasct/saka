@@ -282,6 +282,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_change_requests_opened_total",
+        "counter",
+        "Change requests opened, by the credential that opened them.",
+    );
+    for (credential, n) in &m.change_requests_opened {
+        t.sample(
+            "saka_change_requests_opened_total",
+            &[("credential", credential)],
+            n,
+        );
+    }
+    t.family(
         "saka_gate_runs_total",
         "counter",
         "Gate runs by source and outcome.",

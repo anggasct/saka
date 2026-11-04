@@ -26,6 +26,7 @@ pub enum Produced<'a> {
     Rule(&'a PermissionRule),
     Doc(&'a DocWriteView),
     UserLinkAuthorization(&'a crate::accounts::AuthorizationView),
+    Authorship(&'a crate::authorship::AuthorshipView),
     Nothing,
 }
 

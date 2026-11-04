@@ -20,6 +20,7 @@ export const project: ProjectItem = {
   },
   repos: [],
   autonomy: "standard",
+  authorship_mode: "bot",
   workflow_preset: "full_loop",
   config_commit: "9f1c".padEnd(40, "0"),
   config_sha256: `sha256:${"4b8e".padEnd(64, "0")}`,

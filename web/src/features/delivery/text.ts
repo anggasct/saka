@@ -128,6 +128,10 @@ export function blockerText(
     shas: remote !== "" && local !== "" ? "yes" : "no",
     remote,
     local,
+    integration: text(params.integration_id),
+    credential: text(params.credential) || "other",
+    login: text(params.login),
+    status: text(params.status),
   };
   return t(key, values);
 }
@@ -149,6 +153,11 @@ export function errorText(
     stage: label(t, "stage", text(params.stage)),
     limit: number(params.limit),
     reason: text(params.reason) || "other",
+    integrations: Array.isArray(params.integrations)
+      ? params.integrations
+          .map((i) => text(record(i).integration_id))
+          .join(", ")
+      : "",
   });
 }
 

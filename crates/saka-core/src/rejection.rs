@@ -80,6 +80,10 @@ pub enum Rejection {
     UserAuthorshipUnsupported { integration_id: String },
     #[error("projects in user mode still use the linked account")]
     UserLinkInUse { projects: Value },
+    #[error("an integration of the project has no usable linked account")]
+    UserLinkMissing { integrations: Value },
+    #[error("the project has no user token")]
+    UserTokenMissing,
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -123,6 +127,8 @@ impl Rejection {
             Rejection::DeviceFlowUnconfigured { .. } => "device_flow_unconfigured",
             Rejection::UserAuthorshipUnsupported { .. } => "user_authorship_unsupported",
             Rejection::UserLinkInUse { .. } => "user_link_in_use",
+            Rejection::UserLinkMissing { .. } => "user_link_missing",
+            Rejection::UserTokenMissing => "user_token_missing",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -178,6 +184,7 @@ impl Rejection {
                 json!({ "integration_id": integration_id })
             }
             Rejection::UserLinkInUse { projects } => json!({ "projects": projects }),
+            Rejection::UserLinkMissing { integrations } => json!({ "integrations": integrations }),
             Rejection::Invalid { field, code } => {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }

@@ -302,9 +302,10 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::sync::Mutex;
 
+    use saka_core::authorship::GitIdentity;
     use saka_core::ids::RepoId;
     use saka_core::time::Timestamp;
-    use saka_ports::{CommitIdentity, PushOutcome, PushRequest};
+    use saka_ports::{PushOutcome, PushRequest};
     use uuid::Uuid;
 
     use super::*;
@@ -494,7 +495,7 @@ mod tests {
             path: path.into(),
             bytes: bytes.to_vec(),
             expect,
-            author: CommitIdentity {
+            author: GitIdentity {
                 name: "Saka Agent".into(),
                 email: "agent@saka.invalid".into(),
             },

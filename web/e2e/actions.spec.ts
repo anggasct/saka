@@ -21,6 +21,7 @@ const project = {
   },
   repos: [],
   autonomy: "standard",
+  authorship_mode: "bot",
   workflow_preset: "full_loop",
   config_commit: "c",
   created_at: AT,

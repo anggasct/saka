@@ -148,6 +148,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/authorship": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_authorship"];
+    put: operations["set_authorship"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/file": {
     parameters: {
       query?: never;
@@ -766,6 +782,22 @@ export interface components {
       /** @description With `allow` only: also allow the same tool (and, for Bash, the same whole command) in this project from now on. */
       remember?: boolean;
     };
+    /** @description A commit author identity. */
+    AuthorshipAuthor: {
+      email: string;
+      /** @description The account login; `null` for `saka`. */
+      login?: string | null;
+      name: string;
+      /** @description `saka | user_link | user_token` */
+      source: string;
+    };
+    /** @description An integration of a project and the state of its linked account. */
+    AuthorshipIntegration: {
+      /** @description `[[scm]].id` from the operator config. */
+      integration_id: string;
+      /** @description `active | needs_relink | missing` */
+      user_link_state: string;
+    };
     Blocker: {
       code: string;
       /** Format: uuid */
@@ -938,6 +970,8 @@ export interface components {
     /** @description A list page. */
     Page_Project: {
       items: {
+        /** @description `bot | user | user_pat`: who authors the agent's commits and opens its pull requests. */
+        authorship_mode: string;
         /** @description `standard` in this version. */
         autonomy: string;
         config_commit: string;
@@ -1194,6 +1228,8 @@ export interface components {
       type: string;
     };
     Project: {
+      /** @description `bot | user | user_pat`: who authors the agent's commits and opens its pull requests. */
+      authorship_mode: string;
       /** @description `standard` in this version. */
       autonomy: string;
       config_commit: string;
@@ -1211,6 +1247,19 @@ export interface components {
       /** @description `full_loop` in this version. */
       workflow_preset: string;
       workspace: components["schemas"]["Workspace"];
+    };
+    /** @description Who authors a project's agent changes. Tokens are never part of it. */
+    ProjectAuthorship: {
+      author?: components["schemas"]["AuthorshipAuthor"] | null;
+      /** @description The integrations of the repos bound to the project, each with its linked account state. */
+      integrations: components["schemas"]["AuthorshipIntegration"][];
+      /** @description `bot | user | user_pat`; `bot` for a project whose mode was never set. */
+      mode: string;
+      /** @description When the mode last changed; `null` for a project whose mode was never set. */
+      mode_updated_at?: string | null;
+      /** Format: uuid */
+      project_id: string;
+      user_token?: components["schemas"]["ProjectUserToken"] | null;
     };
     /** @description The last rejected reload of `saka.toml`; the previous config stays in force while it is set. */
     ProjectConfigError: {
@@ -1243,6 +1292,20 @@ export interface components {
       /** Format: uuid */
       repo_id: string;
       url: string;
+    };
+    /** @description A stored user token, without its value. */
+    ProjectUserToken: {
+      /** @description `null` for a token without an expiry. */
+      expires_at?: string | null;
+      integration_id: string;
+      /** @description Only with `invalid`: `expired | rejected`. */
+      invalid_cause?: string | null;
+      login: string;
+      /** Format: int64 */
+      provider_user_id: number;
+      set_at: string;
+      /** @description `active | invalid` */
+      state: string;
     };
     /** @description A warning computed when the project is read; never stored. */
     ProjectWarning: {
@@ -1403,6 +1466,15 @@ export interface components {
     };
     SessionList: {
       items: components["schemas"]["Session"][];
+    };
+    /** @description Request body that sets a project's authorship mode. */
+    SetAuthorshipBody: {
+      /**
+       * @description `bot` (Saka authors and opens pull requests), `user` (the linked account of every
+       *     integration of the project authors commits and opens pull requests) or `user_pat` (the
+       *     owner of the project's user token).
+       */
+      mode: string;
     };
     /** @description Body of `PUT /api/v1/projects/{project_id}/secrets/{name}`. The value is write-only: no response, event, or log carries it, and it cannot be read back. */
     SetSecretBody: {
@@ -2287,6 +2359,72 @@ export interface operations {
         };
         content: {
           "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_authorship: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProjectAuthorship"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  set_authorship: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SetAuthorshipBody"];
+      };
+    };
+    responses: {
+      /** @description The mode in force; setting the current mode again records nothing */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProjectAuthorship"];
         };
       };
       "4XX": {

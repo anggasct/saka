@@ -113,7 +113,9 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::SpecDraftTargetTaken { .. }
         | R::DeviceFlowUnconfigured { .. }
         | R::UserAuthorshipUnsupported { .. }
-        | R::UserLinkInUse { .. } => StatusCode::CONFLICT,
+        | R::UserLinkInUse { .. }
+        | R::UserLinkMissing { .. }
+        | R::UserTokenMissing => StatusCode::CONFLICT,
     }
 }
 

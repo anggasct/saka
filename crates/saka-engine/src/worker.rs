@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use saka_core::authorship::{self, CredentialBlock, ResolvedAuthor, SessionAuthor, UserLink};
 use saka_core::draft::DraftInput;
 use saka_core::event::{Event, Prompt};
 use saka_core::gate::{Check, GatePolicy};
@@ -9,23 +10,26 @@ use saka_core::model::{
     Coded, Environment, EnvironmentSetup, PermissionRequest, Project, ProjectRepo, RunOwner,
     Session, Task, ToolchainUse,
 };
+use saka_core::rejection::Rejection;
 use saka_core::scope::{PathScope, ScopeViolation};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
 use saka_core::vocab::{
-    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
-    PermissionState, ScopeStage, Stage, StagePhase,
+    AuthorshipMode, BlockerCode, ChangeCredentialKind, ChangeState, CheckConclusion, CheckKind,
+    CheckStatus, EnvironmentState, PermissionState, RefreshReason, ScopeStage, Stage, StagePhase,
+    UserLinkCause,
 };
 use saka_ports::{
-    Checkout, EnvRef, LaunchProfile, MergeOutcome, MergeRequest, OpenChangeRequest, PortError,
-    PortResult, PrepareRequest, PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef,
-    SessionLaunch, SessionRef, StatusReport, StatusState,
+    ChangeCredential, ChangeOpening, Checkout, EnvRef, LaunchProfile, MergeOutcome, MergeRequest,
+    OpenChangeRequest, PortError, PortResult, PrepareRequest, PushOutcome, PushRequest,
+    RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef, StatusReport, StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::Instrument;
 
+use crate::accounts::LinkCredential;
 use crate::recipe::{self, Recipe};
 use crate::toolchain;
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, text};
@@ -66,6 +70,17 @@ pub type Execution = std::result::Result<Effect, PortError>;
 enum Input {
     Task(TaskInput),
     Draft(DraftInput),
+}
+
+pub(crate) struct Opener {
+    credential: ChangeCredential,
+    kind: ChangeCredentialKind,
+    link: Option<UserLink>,
+}
+
+// No project can hold the user token mode until a token can be stored for it.
+fn user_token_missing() -> PortError {
+    PortError::permanent("user_token_missing", json!({}))
 }
 
 pub(crate) enum Refusal {
@@ -115,7 +130,7 @@ pub(crate) fn internal(e: EngineError) -> PortError {
 }
 
 pub(crate) enum SessionJob {
-    Input(SessionInput),
+    Input(Box<SessionInput>),
     Done,
     Skipped,
 }
@@ -123,7 +138,7 @@ pub(crate) enum SessionJob {
 impl SessionJob {
     pub(crate) fn effect(self, wrap: impl FnOnce(SessionInput) -> Effect) -> Effect {
         match self {
-            SessionJob::Input(input) => wrap(input),
+            SessionJob::Input(input) => wrap(*input),
             SessionJob::Done => Effect::Nothing,
             SessionJob::Skipped => Effect::Skipped,
         }
@@ -208,22 +223,22 @@ impl Engine {
                     return Ok(SessionJob::Skipped);
                 };
                 if !self.ports.agents.unit_active(&target).await? {
-                    return Ok(SessionJob::Input(SessionInput::Gone {
+                    return Ok(SessionJob::Input(Box::new(SessionInput::Gone {
                         cause: "runner_exited".into(),
-                    }));
+                    })));
                 }
                 let last = session.map_or(0, |s| s.last_offset);
                 let from_offset = if last == 0 { 0 } else { last + 1 };
                 match self.ports.agents.reattach(&target, from_offset).await {
-                    Ok(r) => Ok(SessionJob::Input(SessionInput::Reattached {
+                    Ok(r) => Ok(SessionJob::Input(Box::new(SessionInput::Reattached {
                         runner_version: r.runner_version,
                         from_offset,
-                    })),
+                    }))),
                     Err(e) if e.code == "version_mismatch" => {
                         let _ = self.ports.agents.stop(id, Some(&target.runner_unit)).await;
-                        Ok(SessionJob::Input(SessionInput::Gone {
+                        Ok(SessionJob::Input(Box::new(SessionInput::Gone {
                             cause: "version_mismatch".into(),
-                        }))
+                        })))
                     }
                     Err(e) => Err(e),
                 }
@@ -959,6 +974,10 @@ impl Engine {
         let Some(view) = saka_core::task::run_view(task) else {
             return Ok(Effect::Skipped);
         };
+        let resolved = match self.session_author(task)? {
+            Ok(resolved) => resolved,
+            Err(block) => return Ok(Effect::Fact(TaskInput::CredentialBlocked { block })),
+        };
         let launched = self
             .ports
             .agents
@@ -972,6 +991,7 @@ impl Engine {
                     .and_then(|p| p.cli_session_id),
                 profile: LaunchProfile::Task,
                 model: None,
+                author: resolved.identity,
             })
             .await?;
         Ok(Effect::Fact(TaskInput::Session(SessionInput::Launched {
@@ -983,7 +1003,79 @@ impl Engine {
             runner_unit: launched.runner_unit,
             socket_path: launched.socket_path,
             log_path: launched.log_path,
+            author: resolved.author,
         })))
+    }
+
+    fn session_author(
+        &self,
+        task: &Task,
+    ) -> std::result::Result<std::result::Result<ResolvedAuthor, CredentialBlock>, PortError> {
+        let mode = self
+            .authorship_mode(task.item.project_id)
+            .map_err(internal)?;
+        match mode {
+            AuthorshipMode::Bot => Ok(Ok(ResolvedAuthor {
+                identity: self.cfg.git_identity.clone(),
+                author: SessionAuthor::saka(),
+            })),
+            AuthorshipMode::User => {
+                let integration = self.repo_ref(task)?.integration_id;
+                let link = self.operator_link(&integration)?;
+                Ok(authorship::user_link_author(&integration, link.as_ref()))
+            }
+            AuthorshipMode::UserPat => Err(user_token_missing()),
+        }
+    }
+
+    fn operator_link(&self, integration: &str) -> std::result::Result<Option<UserLink>, PortError> {
+        self.store
+            .read(|c| saka_store::user_link::user_link(c, crate::OPERATOR, integration))
+            .map(|row| row.map(|r| r.link))
+            .map_err(|e| internal(e.into()))
+    }
+
+    // The credential is the project's mode at the moment the change opens; a refresh that is due
+    // happens first and is committed before the token is used.
+    async fn change_credential(
+        &self,
+        task: &Task,
+        integration: &str,
+    ) -> std::result::Result<std::result::Result<Opener, CredentialBlock>, PortError> {
+        let mode = self
+            .authorship_mode(task.item.project_id)
+            .map_err(internal)?;
+        let blocked = |cause: UserLinkCause| CredentialBlock::LinkRequired {
+            integration_id: integration.to_string(),
+            cause,
+            phase: StagePhase::OpeningChange,
+        };
+        match mode {
+            AuthorshipMode::Bot => Ok(Ok(Opener {
+                credential: ChangeCredential::App,
+                kind: ChangeCredentialKind::App,
+                link: None,
+            })),
+            AuthorshipMode::User => {
+                let Some(link) = self.operator_link(integration)? else {
+                    return Ok(Err(blocked(UserLinkCause::Missing)));
+                };
+                match self.refresh_user_link(link.id, RefreshReason::Use).await {
+                    Ok(LinkCredential::Ready(token)) => Ok(Ok(Opener {
+                        credential: ChangeCredential::User(token),
+                        kind: ChangeCredentialKind::UserLink,
+                        link: Some(link),
+                    })),
+                    Ok(LinkCredential::Relink(cause)) => Ok(Err(blocked(cause.into()))),
+                    Err(EngineError::Rejected(Rejection::UserLinkNotFound)) => {
+                        Ok(Err(blocked(UserLinkCause::Missing)))
+                    }
+                    Err(EngineError::Port(e)) => Err(e),
+                    Err(e) => Err(internal(e)),
+                }
+            }
+            AuthorshipMode::UserPat => Err(user_token_missing()),
+        }
     }
 
     async fn send_turn(
@@ -1224,17 +1316,49 @@ impl Engine {
         }
         let base_branch = self.base_branch(task)?;
         let (title, body) = self.change_text(task).map_err(internal)?;
-        let opened = self
+        let repo = self.repo_ref(task)?;
+        let integration = repo.integration_id.clone();
+        let opener = match self.change_credential(task, &integration).await? {
+            Ok(opener) => opener,
+            Err(block) => return Ok(Effect::Fact(TaskInput::CredentialBlocked { block })),
+        };
+        let opening = self
             .ports
             .scm
             .open_change_request(&OpenChangeRequest {
-                repo: self.repo_ref(task)?,
+                repo,
                 head_branch: task.item.branch.clone(),
                 base_branch: base_branch.clone(),
                 title,
                 body,
+                credential: opener.credential,
             })
             .await?;
+        let opened = match opening {
+            ChangeOpening::Opened(opened) => opened,
+            ChangeOpening::CredentialRejected => {
+                let cause = match &opener.link {
+                    Some(link) => self.revoke_user_link(link)?,
+                    None => UserLinkCause::Revoked,
+                };
+                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                    block: CredentialBlock::LinkRequired {
+                        integration_id: integration,
+                        cause,
+                        phase: StagePhase::OpeningChange,
+                    },
+                }));
+            }
+            ChangeOpening::AccessDenied { status } => {
+                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                    block: CredentialBlock::AccessDenied {
+                        credential: opener.kind,
+                        login: opener.link.map(|l| l.login).unwrap_or_default(),
+                        status,
+                    },
+                }));
+            }
+        };
         // One change request per task: a repeated job records the same id.
         Ok(Effect::Fact(TaskInput::ChangeOpened {
             change_request_id: ChangeRequestId(task.item.id.0),
@@ -1242,6 +1366,7 @@ impl Engine {
             url: opened.url,
             head_sha: opened.head_sha,
             base_branch,
+            opened_with: opener.kind,
         }))
     }
 

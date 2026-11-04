@@ -1,5 +1,6 @@
 mod accounts;
 mod action;
+mod authorship;
 mod commands;
 mod context;
 mod docs;
@@ -24,6 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use saka_core::Ctx;
+use saka_core::authorship::GitIdentity;
 use saka_core::event::Event;
 use saka_core::ids::{ProjectId, WorkItemId};
 use saka_core::job::Job;
@@ -34,8 +36,7 @@ use saka_core::rejection::Rejection;
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    Agents, Clock, CommitIdentity, DocSource, Environments, Ids, IdsSource, PortError, Scm,
-    SecretStore, Toolchains,
+    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm, SecretStore, Toolchains,
 };
 use saka_store::read;
 use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
@@ -44,6 +45,7 @@ use uuid::Uuid;
 
 pub use accounts::{AuthorizationView, LinkCredential};
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
+pub use authorship::{AuthorPreview, AuthorshipView, IntegrationLink};
 pub use commands::{NewBinding, NewProject, NewRepo, RegisteredSpec, SessionCommand};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
@@ -72,7 +74,7 @@ pub struct EngineConfig {
     pub worker_id: String,
     pub integrations: Vec<Integration>,
     pub env: EnvConfig,
-    pub docs_author: CommitIdentity,
+    pub git_identity: GitIdentity,
     pub draft: saka_core::draft::DraftConfig,
     pub architect_model: Option<String>,
     pub config_poll_secs: u32,
@@ -304,6 +306,18 @@ impl Engine {
             batch.tasks.push(after);
         }
         self.commit(&batch)?;
+        for e in &events {
+            if let Event::ChangeRequestOpened {
+                work_item_id,
+                number,
+                opened_with,
+                ..
+            } = e
+            {
+                self.counters.change_request_opened(opened_with.as_str());
+                tracing::info!(%work_item_id, number, credential = opened_with.as_str(), "scm.change_request.opened");
+            }
+        }
         match verification {
             Some(metrics::DodVerification::Outcome(outcome)) => self.counters.dod(outcome),
             Some(metrics::DodVerification::Started { head_sha, sources }) => {

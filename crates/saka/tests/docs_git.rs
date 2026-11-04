@@ -9,13 +9,14 @@ use std::process::Command;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use saka_core::authorship::GitIdentity;
 use saka_core::ids::RepoId;
 use saka_core::time::Timestamp;
 use saka_docs::GitDocs;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    CommitIdentity, DocBlob, DocCommit, DocExpect, DocSource, DocWrite, GitAccess, GitRemote,
-    PortResult, RepoRef, UnitLimits,
+    DocBlob, DocCommit, DocExpect, DocSource, DocWrite, GitAccess, GitRemote, PortResult, RepoRef,
+    UnitLimits,
 };
 use uuid::Uuid;
 
@@ -222,7 +223,7 @@ impl World {
             path: path.into(),
             bytes: bytes.to_vec(),
             expect,
-            author: CommitIdentity {
+            author: GitIdentity {
                 name: "Saka Agent".into(),
                 email: "agent@saka.invalid".into(),
             },

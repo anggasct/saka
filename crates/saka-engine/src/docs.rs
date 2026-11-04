@@ -195,7 +195,7 @@ impl Engine {
                 Precondition::Exists => DocExpect::Exists,
                 Precondition::Absent => DocExpect::Absent,
             },
-            author: self.cfg.docs_author.clone(),
+            author: self.cfg.git_identity.clone(),
             at: self.now(),
         };
         let project_id = project.id;

@@ -972,6 +972,7 @@ impl Engine {
                     cwd: cwd_of(&project.project_path),
                 },
                 model: self.cfg.architect_model.clone(),
+                author: self.cfg.git_identity.clone(),
             })
             .await?;
         Ok(Effect::Draft {
@@ -984,6 +985,7 @@ impl Engine {
                 runner_unit: launched.runner_unit,
                 socket_path: launched.socket_path,
                 log_path: launched.log_path,
+                author: saka_core::authorship::SessionAuthor::saka(),
             }),
             events: Vec::new(),
         })

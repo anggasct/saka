@@ -13,7 +13,7 @@ use saka_core::ids::{
     SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
-use saka_core::vocab::{DraftLocale, ReloadTrigger};
+use saka_core::vocab::{AuthorshipMode, DraftLocale, ReloadTrigger};
 use saka_engine::{
     AddProject, EngineError, NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf,
     SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
@@ -305,6 +305,73 @@ pub async fn remove_secret(
             engine
                 .remove_secret(project, &name, &cause, Some(&action))
                 .map(|()| Some(project))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/authorship", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path)),
+    responses(
+        (status = 200, body = dto::ProjectAuthorship),
+        (status = 404, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn get_authorship(State(s): State<AppState>, Path(project): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let project = ProjectId(tri!(path_id(&project)));
+    let view = tri!(engine.project_authorship(project));
+    ok(StatusCode::OK, &dto::ProjectAuthorship::from_view(&view))
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/projects/{project_id}/authorship", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::SetAuthorshipBody,
+    responses(
+        (status = 200, body = dto::ProjectAuthorship, description = "The mode in force; setting the current mode again records nothing"),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn set_authorship(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let req: dto::SetAuthorshipBody = tri!(body(&raw));
+    let mode: AuthorshipMode = match req.mode.parse() {
+        Ok(mode) => mode,
+        Err(_) => return ApiError::validation("mode", "invalid").into_response(),
+    };
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Authorship(v) => reply(StatusCode::OK, &dto::ProjectAuthorship::from_view(v)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "project.authorship.set",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .set_authorship(project, mode, &cause, Some(&action))
+                .map(|_| Some(project))
                 .map_err(|e| (e, None))
         },
     )

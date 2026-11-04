@@ -155,6 +155,7 @@ impl World {
             runner_unit: "unit".into(),
             socket_path: "/s".into(),
             log_path: "/l".into(),
+            author: saka_core::authorship::SessionAuthor::saka(),
         }))
     }
 
@@ -697,6 +698,7 @@ fn input(w: &mut World, op: &Op) -> Option<DraftInput> {
                 runner_unit: "u".into(),
                 socket_path: "/s".into(),
                 log_path: "/l".into(),
+                author: saka_core::authorship::SessionAuthor::saka(),
             })
         }
         Op::Accept => DraftInput::Session(SessionInput::TurnAccepted {
