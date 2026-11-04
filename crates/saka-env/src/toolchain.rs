@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use saka_core::diagnostics::{InstalledToolchain, ToolchainCache};
+use saka_core::diagnostics::{InstalledToolchain, ToolchainCache, host_version_of};
 use saka_core::model::ToolchainUse;
-use saka_core::vocab::Tool;
+use saka_core::vocab::{HostTool, Tool};
 use saka_ports::{PortError, PortResult, Toolchains};
 use serde::Deserialize;
 use serde_json::json;
@@ -19,6 +19,7 @@ const DOWNLOAD_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const MARKER: &str = ".saka-toolchain.json";
+const HOST_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Platform {
@@ -60,6 +61,7 @@ pub struct ToolchainConfig {
     pub timeout: Duration,
     pub user_agent: String,
     pub platform: Option<Platform>,
+    pub host_path: Vec<String>,
 }
 
 pub struct ToolchainInstaller {
@@ -581,6 +583,10 @@ impl Toolchains for ToolchainInstaller {
         self.used(tool, version, &dir, true)
     }
 
+    async fn host_version(&self, tool: HostTool) -> PortResult<Option<String>> {
+        host_version(&self.cfg.host_path, tool).await
+    }
+
     async fn cache(&self) -> PortResult<ToolchainCache> {
         let root = self.cfg.root.clone();
         tokio::task::spawn_blocking(move || cache_status(&root))
@@ -592,6 +598,44 @@ impl Toolchains for ToolchainInstaller {
                 )
             })
     }
+}
+
+fn on_path(dirs: &[String], program: &str) -> Option<PathBuf> {
+    dirs.iter()
+        .map(|dir| Path::new(dir).join(program))
+        .find(|p| {
+            std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+}
+
+pub async fn host_version(dirs: &[String], tool: HostTool) -> PortResult<Option<String>> {
+    let Some(program) = on_path(dirs, tool.program()) else {
+        return Ok(None);
+    };
+    let mut command = tokio::process::Command::new(&program);
+    command
+        .arg("--version")
+        .env_clear()
+        .env("PATH", dirs.join(":"))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let unavailable = |detail: &str| {
+        PortError::retryable(
+            "host_toolchain_unavailable",
+            json!({ "tool": tool, "detail": detail }),
+        )
+    };
+    let output = tokio::time::timeout(HOST_VERSION_TIMEOUT, command.output())
+        .await
+        .map_err(|_| unavailable("timeout"))?
+        .map_err(|_| unavailable("spawn_failed"))?;
+    if !output.status.success() {
+        return Err(unavailable("exit_status"));
+    }
+    host_version_of(&String::from_utf8_lossy(&output.stdout))
+        .map(Some)
+        .ok_or_else(|| unavailable("unparsable"))
 }
 
 fn writable(root: &Path) -> bool {

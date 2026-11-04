@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use saka_agents::launch::{self, ClaudeSettings, UnsupportedPath};
 use saka_agents::{AgentsConfig, ClaudeAgents};
 use saka_api::{ApiConfig, AppState};
+use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
 use saka_core::model::Budget;
 use saka_core::policy::Policy;
 use saka_core::secret::SecretText;
@@ -140,6 +141,17 @@ impl Scm for ScmRouter {
     }
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities> {
         self.0.get(integration_id)?.capabilities(integration_id)
+    }
+    async fn app_status(&self, integration_id: &str) -> PortResult<AppStatus> {
+        self.get(integration_id)?.app_status(integration_id).await
+    }
+    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation> {
+        self.get(&repo.integration_id)?.app_installation(repo).await
+    }
+    async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus> {
+        self.get(integration_id)?
+            .webhook_status(integration_id)
+            .await
     }
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool> {
         self.get(integration_id)?.webhook_configured(integration_id)
@@ -339,6 +351,7 @@ pub fn toolchain_config(cfg: &Config) -> ToolchainConfig {
         timeout: Duration::from_secs(cfg.toolchain.download_timeout_secs),
         user_agent: format!("saka/{VERSION}"),
         platform: Platform::current(),
+        host_path: config::paths_of(&cfg.agent.path),
     }
 }
 
@@ -758,6 +771,7 @@ mod capability_tests {
         delete_branch_after_merge: false,
         commit_status: false,
         user_authorship: false,
+        diagnostics: None,
     };
 
     fn config(extra: &str) -> Config {

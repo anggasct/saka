@@ -1683,3 +1683,85 @@ fn a_draft_attempt_and_its_packet_round_trip_and_one_live_draft_holds_a_path() {
         "a second live draft for the path"
     );
 }
+
+#[test]
+fn diagnostics_read_the_last_received_webhook_and_the_latest_authorization() {
+    use saka_core::authorship::{UserLinkAuthorization, failure};
+    use saka_core::ids::UserLinkAuthorizationId;
+    use saka_core::vocab::{AuthorizationFailure, AuthorizationState};
+    use saka_store::user_link::latest_authorization;
+    use saka_store::{AuthorizationRow, WebhookDeliveryRow};
+
+    let dir = tempfile::tempdir().unwrap();
+    let now = Timestamp(1_000_000);
+    let store = Store::open(&dir.path().join("saka.db"), &dir.path().join("b"), now).unwrap();
+    assert_eq!(
+        store
+            .read(|c| read::last_webhook_received_at(c, "github"))
+            .unwrap(),
+        None
+    );
+    let delivery = |n: u128, integration: &str, at: i64| WebhookDeliveryRow {
+        id: Uuid::from_u128(n),
+        integration_id: integration.into(),
+        delivery_id: format!("d-{n}"),
+        event: "ping".into(),
+        action: None,
+        repo_id: None,
+        refreshed: 0,
+        received_at: Timestamp(at),
+    };
+    let authorization = |n: u128, at: i64, failed: bool| AuthorizationRow {
+        authorization: UserLinkAuthorization {
+            id: UserLinkAuthorizationId(Uuid::from_u128(n)),
+            owner: "operator:local".into(),
+            integration_id: "github".into(),
+            state: if failed {
+                AuthorizationState::Failed
+            } else {
+                AuthorizationState::Expired
+            },
+            user_code: "ABCD-1234".into(),
+            verification_uri: "https://github.com/login/device".into(),
+            interval_secs: 5,
+            expires_at: Timestamp(at + 900_000),
+            failure: failed.then(|| failure(AuthorizationFailure::DeviceFlowDisabled)),
+            link_id: None,
+            created_at: Timestamp(at),
+            updated_at: Timestamp(at),
+        },
+        device: None,
+    };
+    let mut batch = Batch::new(now);
+    batch.webhook_deliveries = vec![
+        delivery(1, "github", 5_000),
+        delivery(2, "github", 9_000),
+        delivery(3, "ghes", 12_000),
+    ];
+    batch.user_link_authorizations = vec![
+        authorization(4, 2_000, false),
+        authorization(5, 3_000, true),
+    ];
+    store.commit(&batch).unwrap();
+    assert_eq!(
+        store
+            .read(|c| read::last_webhook_received_at(c, "github"))
+            .unwrap(),
+        Some(Timestamp(9_000))
+    );
+    let latest = store
+        .read(|c| latest_authorization(c, "operator:local", "github"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.id, UserLinkAuthorizationId(Uuid::from_u128(5)));
+    assert_eq!(
+        latest.failure.map(|f| f.code),
+        Some("device_flow_disabled".into())
+    );
+    assert!(
+        store
+            .read(|c| latest_authorization(c, "operator:local", "ghes"))
+            .unwrap()
+            .is_none()
+    );
+}

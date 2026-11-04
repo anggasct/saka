@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use saka_core::authorship::GitIdentity;
-use saka_core::diagnostics::{AgentCli, AgentLogin, SupervisorProbe, ToolchainCache};
+use saka_core::diagnostics::{
+    AgentCli, AgentLogin, AppStatus, Installation, SupervisorProbe, ToolchainCache, WebhookStatus,
+};
 use saka_core::gate::Check;
 use saka_core::ids::{EnvironmentId, SessionId};
 use saka_core::model::{RunOwner, ToolchainUse};
@@ -11,8 +13,8 @@ use saka_core::policy::RequestPath;
 use saka_core::secret::{SecretScope, SecretText, SecretVar};
 use saka_core::time::Timestamp;
 use saka_core::vocab::SecretPurpose;
-use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
+use saka_core::vocab::{HostTool, Tool};
 use saka_ports::{
     Agents, Blob, ChangeCredential, ChangeOpening, ChangeSnapshot, ChangedPaths, Clock,
     CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect,
@@ -1382,6 +1384,33 @@ impl Environments for FakeWorld {
         Ok(s.recipe.clone())
     }
 
+    async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>> {
+        Ok(self.state().refs(&repo.full_name).get(branch).cloned())
+    }
+
+    async fn list_repo_dir(
+        &self,
+        _repo: &RepoRef,
+        _commit: &str,
+        dir: &str,
+    ) -> PortResult<Vec<String>> {
+        let prefix = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("{dir}/")
+        };
+        Ok(self
+            .state()
+            .repo_files
+            .keys()
+            .filter(|p| {
+                p.strip_prefix(&prefix)
+                    .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+            })
+            .cloned()
+            .collect())
+    }
+
     async fn read_repo_file(
         &self,
         _repo: &RepoRef,
@@ -2028,6 +2057,21 @@ impl Scm for FakeWorld {
         (integration_id == FAKE_INTEGRATION).then(|| self.state().capabilities.clone())
     }
 
+    async fn app_status(&self, integration_id: &str) -> PortResult<AppStatus> {
+        known_integration(integration_id)?;
+        self.host.app_status().await
+    }
+
+    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation> {
+        known_integration(&repo.integration_id)?;
+        self.host.installation(&repo.full_name).await
+    }
+
+    async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus> {
+        known_integration(integration_id)?;
+        self.host.webhook().await
+    }
+
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool> {
         if integration_id != FAKE_INTEGRATION {
             return Err(PortError::permanent(
@@ -2120,6 +2164,17 @@ impl Scm for FakeWorld {
 }
 
 pub const FAKE_INTEGRATION: &str = "github";
+
+fn known_integration(integration_id: &str) -> PortResult<()> {
+    if integration_id == FAKE_INTEGRATION {
+        Ok(())
+    } else {
+        Err(PortError::permanent(
+            "scm_integration_unknown",
+            json!({ "integration_id": integration_id }),
+        ))
+    }
+}
 pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     provider: "fake",
     merge_methods: &[MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase],
@@ -2129,7 +2184,21 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     user_authorship: true,
+    diagnostics: Some(FAKE_APP_REQUIREMENTS),
 };
+
+pub const FAKE_APP_REQUIREMENTS: saka_core::diagnostics::AppRequirements =
+    saka_core::diagnostics::AppRequirements {
+        permissions: &[
+            ("contents", "write"),
+            ("pull_requests", "write"),
+            ("checks", "read"),
+            ("statuses", "read"),
+            ("metadata", "read"),
+        ],
+        recommended: &[("statuses", "write")],
+        events: &["pull_request", "check_run", "check_suite", "status"],
+    };
 pub const FAKE_SIGNATURE_HEADER: &str = "x-fake-signature";
 
 pub fn fake_signature(secret: &[u8], body: &[u8]) -> String {
@@ -2481,6 +2550,10 @@ impl Toolchains for FakeWorld {
 
     async fn cache(&self) -> PortResult<ToolchainCache> {
         self.host.cache().await
+    }
+
+    async fn host_version(&self, tool: HostTool) -> PortResult<Option<String>> {
+        self.host.host_version(tool).await
     }
 }
 

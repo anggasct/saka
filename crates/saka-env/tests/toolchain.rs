@@ -75,9 +75,9 @@ impl Fixture {
         }
     }
 
-    fn installer(&self, platform: Option<Platform>) -> ToolchainInstaller {
+    fn config(&self) -> ToolchainConfig {
         let base = self.server.uri();
-        ToolchainInstaller::new(ToolchainConfig {
+        ToolchainConfig {
             root: self.root.clone(),
             caches: self.caches.clone(),
             go_dl_url: format!("{base}/dl"),
@@ -85,7 +85,15 @@ impl Fixture {
             npm_registry_url: format!("{base}/npm"),
             timeout: Duration::from_secs(10),
             user_agent: "saka-test".into(),
+            platform: Platform::current(),
+            host_path: Vec::new(),
+        }
+    }
+
+    fn installer(&self, platform: Option<Platform>) -> ToolchainInstaller {
+        ToolchainInstaller::new(ToolchainConfig {
             platform,
+            ..self.config()
         })
         .unwrap()
     }
@@ -397,4 +405,60 @@ fn the_cache_lists_installed_toolchains_and_reports_a_read_only_root() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(!cache.writable);
     assert_eq!(cache.path, locked.join("toolchains").to_string_lossy());
+}
+
+fn fake_program(dir: &Path, name: &str, body: &str) {
+    let source = dir.join(format!("{name}.src"));
+    std::fs::write(&source, format!("#!/bin/sh\n{body}\n")).unwrap();
+    let installed = std::process::Command::new("install")
+        .arg("-m")
+        .arg("755")
+        .arg(&source)
+        .arg(dir.join(name))
+        .status()
+        .unwrap();
+    assert!(installed.success());
+}
+
+#[tokio::test]
+async fn a_host_version_comes_from_the_agent_path_with_only_path_in_its_environment() {
+    use saka_core::vocab::HostTool;
+
+    let f = Fixture::new().await;
+    let bin = f.root.with_file_name("agent-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let env_file = bin.join("env.txt");
+    fake_program(
+        &bin,
+        "rustc",
+        &format!(
+            "/usr/bin/env > '{}'\necho 'rustc 1.99.1 (4d215e2 2026-09-01)'",
+            env_file.display()
+        ),
+    );
+    fake_program(&bin, "python3", "exit 3");
+    let installer = ToolchainInstaller::new(ToolchainConfig {
+        host_path: vec![bin.to_string_lossy().into_owned()],
+        ..f.config()
+    })
+    .unwrap();
+    assert_eq!(
+        installer
+            .host_version(HostTool::Rust)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("1.99.1")
+    );
+    let names: Vec<String> = std::fs::read_to_string(&env_file)
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split('=').next().map(String::from))
+        .filter(|n| !["PWD", "SHLVL", "_", "OLDPWD"].contains(&n.as_str()))
+        .collect();
+    assert_eq!(names, ["PATH"]);
+    let broken = installer.host_version(HostTool::Python).await.unwrap_err();
+    assert_eq!(broken.code, "host_toolchain_unavailable");
+    let none = ToolchainInstaller::new(f.config()).unwrap();
+    assert_eq!(none.host_version(HostTool::Rust).await.unwrap(), None);
 }

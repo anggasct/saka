@@ -11,10 +11,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use saka_api::{ApiConfig, AppState, router};
-use saka_core::diagnostics::AgentLogin;
+use saka_core::diagnostics::{AgentLogin, HookDelivery};
+use saka_core::time::Timestamp;
 use saka_core::vocab::Tool;
 use saka_engine::DiagnosticLimits;
-use saka_testkit::diagnostics::HostPort;
+use saka_testkit::diagnostics::{HostPort, HostScript, full_installation};
 use saka_testkit::{Sim, SimConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -93,7 +94,7 @@ fn rows(sim: &Sim) -> (i64, i64, i64) {
 }
 
 #[test]
-fn the_report_holds_every_instance_and_agent_check_in_catalog_order_and_changes_nothing() {
+fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
     let sim = Sim::new(SimConfig::default());
     let app = api(&sim);
     let before = rows(&sim);
@@ -109,6 +110,16 @@ fn the_report_holds_every_instance_and_agent_check_in_catalog_order_and_changes_
         ("agent.quota", "claude:default"),
         ("toolchain.cache", "instance"),
         ("toolchain.sources", "instance"),
+        ("scm.app", "ghes"),
+        ("scm.app", "github"),
+        ("scm.installation", "acme/tasks"),
+        ("scm.webhook", "ghes"),
+        ("scm.webhook", "github"),
+        ("scm.user_link", "ghes"),
+        ("scm.user_link", "github"),
+        ("project.user_token", "tasks"),
+        ("project.config", "tasks"),
+        ("toolchain.repo", "tasks/app"),
     ]
     .iter()
     .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -138,9 +149,58 @@ fn the_report_holds_every_instance_and_agent_check_in_catalog_order_and_changes_
         "the sim runs no worker loop"
     );
     assert_eq!(ready["params"]["failing"], json!(["worker", "reconciler"]));
+    let project = sim.project_id.0.to_string();
+    let repo = sim.project().project.repos[0].repo_id.0.to_string();
+    let subjects: Vec<(&str, Value)> = [
+        "scm.app",
+        "scm.installation",
+        "project.config",
+        "toolchain.repo",
+    ]
+    .iter()
+    .map(|id| {
+        let c = r.body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == *id && c["subject"]["label"] != "ghes")
+            .unwrap();
+        (*id, c["subject"].clone())
+    })
+    .collect();
+    assert_eq!(
+        subjects,
+        [
+            (
+                "scm.app",
+                json!({ "kind": "integration", "id": "github", "label": "github" })
+            ),
+            (
+                "scm.installation",
+                json!({ "kind": "repo", "id": repo, "label": "acme/tasks" })
+            ),
+            (
+                "project.config",
+                json!({ "kind": "project", "id": project, "label": "tasks" })
+            ),
+            (
+                "toolchain.repo",
+                json!({ "kind": "project_repo", "id": format!("{project}/app"), "label": "tasks/app" })
+            ),
+        ]
+    );
+    assert_eq!(
+        check(&r.body, "scm.app")["code"],
+        "unsupported_by_adapter",
+        "ghes sorts first and the fake has no adapter for it"
+    );
+    assert_eq!(
+        check(&r.body, "toolchain.repo")["params"],
+        json!({ "toolchains": [] })
+    );
     assert_eq!(
         r.body["summary"],
-        json!({ "pass": 6, "warn": 0, "fail": 1, "skip": 1 })
+        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 7 })
     );
     assert_eq!(
         rows(&sim),
@@ -330,10 +390,10 @@ fn a_report_is_counted_in_metrics_and_logged() {
     let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
     assert!(text.contains("diagnostics.ran"), "{text}");
     for field in [
-        "\"pass\":6",
+        "\"pass\":10",
         "\"warn\":0",
         "\"fail\":1",
-        "\"skip\":1",
+        "\"skip\":7",
         "\"duration_ms\":",
     ] {
         assert!(text.contains(field), "{field} in {text}");
@@ -347,5 +407,350 @@ fn a_report_is_counted_in_metrics_and_logged() {
         "saka_diagnostic_checks_total{id=\"agent.quota\",status=\"skip\"} 1",
     ] {
         assert!(metrics.contains(line), "{line}\n{metrics}");
+    }
+}
+
+fn all<'a>(body: &'a Value, id: &str) -> Vec<&'a Value> {
+    body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["id"] == id)
+        .collect()
+}
+
+fn of<'a>(body: &'a Value, id: &str, label: &str) -> Vec<&'a Value> {
+    all(body, id)
+        .into_iter()
+        .filter(|c| c["subject"]["label"] == label)
+        .collect()
+}
+
+fn findings(checks: &[&Value]) -> Vec<(String, String)> {
+    checks
+        .iter()
+        .map(|c| {
+            (
+                c["status"].as_str().unwrap().to_string(),
+                c["code"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+    rows.iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+}
+
+fn hook_deliveries(now: i64, failing: usize) -> Vec<HookDelivery> {
+    (0..10)
+        .map(|n| HookDelivery {
+            delivered_at: Timestamp(now - (10 - n as i64) * 60_000),
+            status_code: if n < failing { 500 } else { 202 },
+        })
+        .collect()
+}
+
+#[test]
+fn app_installation_webhook_and_repo_findings_reach_the_report_with_their_fix() {
+    let sim = Sim::new(SimConfig::default());
+    let app = api(&sim);
+    let now = saka_ports::Clock::now(&*sim.clock);
+    sim.world
+        .set_webhook_secret(b"0123456789abcdef0123456789abcdef");
+    sim.world.set_repo_file(".nvmrc", Some("22\n"));
+    sim.world.host().script(|s| {
+        let mut partial = full_installation();
+        partial
+            .permissions
+            .insert("pull_requests".into(), "read".into());
+        s.installations.insert("acme/tasks".into(), partial);
+        if let Ok(app) = &mut s.app {
+            app.events.retain(|e| e != "status");
+        }
+        if let Ok(hook) = &mut s.webhook {
+            hook.deliveries = hook_deliveries(now.0, 3);
+        }
+    });
+    let r = get(&sim, &app, "/api/v1/diagnostics");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let installation = of(&r.body, "scm.installation", "acme/tasks");
+    assert_eq!(installation.len(), 1);
+    assert_eq!(installation[0]["code"], "app_permissions_missing");
+    assert_eq!(
+        installation[0]["params"],
+        json!({ "missing": [{ "permission": "pull_requests", "required": "write", "granted": "read" }] })
+    );
+    assert_eq!(
+        installation[0]["fix"],
+        json!({ "code": "grant_app_permissions", "params": { "url": "https://github.com/settings/apps/saka-sim/permissions" } })
+    );
+    let webhook = of(&r.body, "scm.webhook", "github");
+    assert_eq!(
+        findings(&webhook),
+        pairs(&[
+            ("warn", "app_events_missing"),
+            ("warn", "webhook_deliveries_failing")
+        ])
+    );
+    assert_eq!(webhook[1]["params"]["failed"], 3);
+    assert_eq!(webhook[1]["params"]["total"], 10);
+    assert_eq!(
+        webhook[1]["fix"],
+        json!({ "code": "configure_app_webhook", "params": { "url": "/hooks/github" } })
+    );
+    let toolchain = of(&r.body, "toolchain.repo", "tasks/app");
+    assert_eq!(
+        findings(&toolchain),
+        pairs(&[("fail", "toolchain_unpinned")])
+    );
+    assert_eq!(toolchain[0]["params"]["tool"], "node");
+    assert_eq!(toolchain[0]["params"]["value"], "22");
+    assert_eq!(
+        toolchain[0]["fix"],
+        json!({ "code": "run_saka_init", "params": { "command": "saka init" } }),
+        "the fake index has no node 22, so there is no version to propose"
+    );
+
+    let delivery = saka_ports::WebhookDelivery {
+        delivery_id: "d-1".into(),
+        event: "ping".into(),
+        action: None,
+        repo_full_name: None,
+        targets: Vec::new(),
+    };
+    sim.engine().accept_webhook("github", &delivery).unwrap();
+    sim.world.host().script(|s| {
+        s.installations.clear();
+        if let Ok(hook) = &mut s.webhook {
+            hook.deliveries = hook_deliveries(now.0, 0);
+        }
+        s.app = Err(saka_ports::PortError::permanent(
+            "app_auth_failed",
+            json!({ "status": 401, "app_id": 4242, "key_file": "/etc/saka/app.pem" }),
+        ));
+    });
+    let r = get(&sim, &app, "/api/v1/diagnostics");
+    for id in ["scm.app", "scm.installation", "scm.webhook"] {
+        let failed = all(&r.body, id)
+            .into_iter()
+            .filter(|c| c["subject"]["label"] != "ghes")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            findings(&failed),
+            pairs(&[("fail", "app_auth_failed")]),
+            "{id}"
+        );
+        assert_eq!(failed[0]["params"], json!({ "status": 401 }));
+        assert_eq!(
+            failed[0]["fix"],
+            json!({ "code": "check_app_credentials", "params": { "app_id": 4242, "key_file": "/etc/saka/app.pem" } })
+        );
+    }
+    sim.world
+        .host()
+        .script(|s| s.app = HostScript::default().app);
+    let r = get(&sim, &app, "/api/v1/diagnostics");
+    let webhook = of(&r.body, "scm.webhook", "github");
+    assert_eq!(webhook[0]["code"], "webhook_ok");
+    assert_eq!(
+        webhook[0]["params"],
+        json!({ "deliveries_24h": 10, "last_received_at": now.to_rfc3339() })
+    );
+    assert_eq!(
+        of(&r.body, "scm.installation", "acme/tasks")[0]["code"],
+        "app_installed"
+    );
+}
+
+fn add_web_project(sim: &Sim) -> saka_core::ids::ProjectId {
+    let engine = sim.engine();
+    let repo = |full_name: &str| saka_engine::NewRepo {
+        repo_id: None,
+        integration_id: "github".into(),
+        provider: "github".into(),
+        full_name: full_name.into(),
+        url: format!("https://github.com/{full_name}"),
+        default_branch: "main".into(),
+    };
+    let binding = |full_name: &str, name: &str, is_default: bool| saka_engine::NewBinding {
+        repo: repo(full_name),
+        name: name.into(),
+        is_default,
+        base_branch: "main".into(),
+        path_scope: vec!["**".into()],
+    };
+    let (id, _) = engine
+        .register_project(
+            &saka_engine::NewProject {
+                name: "web".into(),
+                workspace: repo("acme/tasks"),
+                project_path: "web".into(),
+                base_branch: "main".into(),
+                config_commit: sim.world.base_head(),
+                config_sha256: saka_testkit::ZERO_SHA256.into(),
+                bindings: vec![
+                    binding("acme/tasks", "api", true),
+                    binding("acme/web", "site", false),
+                ],
+            },
+            &engine.cause("human:operator:local"),
+        )
+        .unwrap();
+    id
+}
+
+fn link_and_store_a_pat(sim: &mut Sim) -> String {
+    let engine = sim.engine();
+    let accounts = sim.world.accounts();
+    accounts.set_device_flow(true);
+    accounts.set_user(7, "octo", Some("Octo Cat"));
+    let cause = engine.cause(saka_engine::OPERATOR);
+    let started = sim
+        .block_on(engine.start_user_link("github", &cause, None))
+        .unwrap();
+    accounts.answer(saka_testkit::DeviceAnswer::Approve);
+    let auth = started.authorization.id;
+    assert!(sim.run_until(8_000, |s| {
+        s.engine()
+            .user_link_authorization("github", saka_engine::OPERATOR, auth)
+            .is_ok_and(|v| v.link.is_some())
+    }));
+    let now = saka_ports::Clock::now(&*sim.clock);
+    let pat = sim
+        .world
+        .accounts()
+        .issue_pat(Some(now.plus_ms(3 * 86_400_000)));
+    sim.block_on(engine.set_user_token(
+        sim.project_id,
+        &saka_core::secret::SecretText::new(pat.clone()),
+        &engine.cause("human:operator:local"),
+        None,
+    ))
+    .unwrap();
+    pat
+}
+
+#[test]
+fn links_tokens_and_overlapping_scopes_are_reported_per_subject_and_scoped_by_project() {
+    let mut sim = Sim::new(SimConfig::default());
+    let web = add_web_project(&sim);
+    link_and_store_a_pat(&mut sim);
+    let app = api(&sim);
+    let r = get(&sim, &app, "/api/v1/diagnostics");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let link = of(&r.body, "scm.user_link", "github");
+    assert_eq!(findings(&link), pairs(&[("pass", "user_link_active")]));
+    assert_eq!(link[0]["params"]["login"], "octo");
+    let token = of(&r.body, "project.user_token", "tasks");
+    assert_eq!(findings(&token), pairs(&[("warn", "user_token_expiring")]));
+    assert_eq!(token[0]["params"]["login"], "octo");
+    assert_eq!(
+        token[0]["fix"],
+        json!({ "code": "replace_user_token", "params": { "command": "saka project user-token set tasks" } })
+    );
+    assert_eq!(
+        findings(&of(&r.body, "project.user_token", "web")),
+        pairs(&[("skip", "user_token_absent")])
+    );
+    let overlap = of(&r.body, "project.config", "tasks");
+    assert_eq!(findings(&overlap), pairs(&[("warn", "path_scope_overlap")]));
+    assert_eq!(
+        overlap[0]["params"],
+        json!({ "repo": "app", "other_project": "web", "other_repo": "api" })
+    );
+    assert_eq!(
+        overlap[0]["fix"],
+        json!({ "code": "narrow_path_scope", "params": { "repo": "app" } })
+    );
+    let installs: Vec<&str> = all(&r.body, "scm.installation")
+        .iter()
+        .map(|c| c["subject"]["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        installs,
+        ["acme/tasks", "acme/web"],
+        "one check per repo even when two projects bind it"
+    );
+    let repos: Vec<&str> = all(&r.body, "toolchain.repo")
+        .iter()
+        .map(|c| c["subject"]["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(repos, ["tasks/app", "web/api", "web/site"]);
+
+    let scoped = get(
+        &sim,
+        &app,
+        &format!("/api/v1/diagnostics?project_id={}", web.0),
+    );
+    let labels = |id: &str| -> Vec<String> {
+        all(&scoped.body, id)
+            .iter()
+            .map(|c| c["subject"]["label"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(labels("toolchain.repo"), ["web/api", "web/site"]);
+    assert_eq!(labels("project.config"), ["web"]);
+    assert_eq!(labels("project.user_token"), ["web"]);
+    assert_eq!(labels("scm.installation"), ["acme/tasks", "acme/web"]);
+    assert_eq!(labels("scm.user_link"), ["ghes", "github"]);
+    assert_eq!(labels("agent.login"), ["claude:default"]);
+}
+
+const SECRET_MARKERS: [&str; 5] = ["ghs_", "ghu_", "ghr_", "github_pat_", "-----BEGIN"];
+
+#[test]
+fn an_adapter_without_diagnostics_skips_its_scm_checks_and_no_report_holds_a_secret() {
+    let mut sim = Sim::new(SimConfig::default());
+    let pat = link_and_store_a_pat(&mut sim);
+    assert!(pat.starts_with("github_pat_"));
+    let issued = sim.world.accounts().issued_tokens();
+    assert!(issued.iter().any(|t| t.starts_with("ghu_")));
+    let app = api(&sim);
+    let full = get(&sim, &app, "/api/v1/diagnostics");
+    assert_eq!(full.status, StatusCode::OK);
+    assert_eq!(
+        findings(&of(&full.body, "scm.app", "github")),
+        pairs(&[("pass", "app_ok")])
+    );
+
+    sim.world.set_capabilities(saka_ports::ScmCapabilities {
+        diagnostics: None,
+        ..saka_testkit::FAKE_CAPABILITIES
+    });
+    let limited = get(&sim, &app, "/api/v1/diagnostics");
+    for (id, label) in [
+        ("scm.app", "github"),
+        ("scm.installation", "acme/tasks"),
+        ("scm.webhook", "github"),
+        ("scm.user_link", "github"),
+    ] {
+        let c = of(&limited.body, id, label);
+        assert_eq!(c.len(), 1, "{id}");
+        assert_eq!(c[0]["status"], "skip", "{id}");
+        assert_eq!(c[0]["code"], "unsupported_by_adapter", "{id}");
+        assert_eq!(c[0]["fix"], Value::Null);
+    }
+    assert_eq!(
+        of(&limited.body, "project.user_token", "tasks")[0]["code"],
+        "user_token_expiring",
+        "project checks do not depend on the adapter"
+    );
+    for (name, text) in [("full", &full.text), ("limited", &limited.text)] {
+        for marker in SECRET_MARKERS {
+            assert!(!text.contains(marker), "{marker} in the {name} report");
+        }
+        for secret in issued.iter().chain([&pat]) {
+            assert!(
+                !text.contains(secret.as_str()),
+                "a secret in the {name} report"
+            );
+        }
+        assert!(
+            !text.contains("users.noreply"),
+            "an email in the {name} report"
+        );
     }
 }

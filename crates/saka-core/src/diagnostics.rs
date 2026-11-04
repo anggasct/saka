@@ -1,9 +1,15 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use crate::admission::paused_windows;
-use crate::model::AccountQuota;
+use crate::authorship::{PROACTIVE_REFRESH_WINDOW_MS, ProjectUserToken, UserLink};
+use crate::model::{AccountQuota, Project};
+use crate::paths::project_config_path;
 use crate::time::Timestamp;
-use crate::vocab::{CheckId, DiagnosticStatus, ReportMode, SubjectKind, Tool};
+use crate::vocab::{
+    AuthorizationFailure, CheckId, DiagnosticStatus, HostTool, ReportMode, SubjectKind, Tool,
+};
 
 pub const INSTANCE: &str = "instance";
 pub const MIGRATE_COMMAND: &str = "saka migrate";
@@ -25,6 +31,12 @@ impl CheckId {
             | CheckId::RuntimeSupervisor
             | CheckId::ToolchainCache
             | CheckId::ToolchainSources => SubjectKind::Instance,
+            CheckId::ScmApp | CheckId::ScmWebhook | CheckId::ScmUserLink => {
+                SubjectKind::Integration
+            }
+            CheckId::ScmInstallation => SubjectKind::Repo,
+            CheckId::ProjectUserToken | CheckId::ProjectConfig => SubjectKind::Project,
+            CheckId::ToolchainRepo => SubjectKind::ProjectRepo,
         }
     }
 
@@ -489,9 +501,549 @@ pub fn engine_not_ready() -> Finding {
     Finding::skip("engine_not_ready", json!({}))
 }
 
+pub const SAKA_INIT_COMMAND: &str = "saka init";
+pub const EXPIRY_WARNING_MS: i64 = PROACTIVE_REFRESH_WINDOW_MS;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppRequirements {
+    pub permissions: &'static [(&'static str, &'static str)],
+    pub recommended: &'static [(&'static str, &'static str)],
+    pub events: &'static [&'static str],
+}
+pub const WEBHOOK_CONTENT_TYPE: &str = "json";
+
+impl Subject {
+    pub fn integration(integration_id: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Integration,
+            id: integration_id.into(),
+            label: integration_id.into(),
+        }
+    }
+
+    pub fn repo(repo_id: &str, full_name: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Repo,
+            id: repo_id.into(),
+            label: full_name.into(),
+        }
+    }
+
+    pub fn project(project_id: &str, name: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Project,
+            id: project_id.into(),
+            label: name.into(),
+        }
+    }
+
+    pub fn project_repo(project_id: &str, project_name: &str, binding: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::ProjectRepo,
+            id: format!("{project_id}/{binding}"),
+            label: format!("{project_name}/{binding}"),
+        }
+    }
+}
+
+impl HostTool {
+    pub fn program(self) -> &'static str {
+        match self {
+            HostTool::Rust => "rustc",
+            HostTool::Python => "python3",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppStatus {
+    pub app_id: u64,
+    pub slug: String,
+    pub events: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installation {
+    pub installed: bool,
+    pub installation_id: Option<u64>,
+    pub permissions: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookDelivery {
+    pub delivered_at: Timestamp,
+    pub status_code: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookStatus {
+    pub url_set: bool,
+    pub content_type: Option<String>,
+    pub secret_set: bool,
+    pub deliveries: Vec<HookDelivery>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeOverlap {
+    pub repo: String,
+    pub other_project: String,
+    pub other_repo: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolchainDrift {
+    pub source: String,
+    pub file: String,
+    pub line: usize,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostVersion {
+    Found(String),
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepoToolchain {
+    pub tool: String,
+    pub source: Option<String>,
+    pub value: Option<String>,
+    pub pinned: Option<String>,
+    pub drift: Vec<ToolchainDrift>,
+    pub cached: Option<bool>,
+    pub host: Option<HostVersion>,
+    pub proposal: Option<Fix>,
+}
+
+pub fn unsupported_by_adapter() -> Finding {
+    Finding::skip("unsupported_by_adapter", json!({}))
+}
+
+pub fn app_ok(app: &AppStatus) -> Finding {
+    Finding::pass("app_ok", json!({ "app_id": app.app_id, "slug": app.slug }))
+}
+
+pub fn scm_failure(code: &str, params: &Value) -> Finding {
+    let status = params.get("status").cloned().unwrap_or(Value::Null);
+    match code {
+        "app_auth_failed" => Finding::fail(
+            "app_auth_failed",
+            json!({ "status": status }),
+            fix(
+                "check_app_credentials",
+                json!({
+                    "app_id": params.get("app_id").cloned().unwrap_or(Value::Null),
+                    "key_file": params.get("key_file").cloned().unwrap_or(Value::Null),
+                }),
+            ),
+        ),
+        "scm_unavailable" => Finding::fail("scm_unavailable", json!({ "status": status }), None),
+        other => check_failed(other),
+    }
+}
+
+pub fn install_url(web_url: &str, slug: &str) -> String {
+    format!(
+        "{}/apps/{slug}/installations/new",
+        web_url.trim_end_matches('/')
+    )
+}
+
+pub fn permissions_url(web_url: &str, slug: &str) -> String {
+    format!(
+        "{}/settings/apps/{slug}/permissions",
+        web_url.trim_end_matches('/')
+    )
+}
+
+fn level(access: &str) -> u8 {
+    match access {
+        "read" => 1,
+        "write" => 2,
+        "admin" => 3,
+        _ => 0,
+    }
+}
+
+fn missing_permissions(granted: &BTreeMap<String, String>, wanted: &[(&str, &str)]) -> Vec<Value> {
+    wanted
+        .iter()
+        .filter_map(|(permission, required)| {
+            let has = granted.get(*permission);
+            (has.map_or(0, |g| level(g)) < level(required))
+                .then(|| json!({ "permission": permission, "required": required, "granted": has }))
+        })
+        .collect()
+}
+
+pub fn installation(
+    requirements: &AppRequirements,
+    repo: &str,
+    web_url: &str,
+    slug: &str,
+    found: &Installation,
+) -> Finding {
+    if !found.installed {
+        return Finding::fail(
+            "app_not_installed",
+            json!({ "repo": repo }),
+            fix("install_app", json!({ "url": install_url(web_url, slug) })),
+        );
+    }
+    let grant = || {
+        fix(
+            "grant_app_permissions",
+            json!({ "url": permissions_url(web_url, slug) }),
+        )
+    };
+    let required = missing_permissions(&found.permissions, requirements.permissions);
+    if !required.is_empty() {
+        return Finding::fail(
+            "app_permissions_missing",
+            json!({ "missing": required }),
+            grant(),
+        );
+    }
+    let recommended = missing_permissions(&found.permissions, requirements.recommended);
+    if !recommended.is_empty() {
+        return Finding::warn(
+            "app_permission_recommended",
+            json!({ "missing": recommended }),
+            grant(),
+        );
+    }
+    Finding::pass(
+        "app_installed",
+        json!({ "installation_id": found.installation_id, "permissions": found.permissions }),
+    )
+}
+
+pub fn hook_path(integration_id: &str) -> String {
+    format!("/hooks/{integration_id}")
+}
+
+pub fn webhook_not_configured() -> Finding {
+    Finding::skip("webhook_not_configured", json!({}))
+}
+
+fn is_success(status_code: u16) -> bool {
+    (200..300).contains(&status_code)
+}
+
+pub fn webhook(
+    requirements: &AppRequirements,
+    integration_id: &str,
+    app: &AppStatus,
+    hook: &WebhookStatus,
+    last_received_at: Option<Timestamp>,
+) -> Vec<Finding> {
+    let configure = || {
+        fix(
+            "configure_app_webhook",
+            json!({ "url": hook_path(integration_id) }),
+        )
+    };
+    let mut fails = Vec::new();
+    if !hook.url_set {
+        fails.push(Finding::fail(
+            "app_webhook_url_missing",
+            json!({}),
+            configure(),
+        ));
+    }
+    if !hook.secret_set {
+        fails.push(Finding::fail(
+            "app_webhook_secret_missing",
+            json!({}),
+            configure(),
+        ));
+    }
+    if hook.url_set && hook.content_type.as_deref() != Some(WEBHOOK_CONTENT_TYPE) {
+        fails.push(Finding::fail(
+            "app_webhook_content_type",
+            json!({ "content_type": hook.content_type }),
+            configure(),
+        ));
+    }
+    if !fails.is_empty() {
+        return fails;
+    }
+    let mut warns = Vec::new();
+    let missing: Vec<&str> = requirements
+        .events
+        .iter()
+        .copied()
+        .filter(|e| !app.events.iter().any(|have| have == e))
+        .collect();
+    if !missing.is_empty() {
+        warns.push(Finding::warn(
+            "app_events_missing",
+            json!({ "missing": missing }),
+            fix("subscribe_app_events", json!({ "missing": missing })),
+        ));
+    }
+    let failed: Vec<&HookDelivery> = hook
+        .deliveries
+        .iter()
+        .filter(|d| !is_success(d.status_code))
+        .collect();
+    if let Some(last) = failed.iter().max_by_key(|d| d.delivered_at) {
+        warns.push(Finding::warn(
+            "webhook_deliveries_failing",
+            json!({
+                "failed": failed.len(),
+                "total": hook.deliveries.len(),
+                "last_status_code": last.status_code,
+                "last_delivered_at": last.delivered_at.to_rfc3339(),
+            }),
+            configure(),
+        ));
+    }
+    if !warns.is_empty() {
+        return warns;
+    }
+    vec![Finding::pass(
+        "webhook_ok",
+        json!({
+            "deliveries_24h": hook.deliveries.len(),
+            "last_received_at": last_received_at.map(Timestamp::to_rfc3339),
+        }),
+    )]
+}
+
+pub fn link_command(integration_id: &str) -> String {
+    format!("saka scm link {integration_id}")
+}
+
+pub fn device_flow_unconfigured() -> Finding {
+    Finding::skip("device_flow_unconfigured", json!({}))
+}
+
+pub fn user_link(
+    integration_id: &str,
+    link: Option<&UserLink>,
+    last_failure: Option<AuthorizationFailure>,
+    user_mode_projects: &[String],
+    now: Timestamp,
+) -> Vec<Finding> {
+    let relink = || command("run_scm_link", &link_command(integration_id));
+    match link {
+        Some(l) if !l.is_active() => {
+            let cause = l.problem();
+            return vec![Finding::fail(
+                "user_link_needs_relink",
+                json!({ "cause": cause }),
+                relink(),
+            )];
+        }
+        None if !user_mode_projects.is_empty() => {
+            return vec![Finding::fail(
+                "user_link_missing",
+                json!({ "projects": user_mode_projects }),
+                relink(),
+            )];
+        }
+        _ => {}
+    }
+    let mut warns = Vec::new();
+    if let Some(l) = link
+        && l.refresh_expires_at.0.saturating_sub(now.0) < EXPIRY_WARNING_MS
+    {
+        warns.push(Finding::warn(
+            "user_link_expiring",
+            json!({ "login": l.login, "refresh_expires_at": l.refresh_expires_at.to_rfc3339() }),
+            relink(),
+        ));
+    }
+    if last_failure == Some(AuthorizationFailure::DeviceFlowDisabled) {
+        warns.push(Finding::warn(
+            "device_flow_disabled",
+            json!({}),
+            fix("enable_device_flow", json!({})),
+        ));
+    }
+    if !warns.is_empty() {
+        return warns;
+    }
+    vec![match link {
+        Some(l) => Finding::pass(
+            "user_link_active",
+            json!({ "login": l.login, "refresh_expires_at": l.refresh_expires_at.to_rfc3339() }),
+        ),
+        None => Finding::skip("user_link_absent", json!({})),
+    }]
+}
+
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/' | b'@'));
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+pub fn user_token_command(project_name: &str) -> String {
+    format!("saka project user-token set {}", shell_word(project_name))
+}
+
+pub fn user_token(project_name: &str, token: Option<&ProjectUserToken>, now: Timestamp) -> Finding {
+    let Some(t) = token else {
+        return Finding::skip("user_token_absent", json!({}));
+    };
+    let replace = || command("replace_user_token", &user_token_command(project_name));
+    if let Some(cause) = t.problem(now) {
+        return Finding::fail("user_token_invalid", json!({ "cause": cause }), replace());
+    }
+    let params = json!({
+        "login": t.identity.login,
+        "expires_at": t.expires_at.map(Timestamp::to_rfc3339),
+    });
+    match t.expires_at {
+        Some(at) if at.0.saturating_sub(now.0) < EXPIRY_WARNING_MS => {
+            Finding::warn("user_token_expiring", params, replace())
+        }
+        _ => Finding::pass("user_token_active", params),
+    }
+}
+
+pub fn project_config(project: &Project, overlaps: &[ScopeOverlap]) -> Vec<Finding> {
+    if let Some(e) = &project.config_error {
+        return vec![Finding::fail(
+            "project_config_rejected",
+            json!({ "code": e.code, "commit": e.commit, "params": e.params }),
+            fix(
+                "fix_saka_toml",
+                json!({ "path": project_config_path(&project.project_path) }),
+            ),
+        )];
+    }
+    if overlaps.is_empty() {
+        return vec![Finding::pass(
+            "project_config_ok",
+            json!({ "config_commit": project.config_commit }),
+        )];
+    }
+    overlaps
+        .iter()
+        .map(|o| {
+            Finding::warn(
+                "path_scope_overlap",
+                json!({ "repo": o.repo, "other_project": o.other_project, "other_repo": o.other_repo }),
+                fix("narrow_path_scope", json!({ "repo": o.repo })),
+            )
+        })
+        .collect()
+}
+
+pub fn repo_unreachable(status: Option<u16>) -> Finding {
+    Finding::skip("repo_unreachable", json!({ "status": status }))
+}
+
+pub fn host_version_of(output: &str) -> Option<String> {
+    output
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)
+        .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+        .map(String::from)
+}
+
+pub fn host_matches(declared: &str, found: &str) -> bool {
+    found == declared
+        || found
+            .strip_prefix(declared)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
+pub fn toolchain_repo(tools: &[RepoToolchain]) -> Vec<Finding> {
+    let fails: Vec<Finding> = tools
+        .iter()
+        .filter(|t| t.pinned.is_none())
+        .map(|t| {
+            Finding::fail(
+                "toolchain_unpinned",
+                json!({ "tool": t.tool, "source": t.source, "value": t.value }),
+                t.proposal
+                    .clone()
+                    .or_else(|| command("run_saka_init", SAKA_INIT_COMMAND)),
+            )
+        })
+        .collect();
+    if !fails.is_empty() {
+        return fails;
+    }
+    let mut warns = Vec::new();
+    let mut pinned = Vec::new();
+    for t in tools {
+        let Some(version) = &t.pinned else { continue };
+        if !t.drift.is_empty() {
+            warns.push(Finding::warn(
+                "toolchain_drift",
+                json!({
+                    "tool": t.tool,
+                    "pinned": version,
+                    "drift": t.drift.iter().map(|d| json!({
+                        "source": d.source, "file": d.file, "line": d.line, "value": d.value,
+                    })).collect::<Vec<_>>(),
+                }),
+                None,
+            ));
+        }
+        let host_ok = match &t.host {
+            Some(HostVersion::Missing) => {
+                warns.push(Finding::warn(
+                    "host_toolchain_missing",
+                    json!({ "tool": t.tool, "declared": version }),
+                    None,
+                ));
+                false
+            }
+            Some(HostVersion::Found(found)) if !host_matches(version, found) => {
+                warns.push(Finding::warn(
+                    "host_toolchain_mismatch",
+                    json!({ "tool": t.tool, "declared": version, "found": found }),
+                    None,
+                ));
+                false
+            }
+            Some(HostVersion::Found(_)) => true,
+            None => false,
+        };
+        pinned.push(json!({
+            "tool": t.tool,
+            "version": version,
+            "installed": t.cached.unwrap_or(host_ok),
+        }));
+    }
+    if !warns.is_empty() {
+        return warns;
+    }
+    vec![Finding::pass(
+        "toolchains_pinned",
+        json!({ "toolchains": pinned }),
+    )]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const APP: AppRequirements = AppRequirements {
+        permissions: &[
+            ("contents", "write"),
+            ("pull_requests", "write"),
+            ("checks", "read"),
+            ("statuses", "read"),
+            ("metadata", "read"),
+        ],
+        recommended: &[("statuses", "write")],
+        events: &["pull_request", "check_run", "check_suite", "status"],
+    };
 
     fn quota(window: &str, utilization: f64, resets_at: Option<i64>) -> AccountQuota {
         AccountQuota {
@@ -925,6 +1477,753 @@ mod tests {
         );
     }
 
+    const DAY: i64 = 86_400_000;
+    const NOW: Timestamp = Timestamp(1_800_000_000_000);
+
+    fn link(state: crate::vocab::UserLinkState, refresh_in_days: i64) -> UserLink {
+        UserLink {
+            id: crate::ids::UserLinkId(uuid::Uuid::nil()),
+            owner: "operator:local".into(),
+            integration_id: "github".into(),
+            provider_user_id: 1,
+            login: "octo".into(),
+            display_name: None,
+            email: "1+octo@users.noreply.github.com".into(),
+            state,
+            relink_cause: Some(crate::vocab::RelinkCause::Revoked),
+            access_expires_at: NOW.plus_ms(DAY),
+            refresh_expires_at: NOW.plus_ms(refresh_in_days * DAY),
+            linked_at: NOW,
+            refreshed_at: None,
+            created_at: NOW,
+            updated_at: NOW,
+        }
+    }
+
+    fn pat(expires_in_days: Option<i64>) -> ProjectUserToken {
+        ProjectUserToken {
+            integration_id: "github".into(),
+            identity: crate::authorship::Identity {
+                provider_user_id: 7,
+                login: "ann".into(),
+                display_name: None,
+                email: "ann@example.com".into(),
+            },
+            expires_at: expires_in_days.map(|d| NOW.plus_ms(d * DAY)),
+            set_at: NOW,
+            invalid_cause: None,
+        }
+    }
+
+    fn project(config_error: Option<crate::model::ConfigError>) -> Project {
+        Project {
+            id: crate::ids::ProjectId(uuid::Uuid::nil()),
+            name: "shop".into(),
+            workspace_repo_id: crate::ids::RepoId(uuid::Uuid::nil()),
+            project_path: "docs".into(),
+            base_branch: "main".into(),
+            config_commit: "c0ffee".into(),
+            config_sha256: "sha256:0".into(),
+            config_error,
+            autonomy: crate::vocab::Autonomy::Standard,
+            workflow_preset: crate::vocab::WorkflowPreset::FullLoop,
+            repos: Vec::new(),
+            created_at: NOW,
+            updated_at: NOW,
+        }
+    }
+
+    fn granted(pairs: &[(&str, &str)]) -> Installation {
+        Installation {
+            installed: true,
+            installation_id: Some(42),
+            permissions: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        }
+    }
+
+    const FULL: &[(&str, &str)] = &[
+        ("contents", "write"),
+        ("pull_requests", "write"),
+        ("checks", "read"),
+        ("statuses", "write"),
+        ("metadata", "read"),
+    ];
+
+    fn app(events: &[&str]) -> AppStatus {
+        AppStatus {
+            app_id: 9,
+            slug: "saka-dev".into(),
+            events: events.iter().map(|e| (*e).to_string()).collect(),
+        }
+    }
+
+    fn hook(deliveries: Vec<HookDelivery>) -> WebhookStatus {
+        WebhookStatus {
+            url_set: true,
+            content_type: Some("json".into()),
+            secret_set: true,
+            deliveries,
+        }
+    }
+
+    fn delivery(minutes_ago: i64, status_code: u16) -> HookDelivery {
+        HookDelivery {
+            delivered_at: NOW.plus_ms(-minutes_ago * 60_000),
+            status_code,
+        }
+    }
+
+    fn pinned(tool: &str, version: &str) -> RepoToolchain {
+        RepoToolchain {
+            tool: tool.into(),
+            source: Some("nvmrc".into()),
+            value: Some(version.into()),
+            pinned: Some(version.into()),
+            drift: Vec::new(),
+            cached: Some(false),
+            host: None,
+            proposal: None,
+        }
+    }
+
+    fn rows(findings: &[Finding]) -> Vec<Row<'_>> {
+        findings.iter().map(row).collect()
+    }
+
+    #[test]
+    fn every_step_two_catalog_row_yields_its_status_code_params_and_fix() {
+        use DiagnosticStatus::{Fail, Pass, Skip, Warn};
+        const WEB: &str = "https://github.com";
+        let grant = Some((
+            "grant_app_permissions",
+            json!({"url": "https://github.com/settings/apps/saka-dev/permissions"}),
+        ));
+        let configure = Some(("configure_app_webhook", json!({"url": "/hooks/github"})));
+        let relink = Some(("run_scm_link", json!({"command": "saka scm link github"})));
+        let replace = Some((
+            "replace_user_token",
+            json!({"command": "saka project user-token set shop"}),
+        ));
+        let all_events = ["pull_request", "check_run", "check_suite", "status"];
+        let cases: Vec<(Vec<Finding>, Vec<Row<'_>>)> = vec![
+            (
+                vec![app_ok(&app(&all_events))],
+                vec![(
+                    Pass,
+                    "app_ok",
+                    json!({"app_id": 9, "slug": "saka-dev"}),
+                    None,
+                )],
+            ),
+            (
+                vec![scm_failure(
+                    "app_auth_failed",
+                    &json!({"status": 401, "app_id": 9, "key_file": "/etc/saka/app.pem"}),
+                )],
+                vec![(
+                    Fail,
+                    "app_auth_failed",
+                    json!({"status": 401}),
+                    Some((
+                        "check_app_credentials",
+                        json!({"app_id": 9, "key_file": "/etc/saka/app.pem"}),
+                    )),
+                )],
+            ),
+            (
+                vec![scm_failure(
+                    "scm_unavailable",
+                    &json!({"status": 502, "detail": "server_error"}),
+                )],
+                vec![(Fail, "scm_unavailable", json!({"status": 502}), None)],
+            ),
+            (
+                vec![scm_failure(
+                    "scm_integration_unknown",
+                    &json!({"integration_id": "x"}),
+                )],
+                vec![(
+                    Fail,
+                    "check_failed",
+                    json!({"error": "scm_integration_unknown"}),
+                    None,
+                )],
+            ),
+            (
+                vec![unsupported_by_adapter()],
+                vec![(Skip, "unsupported_by_adapter", json!({}), None)],
+            ),
+            (
+                vec![installation(
+                    &APP,
+                    "acme/shop",
+                    WEB,
+                    "saka-dev",
+                    &granted(FULL),
+                )],
+                vec![(
+                    Pass,
+                    "app_installed",
+                    json!({"installation_id": 42, "permissions": {
+                        "checks": "read", "contents": "write", "metadata": "read",
+                        "pull_requests": "write", "statuses": "write",
+                    }}),
+                    None,
+                )],
+            ),
+            (
+                vec![installation(
+                    &APP,
+                    "acme/shop",
+                    WEB,
+                    "saka-dev",
+                    &Installation {
+                        installed: false,
+                        installation_id: None,
+                        permissions: BTreeMap::new(),
+                    },
+                )],
+                vec![(
+                    Fail,
+                    "app_not_installed",
+                    json!({"repo": "acme/shop"}),
+                    Some((
+                        "install_app",
+                        json!({"url": "https://github.com/apps/saka-dev/installations/new"}),
+                    )),
+                )],
+            ),
+            (
+                vec![installation(
+                    &APP,
+                    "acme/shop",
+                    WEB,
+                    "saka-dev",
+                    &granted(&[
+                        ("contents", "write"),
+                        ("pull_requests", "read"),
+                        ("checks", "read"),
+                        ("statuses", "write"),
+                        ("metadata", "read"),
+                    ]),
+                )],
+                vec![(
+                    Fail,
+                    "app_permissions_missing",
+                    json!({"missing": [{"permission": "pull_requests", "required": "write", "granted": "read"}]}),
+                    grant.clone(),
+                )],
+            ),
+            (
+                vec![installation(
+                    &APP,
+                    "acme/shop",
+                    WEB,
+                    "saka-dev",
+                    &granted(&[
+                        ("contents", "admin"),
+                        ("pull_requests", "write"),
+                        ("checks", "write"),
+                        ("statuses", "read"),
+                        ("metadata", "read"),
+                    ]),
+                )],
+                vec![(
+                    Warn,
+                    "app_permission_recommended",
+                    json!({"missing": [{"permission": "statuses", "required": "write", "granted": "read"}]}),
+                    grant.clone(),
+                )],
+            ),
+            (
+                vec![installation(
+                    &APP,
+                    "acme/shop",
+                    WEB,
+                    "saka-dev",
+                    &granted(&[("contents", "write"), ("pull_requests", "write")]),
+                )],
+                vec![(
+                    Fail,
+                    "app_permissions_missing",
+                    json!({"missing": [
+                        {"permission": "checks", "required": "read", "granted": null},
+                        {"permission": "statuses", "required": "read", "granted": null},
+                        {"permission": "metadata", "required": "read", "granted": null},
+                    ]}),
+                    grant.clone(),
+                )],
+            ),
+            (
+                webhook(
+                    &APP,
+                    "github",
+                    &app(&all_events),
+                    &hook(vec![delivery(5, 200)]),
+                    Some(NOW),
+                ),
+                vec![(
+                    Pass,
+                    "webhook_ok",
+                    json!({"deliveries_24h": 1, "last_received_at": NOW.to_rfc3339()}),
+                    None,
+                )],
+            ),
+            (
+                webhook(
+                    &APP,
+                    "github",
+                    &app(&["pull_request", "check_run", "check_suite"]),
+                    &hook(Vec::new()),
+                    None,
+                ),
+                vec![(
+                    Warn,
+                    "app_events_missing",
+                    json!({"missing": ["status"]}),
+                    Some(("subscribe_app_events", json!({"missing": ["status"]}))),
+                )],
+            ),
+            (
+                webhook(
+                    &APP,
+                    "github",
+                    &app(&all_events),
+                    &hook(
+                        (0..10)
+                            .map(|n| {
+                                delivery(60 * (10 - n), if n % 3 == 0 && n > 0 { 500 } else { 200 })
+                            })
+                            .collect(),
+                    ),
+                    None,
+                ),
+                vec![(
+                    Warn,
+                    "webhook_deliveries_failing",
+                    json!({
+                        "failed": 3, "total": 10, "last_status_code": 500,
+                        "last_delivered_at": NOW.plus_ms(-60 * 60_000).to_rfc3339(),
+                    }),
+                    configure.clone(),
+                )],
+            ),
+            (
+                webhook(
+                    &APP,
+                    "github",
+                    &app(&[]),
+                    &WebhookStatus {
+                        url_set: false,
+                        content_type: None,
+                        secret_set: false,
+                        deliveries: Vec::new(),
+                    },
+                    None,
+                ),
+                vec![
+                    (
+                        Fail,
+                        "app_webhook_url_missing",
+                        json!({}),
+                        configure.clone(),
+                    ),
+                    (
+                        Fail,
+                        "app_webhook_secret_missing",
+                        json!({}),
+                        configure.clone(),
+                    ),
+                ],
+            ),
+            (
+                webhook(
+                    &APP,
+                    "github",
+                    &app(&all_events),
+                    &WebhookStatus {
+                        content_type: Some("form".into()),
+                        ..hook(Vec::new())
+                    },
+                    None,
+                ),
+                vec![(
+                    Fail,
+                    "app_webhook_content_type",
+                    json!({"content_type": "form"}),
+                    configure.clone(),
+                )],
+            ),
+            (
+                vec![webhook_not_configured()],
+                vec![(Skip, "webhook_not_configured", json!({}), None)],
+            ),
+            (
+                user_link(
+                    "github",
+                    Some(&link(crate::vocab::UserLinkState::Active, 30)),
+                    None,
+                    &[],
+                    NOW,
+                ),
+                vec![(
+                    Pass,
+                    "user_link_active",
+                    json!({"login": "octo", "refresh_expires_at": NOW.plus_ms(30 * DAY).to_rfc3339()}),
+                    None,
+                )],
+            ),
+            (
+                user_link(
+                    "github",
+                    Some(&link(crate::vocab::UserLinkState::Active, 6)),
+                    None,
+                    &[],
+                    NOW,
+                ),
+                vec![(
+                    Warn,
+                    "user_link_expiring",
+                    json!({"login": "octo", "refresh_expires_at": NOW.plus_ms(6 * DAY).to_rfc3339()}),
+                    relink.clone(),
+                )],
+            ),
+            (
+                user_link(
+                    "github",
+                    Some(&link(crate::vocab::UserLinkState::NeedsRelink, 30)),
+                    None,
+                    &["shop".into()],
+                    NOW,
+                ),
+                vec![(
+                    Fail,
+                    "user_link_needs_relink",
+                    json!({"cause": "revoked"}),
+                    relink.clone(),
+                )],
+            ),
+            (
+                user_link("github", None, None, &["shop".into(), "web".into()], NOW),
+                vec![(
+                    Fail,
+                    "user_link_missing",
+                    json!({"projects": ["shop", "web"]}),
+                    relink.clone(),
+                )],
+            ),
+            (
+                user_link("github", None, None, &[], NOW),
+                vec![(Skip, "user_link_absent", json!({}), None)],
+            ),
+            (
+                user_link(
+                    "github",
+                    None,
+                    Some(AuthorizationFailure::DeviceFlowDisabled),
+                    &[],
+                    NOW,
+                ),
+                vec![(
+                    Warn,
+                    "device_flow_disabled",
+                    json!({}),
+                    Some(("enable_device_flow", json!({}))),
+                )],
+            ),
+            (
+                vec![device_flow_unconfigured()],
+                vec![(Skip, "device_flow_unconfigured", json!({}), None)],
+            ),
+            (
+                vec![user_token("shop", Some(&pat(Some(30))), NOW)],
+                vec![(
+                    Pass,
+                    "user_token_active",
+                    json!({"login": "ann", "expires_at": NOW.plus_ms(30 * DAY).to_rfc3339()}),
+                    None,
+                )],
+            ),
+            (
+                vec![user_token("shop", Some(&pat(None)), NOW)],
+                vec![(
+                    Pass,
+                    "user_token_active",
+                    json!({"login": "ann", "expires_at": null}),
+                    None,
+                )],
+            ),
+            (
+                vec![user_token("shop", Some(&pat(Some(3))), NOW)],
+                vec![(
+                    Warn,
+                    "user_token_expiring",
+                    json!({"login": "ann", "expires_at": NOW.plus_ms(3 * DAY).to_rfc3339()}),
+                    replace.clone(),
+                )],
+            ),
+            (
+                vec![user_token(
+                    "shop",
+                    Some(&ProjectUserToken {
+                        invalid_cause: Some(crate::vocab::TokenInvalidCause::Rejected),
+                        ..pat(Some(30))
+                    }),
+                    NOW,
+                )],
+                vec![(
+                    Fail,
+                    "user_token_invalid",
+                    json!({"cause": "rejected"}),
+                    replace.clone(),
+                )],
+            ),
+            (
+                vec![user_token("shop", Some(&pat(Some(-1))), NOW)],
+                vec![(
+                    Fail,
+                    "user_token_invalid",
+                    json!({"cause": "expired"}),
+                    replace.clone(),
+                )],
+            ),
+            (
+                vec![user_token("shop", None, NOW)],
+                vec![(Skip, "user_token_absent", json!({}), None)],
+            ),
+            (
+                project_config(&project(None), &[]),
+                vec![(
+                    Pass,
+                    "project_config_ok",
+                    json!({"config_commit": "c0ffee"}),
+                    None,
+                )],
+            ),
+            (
+                project_config(
+                    &project(Some(crate::model::ConfigError {
+                        commit: "bad0".into(),
+                        code: "config_invalid".into(),
+                        params: json!({"issues": [{"code": "unknown_field"}]}),
+                        observed_at: NOW,
+                    })),
+                    &[ScopeOverlap {
+                        repo: "api".into(),
+                        other_project: "web".into(),
+                        other_repo: "api".into(),
+                    }],
+                ),
+                vec![(
+                    Fail,
+                    "project_config_rejected",
+                    json!({"code": "config_invalid", "commit": "bad0", "params": {"issues": [{"code": "unknown_field"}]}}),
+                    Some(("fix_saka_toml", json!({"path": "docs/saka.toml"}))),
+                )],
+            ),
+            (
+                project_config(
+                    &project(None),
+                    &[
+                        ScopeOverlap {
+                            repo: "api".into(),
+                            other_project: "web".into(),
+                            other_repo: "backend".into(),
+                        },
+                        ScopeOverlap {
+                            repo: "ui".into(),
+                            other_project: "web".into(),
+                            other_repo: "ui".into(),
+                        },
+                    ],
+                ),
+                vec![
+                    (
+                        Warn,
+                        "path_scope_overlap",
+                        json!({"repo": "api", "other_project": "web", "other_repo": "backend"}),
+                        Some(("narrow_path_scope", json!({"repo": "api"}))),
+                    ),
+                    (
+                        Warn,
+                        "path_scope_overlap",
+                        json!({"repo": "ui", "other_project": "web", "other_repo": "ui"}),
+                        Some(("narrow_path_scope", json!({"repo": "ui"}))),
+                    ),
+                ],
+            ),
+            (
+                vec![repo_unreachable(Some(404))],
+                vec![(Skip, "repo_unreachable", json!({"status": 404}), None)],
+            ),
+        ];
+        for (findings, expected) in &cases {
+            assert_eq!(&rows(findings), expected);
+        }
+    }
+
+    #[test]
+    fn toolchain_repo_fails_unpinned_tools_first_then_warns_then_passes_once() {
+        use DiagnosticStatus::{Fail, Pass, Warn};
+        let node = pinned("node", "22.11.0");
+        assert_eq!(
+            rows(&toolchain_repo(std::slice::from_ref(&node))),
+            vec![(
+                Pass,
+                "toolchains_pinned",
+                json!({"toolchains": [{"tool": "node", "version": "22.11.0", "installed": false}]}),
+                None,
+            )]
+        );
+        let unpinned = RepoToolchain {
+            pinned: None,
+            source: Some("nvmrc".into()),
+            value: Some("22".into()),
+            proposal: Some(Fix {
+                code: "write_version_file".into(),
+                params: json!({"path": ".nvmrc", "version": "22.11.0"}),
+            }),
+            ..node.clone()
+        };
+        let python = RepoToolchain {
+            tool: "python".into(),
+            proposal: None,
+            value: Some(">=3.11".into()),
+            source: Some("pyproject_requires_python".into()),
+            ..unpinned.clone()
+        };
+        let drifted = RepoToolchain {
+            drift: vec![ToolchainDrift {
+                source: "dockerfile_from".into(),
+                file: "Dockerfile".into(),
+                line: 1,
+                value: "1.24".into(),
+            }],
+            ..pinned("go", "1.26.1")
+        };
+        assert_eq!(
+            rows(&toolchain_repo(&[
+                unpinned.clone(),
+                drifted.clone(),
+                python
+            ])),
+            vec![
+                (
+                    Fail,
+                    "toolchain_unpinned",
+                    json!({"tool": "node", "source": "nvmrc", "value": "22"}),
+                    Some((
+                        "write_version_file",
+                        json!({"path": ".nvmrc", "version": "22.11.0"})
+                    )),
+                ),
+                (
+                    Fail,
+                    "toolchain_unpinned",
+                    json!({"tool": "python", "source": "pyproject_requires_python", "value": ">=3.11"}),
+                    Some(("run_saka_init", json!({"command": "saka init"}))),
+                ),
+            ],
+            "fails hide the warnings"
+        );
+        let rust = |host: HostVersion| RepoToolchain {
+            cached: None,
+            host: Some(host),
+            ..pinned("rust", "1.80.0")
+        };
+        assert_eq!(
+            rows(&toolchain_repo(&[
+                drifted,
+                rust(HostVersion::Found("1.99.1".into())),
+                RepoToolchain {
+                    tool: "python".into(),
+                    ..rust(HostVersion::Missing)
+                },
+            ])),
+            vec![
+                (
+                    Warn,
+                    "toolchain_drift",
+                    json!({"tool": "go", "pinned": "1.26.1", "drift": [
+                        {"source": "dockerfile_from", "file": "Dockerfile", "line": 1, "value": "1.24"},
+                    ]}),
+                    None,
+                ),
+                (
+                    Warn,
+                    "host_toolchain_mismatch",
+                    json!({"tool": "rust", "declared": "1.80.0", "found": "1.99.1"}),
+                    None,
+                ),
+                (
+                    Warn,
+                    "host_toolchain_missing",
+                    json!({"tool": "python", "declared": "1.80.0"}),
+                    None,
+                ),
+            ]
+        );
+        assert_eq!(
+            rows(&toolchain_repo(&[
+                rust(HostVersion::Found("1.80.0".into())),
+                RepoToolchain {
+                    cached: Some(true),
+                    ..node
+                },
+            ])),
+            vec![(
+                Pass,
+                "toolchains_pinned",
+                json!({"toolchains": [
+                    {"tool": "rust", "version": "1.80.0", "installed": true},
+                    {"tool": "node", "version": "22.11.0", "installed": true},
+                ]}),
+                None,
+            )]
+        );
+        assert_eq!(
+            rows(&toolchain_repo(&[])),
+            vec![(Pass, "toolchains_pinned", json!({"toolchains": []}), None)]
+        );
+    }
+
+    #[test]
+    fn host_versions_are_read_from_the_first_line_and_match_by_prefix() {
+        assert_eq!(
+            host_version_of("rustc 1.99.1 (4d215e2 2026-09-01)\n").as_deref(),
+            Some("1.99.1")
+        );
+        assert_eq!(
+            host_version_of("Python 3.12.4\n").as_deref(),
+            Some("3.12.4")
+        );
+        assert_eq!(host_version_of("command not found"), None);
+        assert_eq!(host_version_of(""), None);
+        assert!(host_matches("3.12", "3.12.4"));
+        assert!(host_matches("1.80.0", "1.80.0"));
+        assert!(!host_matches("1.80.0", "1.99.1"));
+        assert!(!host_matches("3.1", "3.12.4"));
+    }
+
+    #[test]
+    fn a_project_name_that_needs_quoting_is_quoted_in_its_command() {
+        assert_eq!(
+            user_token_command("shop"),
+            "saka project user-token set shop"
+        );
+        assert_eq!(
+            user_token_command("Shop app"),
+            "saka project user-token set 'Shop app'"
+        );
+        assert_eq!(
+            user_token_command("it's"),
+            r"saka project user-token set 'it'\''s'"
+        );
+    }
+
     #[test]
     fn check_ids_are_stable_dotted_names_and_client_checks_come_first() {
         let ids: Vec<&str> = CheckId::ALL.iter().map(|c| c.as_str()).collect();
@@ -942,6 +2241,13 @@ mod tests {
                 "agent.quota",
                 "toolchain.cache",
                 "toolchain.sources",
+                "scm.app",
+                "scm.installation",
+                "scm.webhook",
+                "scm.user_link",
+                "project.user_token",
+                "project.config",
+                "toolchain.repo",
             ]
         );
         assert!(CheckId::server().all(|c| !c.is_client()));

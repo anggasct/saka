@@ -1275,6 +1275,18 @@ pub fn webhook_delivery_seen(
     )
 }
 
+pub fn last_webhook_received_at(
+    conn: &Connection,
+    integration_id: &str,
+) -> Result<Option<Timestamp>> {
+    let at: Option<i64> = conn.query_row(
+        "SELECT MAX(received_at) FROM webhook_delivery WHERE integration_id = ?1",
+        [integration_id],
+        |row| row.get(0),
+    )?;
+    Ok(at.map(Timestamp))
+}
+
 pub fn hook_candidates(conn: &Connection, repo: RepoId) -> Result<Vec<HookCandidate>> {
     let mut stmt = conn.prepare(
         "SELECT cr.id, cr.work_item_id, cr.project_id, cr.repo_id, cr.number, cr.head_sha

@@ -139,7 +139,15 @@ vocab!(CheckId {
     AgentQuota => "agent.quota",
     ToolchainCache => "toolchain.cache",
     ToolchainSources => "toolchain.sources",
+    ScmApp => "scm.app",
+    ScmInstallation => "scm.installation",
+    ScmWebhook => "scm.webhook",
+    ScmUserLink => "scm.user_link",
+    ProjectUserToken => "project.user_token",
+    ProjectConfig => "project.config",
+    ToolchainRepo => "toolchain.repo",
 });
+vocab!(HostTool { Rust => "rust", Python => "python" });
 vocab!(DiagnosticStatus { Pass => "pass", Warn => "warn", Fail => "fail", Skip => "skip" });
 vocab!(SubjectKind {
     Instance => "instance",
