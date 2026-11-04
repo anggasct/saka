@@ -5,10 +5,12 @@ use crate::event::Event;
 use crate::ids::{ProjectId, UserLinkAuthorizationId, UserLinkId};
 use crate::job::{Job, JobKind};
 use crate::model::{Blocker, Coded};
+use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorSource, AuthorizationFailure, AuthorizationState, AuthorshipMode, BlockerCode,
-    ChangeCredentialKind, RelinkCause, ResumeTrigger, StagePhase, UserLinkCause, UserLinkState,
+    ChangeCredentialKind, RelinkCause, ResumeTrigger, StagePhase, TokenInvalidCause, UserLinkCause,
+    UserLinkState, UserTokenCause,
 };
 
 pub const REUSE_MIN_REMAINING_MS: i64 = 60_000;
@@ -21,6 +23,9 @@ pub const INTERVAL_MAX_SECS: u32 = 300;
 pub const USER_CODE_MAX: usize = 32;
 pub const LOGIN_MAX: usize = 39;
 pub const DISPLAY_NAME_MAX: usize = 255;
+pub const USER_TOKEN_PREFIX: &str = "github_pat_";
+pub const USER_TOKEN_MIN_BYTES: usize = 40;
+pub const USER_TOKEN_MAX_BYTES: usize = 255;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserLink {
@@ -418,11 +423,47 @@ pub struct ProjectAuthorship {
     pub project_id: ProjectId,
     pub mode: AuthorshipMode,
     pub mode_updated_at: Timestamp,
+    pub token: Option<ProjectUserToken>,
     pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectUserToken {
+    pub integration_id: String,
+    pub identity: Identity,
+    pub expires_at: Option<Timestamp>,
+    pub set_at: Timestamp,
+    pub invalid_cause: Option<TokenInvalidCause>,
+}
+
+impl ProjectUserToken {
+    // A token the provider refused stays refused; one past its expiry is expired without a write.
+    pub fn problem(&self, now: Timestamp) -> Option<TokenInvalidCause> {
+        self.invalid_cause.or_else(|| {
+            self.expires_at
+                .filter(|at| *at <= now)
+                .map(|_| TokenInvalidCause::Expired)
+        })
+    }
+
+    pub fn git_identity(&self) -> GitIdentity {
+        GitIdentity {
+            name: self
+                .identity
+                .display_name
+                .clone()
+                .unwrap_or_else(|| self.identity.login.clone()),
+            email: self.identity.email.clone(),
+        }
+    }
 }
 
 pub fn mode_of(authorship: Option<&ProjectAuthorship>) -> AuthorshipMode {
     authorship.map_or(AuthorshipMode::Bot, |a| a.mode)
+}
+
+pub fn token_of(authorship: Option<&ProjectAuthorship>) -> Option<&ProjectUserToken> {
+    authorship.and_then(|a| a.token.as_ref())
 }
 
 // Setting the mode a project already has changes nothing and records nothing.
@@ -441,9 +482,153 @@ pub fn set_mode(
         project_id,
         mode,
         mode_updated_at: now,
+        token: current.and_then(|a| a.token.clone()),
         updated_at: now,
     };
     Some((event, after))
+}
+
+// The user token mode needs a stored token that is usable right now.
+pub fn check_user_pat_mode(
+    current: Option<&ProjectAuthorship>,
+    now: Timestamp,
+) -> Result<(), Rejection> {
+    let token = token_of(current).ok_or(Rejection::UserTokenMissing)?;
+    match token.problem(now) {
+        None => Ok(()),
+        Some(cause) => Err(Rejection::UserTokenInvalid { cause }),
+    }
+}
+
+// Only the shape is checked here; whether the token works is the provider's answer.
+pub fn check_user_token_value(value: &str) -> Result<(), Rejection> {
+    if !(USER_TOKEN_MIN_BYTES..=USER_TOKEN_MAX_BYTES).contains(&value.len()) {
+        return Err(Rejection::Invalid {
+            field: "value",
+            code: "length",
+        });
+    }
+    if !value.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(Rejection::Invalid {
+            field: "value",
+            code: "invalid",
+        });
+    }
+    if !value.starts_with(USER_TOKEN_PREFIX) {
+        return Err(Rejection::UserTokenNotFineGrained);
+    }
+    Ok(())
+}
+
+// A project that never had a row is in bot mode, so a token stored first records bot mode too.
+#[must_use]
+pub fn store_token(
+    project_id: ProjectId,
+    current: Option<&ProjectAuthorship>,
+    token: ProjectUserToken,
+    now: Timestamp,
+) -> (Event, ProjectAuthorship) {
+    let event = Event::ProjectUserTokenSet {
+        project_id,
+        integration_id: token.integration_id.clone(),
+        provider_user_id: token.identity.provider_user_id,
+        login: token.identity.login.clone(),
+        expires_at: token.expires_at,
+    };
+    let after = ProjectAuthorship {
+        project_id,
+        mode: mode_of(current),
+        mode_updated_at: current.map_or(now, |a| a.mode_updated_at),
+        token: Some(token),
+        updated_at: now,
+    };
+    (event, after)
+}
+
+#[must_use]
+pub fn remove_token(
+    current: Option<&ProjectAuthorship>,
+    now: Timestamp,
+) -> Option<(Event, ProjectAuthorship)> {
+    let current = current.filter(|a| a.token.is_some())?;
+    let event = Event::ProjectUserTokenRemoved {
+        project_id: current.project_id,
+    };
+    let after = ProjectAuthorship {
+        token: None,
+        updated_at: now,
+        ..current.clone()
+    };
+    Some((event, after))
+}
+
+// Only the token that was used is marked: one stored again meanwhile is left as it is.
+#[must_use]
+pub fn invalidate_token(
+    current: Option<&ProjectAuthorship>,
+    used_set_at: Timestamp,
+    cause: TokenInvalidCause,
+    now: Timestamp,
+) -> Option<(Event, ProjectAuthorship)> {
+    let current = current?;
+    let token = current
+        .token
+        .as_ref()
+        .filter(|t| t.set_at == used_set_at && t.invalid_cause.is_none())?;
+    let event = Event::ProjectUserTokenInvalidated {
+        project_id: current.project_id,
+        cause,
+    };
+    let after = ProjectAuthorship {
+        token: Some(ProjectUserToken {
+            invalid_cause: Some(cause),
+            ..token.clone()
+        }),
+        updated_at: now,
+        ..current.clone()
+    };
+    Some((event, after))
+}
+
+impl From<TokenInvalidCause> for UserTokenCause {
+    fn from(cause: TokenInvalidCause) -> UserTokenCause {
+        match cause {
+            TokenInvalidCause::Expired => UserTokenCause::Expired,
+            TokenInvalidCause::Rejected => UserTokenCause::Rejected,
+        }
+    }
+}
+
+// The token belongs to one integration; a repo on another one never sees it.
+pub fn usable_token<'a>(
+    current: Option<&'a ProjectAuthorship>,
+    integration_id: &str,
+    phase: StagePhase,
+    now: Timestamp,
+) -> Result<&'a ProjectUserToken, CredentialBlock> {
+    let blocked = |cause| CredentialBlock::TokenInvalid { cause, phase };
+    let token = token_of(current)
+        .filter(|t| t.integration_id == integration_id)
+        .ok_or(blocked(UserTokenCause::Missing))?;
+    match token.problem(now) {
+        None => Ok(token),
+        Some(cause) => Err(blocked(cause.into())),
+    }
+}
+
+pub fn user_token_author(
+    current: Option<&ProjectAuthorship>,
+    integration_id: &str,
+    now: Timestamp,
+) -> Result<ResolvedAuthor, CredentialBlock> {
+    let token = usable_token(current, integration_id, StagePhase::RunningSession, now)?;
+    Ok(ResolvedAuthor {
+        identity: token.git_identity(),
+        author: SessionAuthor {
+            source: AuthorSource::UserToken,
+            login: Some(token.identity.login.clone()),
+        },
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,6 +636,10 @@ pub enum CredentialBlock {
     LinkRequired {
         integration_id: String,
         cause: UserLinkCause,
+        phase: StagePhase,
+    },
+    TokenInvalid {
+        cause: UserTokenCause,
         phase: StagePhase,
     },
     AccessDenied {
@@ -464,13 +653,15 @@ impl CredentialBlock {
     pub fn code(&self) -> BlockerCode {
         match self {
             CredentialBlock::LinkRequired { .. } => BlockerCode::UserLinkRequired,
+            CredentialBlock::TokenInvalid { .. } => BlockerCode::UserTokenInvalid,
             CredentialBlock::AccessDenied { .. } => BlockerCode::UserAccessDenied,
         }
     }
 
     pub fn phase(&self) -> StagePhase {
         match self {
-            CredentialBlock::LinkRequired { phase, .. } => *phase,
+            CredentialBlock::LinkRequired { phase, .. }
+            | CredentialBlock::TokenInvalid { phase, .. } => *phase,
             CredentialBlock::AccessDenied { .. } => StagePhase::OpeningChange,
         }
     }
@@ -482,6 +673,9 @@ impl CredentialBlock {
                 cause,
                 phase,
             } => json!({ "integration_id": integration_id, "cause": cause, "phase": phase }),
+            CredentialBlock::TokenInvalid { cause, phase } => {
+                json!({ "cause": cause, "phase": phase })
+            }
             CredentialBlock::AccessDenied {
                 credential,
                 login,
@@ -537,26 +731,34 @@ pub fn user_link_author(
     }
 }
 
-// An operator's own action ends a credential blocker: a fresh link for its integration or any
-// later change of the project's mode. Nothing else does, so it is never retried blindly.
+// An operator's own action ends a credential blocker: a fresh link for its integration, a new
+// usable token for the project, or any later change of the project's mode. Nothing else does,
+// so it is never retried blindly.
 pub fn resume_trigger(
     blocker: &Blocker,
     links: &[UserLink],
     authorship: Option<&ProjectAuthorship>,
+    now: Timestamp,
 ) -> Option<ResumeTrigger> {
-    if blocker.code != BlockerCode::UserLinkRequired {
+    if !matches!(
+        blocker.code,
+        BlockerCode::UserLinkRequired | BlockerCode::UserTokenInvalid
+    ) {
         return None;
     }
     if authorship.is_some_and(|a| a.mode_updated_at > blocker.opened_at) {
         return Some(ResumeTrigger::AuthorshipModeChanged);
     }
-    let integration = blocker.params.get("integration_id")?.as_str()?;
-    links
-        .iter()
-        .any(|l| {
+    let renewed = if blocker.code == BlockerCode::UserTokenInvalid {
+        token_of(authorship)
+            .is_some_and(|t| t.set_at > blocker.opened_at && t.problem(now).is_none())
+    } else {
+        let integration = blocker.params.get("integration_id")?.as_str()?;
+        links.iter().any(|l| {
             l.integration_id == integration && l.is_active() && l.linked_at > blocker.opened_at
         })
-        .then_some(ResumeTrigger::CredentialRenewed)
+    };
+    renewed.then_some(ResumeTrigger::CredentialRenewed)
 }
 
 #[cfg(test)]
@@ -748,25 +950,188 @@ mod tests {
             ..later.clone()
         };
         assert_eq!(
-            resume_trigger(&b, std::slice::from_ref(&later), None),
+            resume_trigger(&b, std::slice::from_ref(&later), None, NOW),
             Some(ResumeTrigger::CredentialRenewed)
         );
-        assert_eq!(resume_trigger(&b, &[same, broken, other], None), None);
+        assert_eq!(resume_trigger(&b, &[same, broken, other], None, NOW), None);
         let mode = |at| ProjectAuthorship {
             project_id: ProjectId(Uuid::from_u128(3)),
             mode: AuthorshipMode::Bot,
             mode_updated_at: at,
+            token: None,
             updated_at: at,
         };
         assert_eq!(
-            resume_trigger(&b, &[], Some(&mode(NOW.plus_ms(1)))),
+            resume_trigger(&b, &[], Some(&mode(NOW.plus_ms(1))), NOW),
             Some(ResumeTrigger::AuthorshipModeChanged)
         );
-        assert_eq!(resume_trigger(&b, &[], Some(&mode(NOW))), None);
+        assert_eq!(resume_trigger(&b, &[], Some(&mode(NOW)), NOW), None);
         let denied = blocker(BlockerCode::UserAccessDenied, NOW);
         assert_eq!(
-            resume_trigger(&denied, &[later], Some(&mode(NOW.plus_ms(1)))),
+            resume_trigger(&denied, &[later], Some(&mode(NOW.plus_ms(1))), NOW),
             None
+        );
+    }
+
+    fn with_token(at: Timestamp, expires_at: Option<Timestamp>) -> ProjectAuthorship {
+        let token = ProjectUserToken {
+            integration_id: "github".into(),
+            identity: Identity {
+                display_name: Some("Ann Lee".into()),
+                ..identity(7, "ann")
+            },
+            expires_at,
+            set_at: at,
+            invalid_cause: None,
+        };
+        store_token(ProjectId(Uuid::from_u128(3)), None, token, at).1
+    }
+
+    #[test]
+    fn only_a_fine_grained_token_of_the_right_size_is_accepted() {
+        let ok = format!("{USER_TOKEN_PREFIX}{}", "a".repeat(29));
+        assert_eq!(ok.len(), 40);
+        assert_eq!(check_user_token_value(&ok), Ok(()));
+        let classic = format!("ghp_{}", "a".repeat(36));
+        assert_eq!(
+            check_user_token_value(&classic),
+            Err(Rejection::UserTokenNotFineGrained)
+        );
+        for (value, code) in [
+            (ok[..39].to_string(), "length"),
+            (format!("{ok}{}", "a".repeat(216)), "length"),
+            (ok.replacen('a', " ", 1), "invalid"),
+            (ok.replacen('a', "é", 1), "invalid"),
+        ] {
+            assert_eq!(
+                check_user_token_value(&value),
+                Err(Rejection::Invalid {
+                    field: "value",
+                    code
+                }),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_token_authors_until_it_expires_or_is_refused_and_only_on_its_integration() {
+        let expires = NOW.plus_ms(3_600_000);
+        let a = with_token(NOW, Some(expires));
+        assert_eq!(a.mode, AuthorshipMode::Bot);
+        assert_eq!(a.mode_updated_at, NOW);
+        let resolved = user_token_author(Some(&a), "github", NOW).unwrap();
+        assert_eq!(resolved.identity.name, "Ann Lee");
+        assert_eq!(resolved.author.source, AuthorSource::UserToken);
+        assert_eq!(resolved.author.login.as_deref(), Some("ann"));
+        let block = |r: Result<ResolvedAuthor, CredentialBlock>| r.unwrap_err().params();
+        assert_eq!(
+            block(user_token_author(Some(&a), "github", expires)),
+            json!({ "cause": "expired", "phase": "running_session" })
+        );
+        assert_eq!(
+            block(user_token_author(Some(&a), "ghes", NOW)),
+            json!({ "cause": "missing", "phase": "running_session" })
+        );
+        assert_eq!(
+            block(user_token_author(None, "github", NOW)),
+            json!({ "cause": "missing", "phase": "running_session" })
+        );
+        let (event, refused) =
+            invalidate_token(Some(&a), NOW, TokenInvalidCause::Rejected, NOW).unwrap();
+        assert_eq!(event.kind(), "workspace.project.user_token_invalidated");
+        assert_eq!(
+            block(user_token_author(Some(&refused), "github", NOW)),
+            json!({ "cause": "rejected", "phase": "running_session" })
+        );
+        assert_eq!(
+            check_user_pat_mode(Some(&refused), NOW),
+            Err(Rejection::UserTokenInvalid {
+                cause: TokenInvalidCause::Rejected
+            })
+        );
+        assert_eq!(
+            check_user_pat_mode(None, NOW),
+            Err(Rejection::UserTokenMissing)
+        );
+        assert_eq!(check_user_pat_mode(Some(&a), NOW), Ok(()));
+        assert!(
+            invalidate_token(Some(&a), NOW.plus_ms(1), TokenInvalidCause::Rejected, NOW).is_none(),
+            "a token stored again meanwhile is not the one refused"
+        );
+        assert!(invalidate_token(Some(&refused), NOW, TokenInvalidCause::Rejected, NOW).is_none());
+    }
+
+    #[test]
+    fn a_stored_token_event_and_its_removal_never_carry_the_value() {
+        let a = with_token(NOW, None);
+        let (event, _) = store_token(
+            a.project_id,
+            Some(&a),
+            a.token.clone().unwrap(),
+            NOW.plus_ms(1),
+        );
+        assert_eq!(event.kind(), "workspace.project.user_token_set");
+        assert_eq!(
+            event.payload(),
+            json!({
+                "project_id": a.project_id,
+                "integration_id": "github",
+                "provider_user_id": 7,
+                "login": "ann",
+                "expires_at": null,
+            })
+        );
+        let (removed, after) = remove_token(Some(&a), NOW).unwrap();
+        assert_eq!(removed.kind(), "workspace.project.user_token_removed");
+        assert_eq!(after.token, None);
+        assert!(remove_token(Some(&after), NOW).is_none());
+        let (_, user_pat) = set_mode(a.project_id, Some(&a), AuthorshipMode::UserPat, NOW).unwrap();
+        assert_eq!(user_pat.token, a.token, "a mode change keeps the token");
+    }
+
+    #[test]
+    fn only_a_later_usable_token_or_mode_change_resumes_a_token_blocker() {
+        let opened_at = NOW;
+        let blocker = Blocker {
+            id: crate::ids::BlockerId(Uuid::from_u128(1)),
+            work_item_id: crate::ids::WorkItemId(Uuid::from_u128(2)),
+            stage_run_id: None,
+            code: BlockerCode::UserTokenInvalid,
+            params: json!({ "cause": "rejected", "phase": "opening_change" }),
+            resolution: None,
+            opened_at,
+            resolved_at: None,
+        };
+        let earlier = ProjectAuthorship {
+            mode: AuthorshipMode::UserPat,
+            ..with_token(NOW.plus_ms(-10), None)
+        };
+        assert_eq!(resume_trigger(&blocker, &[], Some(&earlier), NOW), None);
+        let renewed = ProjectAuthorship {
+            mode_updated_at: NOW.plus_ms(-10),
+            ..with_token(NOW.plus_ms(1), None)
+        };
+        assert_eq!(
+            resume_trigger(&blocker, &[], Some(&renewed), NOW.plus_ms(2)),
+            Some(ResumeTrigger::CredentialRenewed)
+        );
+        let short = ProjectAuthorship {
+            mode_updated_at: NOW.plus_ms(-10),
+            ..with_token(NOW.plus_ms(1), Some(NOW.plus_ms(5)))
+        };
+        assert_eq!(
+            resume_trigger(&blocker, &[], Some(&short), NOW.plus_ms(5)),
+            None,
+            "a new token already expired does not resume"
+        );
+        let switched = ProjectAuthorship {
+            mode_updated_at: NOW.plus_ms(1),
+            ..earlier
+        };
+        assert_eq!(
+            resume_trigger(&blocker, &[], Some(&switched), NOW),
+            Some(ResumeTrigger::AuthorshipModeChanged)
         );
     }
 

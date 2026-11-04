@@ -93,6 +93,9 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::SecretTooShort
         | R::SecretNameInvalid
         | R::FileUnsupported { .. }
+        | R::UserTokenNotFineGrained
+        | R::UserTokenRejected { .. }
+        | R::UserTokenRepoInaccessible { .. }
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
@@ -115,7 +118,10 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserAuthorshipUnsupported { .. }
         | R::UserLinkInUse { .. }
         | R::UserLinkMissing { .. }
-        | R::UserTokenMissing => StatusCode::CONFLICT,
+        | R::UserTokenMissing
+        | R::UserTokenInvalid { .. }
+        | R::UserTokenInUse
+        | R::UserTokenMultiIntegration { .. } => StatusCode::CONFLICT,
     }
 }
 

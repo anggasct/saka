@@ -6,7 +6,8 @@ use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_core::vocab::AuthorizationFailure;
 use saka_ports::{
-    Clock, DeviceCode, DevicePoll, IdentityLookup, PortError, PortResult, TokenRefresh, UserTokens,
+    Clock, DeviceCode, DevicePoll, IdentityLookup, PortError, PortResult, RepoAccess, TokenRefresh,
+    UserTokens,
 };
 use serde_json::json;
 
@@ -41,6 +42,13 @@ pub struct GitHubUser {
 }
 
 #[derive(Debug)]
+struct Pat {
+    user: GitHubUser,
+    expires_at: Option<Timestamp>,
+    live: bool,
+}
+
+#[derive(Debug)]
 struct Device {
     device_code: String,
     answers: VecDeque<DeviceAnswer>,
@@ -65,6 +73,8 @@ struct State {
     identity_rejected: bool,
     calls: Vec<AccountCall>,
     issued: Vec<String>,
+    pats: BTreeMap<String, Pat>,
+    pat_repo_denials: BTreeMap<String, u16>,
 }
 
 // The user-account side of a fake GitHub: device authorizations a test approves, denies, slows
@@ -99,6 +109,8 @@ impl FakeAccounts {
             identity_rejected: false,
             calls: Vec::new(),
             issued: Vec::new(),
+            pats: BTreeMap::new(),
+            pat_repo_denials: BTreeMap::new(),
         });
         FakeAccounts { clock, state }
     }
@@ -167,12 +179,65 @@ impl FakeAccounts {
         self.state().pull_denial = status;
     }
 
+    // A fine-grained token owned by the current user, live until revoked.
+    pub fn issue_pat(&self, expires_at: Option<Timestamp>) -> String {
+        let mut s = self.state();
+        s.next += 1;
+        let token = format!("github_pat_11FAKE{:04}_finegrainedtokenvalue", s.next);
+        let user = s.user.clone();
+        s.issued.push(token.clone());
+        s.pats.insert(
+            token.clone(),
+            Pat {
+                user,
+                expires_at,
+                live: true,
+            },
+        );
+        token
+    }
+
+    pub fn revoke_pat(&self, token: &str) {
+        if let Some(pat) = self.state().pats.get_mut(token) {
+            pat.live = false;
+        }
+    }
+
+    pub fn deny_pat_repo(&self, full_name: &str, status: Option<u16>) {
+        let mut s = self.state();
+        match status {
+            Some(status) => s.pat_repo_denials.insert(full_name.to_string(), status),
+            None => s.pat_repo_denials.remove(full_name),
+        };
+    }
+
+    fn live_pat(s: &State, token: &SecretText) -> bool {
+        s.pats.get(token.expose()).is_some_and(|p| p.live)
+    }
+
     pub(crate) fn user_pull(&self, token: &SecretText) -> Option<u16> {
         let s = self.state();
-        if !s.live_access.contains(token.expose()) {
+        let live = if token.expose().starts_with("github_pat_") {
+            FakeAccounts::live_pat(&s, token)
+        } else {
+            s.live_access.contains(token.expose())
+        };
+        if !live {
             return Some(401);
         }
         s.pull_denial
+    }
+
+    pub(crate) fn repository_access(&self, full_name: &str, token: &SecretText) -> RepoAccess {
+        let mut s = self.state();
+        self.record(&mut s, "repository_access", token.expose());
+        if !FakeAccounts::live_pat(&s, token) && !s.live_access.contains(token.expose()) {
+            return RepoAccess::Inaccessible { status: 401 };
+        }
+        match s.pat_repo_denials.get(full_name) {
+            Some(status) => RepoAccess::Inaccessible { status: *status },
+            None => RepoAccess::Readable,
+        }
     }
 
     pub fn calls(&self) -> Vec<AccountCall> {
@@ -305,12 +370,22 @@ impl FakeAccounts {
         if s.identity_rejected {
             return Ok(IdentityLookup::Rejected { status: 401 });
         }
-        let u = s.user.clone();
-        Ok(IdentityLookup::Found(Identity {
-            provider_user_id: u.id,
-            email: format!("{}+{}@users.noreply.github.com", u.id, u.login),
-            login: u.login,
-            display_name: u.name,
-        }))
+        let (u, token_expires_at) = if token.expose().starts_with("github_pat_") {
+            match s.pats.get(token.expose()).filter(|p| p.live) {
+                Some(pat) => (pat.user.clone(), pat.expires_at),
+                None => return Ok(IdentityLookup::Rejected { status: 401 }),
+            }
+        } else {
+            (s.user.clone(), None)
+        };
+        Ok(IdentityLookup::Found {
+            identity: Identity {
+                provider_user_id: u.id,
+                email: format!("{}+{}@users.noreply.github.com", u.id, u.login),
+                login: u.login,
+                display_name: u.name,
+            },
+            token_expires_at,
+        })
     }
 }

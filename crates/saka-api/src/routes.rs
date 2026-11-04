@@ -378,6 +378,102 @@ pub async fn set_authorship(
     .await
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/projects/{project_id}/authorship/user-token", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::SetUserTokenBody,
+    responses(
+        (status = 200, body = dto::ProjectAuthorship, description = "The token is checked and stored; its value is never returned"),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn set_user_token(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let req: dto::SetUserTokenBody = tri!(body(&raw));
+    let value = SecretText::new(req.value);
+    let engine = tri!(s.engine().cloned());
+    // The stored request hash covers a keyed digest of the token, never the token itself.
+    let digest = Bytes::from(engine.user_token_fingerprint(project, &value));
+    let respond = |p: Produced<'_>| match p {
+        Produced::Authorship(v) => reply(StatusCode::OK, &dto::ProjectAuthorship::from_view(v)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "project.user_token.set",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &digest,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .set_user_token(project, &value, &cause, Some(&action))
+                .await
+                .map(|_| Some(project))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/projects/{project_id}/authorship/user-token", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    responses(
+        (status = 204, description = "The token is gone, or there was none"),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn remove_user_token(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let engine = tri!(s.engine().cloned());
+    let m = Mutation {
+        name: "project.user_token.remove",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &no_content,
+        |cause, action| async move {
+            engine
+                .remove_user_token(project, &cause, Some(&action))
+                .map(|()| Some(project))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
 fn no_content(p: Produced<'_>) -> Reply {
     match p {
         Produced::Nothing => Reply {

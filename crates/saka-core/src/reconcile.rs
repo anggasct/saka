@@ -75,7 +75,11 @@ pub fn waiting(
         .collect()
 }
 
-fn credential_resume(snapshot: &Snapshot, task: &Task) -> Option<crate::vocab::ResumeTrigger> {
+fn credential_resume(
+    snapshot: &Snapshot,
+    task: &Task,
+    now: Timestamp,
+) -> Option<crate::vocab::ResumeTrigger> {
     if task.item.state != WorkItemState::Blocked {
         return None;
     }
@@ -83,7 +87,7 @@ fn credential_resume(snapshot: &Snapshot, task: &Task) -> Option<crate::vocab::R
         .authorships
         .iter()
         .find(|a| a.project_id == task.item.project_id);
-    resume_trigger(task.open_blocker()?, &snapshot.user_links, authorship)
+    resume_trigger(task.open_blocker()?, &snapshot.user_links, authorship, now)
 }
 
 pub fn reconcile(
@@ -146,7 +150,7 @@ pub fn reconcile(
         if crate::task::auto_retry_due(task, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::AutoRetry));
         }
-        if let Some(trigger) = credential_resume(snapshot, task) {
+        if let Some(trigger) = credential_resume(snapshot, task, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::Resume { trigger }));
         }
     }

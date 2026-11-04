@@ -155,8 +155,15 @@ export function errorText(
     reason: text(params.reason) || "other",
     integrations: Array.isArray(params.integrations)
       ? params.integrations
-          .map((i) => text(record(i).integration_id))
+          .map((i) =>
+            typeof i === "string" ? i : text(record(i).integration_id),
+          )
           .join(", ")
+      : "",
+    cause: text(params.cause) || "other",
+    status: text(params.status),
+    repos: Array.isArray(params.repos)
+      ? params.repos.map((r) => text(record(r).full_name)).join(", ")
       : "",
   });
 }

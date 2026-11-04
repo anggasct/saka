@@ -1446,10 +1446,12 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::QuotaExhausted
         | B::NoChanges
         | B::PathScopeViolation => (Stage::Dev, StagePhase::RunningSession),
-        B::UserLinkRequired => match params.get("phase").and_then(Value::as_str)?.parse().ok()? {
-            StagePhase::OpeningChange => (Stage::Dev, StagePhase::OpeningChange),
-            _ => (Stage::Dev, StagePhase::RunningSession),
-        },
+        B::UserLinkRequired | B::UserTokenInvalid => {
+            match params.get("phase").and_then(Value::as_str)?.parse().ok()? {
+                StagePhase::OpeningChange => (Stage::Dev, StagePhase::OpeningChange),
+                _ => (Stage::Dev, StagePhase::RunningSession),
+            }
+        }
         B::UserAccessDenied => (Stage::Dev, StagePhase::OpeningChange),
         B::CiRed if params.get("reason").and_then(Value::as_str) == Some("runner_failed") => {
             (Stage::Merge, StagePhase::AwaitingCi)
@@ -1878,7 +1880,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::UserLinkRefreshed { .. }
         | E::UserLinkRelinkRequired { .. }
         | E::UserLinkRemoved { .. }
-        | E::ProjectAuthorshipSet { .. } => {}
+        | E::ProjectAuthorshipSet { .. }
+        | E::ProjectUserTokenSet { .. }
+        | E::ProjectUserTokenRemoved { .. }
+        | E::ProjectUserTokenInvalidated { .. } => {}
         E::EnvironmentPrepared { .. }
         | E::EnvironmentTornDown { .. }
         | E::EnvironmentTeardownFailed { .. }
@@ -2148,6 +2153,14 @@ mod retry_tests {
             &link("opening_change")
         ));
         assert!(!auto_retryable(BlockerCode::UserAccessDenied, &json!({})));
+        for phase in [StagePhase::RunningSession, StagePhase::OpeningChange] {
+            let token = json!({ "cause": "rejected", "phase": phase });
+            assert_eq!(
+                retry_entry(BlockerCode::UserTokenInvalid, &token),
+                Some((Stage::Dev, phase))
+            );
+            assert!(!auto_retryable(BlockerCode::UserTokenInvalid, &token));
+        }
         let mut r = BTreeMap::new();
         count_retry(
             &mut r,

@@ -18,9 +18,9 @@ use saka_ports::{
     DocWrite, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link,
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
-    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
-    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, TokenRefresh, Toolchains,
-    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    RecipeCommandOutcome, RepoAccess, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm,
+    ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, TokenRefresh,
+    Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1870,6 +1870,15 @@ impl Scm for FakeWorld {
         token: &SecretText,
     ) -> PortResult<IdentityLookup> {
         self.accounts.identity(token)
+    }
+
+    async fn user_repository_access(
+        &self,
+        _integration_id: &str,
+        full_name: &str,
+        token: &SecretText,
+    ) -> PortResult<RepoAccess> {
+        Ok(self.accounts.repository_access(full_name, token))
     }
 }
 

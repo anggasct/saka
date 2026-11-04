@@ -23,8 +23,8 @@ use saka_env::{
 use saka_ports::{
     ChangeOpening, ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote,
     IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
-    PushOutcome, PushRequest, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport, TokenRefresh,
-    UnitLimits, WebhookDelivery,
+    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport,
+    TokenRefresh, UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
 use saka_store::{Store, StoreError};
@@ -165,6 +165,16 @@ impl Scm for ScmRouter {
     ) -> PortResult<IdentityLookup> {
         self.get(integration_id)?
             .user_identity(integration_id, token)
+            .await
+    }
+    async fn user_repository_access(
+        &self,
+        integration_id: &str,
+        full_name: &str,
+        token: &SecretText,
+    ) -> PortResult<RepoAccess> {
+        self.get(integration_id)?
+            .user_repository_access(integration_id, full_name, token)
             .await
     }
 }

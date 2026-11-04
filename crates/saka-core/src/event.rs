@@ -17,7 +17,8 @@ use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, DraftFailureCode, DraftLocale, GateOutcome, GateSource, InterruptBy,
     LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause,
-    ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, Trigger,
+    ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, TokenInvalidCause,
+    Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -84,6 +85,21 @@ pub enum Event {
     ProjectAuthorshipSet {
         project_id: ProjectId,
         mode: AuthorshipMode,
+    },
+    #[serde(rename = "workspace.project.user_token_set")]
+    ProjectUserTokenSet {
+        project_id: ProjectId,
+        integration_id: String,
+        provider_user_id: u64,
+        login: String,
+        expires_at: Option<Timestamp>,
+    },
+    #[serde(rename = "workspace.project.user_token_removed")]
+    ProjectUserTokenRemoved { project_id: ProjectId },
+    #[serde(rename = "workspace.project.user_token_invalidated")]
+    ProjectUserTokenInvalidated {
+        project_id: ProjectId,
+        cause: TokenInvalidCause,
     },
     #[serde(rename = "workspace.secret.set")]
     SecretSet { project_id: ProjectId, name: String },
@@ -711,6 +727,9 @@ impl Event {
             | E::ProjectConfigRejected { project_id, .. }
             | E::ProjectConfigErrorCleared { project_id, .. }
             | E::ProjectAuthorshipSet { project_id, .. }
+            | E::ProjectUserTokenSet { project_id, .. }
+            | E::ProjectUserTokenRemoved { project_id }
+            | E::ProjectUserTokenInvalidated { project_id, .. }
             | E::SecretSet { project_id, .. }
             | E::SecretRemoved { project_id, .. }
             | E::DocCommitted { project_id, .. } => Stream::Project(*project_id),

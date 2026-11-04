@@ -1572,3 +1572,70 @@ fn project_authorship_prints_the_mode_and_changes_it_or_exits_with_the_refusal()
     assert_eq!(code(&bot), 0, "{}", stderr(&bot));
     assert_eq!(code(&saka(&server, &["scm", "unlink", "github"])), 0);
 }
+
+#[test]
+fn project_user_token_reads_one_line_from_stdin_and_the_mode_can_then_use_it() {
+    let sim = Sim::new(SimConfig::default());
+    sim.world.accounts().set_user(7, "ann", None);
+    let pat = sim.world.accounts().issue_pat(None);
+    let server = serve(&sim);
+
+    let classic = saka_with_stdin(
+        &server,
+        &["project", "user-token", "set", "tasks"],
+        &format!("ghp_{}\n", "a".repeat(36)),
+    );
+    assert_eq!(code(&classic), 1);
+    assert!(
+        stderr(&classic).contains("user_token_not_fine_grained"),
+        "{}",
+        stderr(&classic)
+    );
+    assert!(!stderr(&classic).contains("ghp_"), "{}", stderr(&classic));
+
+    let set = saka_with_stdin(
+        &server,
+        &["project", "user-token", "set", "tasks"],
+        &format!("{pat}\nignored second line\n"),
+    );
+    assert_eq!(code(&set), 0, "{}", stderr(&set));
+    assert_eq!(stdout(&set).trim(), "user token of ann set, no expiry");
+    assert!(!stdout(&set).contains(&pat) && !stderr(&set).contains(&pat));
+
+    let refused = saka_with_stdin(
+        &server,
+        &["project", "user-token", "set", "tasks", "--value", &pat],
+        "",
+    );
+    assert_eq!(code(&refused), 2, "the token is never an argument");
+
+    let mode = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "user-pat"],
+    );
+    assert_eq!(code(&mode), 0, "{}", stderr(&mode));
+    assert_eq!(
+        stdout(&mode).trim(),
+        "mode user_pat author ann <7+ann@users.noreply.github.com>"
+    );
+    let in_use = saka(&server, &["project", "user-token", "rm", "tasks"]);
+    assert_eq!(code(&in_use), 4);
+    assert!(
+        stderr(&in_use).contains("user_token_in_use"),
+        "{}",
+        stderr(&in_use)
+    );
+    let bot = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "bot"],
+    );
+    assert_eq!(code(&bot), 0, "{}", stderr(&bot));
+    let rm = saka(&server, &["project", "user-token", "rm", "tasks"]);
+    assert_eq!(code(&rm), 0, "{}", stderr(&rm));
+    assert_eq!(stdout(&rm).trim(), "user token removed");
+    assert_eq!(
+        code(&saka(&server, &["project", "user-token", "rm", "tasks"])),
+        0,
+        "removing twice is fine"
+    );
+}

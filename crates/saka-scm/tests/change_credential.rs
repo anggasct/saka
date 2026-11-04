@@ -19,6 +19,7 @@ mod support;
 use support::{HEAD, MERGED, World, pr};
 
 const USER_TOKEN: &str = "ghu_userlinkaccess0001";
+const PAT: &str = "github_pat_11AAAAAAA0fineGrainedTokenValue0001";
 const BRANCH: &str = "saka/two-step/s1";
 
 fn request(w: &World, credential: ChangeCredential) -> OpenChangeRequest {
@@ -33,7 +34,11 @@ fn request(w: &World, credential: ChangeCredential) -> OpenChangeRequest {
 }
 
 fn user() -> ChangeCredential {
-    ChangeCredential::User(SecretText::new(USER_TOKEN.into()))
+    with(USER_TOKEN)
+}
+
+fn with(token: &str) -> ChangeCredential {
+    ChangeCredential::User(SecretText::new(token.into()))
 }
 
 async fn calls(w: &World) -> Vec<(String, String, String)> {
@@ -59,6 +64,12 @@ async fn calls(w: &World) -> Vec<(String, String, String)> {
 
 #[tokio::test]
 async fn only_opening_the_pull_request_carries_the_user_token() {
+    for token in [USER_TOKEN, PAT] {
+        only_opening_carries(token).await;
+    }
+}
+
+async fn only_opening_carries(token: &str) {
     let w = World::new().await;
     w.mount_tokens().await;
     Mock::given(method("POST"))
@@ -102,7 +113,7 @@ async fn only_opening_the_pull_request_carries_the_user_token() {
         .await;
 
     let opened =
-        w.gh.open_change_request(&request(&w, user()))
+        w.gh.open_change_request(&request(&w, with(token)))
             .await
             .unwrap();
     let ChangeOpening::Opened(opened) = opened else {
@@ -157,7 +168,7 @@ async fn only_opening_the_pull_request_carries_the_user_token() {
     );
     for (m, p, auth) in &calls {
         let expected = if m == "POST" && p == "/repos/acme/app/pulls" {
-            format!("Bearer {USER_TOKEN}")
+            format!("Bearer {token}")
         } else {
             "Bearer ghs_1".to_string()
         };

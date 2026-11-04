@@ -150,7 +150,7 @@ pub struct Batch {
     pub user_link_authorizations: Vec<crate::user_link::AuthorizationRow>,
     pub user_links: Vec<crate::user_link::UserLinkRow>,
     pub removed_user_links: Vec<saka_core::ids::UserLinkId>,
-    pub project_authorships: Vec<saka_core::authorship::ProjectAuthorship>,
+    pub project_authorships: Vec<crate::authorship::ProjectAuthorshipRow>,
 }
 
 impl Batch {

@@ -29,6 +29,8 @@ pub const IDLE_TICK_MS: i64 = 5_000;
 pub const DOCS_REPO: &str = "acme/docs";
 pub const SHOP_REPO: &str = "acme/shop";
 pub const WEB_REPO: &str = "acme/web";
+pub const SECOND_INTEGRATION: &str = "ghes";
+pub const SECOND_WEB_URL: &str = "https://ghe.acme.test";
 
 #[derive(Debug, Clone, Default)]
 pub struct Layout {
@@ -340,11 +342,18 @@ impl Sim {
             env: self.cfg.env,
             policy: Policy::compile(&self.cfg.rules).unwrap(),
             worker_id: format!("sim-{}", self.restarts),
-            integrations: vec![Integration {
-                id: "github".into(),
-                provider: "github".into(),
-                web_url: "https://github.com".into(),
-            }],
+            integrations: vec![
+                Integration {
+                    id: "github".into(),
+                    provider: "github".into(),
+                    web_url: "https://github.com".into(),
+                },
+                Integration {
+                    id: SECOND_INTEGRATION.into(),
+                    provider: "github".into(),
+                    web_url: SECOND_WEB_URL.into(),
+                },
+            ],
             git_identity: saka_core::authorship::GitIdentity {
                 name: "Saka Agent".into(),
                 email: "agent@saka.invalid".into(),

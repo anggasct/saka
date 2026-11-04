@@ -3547,3 +3547,356 @@ fn the_authorship_mode_needs_a_usable_link_and_is_recorded_once() {
         json!([{ "integration_id": "github", "user_link_state": "missing" }])
     );
 }
+
+fn user_token_path(api: &Api) -> String {
+    format!(
+        "/api/v1/projects/{}/authorship/user-token",
+        api.sim.project_id
+    )
+}
+
+fn put_token(api: &mut Api, value: &str) -> Reply {
+    let key = api.key();
+    let path = user_token_path(api);
+    keyed(
+        api,
+        Method::PUT,
+        &path,
+        &key,
+        Some(&json!({ "value": value })),
+    )
+}
+
+#[test]
+fn a_user_token_is_checked_stored_write_only_and_never_shown_anywhere() {
+    let mut api = Api::new(SimConfig::default());
+    let authorship = format!("/api/v1/projects/{}/authorship", api.sim.project_id);
+    let logs = LogBuffer::default();
+    let out = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || out.clone())
+        .finish();
+    let mut bodies = Vec::new();
+    let accounts = api.sim.world.accounts();
+    accounts.set_user(7, "ann", None);
+    let end_of_january = saka_core::time::Timestamp(1_801_353_600_000);
+    let dated = accounts.issue_pat(Some(end_of_january));
+    let lasting = accounts.issue_pat(None);
+    let past = accounts.issue_pat(Some(saka_ports::Clock::now(&*api.sim.clock)));
+    tracing::subscriber::with_default(subscriber, || {
+        let classic = put_token(&mut api, &format!("ghp_{}", "a".repeat(36)));
+        problem(
+            &classic,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "user_token_not_fine_grained",
+        );
+        let short = put_token(&mut api, "github_pat_short");
+        problem(
+            &short,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        );
+        assert_eq!(short.body["params"]["errors"][0]["code"], "length");
+        let unknown = put_token(&mut api, &format!("github_pat_{}", "z".repeat(40)));
+        problem(
+            &unknown,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "user_token_rejected",
+        );
+        assert_eq!(unknown.body["params"], json!({ "status": 401 }));
+        let expired = put_token(&mut api, &past);
+        problem(
+            &expired,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "user_token_rejected",
+        );
+        assert_eq!(expired.body["params"], json!({ "status": 401 }));
+        api.sim
+            .world
+            .accounts()
+            .deny_pat_repo(saka_testkit::HOME_REPO, Some(404));
+        let blind = put_token(&mut api, &lasting);
+        problem(
+            &blind,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "user_token_repo_inaccessible",
+        );
+        let refused = &blind.body["params"]["repos"];
+        assert_eq!(refused.as_array().unwrap().len(), 1, "{refused}");
+        assert_eq!(refused[0]["full_name"], saka_testkit::HOME_REPO);
+        assert_eq!(refused[0]["status"], 404);
+        assert!(refused[0]["name"].is_string());
+        api.sim
+            .world
+            .accounts()
+            .deny_pat_repo(saka_testkit::HOME_REPO, None);
+        assert!(
+            api.sim
+                .events_of("workspace.project.user_token_set")
+                .is_empty()
+        );
+        bodies.extend([
+            classic.body,
+            short.body,
+            unknown.body,
+            expired.body,
+            blind.body,
+        ]);
+
+        let key = api.key();
+        let path = user_token_path(&api);
+        let set = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": dated })),
+        );
+        assert_eq!(set.status, StatusCode::OK, "{}", set.body);
+        let token = &set.body["user_token"];
+        assert_eq!(token["expires_at"], "2027-01-31T00:00:00.000Z");
+        assert_eq!(token["integration_id"], "github");
+        assert_eq!(token["login"], "ann");
+        assert_eq!(token["provider_user_id"], 7);
+        assert_eq!(token["state"], "active");
+        assert_eq!(token["invalid_cause"], Value::Null);
+        assert!(token["set_at"].as_str().unwrap().ends_with('Z'));
+        assert_eq!(set.body["mode"], "bot");
+        let replay = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": dated })),
+        );
+        assert_eq!(replay.status, StatusCode::OK);
+        assert_eq!(replay.headers["idempotent-replayed"], "true");
+        let other = keyed(
+            &api,
+            Method::PUT,
+            &path,
+            &key,
+            Some(&json!({ "value": lasting })),
+        );
+        problem(
+            &other,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "idempotency_key_reused",
+        );
+        let renewed = put_token(&mut api, &lasting);
+        assert_eq!(renewed.status, StatusCode::OK, "{}", renewed.body);
+        assert_eq!(renewed.body["user_token"]["expires_at"], Value::Null);
+        let set_events = api.sim.events_of("workspace.project.user_token_set");
+        assert_eq!(set_events.len(), 2);
+        assert_eq!(
+            set_events[0].payload,
+            json!({
+                "project_id": api.sim.project_id,
+                "integration_id": "github",
+                "provider_user_id": 7,
+                "login": "ann",
+                "expires_at": end_of_january.0,
+            })
+        );
+
+        let key = api.key();
+        let mode = keyed(
+            &api,
+            Method::PUT,
+            &authorship,
+            &key,
+            Some(&json!({ "mode": "user_pat" })),
+        );
+        assert_eq!(mode.status, StatusCode::OK, "{}", mode.body);
+        assert_eq!(
+            mode.body["author"],
+            json!({ "source": "user_token", "name": "ann", "email": "7+ann@users.noreply.github.com", "login": "ann" })
+        );
+        let key = api.key();
+        let in_use = keyed(&api, Method::DELETE, &path, &key, None);
+        problem(&in_use, StatusCode::CONFLICT, "user_token_in_use");
+
+        api.sim.approve();
+        assert!(
+            api.sim
+                .run_until(STEPS, |s| s.task(1).change_request.is_some())
+        );
+        let opened_with: Vec<String> = api
+            .sim
+            .world
+            .scm_calls()
+            .into_iter()
+            .filter(|c| c.op == "open_change_request")
+            .map(|c| c.credential)
+            .collect();
+        assert_eq!(opened_with, std::slice::from_ref(&lasting));
+        let metrics = api.get_text("/metrics");
+        assert!(
+            metrics.contains("saka_change_requests_opened_total{credential=\"user_token\"} 1"),
+            "{metrics}"
+        );
+        let id = api.sim.task(1).item.id;
+        let detail = api.get(&format!("/api/v1/work-items/{id}"));
+        assert_eq!(detail.status, StatusCode::OK);
+        let shown = api.get(&authorship);
+        assert_eq!(shown.body["user_token"]["login"], "ann");
+        bodies.extend([
+            set.body,
+            replay.body,
+            other.body,
+            renewed.body,
+            mode.body,
+            in_use.body,
+            detail.body,
+            shown.body,
+        ]);
+
+        let key = api.key();
+        let bot = keyed(
+            &api,
+            Method::PUT,
+            &authorship,
+            &key,
+            Some(&json!({ "mode": "bot" })),
+        );
+        assert_eq!(bot.status, StatusCode::OK, "{}", bot.body);
+        let key = api.key();
+        let gone = keyed(&api, Method::DELETE, &path, &key, None);
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
+        let key = api.key();
+        let again = keyed(&api, Method::DELETE, &path, &key, None);
+        assert_eq!(again.status, StatusCode::NO_CONTENT);
+        assert_eq!(api.get(&authorship).body["user_token"], Value::Null);
+    });
+    assert_eq!(
+        api.sim
+            .events_of("workspace.project.user_token_removed")
+            .len(),
+        1
+    );
+
+    let secrets = [dated, lasting, past];
+    let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("workspace.project.user_token_set"), "{logs}");
+    let mut haystacks = vec![
+        ("logs", logs),
+        ("responses", bodies.iter().map(Value::to_string).collect()),
+    ];
+    for table in ["event", "action_request", "job", "project_authorship"] {
+        haystacks.push((table, table_text(&api, table)));
+    }
+    for (name, text) in &haystacks {
+        assert!(!text.contains("github_pat_"), "github_pat_ in {name}");
+        for secret in &secrets {
+            assert!(!text.contains(secret.as_str()), "a token in {name}");
+        }
+    }
+}
+
+#[test]
+fn user_token_refusals_carry_their_codes() {
+    let mut api = Api::new(SimConfig::default());
+    let pat = api.sim.world.accounts().issue_pat(None);
+    let missing = format!(
+        "/api/v1/projects/{}/authorship/user-token",
+        uuid::Uuid::now_v7()
+    );
+    let key = api.key();
+    let r = keyed(
+        &api,
+        Method::PUT,
+        &missing,
+        &key,
+        Some(&json!({ "value": pat })),
+    );
+    problem(&r, StatusCode::NOT_FOUND, "not_found");
+    let key = api.key();
+    problem(
+        &keyed(&api, Method::DELETE, &missing, &key, None),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    let path = user_token_path(&api);
+    let unkeyed = api.send(
+        Request::builder()
+            .method(Method::PUT)
+            .uri(&path)
+            .header("host", "127.0.0.1:7420")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "value": pat }).to_string()))
+            .unwrap(),
+    );
+    problem(
+        &unkeyed,
+        StatusCode::BAD_REQUEST,
+        "idempotency_key_required",
+    );
+    let key = api.key();
+    let extra = keyed(
+        &api,
+        Method::PUT,
+        &path,
+        &key,
+        Some(&json!({ "value": pat, "scope": "repo" })),
+    );
+    problem(
+        &extra,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let spaced = put_token(
+        &mut api,
+        &format!("github_pat_{} {}", "a".repeat(20), "b".repeat(20)),
+    );
+    problem(
+        &spaced,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    assert_eq!(spaced.body["params"]["errors"][0]["code"], "invalid");
+    let key = api.key();
+    let none = keyed(&api, Method::DELETE, &path, &key, None);
+    assert_eq!(none.status, StatusCode::NO_CONTENT);
+    assert!(
+        api.sim
+            .events_of("workspace.project.user_token_removed")
+            .is_empty()
+    );
+    let key = api.key();
+    let mode = keyed(
+        &api,
+        Method::PUT,
+        &format!("/api/v1/projects/{}/authorship", api.sim.project_id),
+        &key,
+        Some(&json!({ "mode": "user_pat" })),
+    );
+    problem(&mode, StatusCode::CONFLICT, "user_token_missing");
+
+    let layout = Layout {
+        saka_toml: saka_toml(
+            "two-hosts",
+            &[
+                repo_entry("shop", SHOP_REPO, "default = true\n"),
+                format!(
+                    "[[repo]]\nname = \"web\"\nurl = \"{}/{WEB_REPO}\"\n",
+                    saka_testkit::SECOND_WEB_URL
+                ),
+            ],
+        ),
+        ..Layout::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(SimConfig::default(), &layout));
+    let pat = api.sim.world.accounts().issue_pat(None);
+    let split = put_token(&mut api, &pat);
+    problem(&split, StatusCode::CONFLICT, "user_token_multi_integration");
+    assert_eq!(
+        split.body["params"],
+        json!({ "integrations": [saka_testkit::SECOND_INTEGRATION, "github"] })
+    );
+    assert!(
+        api.sim.world.accounts().calls_of("user").is_empty(),
+        "nothing is sent to a code host before the project is known to fit one token"
+    );
+}
