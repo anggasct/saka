@@ -118,6 +118,7 @@ impl Harness for GitHubHarness {
             delete_branch_after_merge: true,
             commit_status: true,
             user_authorship: true,
+            diagnostics: Some(saka_scm::github::requirements::APP),
         }
     }
 

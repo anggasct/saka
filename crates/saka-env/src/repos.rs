@@ -1439,6 +1439,42 @@ impl Environments for GitRepos {
         })
     }
 
+    async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>> {
+        arg(branch, "branch")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        self.fetch_locked(repo).await?;
+        self.tip_locked(repo, branch).await
+    }
+
+    async fn list_repo_dir(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        dir: &str,
+    ) -> PortResult<Vec<String>> {
+        sha_arg(commit, "commit")?;
+        let bare = self.mirror_path(repo.repo_id);
+        let mut args = vec!["ls-tree", "-l", "-z", "--full-tree", commit];
+        let prefix;
+        if !dir.is_empty() {
+            project_path_arg(dir).map_err(|_| {
+                PortError::permanent("git_argument_invalid", json!({ "field": "dir" }))
+            })?;
+            prefix = format!("{dir}/");
+            args.extend(["--", &prefix]);
+        }
+        let out = self.cfg.git.local(&bare, &args).await?;
+        if !out.ok() {
+            return Err(failed("ls_tree", &out));
+        }
+        Ok(tree_entries(&out)?
+            .into_iter()
+            .filter(TreeEntry::is_regular_file)
+            .map(|e| e.path)
+            .collect())
+    }
+
     async fn read_repo_file(
         &self,
         repo: &RepoRef,

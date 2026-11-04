@@ -145,6 +145,21 @@ pub fn pending_authorization(
     )
 }
 
+pub fn latest_authorization(
+    conn: &Connection,
+    owner: &str,
+    integration_id: &str,
+) -> Result<Option<UserLinkAuthorization>> {
+    Ok(one(
+        conn,
+        "SELECT * FROM user_link_authorization WHERE owner = ?1 AND integration_id = ?2
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+        &[&owner, &integration_id],
+        authorization_row,
+    )?
+    .map(|r| r.authorization))
+}
+
 pub fn pending_authorizations(conn: &Connection) -> Result<Vec<UserLinkAuthorization>> {
     let mut stmt = conn.prepare(
         "SELECT * FROM user_link_authorization WHERE state = 'pending' ORDER BY created_at, id",

@@ -296,7 +296,7 @@ fn doctor_exit_codes_follow_failures_warnings_and_flags() {
     let clean = doctor(&host, &server, &[]);
     assert_eq!(code(&clean), 0, "{}{}", stdout(&clean), stderr(&clean));
     let last = stdout(&clean).lines().last().unwrap().to_string();
-    assert!(last.ends_with("0 warn, 0 fail, 2 skip (online)"), "{last}");
+    assert!(last.ends_with("0 warn, 0 fail, 8 skip (online)"), "{last}");
 
     let json = doctor(&host, &server, &["--json"]);
     let body: Value = serde_json::from_slice(&json.stdout).unwrap();
@@ -320,6 +320,16 @@ fn doctor_exit_codes_follow_failures_warnings_and_flags() {
             "agent.quota",
             "toolchain.cache",
             "toolchain.sources",
+            "scm.app",
+            "scm.app",
+            "scm.installation",
+            "scm.webhook",
+            "scm.webhook",
+            "scm.user_link",
+            "scm.user_link",
+            "project.user_token",
+            "project.config",
+            "toolchain.repo",
         ]
     );
     assert_eq!(body["mode"], "online");
@@ -416,7 +426,18 @@ fn doctor_runs_the_local_checks_read_only_when_the_server_is_down() {
     assert_eq!(by_id("agent.login")["code"], "agent_not_logged_in");
     assert_eq!(by_id("agent.binary")["code"], "agent_cli_found");
     assert_eq!(by_id("toolchain.cache")["code"], "toolchain_cache_ok");
-    for id in ["server.ready", "agent.quota", "toolchain.sources"] {
+    for id in [
+        "server.ready",
+        "agent.quota",
+        "toolchain.sources",
+        "scm.app",
+        "scm.installation",
+        "scm.webhook",
+        "scm.user_link",
+        "project.user_token",
+        "project.config",
+        "toolchain.repo",
+    ] {
         assert_eq!(by_id(id)["status"], "skip", "{id}");
         assert_eq!(by_id(id)["code"], "server_unreachable", "{id}");
     }

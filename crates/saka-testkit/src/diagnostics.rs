@@ -1,16 +1,37 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use saka_core::diagnostics::{
-    AgentCli, AgentLogin, FoundCli, InstalledToolchain, SupervisorProbe, ToolchainCache,
+    AgentCli, AgentLogin, AppStatus, FoundCli, Installation, InstalledToolchain, SupervisorProbe,
+    ToolchainCache, WebhookStatus,
 };
-use saka_core::vocab::Tool;
+use saka_core::vocab::{HostTool, Tool};
 use saka_ports::{PortError, PortResult, Release};
 use serde_json::json;
 
 pub const FAKE_CLI_PATH: &str = "/sim/bin/claude";
 pub const FAKE_CLI_VERSION: &str = "2.1.0";
 pub const FAKE_TOOLCHAINS: &str = "/sim/toolchains";
+pub const FAKE_APP_ID: u64 = 4242;
+pub const FAKE_APP_SLUG: &str = "saka-sim";
+pub const FAKE_INSTALLATION_ID: u64 = 77;
+
+pub fn full_installation() -> Installation {
+    Installation {
+        installed: true,
+        installation_id: Some(FAKE_INSTALLATION_ID),
+        permissions: [
+            ("contents", "write"),
+            ("pull_requests", "write"),
+            ("checks", "write"),
+            ("statuses", "write"),
+            ("metadata", "read"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HostPort {
@@ -19,6 +40,10 @@ pub enum HostPort {
     AgentLogin,
     ToolchainCache,
     Releases,
+    ScmApp,
+    ScmInstallation,
+    ScmWebhook,
+    HostVersion,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +53,10 @@ pub struct HostScript {
     pub probe: SupervisorProbe,
     pub cache: ToolchainCache,
     pub failing_sources: BTreeSet<Tool>,
+    pub app: Result<AppStatus, PortError>,
+    pub installations: BTreeMap<String, Installation>,
+    pub webhook: Result<WebhookStatus, PortError>,
+    pub host_versions: BTreeMap<HostTool, String>,
     pub hang: BTreeSet<HostPort>,
 }
 
@@ -55,6 +84,21 @@ impl Default for HostScript {
                 }],
             },
             failing_sources: BTreeSet::new(),
+            app: Ok(AppStatus {
+                app_id: FAKE_APP_ID,
+                slug: FAKE_APP_SLUG.into(),
+                events: ["pull_request", "check_run", "check_suite", "status"]
+                    .map(String::from)
+                    .to_vec(),
+            }),
+            installations: BTreeMap::new(),
+            webhook: Ok(WebhookStatus {
+                url_set: true,
+                content_type: Some("json".into()),
+                secret_set: true,
+                deliveries: Vec::new(),
+            }),
+            host_versions: BTreeMap::new(),
             hang: BTreeSet::new(),
         }
     }
@@ -96,6 +140,34 @@ impl FakeHost {
     pub(crate) async fn cache(&self) -> PortResult<ToolchainCache> {
         Ok(self
             .answer(HostPort::ToolchainCache, |s| s.cache.clone())
+            .await)
+    }
+
+    pub(crate) async fn app_status(&self) -> PortResult<AppStatus> {
+        self.answer(HostPort::ScmApp, |s| s.app.clone()).await
+    }
+
+    pub(crate) async fn installation(&self, full_name: &str) -> PortResult<Installation> {
+        Ok(self
+            .answer(HostPort::ScmInstallation, |s| {
+                s.installations
+                    .get(full_name)
+                    .cloned()
+                    .unwrap_or_else(full_installation)
+            })
+            .await)
+    }
+
+    pub(crate) async fn webhook(&self) -> PortResult<WebhookStatus> {
+        self.answer(HostPort::ScmWebhook, |s| s.webhook.clone())
+            .await
+    }
+
+    pub(crate) async fn host_version(&self, tool: HostTool) -> PortResult<Option<String>> {
+        Ok(self
+            .answer(HostPort::HostVersion, |s| {
+                s.host_versions.get(&tool).cloned()
+            })
             .await)
     }
 

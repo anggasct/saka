@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
 use saka_core::gate::Check;
 use saka_core::ids::RepoId;
 use saka_core::secret::SecretText;
@@ -135,6 +136,12 @@ pub trait Scm: Send + Sync {
     ) -> PortResult<()>;
 
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities>;
+
+    async fn app_status(&self, integration_id: &str) -> PortResult<AppStatus>;
+
+    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation>;
+
+    async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus>;
 
     fn webhook_configured(&self, integration_id: &str) -> PortResult<bool>;
 
@@ -275,6 +282,7 @@ pub struct ScmCapabilities {
     pub delete_branch_after_merge: bool,
     pub commit_status: bool,
     pub user_authorship: bool,
+    pub diagnostics: Option<saka_core::diagnostics::AppRequirements>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

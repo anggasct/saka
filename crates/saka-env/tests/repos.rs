@@ -1350,3 +1350,63 @@ async fn a_writable_docs_checkout_is_a_branch_whose_commits_are_inspected_pushed
     assert_eq!(git(&wt, &["branch", "--show-current"]), branch);
     assert!(Path::new(&resumed.path).join("api.md").exists());
 }
+
+#[tokio::test]
+async fn a_branch_tip_is_fetched_first_and_a_directory_lists_only_its_own_files() {
+    let w = World::new();
+    assert_eq!(
+        w.repos.branch_tip(&w.repo, "develop").await.unwrap(),
+        None,
+        "a branch the remote does not have has no tip"
+    );
+    std::fs::create_dir_all(w.other.join(".github/workflows/nested")).unwrap();
+    std::fs::write(w.other.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+    std::fs::write(w.other.join(".github/workflows/nested/x.yml"), "on: push\n").unwrap();
+    std::fs::write(w.other.join(".nvmrc"), "22\n").unwrap();
+    std::os::unix::fs::symlink(".nvmrc", w.other.join(".node-version")).unwrap();
+    let head = commit(&w.other, "go.mod", "module x\n\ngo 1.26.1\n");
+    git(&w.other, &["push", "-q", "origin", "main:develop"]);
+
+    let tip = w.repos.branch_tip(&w.repo, "develop").await.unwrap();
+    assert_eq!(
+        tip.as_deref(),
+        Some(head.as_str()),
+        "fetched before reading"
+    );
+    let mut root = w.repos.list_repo_dir(&w.repo, &head, "").await.unwrap();
+    root.sort();
+    assert_eq!(
+        root,
+        [".nvmrc", "README.md", "go.mod"],
+        "no folders, no links"
+    );
+    assert_eq!(
+        w.repos
+            .list_repo_dir(&w.repo, &head, ".github/workflows")
+            .await
+            .unwrap(),
+        [".github/workflows/ci.yml"]
+    );
+    assert!(
+        w.repos
+            .list_repo_dir(&w.repo, &head, "missing")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (commit, dir) in [
+        (head.as_str(), "../x"),
+        (head.as_str(), "-r"),
+        (head.as_str(), "/etc"),
+        ("main", ""),
+    ] {
+        let e = w
+            .repos
+            .list_repo_dir(&w.repo, commit, dir)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, "git_argument_invalid", "{commit} {dir}");
+    }
+    let e = w.repos.branch_tip(&w.repo, "-x").await.unwrap_err();
+    assert_eq!(e.code, "git_argument_invalid");
+}

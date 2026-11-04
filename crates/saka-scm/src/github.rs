@@ -1,5 +1,7 @@
 pub mod app;
 pub mod ci;
+mod diagnose;
+pub mod requirements;
 pub mod user;
 mod webhook;
 
@@ -7,6 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
+use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
 use saka_core::secret::SecretText;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
@@ -30,6 +33,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     user_authorship: true,
+    diagnostics: Some(requirements::APP),
 };
 
 pub struct GitHub {
@@ -422,6 +426,18 @@ impl Scm for GitHub {
 
     fn capabilities(&self, _integration_id: &str) -> Option<ScmCapabilities> {
         Some(CAPABILITIES)
+    }
+
+    async fn app_status(&self, _integration_id: &str) -> PortResult<AppStatus> {
+        diagnose::app_status(&self.app).await
+    }
+
+    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation> {
+        diagnose::installation(&self.app, repo).await
+    }
+
+    async fn webhook_status(&self, _integration_id: &str) -> PortResult<WebhookStatus> {
+        diagnose::webhook_status(&self.app).await
     }
 
     fn webhook_configured(&self, _integration_id: &str) -> PortResult<bool> {

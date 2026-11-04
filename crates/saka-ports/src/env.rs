@@ -213,6 +213,15 @@ pub trait Environments: Send + Sync {
 
     async fn read_recipe(&self, repo: &RepoRef, commit: &str) -> PortResult<Option<String>>;
 
+    async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>>;
+
+    async fn list_repo_dir(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        dir: &str,
+    ) -> PortResult<Vec<String>>;
+
     async fn read_repo_file(
         &self,
         repo: &RepoRef,
