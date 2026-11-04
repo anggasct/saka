@@ -9,6 +9,7 @@ mod clock;
 pub mod fake_claude;
 pub mod fixtures;
 pub mod logs;
+mod releases;
 mod sim;
 mod world;
 
@@ -21,6 +22,7 @@ pub use fixtures::{
     AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec, repo_entry,
     saka_toml,
 };
+pub use releases::FakeReleases;
 pub use sim::{
     DOCS_REPO, Layout, Operator, SECOND_INTEGRATION, SECOND_WEB_URL, SHOP_REPO, Sim, SimConfig,
     SimOutcome, Step, WEB_REPO, ZERO_SHA256, draft_config,

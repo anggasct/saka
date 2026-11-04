@@ -2,13 +2,15 @@ use std::collections::BTreeMap;
 
 use saka_core::gate::GatePolicy;
 use saka_core::vocab::{GateMode, SecretPurpose, Tool};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use toml::Spanned;
 
 use crate::project_config::Issue;
+use crate::versions::RepoFiles;
 
+pub const RECIPE_PATH: &str = ".saka/environment.toml";
 pub const MAX_COMMANDS: usize = 20;
 pub const MAX_COMMAND_BYTES: usize = 4096;
 pub const MAX_ENV_VARS: usize = 64;
@@ -171,7 +173,7 @@ struct Commands {
     commands: Vec<Spanned<String>>,
 }
 
-fn line_of(text: &str, offset: usize) -> usize {
+pub(crate) fn line_of(text: &str, offset: usize) -> usize {
     text.get(..offset)
         .map_or(1, |s| s.matches('\n').count() + 1)
 }
@@ -420,6 +422,110 @@ pub fn parse(text: &str, max_ports: u16) -> Result<Recipe, Vec<Issue>> {
         })
     } else {
         Err(issues)
+    }
+}
+
+const RECIPE_HEADER: &str = "# Read by Saka from the default branch; each task runs these commands in its own environment.\n";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecipeAction {
+    Create,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Note {
+    pub code: &'static str,
+    pub params: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecipeProposal {
+    pub action: RecipeAction,
+    pub reason: Option<&'static str>,
+    pub commands: Vec<String>,
+    pub content: Option<String>,
+    pub issues: Vec<Issue>,
+    pub notes: Vec<Note>,
+}
+
+fn setup_unknown(lockfile: &str) -> Note {
+    Note {
+        code: "setup_command_unknown",
+        params: json!({ "lockfile": lockfile }),
+    }
+}
+
+fn setup_commands(files: &RepoFiles) -> (Vec<String>, Vec<Note>) {
+    let mut commands = Vec::new();
+    let mut notes = Vec::new();
+    if files.has("pnpm-lock.yaml") {
+        commands.push("pnpm install --frozen-lockfile");
+    } else if files.has("package-lock.json") || files.has("npm-shrinkwrap.json") {
+        commands.push("npm ci");
+    } else {
+        for lockfile in ["yarn.lock", "bun.lock", "bun.lockb"] {
+            if files.has(lockfile) {
+                notes.push(setup_unknown(lockfile));
+            }
+        }
+    }
+    if files.has("go.mod") && files.has("go.sum") {
+        commands.push("go mod download");
+    }
+    if files.has("Cargo.lock") {
+        commands.push("cargo fetch --locked");
+    }
+    if files.has("uv.lock") {
+        commands.push("uv sync --frozen");
+    } else if files.has("poetry.lock") {
+        notes.push(setup_unknown("poetry.lock"));
+    }
+    (commands.into_iter().map(String::from).collect(), notes)
+}
+
+fn recipe_text(commands: &[String]) -> String {
+    let list: Vec<String> = commands
+        .iter()
+        .map(|c| toml::Value::String(c.clone()).to_string())
+        .collect();
+    format!("{RECIPE_HEADER}[setup]\ncommands = [{}]\n", list.join(", "))
+}
+
+pub fn propose(files: &RepoFiles, max_ports: u16) -> RecipeProposal {
+    let (commands, notes) = setup_commands(files);
+    if files.has(RECIPE_PATH) {
+        let issues = files
+            .text(RECIPE_PATH)
+            .map(|text| parse(text, max_ports).err().unwrap_or_default())
+            .unwrap_or_default();
+        return RecipeProposal {
+            action: RecipeAction::None,
+            reason: Some("recipe_exists"),
+            commands: Vec::new(),
+            content: None,
+            issues,
+            notes: Vec::new(),
+        };
+    }
+    if commands.is_empty() {
+        return RecipeProposal {
+            action: RecipeAction::None,
+            reason: Some("no_lockfile"),
+            commands,
+            content: None,
+            issues: Vec::new(),
+            notes,
+        };
+    }
+    RecipeProposal {
+        action: RecipeAction::Create,
+        reason: None,
+        content: Some(recipe_text(&commands)),
+        commands,
+        issues: Vec::new(),
+        notes,
     }
 }
 

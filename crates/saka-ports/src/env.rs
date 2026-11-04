@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use saka_core::ids::EnvironmentId;
 use saka_core::policy::RequestPath;
 use saka_core::secret::SecretVar;
+use saka_core::vocab::Tool;
 
 use crate::PortResult;
 use crate::scm::RepoRef;
@@ -136,6 +137,17 @@ pub enum WorktreeFile {
     NotRegular,
     TooLarge { bytes: u64 },
     Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Release {
+    pub version: String,
+    pub lts: Option<String>,
+}
+
+#[async_trait]
+pub trait ReleaseIndex: Send + Sync {
+    async fn releases(&self, tool: Tool) -> PortResult<Vec<Release>>;
 }
 
 #[async_trait]

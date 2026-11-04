@@ -1,10 +1,12 @@
 pub mod git;
+pub mod releases;
 pub mod repos;
 pub mod secrets;
 pub mod supervisor;
 pub mod toolchain;
 
 pub use git::Git;
+pub use releases::{HttpReleaseIndex, ReleaseIndexConfig};
 pub use repos::{GitRepos, RecipeRunner, ReposConfig};
 pub use secrets::{AeadSecrets, KeyFileError};
 pub use supervisor::{DirectSupervisor, SystemdSupervisor, runtime_dir};
