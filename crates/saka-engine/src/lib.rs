@@ -4,6 +4,7 @@ mod authorship;
 mod commands;
 mod config_check;
 mod context;
+pub mod diagnostics;
 mod docs;
 mod draft;
 mod metrics;
@@ -38,7 +39,8 @@ use saka_core::rejection::Rejection;
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, Scm, SecretStore, Toolchains,
+    Agents, Clock, DocSource, Environments, Ids, IdsSource, PortError, ReleaseIndex, Scm,
+    SecretStore, Supervisor, Toolchains,
 };
 use saka_store::read;
 use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
@@ -53,6 +55,7 @@ pub use config_check::{
     CheckConfig, CheckedRepo, CheckedWorkspace, ConfigCheckView, ConfigProblem, RegisteredProject,
     RemoteConfig,
 };
+pub use diagnostics::{DiagnosticFilter, DiagnosticLimits};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
     DraftBudgetView, DraftContentView, DraftPacketDocument, DraftPacketView, DraftView,
@@ -84,6 +87,7 @@ pub struct EngineConfig {
     pub draft: saka_core::draft::DraftConfig,
     pub architect_model: Option<String>,
     pub config_poll_secs: u32,
+    pub diagnostics: DiagnosticLimits,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +120,8 @@ pub struct Ports {
     pub docs: Arc<dyn DocSource>,
     pub toolchains: Arc<dyn Toolchains>,
     pub secrets: Arc<dyn SecretStore>,
+    pub supervisor: Arc<dyn Supervisor>,
+    pub releases: Arc<dyn ReleaseIndex>,
 }
 
 #[derive(Debug, thiserror::Error)]

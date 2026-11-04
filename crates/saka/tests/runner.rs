@@ -106,6 +106,10 @@ fn main() -> ExitCode {
             "systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env",
             systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env,
         ),
+        (
+            "systemd_probe_finds_the_user_manager",
+            systemd_probe_finds_the_user_manager,
+        ),
     ];
     let mut failed = Vec::new();
     for (name, test) in tests {
@@ -987,6 +991,19 @@ fn systemd_runs_the_runner_in_a_limited_unit_and_stop_leaves_nothing() {
                 "process {pid} survived"
             );
         }
+    });
+}
+
+fn systemd_probe_finds_the_user_manager() {
+    if std::env::var("SAKA_TEST_SYSTEMD").as_deref() != Ok("1") {
+        println!("  (skipped: set SAKA_TEST_SYSTEMD=1, or run `cargo xtask test-systemd`)");
+        return;
+    }
+    block_on(async {
+        assert_eq!(
+            SystemdSupervisor.probe().await.unwrap(),
+            saka_core::diagnostics::SupervisorProbe::Available
+        );
     });
 }
 

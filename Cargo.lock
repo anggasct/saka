@@ -2407,6 +2407,7 @@ dependencies = [
 name = "saka-engine"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "proptest",
  "saka-core",
  "saka-ports",

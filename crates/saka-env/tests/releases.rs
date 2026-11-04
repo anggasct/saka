@@ -113,7 +113,35 @@ async fn a_failing_index_is_a_retryable_error_and_is_not_cached() {
     assert_eq!(error.code, "release_index_unavailable");
     assert!(error.retryable);
     assert_eq!(error.params["detail"], "HTTP 500");
+    assert_eq!(error.params["status"], 500);
+    assert_eq!(error.params["url"], format!("{}/dist", server.uri()));
     assert_eq!(index.releases(Tool::Node).await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn an_unreachable_mirror_is_named_without_its_credentials() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    let base = server
+        .uri()
+        .replace("http://", "http://mirror-user:hunter2@");
+    let index = HttpReleaseIndex::new(ReleaseIndexConfig {
+        go_dl_url: format!("{base}/go?token=s3cr3t"),
+        node_dist_url: format!("{base}/dist"),
+        npm_registry_url: format!("{base}/npm"),
+        user_agent: "saka-test".into(),
+    })
+    .unwrap();
+    let error = index.releases(Tool::Go).await.unwrap_err();
+    assert_eq!(error.params["status"], 503);
+    assert_eq!(error.params["url"], format!("{}/go", server.uri()));
+    let shown = error.params.to_string();
+    for secret in ["mirror-user", "hunter2", "s3cr3t"] {
+        assert!(!shown.contains(secret), "{shown}");
+    }
 }
 
 #[tokio::test]

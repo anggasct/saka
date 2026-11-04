@@ -1608,6 +1608,8 @@ pub struct Meta {
     pub capabilities: Vec<String>,
 }
 
+pub const API_VERSION: &str = "1";
+
 pub const CAPABILITIES: &[&str] = &[
     "projects",
     "spec_approve",
@@ -2487,6 +2489,104 @@ impl UserLinkAuthorization {
                 params: f.params.clone(),
             }),
             link: v.link.as_ref().map(UserLink::from),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DiagnosticsQuery {
+    /// Only this project's `project`, `project_repo`, and `repo` checks; instance, agent account, and integration checks always run.
+    pub project_id: Option<String>,
+    /// A check id from the catalog, for example `agent.login`; repeat for more. Without it, every check runs.
+    pub check: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticSubject {
+    /// `instance`, `agent_account`, `integration`, `repo`, `project`, or `project_repo`.
+    pub kind: String,
+    /// For example `instance`, `claude:default`, or an integration, repo, or project id.
+    pub id: String,
+    /// For display, for example `claude:default` or `acme/shop`.
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticFix {
+    pub code: String,
+    /// `command` holds the command that fixes it, when there is one.
+    pub params: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticCheck {
+    /// Stable dotted id, for example `agent.login`.
+    pub id: String,
+    pub subject: DiagnosticSubject,
+    /// `pass`, `warn`, `fail`, or `skip`.
+    pub status: String,
+    /// What was found; the client turns it and `params` into text. Never holds a token, key, secret, or account email.
+    pub code: String,
+    pub params: Value,
+    /// `null` for `pass` and `skip`.
+    pub fix: Option<DiagnosticFix>,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticSummary {
+    pub pass: u32,
+    pub warn: u32,
+    pub fail: u32,
+    pub skip: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DiagnosticReport {
+    pub generated_at: String,
+    pub server_version: String,
+    /// `online` from the server; `saka doctor` writes `offline` when it ran the local checks itself.
+    pub mode: String,
+    pub summary: DiagnosticSummary,
+    /// In catalog order, then by `subject.label`.
+    pub checks: Vec<DiagnosticCheck>,
+}
+
+impl From<&saka_core::diagnostics::CheckResult> for DiagnosticCheck {
+    fn from(c: &saka_core::diagnostics::CheckResult) -> DiagnosticCheck {
+        DiagnosticCheck {
+            id: c.id.as_str().into(),
+            subject: DiagnosticSubject {
+                kind: c.subject.kind.as_str().into(),
+                id: c.subject.id.clone(),
+                label: c.subject.label.clone(),
+            },
+            status: c.finding.status.as_str().into(),
+            code: c.finding.code.clone(),
+            params: c.finding.params.clone(),
+            fix: c.finding.fix.as_ref().map(|f| DiagnosticFix {
+                code: f.code.clone(),
+                params: f.params.clone(),
+            }),
+            duration_ms: c.duration_ms,
+        }
+    }
+}
+
+impl From<&saka_core::diagnostics::Report> for DiagnosticReport {
+    fn from(r: &saka_core::diagnostics::Report) -> DiagnosticReport {
+        DiagnosticReport {
+            generated_at: time(r.generated_at),
+            server_version: r.server_version.clone(),
+            mode: r.mode.as_str().into(),
+            summary: DiagnosticSummary {
+                pass: r.summary.pass,
+                warn: r.summary.warn,
+                fail: r.summary.fail,
+                skip: r.summary.skip,
+            },
+            checks: r.checks.iter().map(DiagnosticCheck::from).collect(),
         }
     }
 }

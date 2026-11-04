@@ -35,6 +35,7 @@ pub struct Counters {
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
+    diagnostic_checks: Mutex<BTreeMap<(String, String), u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -140,6 +141,10 @@ impl Counters {
 
     pub(crate) fn change_request_opened(&self, credential: &str) {
         bump(&self.change_requests_opened, credential, "");
+    }
+
+    pub(crate) fn diagnostic_check(&self, id: &str, status: &str) {
+        bump(&self.diagnostic_checks, id, status);
     }
 
     pub(crate) fn path_scope_violation(&self, stage: &str) {
@@ -312,6 +317,7 @@ pub struct MetricsSnapshot {
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
     pub change_requests_opened: Vec<(String, u64)>,
+    pub diagnostic_checks: Vec<(String, String, u64)>,
 }
 
 pub(crate) enum DodVerification {
@@ -379,6 +385,25 @@ pub struct Readiness {
     pub sessions_reattached: bool,
 }
 
+impl Readiness {
+    pub fn checks(&self) -> [(&'static str, bool); 4] {
+        [
+            ("db", self.db),
+            ("migrations", self.migrations),
+            ("worker", self.worker),
+            ("reconciler", self.reconciler && self.sessions_reattached),
+        ]
+    }
+
+    pub fn failing(&self) -> Vec<&'static str> {
+        self.checks()
+            .into_iter()
+            .filter(|(_, ok)| !ok)
+            .map(|(name, _)| name)
+            .collect()
+    }
+}
+
 impl Engine {
     pub fn metrics(&self) -> Result<MetricsSnapshot> {
         let now = self.now();
@@ -442,6 +467,7 @@ impl Engine {
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
                 .collect(),
+            diagnostic_checks: copy(&self.counters.diagnostic_checks),
             config_reloads: copy(&self.counters.config_reloads)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))

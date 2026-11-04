@@ -1,5 +1,7 @@
+mod agent_login;
 mod cli;
 mod config;
+mod doctor;
 mod init;
 mod logging;
 mod serve;
@@ -53,6 +55,16 @@ enum Command {
         after_help = "Exit codes: 0 done, 1 failed, 2 usage or environment, 3 config problems, 5 waiting for a push. Saka never commits or pushes."
     )]
     Init(init::InitArgs),
+    #[command(
+        about = "Checks whether this instance can run the loop, with one fix per problem",
+        after_help = "Exit codes: 0 no failures, 1 a failure (or a warning with --strict), 2 config refused or a flag is invalid. Uses the server's report; runs the local checks itself when the server is down."
+    )]
+    Doctor(doctor::DoctorArgs),
+    #[command(
+        about = "The agent CLI account Saka's sessions use (on the host that runs `saka serve`)"
+    )]
+    #[command(subcommand)]
+    Agent(AgentCmd),
     #[command(about = "Projects")]
     #[command(subcommand)]
     Project(ProjectCmd),
@@ -76,6 +88,25 @@ enum Command {
     )]
     #[command(subcommand)]
     Scm(ScmCmd),
+}
+
+#[derive(Subcommand)]
+enum AgentCmd {
+    #[command(
+        about = "Logs the agent CLI in to Saka's account directory with its own login (never your personal config)",
+        after_help = "Exit codes: 0 logged in, 1 not found or the login failed, 2 config refused."
+    )]
+    Login {
+        #[arg(
+            help = "Log in with an Anthropic Console account (API usage billing)",
+            long
+        )]
+        console: bool,
+        #[arg(help = "Log in again even when the account is logged in", long)]
+        force: bool,
+    },
+    #[command(about = "Shows whether the agent account is logged in; exits 1 when it is not")]
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -435,6 +466,13 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         Command::Serve => serve::serve(&load_config()?),
         Command::Migrate => serve::migrate(&load_config()?),
         Command::Init(args) => init::run(&args, cli.server, cli.json),
+        Command::Doctor(args) => {
+            current_thread()?.block_on(doctor::run(&args, cli.server, cli.json))
+        }
+        Command::Agent(AgentCmd::Login { console, force }) => {
+            agent_login::login(&load_config()?, console, force)
+        }
+        Command::Agent(AgentCmd::Status) => agent_login::status(&load_config()?, cli.json),
         Command::Runner { session, launch } => {
             let code = current_thread()?.block_on(saka_agents::runner::run(&session, &launch));
             ExitCode::from(u8::try_from(code).unwrap_or(1))

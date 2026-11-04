@@ -262,6 +262,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_diagnostic_checks_total",
+        "counter",
+        "Diagnostic check results, by check id and status.",
+    );
+    for (id, status, n) in &m.diagnostic_checks {
+        t.sample(
+            "saka_diagnostic_checks_total",
+            &[("id", id), ("status", status)],
+            n,
+        );
+    }
+    t.family(
         "saka_path_scope_violations_total",
         "counter",
         "Task diffs found outside their allowed paths, by the stage that checked them.",

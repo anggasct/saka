@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use saka_core::diagnostics::SupervisorProbe;
 use saka_core::secret::SecretText;
 
 use crate::PortResult;
@@ -52,4 +53,6 @@ pub trait Supervisor: Send + Sync {
     async fn is_active(&self, name: &str) -> PortResult<bool>;
 
     async fn run(&self, unit: &CommandUnit) -> PortResult<CommandOutcome>;
+
+    async fn probe(&self) -> PortResult<SupervisorProbe>;
 }

@@ -1,3 +1,4 @@
+pub mod account;
 pub mod adapter;
 pub mod claude;
 pub mod client;

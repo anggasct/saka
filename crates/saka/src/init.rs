@@ -13,7 +13,7 @@ use saka_engine::recipe::{self, RECIPE_PATH, RecipeAction, RecipeProposal};
 use saka_engine::versions::{
     self, FileSkipped, Proposal, ProposalAction, ToolReport, VersionStatus,
 };
-use saka_env::{HttpReleaseIndex, ReleaseIndexConfig};
+use saka_env::HttpReleaseIndex;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -24,7 +24,6 @@ use prompt::Prompter;
 
 pub const EXIT_USAGE: u8 = crate::serve::EXIT_REFUSED;
 const EXIT_FAILED: u8 = 1;
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_DOCS_PATH: &str = "docs";
 const MAX_PROJECT_NAME: usize = 80;
 const MAX_REPO_NAME: usize = 32;
@@ -574,13 +573,8 @@ async fn prepare(
     let (planned, project_name) = session.plan(&code, existing.as_deref())?;
 
     let repo_files = files::collect(&code.root);
-    let index = HttpReleaseIndex::new(ReleaseIndexConfig {
-        go_dl_url: cfg.toolchain.go_dl_url.clone(),
-        node_dist_url: cfg.toolchain.node_dist_url.clone(),
-        npm_registry_url: cfg.toolchain.npm_registry_url.clone(),
-        user_agent: format!("saka/{VERSION}"),
-    })
-    .map_err(|e| InitError::usage("config_refused", json!({ "code": e.code })))?;
+    let index = HttpReleaseIndex::new(crate::serve::release_index_config(cfg))
+        .map_err(|e| InitError::usage("config_refused", json!({ "code": e.code })))?;
     let mut versions = versions::detect(&repo_files, &index).await;
     let recipe = recipe::propose(&repo_files, cfg.env.ports_per_env);
 

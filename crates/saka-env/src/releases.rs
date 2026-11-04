@@ -45,11 +45,21 @@ struct NpmPackument {
     versions: BTreeMap<String, IgnoredAny>,
 }
 
-fn unavailable(tool: Tool, detail: String) -> PortError {
+fn unavailable(tool: Tool, url: &str, status: Option<u16>, detail: String) -> PortError {
     PortError::retryable(
         "release_index_unavailable",
-        json!({ "tool": tool, "detail": detail }),
+        json!({ "tool": tool, "url": public_url(url), "status": status, "detail": detail }),
     )
+}
+
+// A mirror URL may carry credentials or tokens; only scheme, host, and path leave the adapter.
+fn public_url(url: &str) -> Option<String> {
+    let mut u = reqwest::Url::parse(url).ok()?;
+    u.set_username("").ok()?;
+    u.set_password(None).ok()?;
+    u.set_query(None);
+    u.set_fragment(None);
+    Some(u.to_string())
 }
 
 fn join(base: &str, rest: &str) -> String {
@@ -116,7 +126,16 @@ impl HttpReleaseIndex {
             .cloned()
     }
 
+    fn base(&self, tool: Tool) -> &str {
+        match tool {
+            Tool::Go => &self.cfg.go_dl_url,
+            Tool::Node => &self.cfg.node_dist_url,
+            Tool::Pnpm => &self.cfg.npm_registry_url,
+        }
+    }
+
     async fn fetch(&self, tool: Tool) -> PortResult<Vec<u8>> {
+        let base = self.base(tool);
         let request = match tool {
             Tool::Go => self
                 .http
@@ -130,20 +149,21 @@ impl HttpReleaseIndex {
         let mut response = request
             .send()
             .await
-            .map_err(|e| unavailable(tool, e.without_url().to_string()))?;
+            .map_err(|e| unavailable(tool, base, None, e.without_url().to_string()))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(unavailable(tool, format!("HTTP {}", status.as_u16())));
+            let code = status.as_u16();
+            return Err(unavailable(tool, base, Some(code), format!("HTTP {code}")));
         }
         let mut body = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| unavailable(tool, e.without_url().to_string()))?
+            .map_err(|e| unavailable(tool, base, None, e.without_url().to_string()))?
         {
             body.extend_from_slice(&chunk);
             if body.len() > INDEX_MAX_BYTES {
-                return Err(unavailable(tool, "index too large".into()));
+                return Err(unavailable(tool, base, None, "index too large".into()));
             }
         }
         Ok(body)
@@ -162,7 +182,7 @@ impl ReleaseIndex for HttpReleaseIndex {
             Tool::Node => node_releases(&body),
             Tool::Pnpm => pnpm_releases(&body),
         }
-        .map_err(|e| unavailable(tool, e.to_string()))?;
+        .map_err(|e| unavailable(tool, self.base(tool), None, e.to_string()))?;
         self.cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

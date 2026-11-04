@@ -127,6 +127,29 @@ vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
 vocab!(ChangeRole { Code => "code", Docs => "docs" });
 vocab!(ScopeViolationReason { OutsideScope => "outside_scope", TooManyPaths => "too_many_paths" });
 vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
+vocab!(CheckId {
+    CliConfig => "cli.config",
+    ServerReachable => "server.reachable",
+    ServerVersion => "server.version",
+    ServerReady => "server.ready",
+    DbMigrations => "db.migrations",
+    RuntimeSupervisor => "runtime.supervisor",
+    AgentBinary => "agent.binary",
+    AgentLogin => "agent.login",
+    AgentQuota => "agent.quota",
+    ToolchainCache => "toolchain.cache",
+    ToolchainSources => "toolchain.sources",
+});
+vocab!(DiagnosticStatus { Pass => "pass", Warn => "warn", Fail => "fail", Skip => "skip" });
+vocab!(SubjectKind {
+    Instance => "instance",
+    AgentAccount => "agent_account",
+    Integration => "integration",
+    Repo => "repo",
+    Project => "project",
+    ProjectRepo => "project_repo",
+});
+vocab!(ReportMode { Online => "online", Offline => "offline" });
 vocab!(SecretPurpose { Setup => "setup", Session => "session" });
 vocab!(UserLinkState { Active => "active", NeedsRelink => "needs_relink" });
 vocab!(RelinkCause { RefreshFailed => "refresh_failed", Revoked => "revoked", Expired => "expired" });

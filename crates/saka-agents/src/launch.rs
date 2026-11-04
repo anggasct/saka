@@ -100,7 +100,7 @@ pub struct ClaudeSettings {
 impl ClaudeSettings {
     pub fn program(&self) -> Option<PathBuf> {
         if self.command.contains('/') {
-            return Some(PathBuf::from(&self.command));
+            return Some(PathBuf::from(&self.command)).filter(|p| is_executable(p));
         }
         self.path
             .iter()

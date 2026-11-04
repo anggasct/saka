@@ -38,11 +38,11 @@ impl Answer {
     }
 }
 
-fn out(text: &str) {
+pub(crate) fn out(text: &str) {
     let _ = writeln!(std::io::stdout(), "{text}");
 }
 
-fn err(text: &str) {
+pub(crate) fn err(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
@@ -157,6 +157,24 @@ impl Client {
             http: reqwest::Client::new(),
             json,
         }
+    }
+
+    pub fn with_timeout(base: &str, json: bool, timeout: std::time::Duration) -> Client {
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .connect_timeout(timeout)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            http,
+            json,
+        }
+    }
+
+    pub async fn get_quiet(&self, path: &str) -> Result<Answer, String> {
+        self.exchange(self.http.get(format!("{}{path}", self.base)))
+            .await
     }
 
     pub fn base(&self) -> &str {
@@ -530,7 +548,7 @@ impl Client {
         }
     }
 
-    async fn project_id(&self, project: &str) -> Result<String, ExitCode> {
+    pub(crate) async fn project_id(&self, project: &str) -> Result<String, ExitCode> {
         if project.parse::<Uuid>().is_ok() {
             return Ok(project.to_string());
         }

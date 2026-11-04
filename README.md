@@ -74,7 +74,11 @@ A task is done only when its merge is proven. If every required gate source pass
 
 Saka retries some blockers by itself, at most twice per stage, after 1 and then 5 minutes. These are blockers a person has nothing to decide on: a lost session, an unreachable SCM, an environment that failed for reasons other than its setup commands, a head that moved during merge, or a gate runner that crashed. A manual `retry` needs a reason and is allowed three times per stage. After that, only `cancel` remains.
 
-Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
+Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is logged in.
+
+`saka agent login` logs the `claude` CLI in to Saka's own account directory (`agent.account_dir`, by default `<data_dir>/agents/claude/default`, mode 0700). It runs `claude auth login` with `CLAUDE_CONFIG_DIR` set to that directory and only a short list of terminal and display variables, so your personal `~/.claude` and any `ANTHROPIC_API_KEY` in your shell never reach it. Add `--console` to log in with an Anthropic Console account. Saka never reads the credentials; `saka agent status` asks the CLI whether the account is logged in.
+
+`saka doctor` checks whether the instance can run the loop: the server, migrations, the user systemd manager, the agent CLI and its login, quota, and the toolchain cache and sources. It prints one line per check with a stable id, `pass`, `warn`, `fail`, or `skip`, a code, and the command that fixes it. `--json` prints the full report, `--check <id>` runs only some checks, and `--strict` makes warnings fail too. It exits 0 without failures, 1 with one, and 2 when the config or a flag is refused. When the server is down, it runs the local checks itself from the config, without migrating the database. The server's report is `GET /api/v1/diagnostics`, and `saka_diagnostic_checks_total{id,status}` counts results.
 
 Linking your GitHub account to an integration lets Saka author agent work as you. In the GitHub App settings, turn on **Enable Device Flow** and keep user-token expiration on. Then copy the App's **Client ID** (not the App ID) into `[[scm]] client_id`. `saka scm link` prints a code to enter at `https://github.com/login/device` and waits until you approve. `saka scm status` shows the linked login and when its refresh token expires, and `saka scm unlink` removes the link. Saka stores the short-lived user tokens encrypted and refreshes them without a client secret. To revoke them, use GitHub's settings → Applications. `saka_user_link_authorizations_total{integration,state}` and `saka_user_link_refresh_total{integration,outcome}` count link attempts and token refreshes. `[git] name` and `email` are Saka's own identity: the committer of every agent commit, and its author in bot mode.
 
@@ -108,7 +112,7 @@ The Rust toolchain is pinned in `rust-toolchain.toml`; Node and pnpm in `web/pac
 - a user systemd instance (`systemctl --user is-system-running` says `running` or `degraded`), `git`, and the `claude` CLI;
 - a test repository you own, with a `docs/saka.toml` naming the repository itself, a Go module in `cli/`, and a CI workflow that runs on `pull_request` for any base branch;
 - a GitHub App installed on that repository with these repository permissions: Contents read and write, Pull requests read and write, Checks read, Commit statuses read and write (for the `saka/verify` status), Metadata read (no webhook needed). Download a private key and `chmod 600` it;
-- a Claude Code account directory that is already logged in: `CLAUDE_CONFIG_DIR=<dir> claude`, then `/login`.
+- a Claude Code account directory that is logged in: point `agent.account_dir` at it and run `saka agent login`.
 
 | Variable | Value |
 |---|---|

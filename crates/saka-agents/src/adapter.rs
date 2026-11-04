@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use saka_core::diagnostics::{AgentCli, AgentLogin};
 use saka_core::ids::SessionId;
 use saka_ports::{
     Agents, LaunchProfile, LaunchedSession, Link, PortError, PortResult, Reattached, RunnerEvent,
@@ -13,6 +14,7 @@ use saka_ports::{
 use serde_json::json;
 use tokio::sync::mpsc;
 
+use crate::account;
 use crate::client::RunnerConnection;
 use crate::launch::{
     self, ClaudeSettings, LaunchOptions, LaunchSpec, SessionPaths, UnsupportedPath,
@@ -22,7 +24,6 @@ use crate::secrets::SessionSecrets;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY: Duration = Duration::from_millis(50);
-const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct AgentsConfig {
@@ -199,21 +200,6 @@ impl ClaudeAgents {
     }
 }
 
-async fn cli_version(program: &Path) -> Option<String> {
-    let output = tokio::time::timeout(
-        VERSION_TIMEOUT,
-        tokio::process::Command::new(program)
-            .arg("--version")
-            .env_clear()
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.split_whitespace().next().map(String::from)
-}
-
 fn write_launch(paths: &SessionPaths, spec: &LaunchSpec) -> std::io::Result<()> {
     std::fs::create_dir_all(&paths.session_dir)?;
     std::fs::set_permissions(&paths.session_dir, std::fs::Permissions::from_mode(0o700))?;
@@ -241,7 +227,7 @@ impl Agents for ClaudeAgents {
                 json!({ "command": self.cfg.claude.command }),
             )
         })?;
-        let version = cli_version(&program).await;
+        let version = account::version(&program, &self.cfg.claude).await;
         let (spec, paths) = self.launch_spec(&program, launch)?;
         self.drop_conn(launch.session_id);
         // A socket left by an earlier attempt must not answer for the new runner.
@@ -407,6 +393,14 @@ impl Agents for ClaudeAgents {
             .unwrap_or_else(|| unit_name(session_id));
         self.supervisor.stop(&name).await
     }
+
+    async fn agent_cli(&self) -> PortResult<AgentCli> {
+        Ok(account::cli(&self.cfg.claude).await)
+    }
+
+    async fn agent_login(&self) -> PortResult<AgentLogin> {
+        Ok(account::login(&self.cfg.claude, account::STATUS_TIMEOUT).await)
+    }
 }
 
 #[cfg(test)]
@@ -433,6 +427,9 @@ mod tests {
             Ok(false)
         }
         async fn run(&self, _unit: &CommandUnit) -> PortResult<CommandOutcome> {
+            Err(PortError::permanent("not_used", json!({})))
+        }
+        async fn probe(&self) -> PortResult<saka_core::diagnostics::SupervisorProbe> {
             Err(PortError::permanent("not_used", json!({})))
         }
     }

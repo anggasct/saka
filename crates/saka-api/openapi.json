@@ -29,6 +29,65 @@
         }
       }
     },
+    "/api/v1/diagnostics": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "diagnostics",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Only this project's `project`, `project_repo`, and `repo` checks; instance, agent account, and integration checks always run.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "check",
+            "in": "query",
+            "description": "A check id from the catalog, for example `agent.login`; repeat for more. Without it, every check runs.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always `no-store`: every request runs the checks again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events": {
       "get": {
         "tags": [
@@ -3555,6 +3614,151 @@
           "allow",
           "deny"
         ]
+      },
+      "DiagnosticCheck": {
+        "type": "object",
+        "required": [
+          "id",
+          "subject",
+          "status",
+          "code",
+          "params",
+          "duration_ms"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "What was found; the client turns it and `params` into text. Never holds a token, key, secret, or account email."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fix": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DiagnosticFix",
+                "description": "`null` for `pass` and `skip`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable dotted id, for example `agent.login`."
+          },
+          "params": {},
+          "status": {
+            "type": "string",
+            "description": "`pass`, `warn`, `fail`, or `skip`."
+          },
+          "subject": {
+            "$ref": "#/components/schemas/DiagnosticSubject"
+          }
+        }
+      },
+      "DiagnosticFix": {
+        "type": "object",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {
+            "description": "`command` holds the command that fixes it, when there is one."
+          }
+        }
+      },
+      "DiagnosticReport": {
+        "type": "object",
+        "required": [
+          "generated_at",
+          "server_version",
+          "mode",
+          "summary",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticCheck"
+            },
+            "description": "In catalog order, then by `subject.label`."
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "`online` from the server; `saka doctor` writes `offline` when it ran the local checks itself."
+          },
+          "server_version": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/DiagnosticSummary"
+          }
+        }
+      },
+      "DiagnosticSubject": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "For example `instance`, `claude:default`, or an integration, repo, or project id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`instance`, `agent_account`, `integration`, `repo`, `project`, or `project_repo`."
+          },
+          "label": {
+            "type": "string",
+            "description": "For display, for example `claude:default` or `acme/shop`."
+          }
+        }
+      },
+      "DiagnosticSummary": {
+        "type": "object",
+        "required": [
+          "pass",
+          "warn",
+          "fail",
+          "skip"
+        ],
+        "properties": {
+          "fail": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "pass": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "skip": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "warn": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "DocsChangeRequest": {
         "type": "object",

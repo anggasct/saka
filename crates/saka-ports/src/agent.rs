@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use saka_core::authorship::GitIdentity;
+use saka_core::diagnostics::{AgentCli, AgentLogin};
 use saka_core::ids::SessionId;
 use saka_core::model::RunOwner;
 use saka_core::time::Timestamp;
@@ -82,6 +83,10 @@ pub trait Agents: Send + Sync {
     fn disconnect(&self, session: SessionId);
 
     async fn stop(&self, session_id: SessionId, runner_unit: Option<&str>) -> PortResult<()>;
+
+    async fn agent_cli(&self) -> PortResult<AgentCli>;
+
+    async fn agent_login(&self) -> PortResult<AgentLogin>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
