@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod init;
 mod logging;
 mod serve;
 
@@ -47,6 +48,11 @@ enum Command {
         #[arg(long)]
         launch: PathBuf,
     },
+    #[command(
+        about = "Sets up this repo for Saka: docs location, saka.toml, toolchain versions, and a setup recipe; registers the project once saka.toml is pushed",
+        after_help = "Exit codes: 0 done, 1 failed, 2 usage or environment, 3 config problems, 5 waiting for a push. Saka never commits or pushes."
+    )]
+    Init(init::InitArgs),
     #[command(about = "Projects")]
     #[command(subcommand)]
     Project(ProjectCmd),
@@ -428,6 +434,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
     Ok(match cli.command {
         Command::Serve => serve::serve(&load_config()?),
         Command::Migrate => serve::migrate(&load_config()?),
+        Command::Init(args) => init::run(&args, cli.server, cli.json),
         Command::Runner { session, launch } => {
             let code = current_thread()?.block_on(saka_agents::runner::run(&session, &launch));
             ExitCode::from(u8::try_from(code).unwrap_or(1))

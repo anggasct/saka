@@ -8,7 +8,7 @@ mod docs;
 mod draft;
 mod metrics;
 pub mod packet;
-mod project_config;
+pub mod project_config;
 pub mod recipe;
 mod reconciler;
 mod register;
@@ -59,7 +59,7 @@ pub use draft::{
     NewSpecDraft,
 };
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
-pub use register::{AddProject, Integration, parse_repo_url};
+pub use register::{AddProject, Integration, MAX_CONFIG_BYTES, branch_ok, parse_repo_url};
 pub use reload::ReloadView;
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;

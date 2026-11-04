@@ -6,8 +6,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-pub const EXIT_LINT: u8 = 3;
+pub const EXIT_PROBLEMS: u8 = 3;
 pub const EXIT_CONFLICT: u8 = 4;
+pub const EXIT_PENDING: u8 = 5;
 const DRAFT_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub struct NewDraft<'a> {
@@ -158,14 +159,12 @@ impl Client {
         }
     }
 
-    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Answer, ExitCode> {
-        let response = req.send().await.map_err(|e| {
-            err(&format!(
-                "error: server_unreachable {}",
-                json!({ "server": self.base, "reason": e.to_string() })
-            ));
-            ExitCode::FAILURE
-        })?;
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    async fn exchange(&self, req: reqwest::RequestBuilder) -> Result<Answer, String> {
+        let response = req.send().await.map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
         let etag = response
             .headers()
@@ -174,6 +173,25 @@ impl Client {
             .map(String::from);
         let body = response.json::<Value>().await.unwrap_or(Value::Null);
         Ok(Answer { status, body, etag })
+    }
+
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Answer, ExitCode> {
+        self.exchange(req).await.map_err(|reason| {
+            err(&format!(
+                "error: server_unreachable {}",
+                json!({ "server": self.base, "reason": reason })
+            ));
+            ExitCode::FAILURE
+        })
+    }
+
+    pub async fn post_quiet(&self, path: &str, body: &Value) -> Result<Answer, String> {
+        let req = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header("Idempotency-Key", Uuid::now_v7().to_string())
+            .json(body);
+        self.exchange(req).await
     }
 
     pub async fn get(&self, path: &str) -> Result<Answer, ExitCode> {
@@ -680,7 +698,7 @@ impl Client {
                 out(&issue_line(issue));
             }
         }
-        ExitCode::from(EXIT_LINT)
+        ExitCode::from(EXIT_PROBLEMS)
     }
 
     pub async fn spec_template(&self, locale: &str) -> ExitCode {
@@ -957,7 +975,7 @@ impl Client {
                     "error: lint_rounds_exhausted {}",
                     failure["params"]
                 ));
-                ExitCode::from(EXIT_LINT)
+                ExitCode::from(EXIT_PROBLEMS)
             }
             "failed" => {
                 err(&format!(
