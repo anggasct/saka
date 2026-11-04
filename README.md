@@ -7,7 +7,9 @@ A self-hosted delivery loop for coding agents: an approved spec becomes one task
 ```sh
 cargo build --release -p saka --features embed-web   # after `cargo xtask wasm` and `corepack pnpm build` in web/
 saka serve                                            # API, workers, and the web app on 127.0.0.1:7420
-saka project add https://github.com/<owner>/<repo> --path docs
+cd <your clone> && saka init                          # writes docs/saka.toml and checks it; exit 5 until it is pushed
+git add docs/saka.toml && git commit -m "chore: set up Saka" && git push
+saka init                                             # sees the pushed saka.toml and registers the project
 saka spec template > docs/specs/<spec>.md            # a spec that passes lint (--locale id for Indonesian)
 saka spec approve <project> docs/specs/<spec>.md       # again after an edit: repins steps that have not started
 saka spec withdraw <project> docs/specs/<spec>.md --reason "<why>"
@@ -17,6 +19,8 @@ saka task list
 saka task steer <task> "<message>"                     # also: interrupt, stop --reason, timeline
 saka permission answer <request> allow --remember      # allow the same request in this project from now on
 ```
+
+`saka init` runs inside a local clone of a code repo. It asks where the docs live (this repo, or the local clone of a separate docs repo), writes `saka.toml` there or adds this repo to an existing one without touching its comments, and reports the Go, Node, pnpm, Rust, and Python versions the repo pins. For a version that is not exact, it offers a version file (`.nvmrc`, `.python-version`, `rust-toolchain.toml`) or prints the official command (`npm pkg set …`, `go mod edit …`); `package.json` and `go.mod` are never edited. It also offers a `.saka/environment.toml` with setup commands from the root lockfiles. Then it checks the file with the server (`POST /api/v1/projects/actions/check-config`): integration, App access, and base branches, all problems at once. Saka never commits, pushes, or fetches in your repo; once the same `saka.toml` is on the remote base branch, the next `saka init` registers the project, or reloads it when it is already registered. Every choice is a flag (`--docs repo --docs-repo <dir> --docs-path <folder>`, `--project-name`, `--repo-name`, `--base-branch`, `--path-scope`, `--default`, `--write-version-files`, `--write-recipe`, `--no-register`, `--dry-run`, `--yes`, `--json`). Exit codes: 0 done, 1 failed, 2 usage or environment, 3 config problems, 5 waiting for a push. `saka project add <url> --path <folder>` still registers a project whose `saka.toml` is already pushed.
 
 A project is a folder in a workspace repo. Its `saka.toml` names the project and binds the code repos its tasks change. Code repos do not have to be the workspace repo, so docs can live in a repo of their own:
 

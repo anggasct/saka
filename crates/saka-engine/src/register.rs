@@ -56,7 +56,7 @@ fn web_host(web_url: &str) -> Option<String> {
     Some(rest.trim_end_matches('/').to_ascii_lowercase())
 }
 
-pub(crate) fn branch_ok(branch: &str) -> bool {
+pub fn branch_ok(branch: &str) -> bool {
     !branch.is_empty()
         && branch.len() <= 255
         && !branch.starts_with('-')
@@ -98,7 +98,7 @@ pub(crate) fn config_invalid(issues: &[project_config::Issue]) -> Rejection {
     }
 }
 
-pub(crate) const MAX_CONFIG_BYTES: u64 = 65_536;
+pub const MAX_CONFIG_BYTES: u64 = 65_536;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConfigContent {
