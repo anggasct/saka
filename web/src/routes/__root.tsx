@@ -23,7 +23,7 @@ function Layout() {
         {t("app.skipToContent")}
       </a>
       <header className="border-b border-border">
-        <nav className="mx-auto flex max-w-4xl items-center gap-4 px-4">
+        <nav className="mx-auto flex max-w-4xl flex-wrap items-center gap-x-4 px-4">
           <span className="py-3 font-semibold">{t("app.name")}</span>
           <Link
             to="/docs"
@@ -36,6 +36,12 @@ function Layout() {
             className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
           >
             {t("nav.delivery")}
+          </Link>
+          <Link
+            to="/settings"
+            className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+          >
+            {t("nav.settings")}
           </Link>
           <LanguageSelect />
         </nav>
