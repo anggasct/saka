@@ -14,6 +14,7 @@ pub mod redact;
 pub mod rejection;
 pub mod resume;
 pub mod rule;
+pub mod scope;
 pub mod secret;
 pub mod session;
 pub mod spec;

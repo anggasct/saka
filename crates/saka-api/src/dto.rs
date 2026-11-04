@@ -10,8 +10,8 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::EnvironmentState;
 use saka_engine::{
     AccountView, BudgetView, DocContentView, DocTreeView, DocWriteView, DraftBudgetView,
-    DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView, SessionView,
-    SpecView, TaskDetail, TaskView, UsageView,
+    DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView, ReloadView,
+    SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -52,8 +52,33 @@ pub struct ProjectRepo {
     pub full_name: String,
     pub url: String,
     pub default_branch: String,
+    /// Branch this binding's worktrees, recipes, change requests, and merge checks use.
+    pub base_branch: String,
     pub is_default: bool,
+    /// The repo is also the project's workspace repo.
+    pub is_workspace: bool,
     pub path_scope: Vec<String>,
+    /// `path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`.
+    pub effective_path_scope: Vec<String>,
+}
+
+/// The last rejected reload of `saka.toml`; the previous config stays in force while it is set.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectConfigError {
+    pub commit: String,
+    /// `project_config_invalid | scm_integration_unknown | scm_repo_inaccessible | project_repo_in_use`
+    pub code: String,
+    pub params: Value,
+    pub observed_at: String,
+}
+
+/// A warning computed when the project is read; never stored.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectWarning {
+    /// `path_scope_overlap`
+    pub code: String,
+    /// For `path_scope_overlap`: `repo`, `repo_id`, `other_project_id`, `other_project`, `other_repo`.
+    pub params: Value,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -61,12 +86,17 @@ pub struct Project {
     pub id: Uuid,
     pub name: String,
     pub workspace: Workspace,
+    /// Bindings from `saka.toml`, the default first, then by `name`.
     pub repos: Vec<ProjectRepo>,
     /// `standard` in this version.
     pub autonomy: String,
     /// `full_loop` in this version.
     pub workflow_preset: String,
     pub config_commit: String,
+    /// `sha256:<hex>` of the `saka.toml` content in force.
+    pub config_sha256: String,
+    pub config_error: Option<ProjectConfigError>,
+    pub warnings: Vec<ProjectWarning>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -97,19 +127,65 @@ impl Project {
                         full_name: r.full_name.clone(),
                         url: r.url.clone(),
                         default_branch: r.default_branch.clone(),
+                        base_branch: pr.base_branch.clone(),
                         is_default: pr.is_default,
+                        is_workspace: pr.repo_id == p.workspace_repo_id,
                         path_scope: pr.path_scope.clone(),
+                        effective_path_scope: p.effective_scope(pr),
                     })
                 })
                 .collect(),
             autonomy: p.autonomy.as_str().to_string(),
             workflow_preset: p.workflow_preset.as_str().to_string(),
             config_commit: p.config_commit.clone(),
+            config_sha256: p.config_sha256.clone(),
+            config_error: p.config_error.as_ref().map(|e| ProjectConfigError {
+                commit: e.commit.clone(),
+                code: e.code.clone(),
+                params: e.params.clone(),
+                observed_at: time(e.observed_at),
+            }),
+            warnings: v
+                .warnings
+                .iter()
+                .map(|w| ProjectWarning {
+                    code: "path_scope_overlap".into(),
+                    params: serde_json::json!({
+                        "repo": w.repo,
+                        "repo_id": w.repo_id,
+                        "other_project_id": w.other_project_id,
+                        "other_project": w.other_project,
+                        "other_repo": w.other_repo,
+                    }),
+                })
+                .collect(),
             created_at: time(p.created_at),
             updated_at: time(p.updated_at),
         }
     }
 }
+
+/// Result of re-reading `saka.toml`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectReload {
+    pub project: Project,
+    /// `changed | unchanged`
+    pub outcome: String,
+}
+
+impl ProjectReload {
+    pub fn from_view(v: &ReloadView) -> ProjectReload {
+        ProjectReload {
+            project: Project::from_view(&v.project),
+            outcome: v.outcome.as_str().to_string(),
+        }
+    }
+}
+
+/// Request body of a reload; no fields.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReloadBody {}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Revision {
@@ -551,6 +627,8 @@ pub struct WorkItem {
     pub task_key: String,
     pub work: String,
     pub repo_id: Uuid,
+    /// Name of the binding of `repo_id` in the project now; `null` once a reload removed it.
+    pub repo_name: Option<String>,
     pub branch: String,
     /// `queued | awaiting_start | admitted | in_stage | blocked | taken_over | done | cancelled | superseded`
     pub state: String,
@@ -676,10 +754,20 @@ impl WorkItemBudget {
 
 impl WorkItem {
     pub fn from_view(v: &TaskView) -> WorkItem {
-        WorkItem::from_task(&v.task, &v.waiting_on, v.budget.as_ref())
+        WorkItem::from_task(
+            &v.task,
+            v.repo_name.as_deref(),
+            &v.waiting_on,
+            v.budget.as_ref(),
+        )
     }
 
-    pub fn from_task(t: &Task, waiting_on: &[Waiting], budget: Option<&BudgetView>) -> WorkItem {
+    pub fn from_task(
+        t: &Task,
+        repo_name: Option<&str>,
+        waiting_on: &[Waiting],
+        budget: Option<&BudgetView>,
+    ) -> WorkItem {
         let i = &t.item;
         WorkItem {
             id: i.id.0,
@@ -692,6 +780,7 @@ impl WorkItem {
             task_key: i.task_key.clone(),
             work: i.work.clone(),
             repo_id: i.repo_id.0,
+            repo_name: repo_name.map(str::to_string),
             branch: i.branch.clone(),
             state: i.state.as_str().to_string(),
             stage: i.stage.map(|x| x.as_str().to_string()),
@@ -792,7 +881,12 @@ pub struct WorkItemDetail {
 impl WorkItemDetail {
     pub fn from_detail(d: &TaskDetail) -> WorkItemDetail {
         WorkItemDetail {
-            item: WorkItem::from_task(&d.task, &d.waiting_on, d.budget.as_ref()),
+            item: WorkItem::from_task(
+                &d.task,
+                d.repo_name.as_deref(),
+                &d.waiting_on,
+                d.budget.as_ref(),
+            ),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
         }
     }

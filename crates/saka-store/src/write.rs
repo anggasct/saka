@@ -438,12 +438,14 @@ fn repo(tx: &Transaction<'_>, r: &Repo) -> Result<()> {
 }
 
 fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
+    let config_error = p.config_error.as_ref().map(to_json).transpose()?;
     tx.execute(
-        "INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, autonomy,
-           workflow_preset, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, config_sha256,
+           config_error, autonomy, workflow_preset, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_branch = excluded.base_branch,
-           config_commit = excluded.config_commit, autonomy = excluded.autonomy,
+           config_commit = excluded.config_commit, config_sha256 = excluded.config_sha256,
+           config_error = excluded.config_error, autonomy = excluded.autonomy,
            workflow_preset = excluded.workflow_preset, updated_at = excluded.updated_at",
         params![
             p.id.to_string(),
@@ -452,19 +454,43 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
             p.project_path,
             p.base_branch,
             p.config_commit,
+            p.config_sha256,
+            config_error,
             p.autonomy.as_str(),
             p.workflow_preset.as_str(),
             p.created_at.0,
             p.updated_at.0,
         ],
     )?;
+    let created: std::collections::HashMap<String, i64> = {
+        let mut stmt =
+            tx.prepare("SELECT repo_id, created_at FROM project_repo WHERE project_id = ?1")?;
+        let rows = stmt.query_map([p.id.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    // Bindings are replaced as a whole: swapping a default or a name between two rows
+    // would trip the unique indexes if rows were updated one at a time.
+    tx.execute(
+        "DELETE FROM project_repo WHERE project_id = ?1",
+        params![p.id.to_string()],
+    )?;
     for r in &p.repos {
+        let repo_id = r.repo_id.to_string();
+        let since = created.get(&repo_id).copied().unwrap_or(p.updated_at.0);
         tx.execute(
-            "INSERT INTO project_repo (project_id, repo_id, name, is_default, path_scope, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-             ON CONFLICT (project_id, repo_id) DO UPDATE SET name = excluded.name, is_default = excluded.is_default,
-               path_scope = excluded.path_scope, updated_at = excluded.updated_at",
-            params![p.id.to_string(), r.repo_id.to_string(), r.name, r.is_default, to_json(&r.path_scope)?, p.updated_at.0],
+            "INSERT INTO project_repo (project_id, repo_id, name, is_default, base_branch, path_scope, created_at,
+               updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                p.id.to_string(),
+                repo_id,
+                r.name,
+                r.is_default,
+                r.base_branch,
+                to_json(&r.path_scope)?,
+                since,
+                p.updated_at.0
+            ],
         )?;
     }
     Ok(())

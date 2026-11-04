@@ -88,6 +88,8 @@ pub struct Project {
     pub project_path: String,
     pub base_branch: String,
     pub config_commit: String,
+    pub config_sha256: String,
+    pub config_error: Option<ConfigError>,
     pub autonomy: Autonomy,
     pub workflow_preset: WorkflowPreset,
     pub repos: Vec<ProjectRepo>,
@@ -100,12 +102,31 @@ pub struct ProjectRepo {
     pub repo_id: RepoId,
     pub name: String,
     pub is_default: bool,
+    pub base_branch: String,
     pub path_scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigError {
+    pub commit: String,
+    pub code: String,
+    pub params: Value,
+    pub observed_at: Timestamp,
 }
 
 impl Project {
     pub fn default_repo(&self) -> Option<RepoId> {
         self.repos.iter().find(|r| r.is_default).map(|r| r.repo_id)
+    }
+
+    pub fn binding(&self, repo_id: RepoId) -> Option<&ProjectRepo> {
+        self.repos.iter().find(|r| r.repo_id == repo_id)
+    }
+
+    pub fn effective_scope(&self, binding: &ProjectRepo) -> Vec<String> {
+        let docs =
+            (binding.repo_id == self.workspace_repo_id).then_some(self.project_path.as_str());
+        crate::scope::PathScope::effective(&binding.path_scope, docs)
     }
 }
 

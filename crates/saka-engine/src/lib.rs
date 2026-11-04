@@ -9,6 +9,7 @@ mod project_config;
 pub mod recipe;
 mod reconciler;
 mod register;
+mod reload;
 mod runner;
 mod secrets;
 mod text;
@@ -41,7 +42,7 @@ use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
-pub use commands::{NewProject, RegisteredSpec, SessionCommand};
+pub use commands::{NewBinding, NewProject, NewRepo, RegisteredSpec, SessionCommand};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
     DraftBudgetView, DraftContentView, DraftPacketDocument, DraftPacketView, DraftView,
@@ -49,6 +50,7 @@ pub use draft::{
 };
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use register::{AddProject, Integration, parse_repo_url};
+pub use reload::ReloadView;
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
@@ -56,7 +58,7 @@ pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{
     AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
-    RevisionRef, SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    RevisionRef, ScopeWarning, SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 pub use worker::{JobReport, JobResult};
 
@@ -71,6 +73,7 @@ pub struct EngineConfig {
     pub docs_author: CommitIdentity,
     pub draft: saka_core::draft::DraftConfig,
     pub architect_model: Option<String>,
+    pub config_poll_secs: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -87,6 +87,8 @@ vocab!(StageRunState {
     Cancelled => "cancelled",
 });
 vocab!(Trigger { Auto => "auto", Manual => "manual" });
+vocab!(ReloadTrigger { Poll => "poll", Operator => "operator" });
+vocab!(ReloadOutcome { Changed => "changed", Unchanged => "unchanged" });
 vocab!(
     BlockerCode {
         EnvSetupFailed => "env_setup_failed",

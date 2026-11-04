@@ -296,6 +296,9 @@ impl Engine {
             self.prune_webhooks().map_err(internal)?;
             return Ok(Effect::Nothing);
         }
+        if job.kind == JobKind::WorkspaceReloadConfig {
+            return self.reload_job(job).await;
+        }
         let id = match saka_core::job::owner_of(&job.payload) {
             Some(RunOwner::StageRun { work_item_id, .. }) => work_item_id,
             Some(RunOwner::DraftAttempt {
@@ -349,7 +352,9 @@ impl Engine {
             }
             JobKind::ScmReportStatus => self.report_status(&task, p).await,
             JobKind::ScmPollCommit => self.poll_commit(&task, field(p, "sha")?).await,
-            JobKind::DraftLint | JobKind::DraftCommit => Ok(Effect::Skipped),
+            JobKind::DraftLint | JobKind::DraftCommit | JobKind::WorkspaceReloadConfig => {
+                Ok(Effect::Skipped)
+            }
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;
@@ -428,6 +433,10 @@ impl Engine {
             }
             Err(e) => {
                 tracing::warn!(job_id = %job.id, kind = job.kind.as_str(), code = %e.code, params = %e.params, "job exhausted");
+                if job.kind == JobKind::WorkspaceReloadConfig {
+                    let project = job.payload.get("project_id").cloned().unwrap_or_default();
+                    tracing::warn!(project_id = %project, code = %e.code, "workspace.config.reload_failed");
+                }
                 let last_error = Coded {
                     code: e.code.clone(),
                     params: e.params.clone(),
@@ -532,6 +541,23 @@ impl Engine {
         self.commit(&batch).map(|_| ())
     }
 
+    async fn reload_job(&self, job: &ClaimedJob) -> Execution {
+        let project: saka_core::ids::ProjectId = field(&job.payload, "project_id")?;
+        let cause = Cause {
+            actor: format!("system:worker:{}", job.kind.as_str()),
+            causation_id: Some(job.id),
+            correlation_id: job.correlation_id,
+        };
+        match self
+            .reload_project_config(project, saka_core::vocab::ReloadTrigger::Poll, &cause, None)
+            .await
+        {
+            Ok(_) | Err(EngineError::Rejected(_)) => Ok(Effect::Nothing),
+            Err(EngineError::Port(e)) => Err(e),
+            Err(e) => Err(internal(e)),
+        }
+    }
+
     fn repo_ref(&self, task: &Task) -> std::result::Result<RepoRef, PortError> {
         let repo = self
             .store
@@ -554,7 +580,12 @@ impl Engine {
             .read(|c| read::load_project(c, task.item.project_id))
             .map_err(|e| internal(e.into()))?
             .ok_or_else(|| PortError::permanent("project_not_found", json!({})))?;
-        Ok(project.base_branch)
+        project
+            .binding(task.item.repo_id)
+            .map(|b| b.base_branch.clone())
+            .ok_or_else(|| {
+                PortError::permanent("repo_not_bound", json!({ "repo_id": task.item.repo_id }))
+            })
     }
 
     fn env_ref(&self, task: &Task, env: &Environment) -> std::result::Result<EnvRef, PortError> {

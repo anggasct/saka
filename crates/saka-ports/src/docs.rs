@@ -90,6 +90,8 @@ pub enum DocWrite {
 
 #[async_trait]
 pub trait DocSource: Send + Sync {
+    async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>>;
+
     async fn read_at_tip(
         &self,
         repo: &RepoRef,

@@ -224,6 +224,31 @@ impl Client {
         }
     }
 
+    pub async fn project_reload(&self, project: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let path = format!("/api/v1/projects/{id}/actions/reload");
+        match self.post(&path, &json!({}), None).await {
+            Ok(a) if a.ok() => self.done(&a, |b| {
+                format!(
+                    "project {} {}",
+                    text(&b["project"]["name"]),
+                    text(&b["outcome"])
+                )
+            }),
+            Ok(a) => {
+                if self.json {
+                    out(&a.body.to_string());
+                }
+                fail(&a);
+                ExitCode::FAILURE
+            }
+            Err(code) => code,
+        }
+    }
+
     pub async fn project_list(&self) -> ExitCode {
         match self.get("/api/v1/projects?limit=200").await {
             Ok(a) => self.finish(&a, |b| {

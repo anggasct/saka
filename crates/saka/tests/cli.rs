@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use saka_api::{ApiConfig, AppState};
 use saka_testkit::fixtures::TWO_STEP_SPEC;
-use saka_testkit::{Sim, SimConfig, one_step_spec};
+use saka_testkit::{
+    Layout, SHOP_REPO, Sim, SimConfig, WEB_REPO, one_step_spec, repo_entry, saka_toml,
+};
 use serde_json::Value;
 
 const SAKA: &str = env!("CARGO_BIN_EXE_saka");
@@ -1272,4 +1274,70 @@ fn spec_draft_and_draft_commands_drive_drafts_through_the_api() {
     assert_eq!(code(&cancelled), 0, "{}", err(&cancelled));
     let (c, _, e) = finished(gone);
     assert_eq!(c, 4, "{e}");
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn project_reload_exits_zero_when_applied_and_one_when_refused() {
+    let layout = Layout {
+        saka_toml: saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]),
+        ..Layout::default()
+    };
+    let mut sim = Sim::multi_repo(SimConfig::default(), &layout);
+    let server = serve(&sim);
+
+    let o = saka(&server, &["project", "reload", "shop"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert_eq!(stdout(&o).trim(), "project shop unchanged");
+
+    let two = saka_toml(
+        "shop",
+        &[
+            repo_entry("shop", SHOP_REPO, "default = true\n"),
+            repo_entry("web", WEB_REPO, ""),
+        ],
+    );
+    sim.world.put_doc("docs/saka.toml", two.as_bytes());
+    let id = sim.project_id.0.to_string();
+    let o = saka(&server, &["--json", "project", "reload", &id]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let body = json(&o);
+    assert_eq!(body["outcome"], "changed");
+    assert_eq!(body["project"]["repos"].as_array().unwrap().len(), 2);
+
+    sim.world
+        .put_doc("docs/saka.toml", b"[project]\nname = \"shop\"\n");
+    let o = saka(&server, &["project", "reload", "shop"]);
+    assert_eq!(code(&o), 1);
+    assert!(
+        stderr(&o).starts_with("error: project_config_invalid "),
+        "{}",
+        stderr(&o)
+    );
+
+    sim.world.put_doc("docs/saka.toml", two.as_bytes());
+    sim.approve();
+    let only_web = saka_toml("shop", &[repo_entry("web", WEB_REPO, "")]);
+    sim.world.put_doc("docs/saka.toml", only_web.as_bytes());
+    let o = saka(&server, &["project", "reload", "shop"]);
+    assert_eq!(code(&o), 1, "a refused reload exits 1, also for a conflict");
+    assert!(
+        stderr(&o).starts_with("error: project_repo_in_use "),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
+fn serve_refuses_a_config_poll_outside_its_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(dir.path(), "[workspace]\nconfig_poll_secs = 10\n");
+    let out = run_saka(&path, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let err = stderr(&out);
+    assert!(err.contains("config_invalid"), "{err}");
+    assert!(err.contains("workspace.config_poll_secs"), "{err}");
 }

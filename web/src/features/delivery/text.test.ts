@@ -428,6 +428,10 @@ const ERRORS = [
   "permission_already_answered",
   "idempotency_key_reused",
   "work_packet_unavailable",
+  "project_config_invalid",
+  "project_repo_in_use",
+  "scm_integration_unknown",
+  "scm_repo_inaccessible",
 ];
 
 describe("catalog coverage", () => {

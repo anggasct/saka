@@ -13,7 +13,7 @@ use saka_core::ids::{
     SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
-use saka_core::vocab::DraftLocale;
+use saka_core::vocab::{DraftLocale, ReloadTrigger};
 use saka_engine::{
     AddProject, EngineError, NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf,
     SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
@@ -148,6 +148,57 @@ pub async fn get_project(State(s): State<AppState>, Path(id): Path<String>) -> R
         Some(v) => ok(StatusCode::OK, &dto::Project::from_view(&v)),
         None => ApiError::not_found().into_response(),
     }
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/actions/reload", tag = "projects",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::ReloadBody,
+    responses(
+        (status = 200, body = dto::ProjectReload),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn reload_project(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let _: dto::ReloadBody = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let known = tri!(engine.project(project)).is_some();
+    let respond = |p: Produced<'_>| match p {
+        Produced::Reload(v) => reply(StatusCode::OK, &dto::ProjectReload::from_view(v)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "project.reload",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .reload_project_config(project, ReloadTrigger::Operator, &cause, Some(&action))
+                .await
+                .map(|_| Some(project))
+                .map_err(|e| (e, known.then_some(project)))
+        },
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -780,11 +831,13 @@ async fn task_action(
             (None, Some(req.reason))
         }
     };
-    let project = tri!(engine.work_item(item)).map(|d| d.task.item.project_id);
+    let detail = tri!(engine.work_item(item));
+    let project = detail.as_ref().map(|d| d.task.item.project_id);
+    let repo_name = detail.and_then(|d| d.repo_name);
     let respond = |p: Produced<'_>| match p {
         Produced::Task(t) => reply(
             StatusCode::ACCEPTED,
-            &dto::WorkItem::from_task(t, &[], None),
+            &dto::WorkItem::from_task(t, repo_name.as_deref(), &[], None),
         ),
         _ => unexpected(),
     };

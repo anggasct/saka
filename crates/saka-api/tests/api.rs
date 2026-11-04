@@ -14,8 +14,8 @@ use saka_api::{ApiConfig, AppState, router};
 use saka_core::vocab::{Stage, StagePhase, WorkItemState};
 use saka_testkit::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
 use saka_testkit::{
-    AgentOutcome, AgentScript, CiScript, CommandScript, Sim, SimConfig, approval_spec,
-    one_step_spec,
+    AgentOutcome, AgentScript, CiScript, CommandScript, DOCS_REPO, Layout, SHOP_REPO, Sim,
+    SimConfig, WEB_REPO, approval_spec, one_step_spec, repo_entry, saka_toml,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -37,8 +37,11 @@ struct Reply {
 
 impl Api {
     fn new(cfg: SimConfig) -> Api {
+        Api::with(Sim::new(cfg))
+    }
+
+    fn with(sim: Sim) -> Api {
         saka_testkit::logs::check_callsites_per_thread();
-        let sim = Sim::new(cfg);
         let mut api_cfg = ApiConfig::new("0.1.0-test");
         api_cfg.keep_alive = Duration::from_millis(200);
         api_cfg.allowed_origins = vec!["http://localhost:5173".into()];
@@ -305,7 +308,7 @@ fn registration_refusals_carry_their_codes() {
     assert_eq!(r.body["params"]["issues"][0]["code"], "file_missing");
     api.sim.world.put_doc(
         "two/saka.toml",
-        b"[project]\nname = \"two\"\n\n[[repo]]\nname = \"a\"\nurl = \"https://github.com/acme/tasks\"\n\n[[repo]]\nname = \"b\"\nurl = \"https://github.com/acme/web\"\n",
+        b"[project]\nname = \"two\"\n\n[[repo]]\nname = \"a\"\nurl = \"https://github.com/acme/tasks\"\ndefault = true\n\n[[repo]]\nname = \"b\"\nurl = \"https://gitlab.example/acme/web\"\n",
     );
     let r = api.post(
         "/api/v1/projects",
@@ -315,7 +318,11 @@ fn registration_refusals_carry_their_codes() {
     problem(
         &r,
         StatusCode::UNPROCESSABLE_ENTITY,
-        "multi_repo_unsupported",
+        "scm_integration_unknown",
+    );
+    assert_eq!(
+        r.body["params"],
+        json!({ "host": "gitlab.example", "repo": "b" })
     );
     api.sim.world.make_inaccessible("acme/gone");
     let r = api.post(
@@ -2731,5 +2738,284 @@ fn a_timeline_is_read_from_its_end_and_backwards() {
     assert_eq!(
         bad.body["params"],
         json!({ "errors": [{ "field": "tail", "code": "invalid" }] })
+    );
+}
+
+fn docs_only() -> Api {
+    let layout = Layout {
+        saka_toml: saka_toml("docs", &[repo_entry("docs", DOCS_REPO, "")]),
+        ..Layout::default()
+    };
+    Api::with(Sim::multi_repo(SimConfig::default(), &layout))
+}
+
+fn register_at(api: &mut Api, folder: &str, toml: &str) -> Reply {
+    api.sim
+        .world
+        .put_doc(&format!("{folder}/saka.toml"), toml.as_bytes());
+    api.post(
+        "/api/v1/projects",
+        &[],
+        json!({ "workspace_url": format!("https://github.com/{DOCS_REPO}"), "project_path": folder }),
+    )
+}
+
+fn project_count(api: &Api) -> usize {
+    api.get("/api/v1/projects").body["items"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+#[test]
+fn a_separate_docs_repo_registers_its_code_repos_as_bindings() {
+    let mut api = docs_only();
+    api.sim.world.create_branch(WEB_REPO, "develop");
+    let toml = saka_toml(
+        "shop",
+        &[
+            repo_entry(
+                "shop",
+                SHOP_REPO,
+                "default = true\npath_scope = [\"services/api/**\", \"pnpm-lock.yaml\"]\n",
+            ),
+            repo_entry("web", WEB_REPO, "base_branch = \"develop\"\n"),
+        ],
+    );
+    let r = register_at(&mut api, "shop", &toml);
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    let id = r.body["id"].as_str().unwrap().to_string();
+    let get = api.get(&format!("/api/v1/projects/{id}"));
+    assert_eq!(get.body, r.body);
+    let repos = &r.body["repos"];
+    let pick = |i: usize| {
+        let b = &repos[i];
+        json!([
+            b["name"],
+            b["full_name"],
+            b["base_branch"],
+            b["is_default"],
+            b["is_workspace"],
+            b["path_scope"],
+            b["effective_path_scope"],
+        ])
+    };
+    assert_eq!(repos.as_array().unwrap().len(), 2);
+    assert_eq!(
+        pick(0),
+        json!([
+            "shop",
+            SHOP_REPO,
+            "main",
+            true,
+            false,
+            ["services/api/**", "pnpm-lock.yaml"],
+            ["services/api/**", "pnpm-lock.yaml"],
+        ])
+    );
+    assert_eq!(
+        pick(1),
+        json!(["web", WEB_REPO, "develop", false, false, ["**"], ["**"]])
+    );
+    assert_eq!(r.body["workspace"]["full_name"], DOCS_REPO);
+    let sha = r.body["config_sha256"].as_str().unwrap();
+    assert!(sha.starts_with("sha256:") && sha.len() == 71, "{sha}");
+    assert_eq!(r.body["config_error"], Value::Null);
+    assert_eq!(r.body["warnings"], json!([]));
+
+    let projects = project_count(&api);
+    let unknown_host = saka_toml(
+        "a",
+        &[
+            repo_entry("shop", SHOP_REPO, "default = true\n"),
+            "[[repo]]\nname = \"web\"\nurl = \"https://gitlab.example/acme/web\"\n".into(),
+        ],
+    );
+    let r = register_at(&mut api, "a", &unknown_host);
+    problem(
+        &r,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "scm_integration_unknown",
+    );
+    assert_eq!(
+        r.body["params"],
+        json!({ "host": "gitlab.example", "repo": "web" })
+    );
+
+    api.sim.world.make_inaccessible("acme/private");
+    let private = saka_toml(
+        "b",
+        &[
+            repo_entry("shop", SHOP_REPO, "default = true\n"),
+            repo_entry("private", "acme/private", ""),
+        ],
+    );
+    let r = register_at(&mut api, "b", &private);
+    problem(
+        &r,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "scm_repo_inaccessible",
+    );
+    assert_eq!(r.body["params"], json!({ "repo": "private" }));
+
+    let missing_branch = saka_toml(
+        "c",
+        &[
+            repo_entry("shop", SHOP_REPO, "default = true\n"),
+            repo_entry("web", WEB_REPO, "base_branch = \"release\"\n"),
+        ],
+    );
+    let r = register_at(&mut api, "c", &missing_branch);
+    problem(
+        &r,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "project_config_invalid",
+    );
+    assert_eq!(
+        r.body["params"]["issues"],
+        json!([{ "code": "base_branch_not_found", "field": "repo[1].base_branch", "line": 12 }])
+    );
+    assert_eq!(project_count(&api), projects, "a refusal registers nothing");
+
+    let openapi = include_str!("../openapi.json");
+    let en = include_str!("../../../web/src/i18n/en.json");
+    let id_catalog = include_str!("../../../web/src/i18n/id.json");
+    for text in [openapi, en, id_catalog] {
+        assert!(!text.contains("multi_repo_unsupported"));
+    }
+}
+
+#[test]
+fn projects_bound_to_one_repo_warn_when_their_scopes_overlap() {
+    let mut api = docs_only();
+    let scoped = |name: &str, scope: &str| {
+        saka_toml(
+            name,
+            &[repo_entry(
+                "shop",
+                SHOP_REPO,
+                &format!("path_scope = [\"{scope}\"]\n"),
+            )],
+        )
+    };
+    let api_id = register_at(&mut api, "api", &scoped("api", "services/api/**")).body["id"].clone();
+    let all_id = register_at(&mut api, "all", &scoped("all", "services/**")).body["id"].clone();
+    let web_id = register_at(&mut api, "web", &scoped("web", "services/web/**")).body["id"].clone();
+    let warnings = |id: &Value| {
+        let r = api.get(&format!("/api/v1/projects/{}", id.as_str().unwrap()));
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        r.body["warnings"].clone()
+    };
+    let overlap = |other_id: &Value, other: &str| {
+        json!({
+            "code": "path_scope_overlap",
+            "params": {
+                "repo": "shop",
+                "repo_id": warnings_repo(&api),
+                "other_project_id": other_id,
+                "other_project": other,
+                "other_repo": "shop",
+            },
+        })
+    };
+    assert_eq!(warnings(&api_id), json!([overlap(&all_id, "all")]));
+    assert_eq!(
+        warnings(&all_id),
+        json!([overlap(&api_id, "api"), overlap(&web_id, "web")])
+    );
+    assert_eq!(warnings(&web_id), json!([overlap(&all_id, "all")]));
+}
+
+fn warnings_repo(api: &Api) -> Value {
+    let items = api.get("/api/v1/projects").body["items"].clone();
+    items
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["repos"].as_array().unwrap().clone())
+        .find(|r| r["full_name"] == SHOP_REPO)
+        .map(|r| r["repo_id"].clone())
+        .unwrap()
+}
+
+#[test]
+fn reload_reports_its_outcome_refusals_and_replays_by_key() {
+    let layout = Layout {
+        saka_toml: saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]),
+        ..Layout::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(SimConfig::default(), &layout));
+    let id = api.sim.project_id.0;
+    let path = format!("/api/v1/projects/{id}/actions/reload");
+
+    let r = api.post_with(&path, None, &[], &json!({}));
+    problem(&r, StatusCode::BAD_REQUEST, "idempotency_key_required");
+    let r = api.post(&path, &[], json!({ "force": true }));
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let r = api.post(&path, &[], json!({}));
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["outcome"], "unchanged");
+    assert_eq!(r.body["project"]["id"], id.to_string());
+    let r = api.post(
+        &format!("/api/v1/projects/{}/actions/reload", uuid::Uuid::nil()),
+        &[],
+        json!({}),
+    );
+    problem(&r, StatusCode::NOT_FOUND, "not_found");
+
+    let two = saka_toml(
+        "shop",
+        &[
+            repo_entry("shop", SHOP_REPO, "default = true\n"),
+            repo_entry("web", WEB_REPO, ""),
+        ],
+    );
+    api.sim.world.put_doc("docs/saka.toml", two.as_bytes());
+    let r = api.post_with(&path, Some("reload-1"), &[], &json!({}));
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["outcome"], "changed");
+    assert_eq!(r.body["project"]["repos"][1]["name"], "web");
+    let replay = api.post_with(&path, Some("reload-1"), &[], &json!({}));
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(replay.body, r.body);
+    let metrics = api.get_text("/metrics");
+    assert!(metrics.contains("saka_project_config_reloads_total{outcome=\"changed\"} 1"));
+
+    api.sim
+        .world
+        .put_doc("docs/saka.toml", b"[project]\nname = \"shop\"\n");
+    let r = api.post(&path, &[], json!({}));
+    problem(
+        &r,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "project_config_invalid",
+    );
+    let error = &api.get(&format!("/api/v1/projects/{id}")).body["config_error"];
+    assert_eq!(error["code"], "project_config_invalid");
+    assert_eq!(error["commit"], api.sim.world.base_head());
+    assert!(error["observed_at"].is_string());
+
+    api.sim.world.put_doc("docs/saka.toml", two.as_bytes());
+    api.sim.approve();
+    let items = api.get(&format!("/api/v1/work-items?project_id={id}")).body["items"].clone();
+    assert!(
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["repo_name"] == "shop"),
+        "{items}"
+    );
+    let only_web = saka_toml("shop", &[repo_entry("web", WEB_REPO, "")]);
+    api.sim.world.put_doc("docs/saka.toml", only_web.as_bytes());
+    let r = api.post(&path, &[], json!({}));
+    problem(&r, StatusCode::CONFLICT, "project_repo_in_use");
+    let repos = r.body["params"]["repos"].as_array().unwrap();
+    assert_eq!(repos[0]["name"], "shop");
+    assert_eq!(repos[0]["tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        api.get(&format!("/api/v1/projects/{id}")).body["config_error"]["code"],
+        "project_repo_in_use"
     );
 }
