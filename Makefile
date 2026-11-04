@@ -3,13 +3,17 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps e2e test-systemd test-claude-memory
+.PHONY: check deps e2e supply-chain test-systemd test-claude-memory
 
 check:
 	$(LIMITED) cargo xtask check
 
 deps:
 	$(LIMITED) cargo xtask deps
+
+# Advisories, licences, bans, sources and unused dependencies; needs network.
+supply-chain:
+	$(LIMITED) cargo xtask supply-chain
 
 # Needs a user systemd instance; part of `make e2e` (not run in CI).
 test-systemd:

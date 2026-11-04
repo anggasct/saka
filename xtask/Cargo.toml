@@ -17,6 +17,11 @@ regex.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
+toml.workspace = true
+
+[dev-dependencies]
+spdx.workspace = true
+tempfile.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

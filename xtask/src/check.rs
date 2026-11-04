@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{deps, hygiene, metadata, wasm};
+use crate::{deps, hygiene, metadata, supply_chain, wasm};
 
 const PURE_CLIPPY_CONFIGS: &[&str] = &[
     "crates/saka-core/clippy.toml",
@@ -34,6 +34,9 @@ pub fn run() -> Result<()> {
         )
     })?;
     step("source hygiene", || hygiene::run(&root))?;
+    step("supply chain (Rust)", || {
+        supply_chain::rust(&root, &meta, false)
+    })?;
     step("cargo clippy", || {
         cargo(
             &root,
@@ -114,7 +117,7 @@ fn args(v: &[String]) -> Vec<&str> {
     v.iter().map(String::as_str).collect()
 }
 
-fn step(name: &str, f: impl FnOnce() -> Result<()>) -> Result<()> {
+pub fn step(name: &str, f: impl FnOnce() -> Result<()>) -> Result<()> {
     println!("==> {name}");
     f().with_context(|| format!("step failed: {name}"))
 }

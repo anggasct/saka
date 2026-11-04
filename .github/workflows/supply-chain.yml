@@ -1,0 +1,29 @@
+name: supply-chain
+
+# New advisories appear without any change in this repository.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v6
+        with:
+          path: target/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'Cargo.lock') }}
+      - run: npm install --global corepack@0.36.0
+      - run: corepack pnpm install --frozen-lockfile
+        working-directory: web
+      - run: make supply-chain

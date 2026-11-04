@@ -4,7 +4,9 @@ mod deps;
 mod e2e;
 mod hygiene;
 mod metadata;
+mod supply_chain;
 mod systemd;
+mod tools;
 mod wasm;
 
 use std::process::ExitCode;
@@ -16,15 +18,15 @@ fn main() -> ExitCode {
         Some("deps") => deps::run(),
         Some("e2e") => e2e::run(),
         Some("hygiene") => metadata::workspace_root().and_then(|root| hygiene::run(&root)),
+        Some("supply-chain") => match &args[1..] {
+            [] => supply_chain::run(false),
+            [flag] if flag == "--offline" => supply_chain::run(true),
+            _ => return usage(),
+        },
         Some("test-systemd") => systemd::run(),
         Some("test-claude-memory") => claude_memory::run(),
         Some("wasm") => wasm::run(),
-        _ => {
-            eprintln!(
-                "usage: cargo xtask <check|deps|e2e|hygiene|test-systemd|test-claude-memory|wasm>"
-            );
-            return ExitCode::from(2);
-        }
+        _ => return usage(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -33,4 +35,11 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn usage() -> ExitCode {
+    eprintln!(
+        "usage: cargo xtask <check|deps|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|wasm>"
+    );
+    ExitCode::from(2)
 }
