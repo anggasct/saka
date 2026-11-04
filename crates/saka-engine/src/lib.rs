@@ -2,6 +2,7 @@ mod accounts;
 mod action;
 mod authorship;
 mod commands;
+mod config_check;
 mod context;
 mod docs;
 mod draft;
@@ -48,6 +49,10 @@ pub use accounts::{AuthorizationView, LinkCredential};
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use authorship::{AuthorPreview, AuthorshipView, IntegrationLink, UserTokenView};
 pub use commands::{NewBinding, NewProject, NewRepo, RegisteredSpec, SessionCommand};
+pub use config_check::{
+    CheckConfig, CheckedRepo, CheckedWorkspace, ConfigCheckView, ConfigProblem, RegisteredProject,
+    RemoteConfig,
+};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
     DraftBudgetView, DraftContentView, DraftPacketDocument, DraftPacketView, DraftView,

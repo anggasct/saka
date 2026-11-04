@@ -22,7 +22,7 @@ pub use state::{ApiConfig, AppState};
 #[openapi(
     info(title = "Saka control API", version = "1", description = "Local control API of a Saka server."),
     paths(
-        routes::add_project, routes::list_projects, routes::get_project, routes::reload_project,
+        routes::add_project, routes::check_project_config, routes::list_projects, routes::get_project, routes::reload_project,
         routes::set_secret, routes::list_secrets, routes::remove_secret,
         routes::get_authorship, routes::set_authorship, routes::set_user_token,
         routes::remove_user_token,
@@ -63,6 +63,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects",
             post(routes::add_project).get(routes::list_projects),
+        )
+        .route(
+            "/api/v1/projects/actions/check-config",
+            post(routes::check_project_config),
         )
         .route("/api/v1/projects/{project_id}", get(routes::get_project))
         .route(

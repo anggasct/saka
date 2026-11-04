@@ -52,6 +52,7 @@ pub struct Reply {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Value,
+    pub raw: Vec<u8>,
 }
 
 impl Reply {
@@ -78,6 +79,9 @@ struct Claims {
     exp: i64,
     iss: String,
 }
+
+pub const JSON_MEDIA_TYPE: &str = "application/vnd.github+json";
+pub const RAW_MEDIA_TYPE: &str = "application/vnd.github.raw";
 
 pub(super) fn unavailable(status: Option<u16>, detail: &str) -> PortError {
     PortError::retryable(
@@ -298,10 +302,29 @@ impl GitHubApp {
         url: Url,
         body: Option<&Value>,
     ) -> PortResult<Reply> {
+        self.call_accepting(full_name, method, url, body, JSON_MEDIA_TYPE)
+            .await
+    }
+
+    pub async fn call_accepting(
+        &self,
+        full_name: &str,
+        method: Method,
+        url: Url,
+        body: Option<&Value>,
+        accept: &'static str,
+    ) -> PortResult<Reply> {
         for attempt in 0..2 {
             let token = self.token(full_name).await?;
             let reply = self
-                .send(method.clone(), url.clone(), As::Installation, token, body)
+                .send_accepting(
+                    method.clone(),
+                    url.clone(),
+                    As::Installation,
+                    token,
+                    body,
+                    accept,
+                )
                 .await?;
             if reply.status != StatusCode::UNAUTHORIZED {
                 return Ok(reply);
@@ -356,12 +379,25 @@ impl GitHubApp {
         bearer: String,
         body: Option<&Value>,
     ) -> PortResult<Reply> {
+        self.send_accepting(method, url, who, bearer, body, JSON_MEDIA_TYPE)
+            .await
+    }
+
+    async fn send_accepting(
+        &self,
+        method: Method,
+        url: Url,
+        who: As,
+        bearer: String,
+        body: Option<&Value>,
+        accept: &'static str,
+    ) -> PortResult<Reply> {
         let path = url.path().to_string();
         let mut request = self
             .http
             .request(method.clone(), url)
             .bearer_auth(bearer)
-            .header(ACCEPT, "application/vnd.github+json")
+            .header(ACCEPT, accept)
             .header("X-GitHub-Api-Version", API_VERSION);
         if let Some(body) = body {
             request = request.json(body);
@@ -414,6 +450,7 @@ impl GitHubApp {
             status,
             headers,
             body,
+            raw: bytes.to_vec(),
         })
     }
 

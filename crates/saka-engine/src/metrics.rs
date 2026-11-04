@@ -29,6 +29,7 @@ pub struct Counters {
     drafts_finished: Mutex<BTreeMap<(String, String), u64>>,
     draft_lint_rounds: Mutex<BTreeMap<(String, String), u64>>,
     config_reloads: Mutex<BTreeMap<(String, String), u64>>,
+    config_checks: Mutex<BTreeMap<(String, String), u64>>,
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
@@ -122,6 +123,10 @@ impl Counters {
 
     pub(crate) fn config_reload(&self, outcome: &str) {
         bump(&self.config_reloads, outcome, "");
+    }
+
+    pub(crate) fn config_check(&self, outcome: &str) {
+        bump(&self.config_checks, outcome, "");
     }
 
     pub(crate) fn user_link_authorization(&self, integration: &str, state: &str) {
@@ -296,6 +301,7 @@ pub struct MetricsSnapshot {
     pub spec_drafts_finished: Vec<(String, u64)>,
     pub spec_draft_lint_rounds: Vec<(String, u64)>,
     pub config_reloads: Vec<(String, u64)>,
+    pub config_checks: Vec<(String, u64)>,
     pub path_scope_violations: Vec<(String, u64)>,
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
@@ -431,6 +437,10 @@ impl Engine {
                 .map(|(outcome, _, n)| (outcome, n))
                 .collect(),
             config_reloads: copy(&self.counters.config_reloads)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            config_checks: copy(&self.counters.config_checks)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
                 .collect(),

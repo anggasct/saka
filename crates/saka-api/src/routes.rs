@@ -15,8 +15,8 @@ use saka_core::ids::{
 use saka_core::secret::SecretText;
 use saka_core::vocab::{AuthorshipMode, DraftLocale, ReloadTrigger};
 use saka_engine::{
-    AddProject, EngineError, NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf,
-    SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
+    AddProject, CheckConfig, EngineError, NewSpecDraft, PermissionFilter, Precondition, Produced,
+    Reply, RunOf, SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -113,6 +113,60 @@ pub async fn add_project(
                 .add_project(&add, &cause, Some(&action))
                 .await
                 .map(|v| Some(v.project.id))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/actions/check-config", tag = "projects",
+    params(("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::CheckConfigBody,
+    responses(
+        (status = 200, body = dto::ConfigCheck),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn check_project_config(
+    State(s): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let req: dto::CheckConfigBody = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::ConfigCheck(v) => reply(StatusCode::OK, &dto::ConfigCheck::from_view(v)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "project.check_config",
+        target_type: "project",
+        target_id: None,
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            let check = CheckConfig {
+                workspace_url: req.workspace_url,
+                project_path: req.project_path,
+                base_branch: req.base_branch,
+                content: req.content,
+            };
+            engine
+                .check_project_config(&check, &cause, Some(&action))
+                .await
+                .map(|v| v.project.map(|p| p.id))
                 .map_err(|e| (e, None))
         },
     )

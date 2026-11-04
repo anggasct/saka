@@ -402,6 +402,64 @@
         }
       }
     },
+    "/api/v1/projects/actions/check-config": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "check_project_config",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckConfigBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigCheck"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}": {
       "get": {
         "tags": [
@@ -3211,6 +3269,219 @@
           }
         }
       },
+      "CheckConfigBody": {
+        "type": "object",
+        "required": [
+          "workspace_url",
+          "project_path",
+          "content"
+        ],
+        "properties": {
+          "base_branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` = the default branch of the workspace repo."
+          },
+          "content": {
+            "type": "string",
+            "description": "The `saka.toml` text to check, 1 to 65 536 bytes."
+          },
+          "project_path": {
+            "type": "string",
+            "description": "`.` for the repo root, or a relative folder path; same rules as `POST /projects`."
+          },
+          "workspace_url": {
+            "type": "string",
+            "description": "HTTPS URL of the repo that holds the project folder; same rules as `POST /projects`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CheckedProject": {
+        "type": "object",
+        "description": "The project already registered for this workspace repo and folder.",
+        "required": [
+          "id",
+          "name",
+          "config_commit",
+          "config_sha256"
+        ],
+        "properties": {
+          "config_commit": {
+            "type": "string"
+          },
+          "config_sha256": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CheckedRepo": {
+        "type": "object",
+        "description": "A `[[repo]]` binding that resolved; same shape as `Project.repos[]` without ids.",
+        "required": [
+          "name",
+          "integration_id",
+          "full_name",
+          "url",
+          "is_workspace",
+          "is_default",
+          "base_branch",
+          "path_scope",
+          "effective_path_scope"
+        ],
+        "properties": {
+          "base_branch": {
+            "type": "string"
+          },
+          "effective_path_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`."
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "integration_id": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "is_workspace": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "CheckedWorkspace": {
+        "type": "object",
+        "description": "The workspace repo as the check resolved it.",
+        "required": [
+          "integration_id",
+          "full_name",
+          "default_branch",
+          "base_branch"
+        ],
+        "properties": {
+          "base_branch": {
+            "type": "string",
+            "description": "The effective base branch: the requested one, or the default branch."
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "integration_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigCheck": {
+        "type": "object",
+        "description": "Result of checking a `saka.toml` without registering it.",
+        "required": [
+          "ok",
+          "content_sha256",
+          "repos",
+          "problems"
+        ],
+        "properties": {
+          "content_sha256": {
+            "type": "string",
+            "description": "`sha256:<hex>` of `content`."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "`true` when `problems` is empty."
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigProblem"
+            },
+            "description": "In order: content issues, the workspace, then repos in `[[repo]]` order."
+          },
+          "project": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CheckedProject",
+                "description": "`null` when no project is registered for this workspace repo and folder."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remote": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RemoteConfig",
+                "description": "`null` when `workspace` is `null` or its base branch does not exist."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckedRepo"
+            },
+            "description": "Resolved bindings, default first, then by `name`."
+          },
+          "workspace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CheckedWorkspace",
+                "description": "`null` when the workspace host has no integration or the App cannot read the repo."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ConfigProblem": {
+        "type": "object",
+        "description": "A problem that would refuse registration.",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`project_config_invalid | scm_integration_unknown | scm_repo_inaccessible`"
+          },
+          "params": {}
+        }
+      },
       "ContextDoc": {
         "type": "object",
         "required": [
@@ -5096,6 +5367,36 @@
         "type": "object",
         "description": "Request body of a reload; no fields.",
         "additionalProperties": false
+      },
+      "RemoteConfig": {
+        "type": "object",
+        "description": "`saka.toml` at the tip of the workspace base branch.",
+        "required": [
+          "commit",
+          "present",
+          "matches"
+        ],
+        "properties": {
+          "commit": {
+            "type": "string",
+            "description": "Commit at the tip of the base branch."
+          },
+          "config_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sha256:<hex>` of the remote file; `null` when it is missing or larger than 65 536 bytes."
+          },
+          "matches": {
+            "type": "boolean",
+            "description": "`config_sha256 == content_sha256`."
+          },
+          "present": {
+            "type": "boolean",
+            "description": "`false` when the file does not exist at that commit."
+          }
+        }
       },
       "RequiredReason": {
         "type": "object",
