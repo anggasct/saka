@@ -2090,6 +2090,17 @@ pub struct SetAuthorshipBody {
     pub mode: String,
 }
 
+/// Request body that stores a project's user token. The value is write-only.
+// No `Debug`: the value must not be printable by accident.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetUserTokenBody {
+    /// A GitHub fine-grained personal access token (`github_pat_…`), 40 to 255 bytes of
+    /// printable ASCII without spaces. It needs read access to every repo of the project and
+    /// write access to their pull requests.
+    pub value: String,
+}
+
 /// Who authors a project's agent changes. Tokens are never part of it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectAuthorship {
@@ -2167,7 +2178,20 @@ impl ProjectAuthorship {
                     .to_string(),
                 })
                 .collect(),
-            user_token: None,
+            user_token: v.user_token.as_ref().map(|u| ProjectUserToken {
+                integration_id: u.token.integration_id.clone(),
+                login: u.token.identity.login.clone(),
+                provider_user_id: u.token.identity.provider_user_id,
+                expires_at: opt_time(u.token.expires_at),
+                set_at: time(u.token.set_at),
+                state: match u.problem {
+                    None => saka_core::vocab::UserTokenState::Active,
+                    Some(_) => saka_core::vocab::UserTokenState::Invalid,
+                }
+                .as_str()
+                .to_string(),
+                invalid_cause: u.problem.map(|c| c.as_str().to_string()),
+            }),
         }
     }
 }

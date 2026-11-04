@@ -280,6 +280,50 @@ impl Client {
         }
     }
 
+    pub async fn user_token_set(&self, project: &str, value: &SecretText) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let body = json!({ "value": value.expose() });
+        match self
+            .keyed(
+                reqwest::Method::PUT,
+                &format!("/api/v1/projects/{id}/authorship/user-token"),
+                Some(&body),
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                let token = &b["user_token"];
+                let expires = match token["expires_at"].as_str() {
+                    Some(at) => format!("expires {at}"),
+                    None => "no expiry".to_string(),
+                };
+                format!("user token of {} set, {expires}", text(&token["login"]))
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn user_token_rm(&self, project: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self
+            .keyed(
+                reqwest::Method::DELETE,
+                &format!("/api/v1/projects/{id}/authorship/user-token"),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |_| "user token removed".to_string()),
+            Err(code) => code,
+        }
+    }
+
     pub async fn project_list(&self) -> ExitCode {
         match self.get("/api/v1/projects?limit=200").await {
             Ok(a) => self.finish(&a, |b| {

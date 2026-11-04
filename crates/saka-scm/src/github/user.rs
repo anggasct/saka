@@ -1,16 +1,19 @@
-use reqwest::header::{ACCEPT, RETRY_AFTER};
+use reqwest::header::{ACCEPT, HeaderMap, RETRY_AFTER};
 use reqwest::{Method, StatusCode, Url};
 use saka_core::authorship::Identity;
 use saka_core::secret::SecretText;
+use saka_core::time::Timestamp;
 use saka_core::vocab::AuthorizationFailure;
 use saka_ports::{
-    DeviceCode, DevicePoll, IdentityLookup, PortError, PortResult, TokenRefresh, UserTokens,
+    DeviceCode, DevicePoll, IdentityLookup, PortError, PortResult, RepoAccess, TokenRefresh,
+    UserTokens,
 };
 use serde_json::{Value, json};
 
 use super::app::{As, GitHubApp, rate_limit_reset, unavailable};
 
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const TOKEN_EXPIRATION: &str = "github-authentication-token-expiration";
 
 struct OAuthReply {
     status: StatusCode,
@@ -57,6 +60,34 @@ fn device_failure(error: &str) -> Option<AuthorizationFailure> {
         "bad_verification_code" => F::BadVerificationCode,
         _ => return None,
     })
+}
+
+// GitHub writes `2027-01-31 00:00:00 UTC` or `2027-01-31 00:00:00 +0000`.
+pub fn token_expiration(raw: &str) -> Option<Timestamp> {
+    let raw = raw.trim();
+    let zoned = match raw.strip_suffix(" UTC") {
+        Some(local) => format!("{local} +0000"),
+        None => raw.to_string(),
+    };
+    let at = jiff::fmt::strtime::parse("%Y-%m-%d %H:%M:%S %z", &zoned)
+        .ok()?
+        .to_timestamp()
+        .ok()?;
+    Some(Timestamp(at.as_millisecond()))
+}
+
+// A header that cannot be read leaves the expiry unknown: the provider still refuses an expired
+// token when it is used, and that refusal marks it.
+fn expiration_of(headers: &HeaderMap) -> Option<Timestamp> {
+    let raw = headers.get(TOKEN_EXPIRATION)?;
+    let parsed = raw.to_str().ok().and_then(token_expiration);
+    if parsed.is_none() {
+        tracing::warn!(
+            header = TOKEN_EXPIRATION,
+            "github token expiration unreadable"
+        );
+    }
+    parsed
 }
 
 pub fn noreply_email(web_url: &str, provider_user_id: u64, login: &str) -> String {
@@ -240,12 +271,34 @@ impl GitHubApp {
             .map(str::trim)
             .filter(|n| !n.is_empty())
             .map(String::from);
-        Ok(IdentityLookup::Found(Identity {
-            provider_user_id: id,
-            login: login.to_string(),
-            display_name: name,
-            email: noreply_email(&self.cfg.web_url, id, login),
-        }))
+        Ok(IdentityLookup::Found {
+            identity: Identity {
+                provider_user_id: id,
+                login: login.to_string(),
+                display_name: name,
+                email: noreply_email(&self.cfg.web_url, id, login),
+            },
+            token_expires_at: expiration_of(&reply.headers),
+        })
+    }
+
+    pub async fn user_repository(
+        &self,
+        full_name: &str,
+        token: &SecretText,
+    ) -> PortResult<RepoAccess> {
+        let (owner, name) = super::app::split_repo(full_name)?;
+        let url = self.url(&["repos", owner, name])?;
+        let reply = self
+            .send(Method::GET, url, As::User, token.expose().to_string(), None)
+            .await?;
+        Ok(if reply.status == StatusCode::OK {
+            RepoAccess::Readable
+        } else {
+            RepoAccess::Inaccessible {
+                status: reply.status.as_u16(),
+            }
+        })
     }
 }
 
@@ -263,5 +316,26 @@ mod tests {
             noreply_email("https://ghe.acme.test/", 7, "ann"),
             "7+ann@users.noreply.ghe.acme.test"
         );
+    }
+
+    #[test]
+    fn the_token_expiration_reads_both_github_forms_and_nothing_else() {
+        let utc = token_expiration("2027-01-31 00:00:00 UTC").unwrap();
+        assert_eq!(utc, Timestamp(1_801_353_600_000));
+        assert_eq!(token_expiration("2027-01-31 00:00:00 +0000"), Some(utc));
+        assert_eq!(
+            token_expiration("2027-01-30 16:00:00 -0800"),
+            Some(utc),
+            "an offset moves the instant"
+        );
+        for garbage in [
+            "",
+            "never",
+            "2027-01-31",
+            "2027-13-40 00:00:00 UTC",
+            "1801267200",
+        ] {
+            assert_eq!(token_expiration(garbage), None, "{garbage}");
+        }
     }
 }

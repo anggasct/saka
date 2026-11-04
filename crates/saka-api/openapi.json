@@ -604,6 +604,114 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/authorship/user-token": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "set_user_token",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetUserTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The token is checked and stored; its value is never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectAuthorship"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "remove_user_token",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The token is gone, or there was none"
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/file": {
       "get": {
         "tags": [
@@ -5373,6 +5481,20 @@
           "value": {
             "type": "string",
             "description": "8 to 65536 bytes of UTF-8 without NUL. Shorter values are refused (`secret_too_short`) so output redaction always applies."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetUserTokenBody": {
+        "type": "object",
+        "description": "Request body that stores a project's user token. The value is write-only.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "A GitHub fine-grained personal access token (`github_pat_…`), 40 to 255 bytes of\nprintable ASCII without spaces. It needs read access to every repo of the project and\nwrite access to their pull requests."
           }
         },
         "additionalProperties": false

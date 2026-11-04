@@ -30,8 +30,8 @@ pub use git::{
 pub use scm::{
     ChangeCredential, ChangeOpening, ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup,
     MAX_WEBHOOK_TARGETS, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome,
-    PushRequest, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport, StatusState, TokenRefresh,
-    UserTokens, WebhookDelivery, WebhookSignature, WebhookTarget,
+    PushRequest, RepoAccess, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport, StatusState,
+    TokenRefresh, UserTokens, WebhookDelivery, WebhookSignature, WebhookTarget,
 };
 pub use secret::{Sealed, SecretStore};
 pub use supervisor::{

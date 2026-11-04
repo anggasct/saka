@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::ids::{SpecDraftId, SpecId};
-use crate::vocab::TargetTaken;
+use crate::vocab::{TargetTaken, TokenInvalidCause};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Rejection {
@@ -84,6 +84,18 @@ pub enum Rejection {
     UserLinkMissing { integrations: Value },
     #[error("the project has no user token")]
     UserTokenMissing,
+    #[error("the project's user token cannot be used")]
+    UserTokenInvalid { cause: TokenInvalidCause },
+    #[error("the project authors changes with its user token")]
+    UserTokenInUse,
+    #[error("the project's repos are on more than one integration")]
+    UserTokenMultiIntegration { integrations: Vec<String> },
+    #[error("the user token is not a fine-grained token")]
+    UserTokenNotFineGrained,
+    #[error("the provider refused the user token")]
+    UserTokenRejected { status: u16 },
+    #[error("the user token cannot read every repo of the project")]
+    UserTokenRepoInaccessible { repos: Value },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -129,6 +141,12 @@ impl Rejection {
             Rejection::UserLinkInUse { .. } => "user_link_in_use",
             Rejection::UserLinkMissing { .. } => "user_link_missing",
             Rejection::UserTokenMissing => "user_token_missing",
+            Rejection::UserTokenInvalid { .. } => "user_token_invalid",
+            Rejection::UserTokenInUse => "user_token_in_use",
+            Rejection::UserTokenMultiIntegration { .. } => "user_token_multi_integration",
+            Rejection::UserTokenNotFineGrained => "user_token_not_fine_grained",
+            Rejection::UserTokenRejected { .. } => "user_token_rejected",
+            Rejection::UserTokenRepoInaccessible { .. } => "user_token_repo_inaccessible",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -185,6 +203,12 @@ impl Rejection {
             }
             Rejection::UserLinkInUse { projects } => json!({ "projects": projects }),
             Rejection::UserLinkMissing { integrations } => json!({ "integrations": integrations }),
+            Rejection::UserTokenInvalid { cause } => json!({ "cause": cause }),
+            Rejection::UserTokenMultiIntegration { integrations } => {
+                json!({ "integrations": integrations })
+            }
+            Rejection::UserTokenRejected { status } => json!({ "status": status }),
+            Rejection::UserTokenRepoInaccessible { repos } => json!({ "repos": repos }),
             Rejection::Invalid { field, code } => {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }

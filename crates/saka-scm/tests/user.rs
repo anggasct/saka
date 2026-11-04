@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 
 use saka_core::secret::SecretText;
+use saka_core::time::Timestamp;
 use saka_core::vocab::AuthorizationFailure;
-use saka_ports::{DevicePoll, IdentityLookup, PortError, TokenRefresh};
+use saka_ports::{DevicePoll, IdentityLookup, PortError, RepoAccess, TokenRefresh};
 use saka_scm::{GitHubApp, GitHubConfig};
 use serde_json::{Value, json};
 use wiremock::matchers::{body_string_contains, header, method, path};
@@ -337,9 +338,14 @@ async fn the_user_endpoint_gives_the_identity_with_the_noreply_address() {
         .host_str()
         .unwrap()
         .to_string();
-    let IdentityLookup::Found(found) = app.identity(&token).await.unwrap() else {
+    let IdentityLookup::Found {
+        identity: found,
+        token_expires_at,
+    } = app.identity(&token).await.unwrap()
+    else {
         panic!("a 200 is an identity");
     };
+    assert_eq!(token_expires_at, None, "no expiration header, no expiry");
     assert_eq!(found.provider_user_id, 1);
     assert_eq!(found.login, "octo");
     assert_eq!(found.display_name.as_deref(), Some("Octo Cat"));
@@ -354,7 +360,10 @@ async fn the_user_endpoint_gives_the_identity_with_the_noreply_address() {
             })))
             .mount(&server)
             .await;
-        let IdentityLookup::Found(found) = app.identity(&token).await.unwrap() else {
+        let IdentityLookup::Found {
+            identity: found, ..
+        } = app.identity(&token).await.unwrap()
+        else {
             panic!("a 200 is an identity");
         };
         assert_eq!(found.display_name, None, "{name}");
@@ -372,5 +381,109 @@ async fn the_user_endpoint_gives_the_identity_with_the_noreply_address() {
     assert_eq!(
         app.identity(&token).await.unwrap(),
         IdentityLookup::Rejected { status: 401 }
+    );
+}
+
+const PAT: &str = "github_pat_11AAAAAAA0fineGrainedTokenValue0001";
+
+async fn pat_user(server: &MockServer, expiration: Option<&str>) {
+    server.reset().await;
+    let mut reply = ResponseTemplate::new(200).set_body_json(json!({
+        "id": 7, "login": "ann", "name": null,
+    }));
+    if let Some(at) = expiration {
+        reply = reply.insert_header("GitHub-Authentication-Token-Expiration", at);
+    }
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .and(header("authorization", format!("Bearer {PAT}").as_str()))
+        .respond_with(reply)
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn a_fine_grained_token_reports_its_expiry_from_the_response_header() {
+    let (server, app) = github(None).await;
+    let token = SecretText::new(PAT.into());
+    let end_of_january = Some(Timestamp(1_801_353_600_000));
+    for (header_value, want) in [
+        (Some("2027-01-31 00:00:00 UTC"), end_of_january),
+        (Some("2027-01-31 00:00:00 +0000"), end_of_january),
+        (Some("2027-01-31 08:00:00 +0800"), end_of_january),
+        (Some("in a while"), None),
+        (None, None),
+    ] {
+        pat_user(&server, header_value).await;
+        let IdentityLookup::Found {
+            identity,
+            token_expires_at,
+        } = app.identity(&token).await.unwrap()
+        else {
+            panic!("a 200 is an identity");
+        };
+        assert_eq!(token_expires_at, want, "{header_value:?}");
+        assert_eq!(identity.login, "ann");
+        assert_eq!(identity.display_name, None);
+        server.verify().await;
+    }
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({ "message": "Bad credentials" })),
+        )
+        .mount(&server)
+        .await;
+    assert_eq!(
+        app.identity(&token).await.unwrap(),
+        IdentityLookup::Rejected { status: 401 }
+    );
+}
+
+#[tokio::test]
+async fn repository_access_is_read_with_the_token_and_only_a_200_is_readable() {
+    let (server, app) = github(None).await;
+    let token = SecretText::new(PAT.into());
+    for (status, want) in [
+        (200, RepoAccess::Readable),
+        (404, RepoAccess::Inaccessible { status: 404 }),
+        (403, RepoAccess::Inaccessible { status: 403 }),
+        (401, RepoAccess::Inaccessible { status: 401 }),
+    ] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/shop"))
+            .and(header("authorization", format!("Bearer {PAT}").as_str()))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(json!({ "full_name": "acme/shop" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            app.user_repository("acme/shop", &token).await.unwrap(),
+            want,
+            "{status}"
+        );
+        server.verify().await;
+    }
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/shop"))
+        .respond_with(ResponseTemplate::new(502))
+        .mount(&server)
+        .await;
+    let e = app.user_repository("acme/shop", &token).await.unwrap_err();
+    assert_eq!(e.code, "scm_unavailable");
+    assert!(e.retryable);
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(
+        requests
+            .iter()
+            .all(|r| !r.url.path().contains("access_tokens")),
+        "the user check never asks for an installation token"
     );
 }

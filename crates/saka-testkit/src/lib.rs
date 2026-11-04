@@ -22,8 +22,8 @@ pub use fixtures::{
     saka_toml,
 };
 pub use sim::{
-    DOCS_REPO, Layout, Operator, SHOP_REPO, Sim, SimConfig, SimOutcome, Step, WEB_REPO,
-    ZERO_SHA256, draft_config,
+    DOCS_REPO, Layout, Operator, SECOND_INTEGRATION, SECOND_WEB_URL, SHOP_REPO, Sim, SimConfig,
+    SimOutcome, Step, WEB_REPO, ZERO_SHA256, draft_config,
 };
 pub use world::{
     APP_CREDENTIAL, AgentOutcome, AgentScript, CiScript, CommandScript, DraftTurn,

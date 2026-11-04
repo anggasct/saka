@@ -176,6 +176,27 @@ enum ProjectCmd {
         )]
         mode: Option<AuthorshipMode>,
     },
+    #[command(
+        subcommand,
+        about = "Stores or removes the project's fine-grained user token"
+    )]
+    UserToken(UserTokenCmd),
+}
+
+#[derive(Subcommand)]
+enum UserTokenCmd {
+    #[command(
+        about = "Checks and stores a fine-grained token (github_pat_...); one line is read from stdin, never from the command line"
+    )]
+    Set {
+        #[arg(help = "Project id or name")]
+        project: String,
+    },
+    #[command(about = "Removes the project's user token; refused while the project uses it")]
+    Rm {
+        #[arg(help = "Project id or name")]
+        project: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -463,6 +484,15 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                         client
                             .project_authorship(&project, mode.map(AuthorshipMode::wire))
                             .await
+                    }
+                    ProjectCmd::UserToken(UserTokenCmd::Set { project }) => {
+                        match cli::read_secret("the user token", false) {
+                            Ok(value) => client.user_token_set(&project, &value).await,
+                            Err(code) => code,
+                        }
+                    }
+                    ProjectCmd::UserToken(UserTokenCmd::Rm { project }) => {
+                        client.user_token_rm(&project).await
                     }
                 }
             })

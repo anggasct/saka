@@ -164,6 +164,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/authorship/user-token": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put: operations["set_user_token"];
+    post?: never;
+    delete: operations["remove_user_token"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/file": {
     parameters: {
       query?: never;
@@ -1481,6 +1497,15 @@ export interface components {
       /** @description 8 to 65536 bytes of UTF-8 without NUL. Shorter values are refused (`secret_too_short`) so output redaction always applies. */
       value: string;
     };
+    /** @description Request body that stores a project's user token. The value is write-only. */
+    SetUserTokenBody: {
+      /**
+       * @description A GitHub fine-grained personal access token (`github_pat_…`), 40 to 255 bytes of
+       *     printable ASCII without spaces. It needs read access to every repo of the project and
+       *     write access to their pull requests.
+       */
+      value: string;
+    };
     Spec: {
       /** @description Left out of list items. */
       acceptance_criteria?:
@@ -2426,6 +2451,82 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["ProjectAuthorship"];
         };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  set_user_token: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SetUserTokenBody"];
+      };
+    };
+    responses: {
+      /** @description The token is checked and stored; its value is never returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProjectAuthorship"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  remove_user_token: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The token is gone, or there was none */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       "4XX": {
         headers: {

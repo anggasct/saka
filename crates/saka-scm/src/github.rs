@@ -12,8 +12,8 @@ use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup,
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities, StatusReport,
-    TokenRefresh, WebhookDelivery, WebhookSignature,
+    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
+    StatusReport, TokenRefresh, WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -416,5 +416,14 @@ impl Scm for GitHub {
         token: &SecretText,
     ) -> PortResult<IdentityLookup> {
         self.app.identity(token).await
+    }
+
+    async fn user_repository_access(
+        &self,
+        _integration_id: &str,
+        full_name: &str,
+        token: &SecretText,
+    ) -> PortResult<RepoAccess> {
+        self.app.user_repository(full_name, token).await
     }
 }

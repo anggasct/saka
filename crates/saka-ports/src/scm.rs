@@ -150,6 +150,13 @@ pub trait Scm: Send + Sync {
         integration_id: &str,
         token: &SecretText,
     ) -> PortResult<IdentityLookup>;
+
+    async fn user_repository_access(
+        &self,
+        integration_id: &str,
+        full_name: &str,
+        token: &SecretText,
+    ) -> PortResult<RepoAccess>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,8 +194,19 @@ pub enum TokenRefresh {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityLookup {
-    Found(saka_core::authorship::Identity),
-    Rejected { status: u16 },
+    Found {
+        identity: saka_core::authorship::Identity,
+        token_expires_at: Option<Timestamp>,
+    },
+    Rejected {
+        status: u16,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepoAccess {
+    Readable,
+    Inaccessible { status: u16 },
 }
 
 pub const MAX_WEBHOOK_TARGETS: usize = 100;

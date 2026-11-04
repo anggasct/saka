@@ -468,7 +468,7 @@ impl Engine {
             .user_identity(&authorization.integration_id, &tokens.access_token)
             .await
         {
-            Ok(IdentityLookup::Found(identity)) if identity.is_valid() => identity,
+            Ok(IdentityLookup::Found { identity, .. }) if identity.is_valid() => identity,
             Ok(_) => return failed(AuthorizationFailure::IdentityUnavailable),
             Err(e) => {
                 tracing::warn!(authorization_id = %id, code = %e.code, "user identity lookup failed");

@@ -14,10 +14,11 @@ use saka_core::rejection::Rejection;
 use saka_core::scope::{PathScope, ScopeViolation};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
+use saka_core::time::Timestamp;
 use saka_core::vocab::{
     AuthorshipMode, BlockerCode, ChangeCredentialKind, ChangeState, CheckConclusion, CheckKind,
     CheckStatus, EnvironmentState, PermissionState, RefreshReason, ScopeStage, Stage, StagePhase,
-    UserLinkCause,
+    TokenInvalidCause, UserLinkCause, UserTokenCause,
 };
 use saka_ports::{
     ChangeCredential, ChangeOpening, Checkout, EnvRef, LaunchProfile, MergeOutcome, MergeRequest,
@@ -72,15 +73,33 @@ enum Input {
     Draft(DraftInput),
 }
 
-pub(crate) struct Opener {
-    credential: ChangeCredential,
-    kind: ChangeCredentialKind,
-    link: Option<UserLink>,
+pub(crate) enum OpenedBy {
+    App,
+    Link(UserLink),
+    Token { set_at: Timestamp, login: String },
 }
 
-// No project can hold the user token mode until a token can be stored for it.
-fn user_token_missing() -> PortError {
-    PortError::permanent("user_token_missing", json!({}))
+pub(crate) struct Opener {
+    credential: ChangeCredential,
+    by: OpenedBy,
+}
+
+impl OpenedBy {
+    fn kind(&self) -> ChangeCredentialKind {
+        match self {
+            OpenedBy::App => ChangeCredentialKind::App,
+            OpenedBy::Link(_) => ChangeCredentialKind::UserLink,
+            OpenedBy::Token { .. } => ChangeCredentialKind::UserToken,
+        }
+    }
+
+    fn login(&self) -> String {
+        match self {
+            OpenedBy::App => String::new(),
+            OpenedBy::Link(link) => link.login.clone(),
+            OpenedBy::Token { login, .. } => login.clone(),
+        }
+    }
 }
 
 pub(crate) enum Refusal {
@@ -1024,7 +1043,17 @@ impl Engine {
                 let link = self.operator_link(&integration)?;
                 Ok(authorship::user_link_author(&integration, link.as_ref()))
             }
-            AuthorshipMode::UserPat => Err(user_token_missing()),
+            AuthorshipMode::UserPat => {
+                let integration = self.repo_ref(task)?.integration_id;
+                let current = self
+                    .project_authorship_now(task.item.project_id)
+                    .map_err(internal)?;
+                Ok(authorship::user_token_author(
+                    current.as_ref(),
+                    &integration,
+                    self.now(),
+                ))
+            }
         }
     }
 
@@ -1053,8 +1082,7 @@ impl Engine {
         match mode {
             AuthorshipMode::Bot => Ok(Ok(Opener {
                 credential: ChangeCredential::App,
-                kind: ChangeCredentialKind::App,
-                link: None,
+                by: OpenedBy::App,
             })),
             AuthorshipMode::User => {
                 let Some(link) = self.operator_link(integration)? else {
@@ -1063,8 +1091,7 @@ impl Engine {
                 match self.refresh_user_link(link.id, RefreshReason::Use).await {
                     Ok(LinkCredential::Ready(token)) => Ok(Ok(Opener {
                         credential: ChangeCredential::User(token),
-                        kind: ChangeCredentialKind::UserLink,
-                        link: Some(link),
+                        by: OpenedBy::Link(link),
                     })),
                     Ok(LinkCredential::Relink(cause)) => Ok(Err(blocked(cause.into()))),
                     Err(EngineError::Rejected(Rejection::UserLinkNotFound)) => {
@@ -1074,8 +1101,43 @@ impl Engine {
                     Err(e) => Err(internal(e)),
                 }
             }
-            AuthorshipMode::UserPat => Err(user_token_missing()),
+            AuthorshipMode::UserPat => self.token_credential(task, integration),
         }
+    }
+
+    fn token_credential(
+        &self,
+        task: &Task,
+        integration: &str,
+    ) -> std::result::Result<std::result::Result<Opener, CredentialBlock>, PortError> {
+        let project = task.item.project_id;
+        let phase = StagePhase::OpeningChange;
+        let current = self.project_authorship_now(project).map_err(internal)?;
+        if let Err(block) =
+            authorship::usable_token(current.as_ref(), integration, phase, self.now())
+        {
+            return Ok(Err(block));
+        }
+        let rejected = CredentialBlock::TokenInvalid {
+            cause: UserTokenCause::Rejected,
+            phase,
+        };
+        let Some(opened) = self.open_user_token(project).map_err(internal)? else {
+            return Ok(Err(rejected));
+        };
+        if opened.token.integration_id != integration {
+            return Ok(Err(CredentialBlock::TokenInvalid {
+                cause: UserTokenCause::Missing,
+                phase,
+            }));
+        }
+        Ok(Ok(Opener {
+            credential: ChangeCredential::User(opened.value),
+            by: OpenedBy::Token {
+                set_at: opened.token.set_at,
+                login: opened.token.identity.login,
+            },
+        }))
     }
 
     async fn send_turn(
@@ -1337,23 +1399,38 @@ impl Engine {
         let opened = match opening {
             ChangeOpening::Opened(opened) => opened,
             ChangeOpening::CredentialRejected => {
-                let cause = match &opener.link {
-                    Some(link) => self.revoke_user_link(link)?,
-                    None => UserLinkCause::Revoked,
-                };
-                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
-                    block: CredentialBlock::LinkRequired {
+                let block = match &opener.by {
+                    OpenedBy::Token { set_at, .. } => {
+                        self.invalidate_user_token(
+                            task.item.project_id,
+                            *set_at,
+                            TokenInvalidCause::Rejected,
+                        )
+                        .map_err(internal)?;
+                        CredentialBlock::TokenInvalid {
+                            cause: UserTokenCause::Rejected,
+                            phase: StagePhase::OpeningChange,
+                        }
+                    }
+                    OpenedBy::Link(link) => CredentialBlock::LinkRequired {
                         integration_id: integration,
-                        cause,
+                        cause: self.revoke_user_link(link)?,
                         phase: StagePhase::OpeningChange,
                     },
-                }));
+                    OpenedBy::App => {
+                        return Err(PortError::permanent(
+                            "scm_app_auth_refused",
+                            json!({ "status": 401 }),
+                        ));
+                    }
+                };
+                return Ok(Effect::Fact(TaskInput::CredentialBlocked { block }));
             }
             ChangeOpening::AccessDenied { status } => {
                 return Ok(Effect::Fact(TaskInput::CredentialBlocked {
                     block: CredentialBlock::AccessDenied {
-                        credential: opener.kind,
-                        login: opener.link.map(|l| l.login).unwrap_or_default(),
+                        credential: opener.by.kind(),
+                        login: opener.by.login(),
                         status,
                     },
                 }));
@@ -1366,7 +1443,7 @@ impl Engine {
             url: opened.url,
             head_sha: opened.head_sha,
             base_branch,
-            opened_with: opener.kind,
+            opened_with: opener.by.kind(),
         }))
     }
 

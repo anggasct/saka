@@ -196,6 +196,37 @@ describe("blockerText", () => {
     );
   });
 
+  it("names what a user token cannot do and how to replace it", () => {
+    expect(
+      blockerText(en, "user_token_invalid", {
+        cause: "rejected",
+        phase: "opening_change",
+      }),
+    ).toBe(
+      "The code host refused the project's user token. Store a new one with saka project user-token set, or switch the project to bot mode; the task then continues by itself.",
+    );
+    expect(
+      errorText(en, "user_token_repo_inaccessible", {
+        repos: [
+          { name: "shop", full_name: "acme/shop", status: 404 },
+          { name: "web", full_name: "acme/web", status: 403 },
+        ],
+      }),
+    ).toBe(
+      "The token cannot read every repo of the project: acme/shop, acme/web. Give it access to them, then store it again.",
+    );
+    expect(
+      errorText(id, "user_token_multi_integration", {
+        integrations: ["github", "ghes"],
+      }),
+    ).toBe(
+      "Repo project ini ada di lebih dari satu code host (github, ghes), padahal token pengguna hanya berlaku untuk satu.",
+    );
+    expect(errorText(en, "user_token_invalid", { cause: "expired" })).toBe(
+      "The project's user token expired. Store a new one first.",
+    );
+  });
+
   it("names the secrets a recipe is missing or cannot open", () => {
     expect(
       blockerText(en, "secret_missing", { names: ["NPM_TOKEN", "API_KEY"] }),
@@ -424,6 +455,21 @@ const VARIANTS: [string, Record<string, unknown>][] = [
       phase: "opening_change",
     },
   ],
+  ...["missing", "expired", "rejected"].map(
+    (cause): [string, Record<string, unknown>] => [
+      "user_token_invalid",
+      { cause, phase: "opening_change" },
+    ],
+  ),
+  [
+    "user_access_denied",
+    {
+      credential: "user_token",
+      login: "octo",
+      status: 404,
+      phase: "opening_change",
+    },
+  ],
 ];
 
 const LABELS: Record<string, string[]> = {
@@ -520,6 +566,13 @@ const ERRORS = [
   "project_repo_in_use",
   "scm_integration_unknown",
   "scm_repo_inaccessible",
+  "user_token_missing",
+  "user_token_invalid",
+  "user_token_in_use",
+  "user_token_multi_integration",
+  "user_token_not_fine_grained",
+  "user_token_rejected",
+  "user_token_repo_inaccessible",
 ];
 
 describe("catalog coverage", () => {

@@ -45,7 +45,7 @@ use uuid::Uuid;
 
 pub use accounts::{AuthorizationView, LinkCredential};
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
-pub use authorship::{AuthorPreview, AuthorshipView, IntegrationLink};
+pub use authorship::{AuthorPreview, AuthorshipView, IntegrationLink, UserTokenView};
 pub use commands::{NewBinding, NewProject, NewRepo, RegisteredSpec, SessionCommand};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
