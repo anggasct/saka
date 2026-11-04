@@ -1,6 +1,7 @@
 pub mod app;
 pub mod ci;
 mod diagnose;
+pub mod manifest;
 pub mod requirements;
 pub mod user;
 mod webhook;

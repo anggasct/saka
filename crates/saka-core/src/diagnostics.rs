@@ -665,12 +665,16 @@ fn level(access: &str) -> u8 {
     }
 }
 
+pub fn access_covers(granted: &str, wanted: &str) -> bool {
+    level(granted) >= level(wanted)
+}
+
 fn missing_permissions(granted: &BTreeMap<String, String>, wanted: &[(&str, &str)]) -> Vec<Value> {
     wanted
         .iter()
         .filter_map(|(permission, required)| {
             let has = granted.get(*permission);
-            (has.map_or(0, |g| level(g)) < level(required))
+            (!has.is_some_and(|g| access_covers(g, required)))
                 .then(|| json!({ "permission": permission, "required": required, "granted": has }))
         })
         .collect()

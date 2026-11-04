@@ -33,6 +33,14 @@ pub struct GitHubConfig {
     pub client_id: Option<String>,
 }
 
+#[must_use]
+pub fn client_id_valid(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 #[derive(Debug, Clone)]
 struct CachedToken {
     token: String,

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use saka_core::policy::RuleSpec;
 use saka_core::vocab::MergeMethod;
+use saka_scm::github::app::client_id_valid;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -485,13 +486,6 @@ fn git_email() -> String {
     "agent@saka.invalid".into()
 }
 
-fn client_id_ok(id: &str) -> bool {
-    (1..=64).contains(&id.len())
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-}
-
 // The identity ends up in a git author/committer header, where angle brackets and line breaks
 // would end the field early.
 fn git_name_ok(name: &str) -> bool {
@@ -633,7 +627,10 @@ impl Config {
                     "scm.web_url and scm.api_url must be https",
                 ));
             }
-            if s.client_id.as_deref().is_some_and(|id| !client_id_ok(id)) {
+            if s.client_id
+                .as_deref()
+                .is_some_and(|id| !client_id_valid(id))
+            {
                 return Err(err(
                     "config_invalid",
                     "scm.client_id must be 1 to 64 characters of A-Z, a-z, 0-9, '.', '_' or '-'",
