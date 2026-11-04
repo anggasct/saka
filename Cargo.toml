@@ -64,6 +64,14 @@ todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
 
+# Line tables keep file:line in backtraces; full debuginfo made every test
+# binary slow to link and filled the disk.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # The browser build of saka-wasm: small, since the web app downloads it.
 [profile.wasm]
 inherits = "release"
