@@ -143,12 +143,24 @@ impl ClaudeAgents {
             Path::new(&launch.environment.root_path),
             &worktree,
         );
+        let add_dirs = match launch.profile {
+            LaunchProfile::Task => launch
+                .environment
+                .extra_dirs
+                .iter()
+                .map(|dir| {
+                    std::fs::canonicalize(dir).map_err(|e| io_error("docs_dir_unreadable", &e))
+                })
+                .collect::<PortResult<Vec<_>>>()?,
+            LaunchProfile::Architect { .. } => Vec::new(),
+        };
         let options = LaunchOptions {
             cwd: &cwd,
             tools,
             model: launch.model.as_deref(),
             resume: launch.resume_cli_session_id.as_deref(),
             author: &launch.author,
+            add_dirs: &add_dirs,
         };
         let mut spec = launch::claude(
             &self.cfg.claude,
@@ -501,6 +513,7 @@ mod tests {
                     value: SecretText::new("s3cr3t".into()),
                     purposes: vec![SecretPurpose::Session],
                 }],
+                extra_dirs: Vec::new(),
             },
             resume_cli_session_id: None,
             profile,
@@ -554,6 +567,49 @@ mod tests {
             root.join("home").to_string_lossy(),
             "a recipe var never replaces a Saka-owned one"
         );
+    }
+
+    #[test]
+    fn a_task_session_gets_the_docs_checkout_as_an_added_dir_and_its_path_in_the_env() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .join("e-1");
+        std::fs::create_dir_all(root.join("worktree")).unwrap_or_else(|e| panic!("{e}"));
+        let docs = root.join("docs/docs");
+        std::fs::create_dir_all(&docs).unwrap_or_else(|e| panic!("{e}"));
+        let agents = agents(dir.path());
+        let mut task = launch(&root, LaunchProfile::Task, None);
+        let docs_dir = docs.to_string_lossy().into_owned();
+        task.environment.extra_dirs = vec![docs_dir.clone()];
+        task.environment
+            .vars
+            .insert("SAKA_DOCS_DIR".into(), docs_dir.clone());
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &task)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let at = spec
+            .args
+            .iter()
+            .position(|a| a == "--add-dir")
+            .unwrap_or_else(|| panic!("no --add-dir in {:?}", spec.args));
+        assert_eq!(spec.args[at + 1], docs_dir);
+        assert_eq!(spec.env["SAKA_DOCS_DIR"], docs_dir);
+
+        let mut architect = launch(&root, LaunchProfile::Architect { cwd: ".".into() }, None);
+        architect.environment.extra_dirs = vec![docs_dir];
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &architect)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(!spec.args.contains(&"--add-dir".to_string()));
+
+        task.environment.extra_dirs = vec![root.join("gone").to_string_lossy().into_owned()];
+        let missing = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &task)
+            .unwrap_err();
+        assert_eq!(missing.code, "docs_dir_unreadable");
     }
 
     #[test]

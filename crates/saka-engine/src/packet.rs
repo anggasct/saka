@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use saka_core::model::{ContextRef, DraftDocument};
-use saka_core::vocab::{ContextOrigin, DraftLocale, PacketOrigin, Tool};
+use saka_core::vocab::{ContextOrigin, DocsMode, DraftLocale, PacketOrigin, Tool};
 
 use saka_spec::content_hash;
 
@@ -28,10 +28,21 @@ pub struct PacketRepo {
     pub base_branch: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacketDocs {
+    pub path: String,
+    pub full_name: String,
+    pub project_path: String,
+    pub commit: String,
+    pub mode: DocsMode,
+    pub branch: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EnvironmentFacts {
     pub repo: Option<PacketRepo>,
     pub path_scope: Vec<String>,
+    pub docs: Option<PacketDocs>,
     pub ports: Option<(u16, u16)>,
     pub toolchains: Vec<(Tool, String)>,
     pub session_secrets: Vec<String>,
@@ -99,6 +110,31 @@ pub fn sources(text: &str) -> std::collections::BTreeMap<u32, String> {
         rest = next;
     }
     out
+}
+
+fn push_docs_line(out: &mut String, docs: &PacketDocs) {
+    match (docs.mode, docs.branch.as_deref()) {
+        (DocsMode::Writable, Some(branch)) => {
+            let _ = writeln!(
+                out,
+                "- Project docs: {}, a checkout of {} on branch {branch}. Edit docs only under {}/ there and commit them in that checkout; Saka opens a separate docs pull request after the code pull request.",
+                docs.path, docs.full_name, docs.project_path
+            );
+        }
+        _ => {
+            let commit: String = docs.commit.chars().take(12).collect();
+            let folder = if docs.project_path == "." {
+                docs.full_name.clone()
+            } else {
+                format!("{}/{}", docs.full_name, docs.project_path)
+            };
+            let _ = writeln!(
+                out,
+                "- Project docs (read-only): {} ({folder} at {commit})",
+                docs.path
+            );
+        }
+    }
 }
 
 fn listed(items: &[String]) -> String {
@@ -196,6 +232,9 @@ pub fn render(input: &PacketInput) -> Packet {
             repo.name, repo.full_name, repo.base_branch
         );
     }
+    if let Some(docs) = &env.docs {
+        push_docs_line(&mut text, docs);
+    }
     let _ = write!(
         text,
         "- Ports: {ports}\n- Toolchains: {}\n- Secrets available as environment variables: {}\n\n",
@@ -207,8 +246,17 @@ pub fn render(input: &PacketInput) -> Packet {
     }
     text.push_str(
         "Rules:\n\
-         - Work only inside this repository, and only in the paths you may change.\n\
-         - Commit all your changes with a Conventional Commits message before you finish.\n\
+         - Work only inside this repository, and only in the paths you may change.\n",
+    );
+    if env
+        .docs
+        .as_ref()
+        .is_some_and(|d| d.mode == DocsMode::Writable)
+    {
+        text.push_str("- Commit docs changes only in the project docs checkout.\n");
+    }
+    text.push_str(
+        "- Commit all your changes with a Conventional Commits message before you finish.\n\
          - Do not push. Saka pushes the branch and opens the pull request.\n",
     );
     let sha256 = content_hash(text.as_bytes());
@@ -567,6 +615,44 @@ mod tests {
         ));
         assert_eq!(packet.text.matches("</documents>").count(), 1);
         assert_eq!(packet.text.matches("</document_content>").count(), 2);
+    }
+
+    fn docs(mode: DocsMode, project_path: &str) -> PacketDocs {
+        PacketDocs {
+            path: "/data/envs/e-1/docs/docs".into(),
+            full_name: "acme/docs".into(),
+            project_path: project_path.into(),
+            commit: "0123456789abcdef".repeat(2) + "01234567",
+            mode,
+            branch: (mode == DocsMode::Writable).then(|| "saka/x/s1-docs".to_string()),
+        }
+    }
+
+    #[test]
+    fn a_read_only_docs_checkout_is_named_before_the_ports_with_its_pinned_commit() {
+        let mut with = input();
+        with.environment.docs = Some(docs(DocsMode::ReadOnly, "docs"));
+        let text = render(&with).text;
+        assert!(text.contains(
+            "Environment:\n- Project docs (read-only): /data/envs/e-1/docs/docs (acme/docs/docs at 0123456789ab)\n- Ports: none\n"
+        ));
+        assert!(!text.contains("Commit docs changes"));
+        with.environment.docs = Some(docs(DocsMode::ReadOnly, "."));
+        assert!(render(&with).text.contains("(acme/docs at 0123456789ab)\n"));
+        assert!(!render(&input()).text.contains("Project docs"));
+    }
+
+    #[test]
+    fn a_writable_docs_checkout_names_its_branch_and_adds_the_commit_rule() {
+        let mut with = input();
+        with.environment.docs = Some(docs(DocsMode::Writable, "docs"));
+        let text = render(&with).text;
+        assert!(text.contains(
+            "- Project docs: /data/envs/e-1/docs/docs, a checkout of acme/docs on branch saka/x/s1-docs. Edit docs only under docs/ there and commit them in that checkout; Saka opens a separate docs pull request after the code pull request.\n- Ports: none\n"
+        ));
+        assert!(text.contains(
+            "Rules:\n- Work only inside this repository, and only in the paths you may change.\n- Commit docs changes only in the project docs checkout.\n- Commit all your changes"
+        ));
     }
 
     #[test]

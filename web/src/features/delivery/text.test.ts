@@ -112,6 +112,35 @@ describe("blockerText", () => {
         error: { code: "worktree_add_failed", params: {} },
       }),
     ).toBe("The task environment could not be prepared.");
+    const tooLarge = {
+      error: {
+        code: "docs_checkout_too_large",
+        params: {
+          files: 20001,
+          bytes: 3 * 1024 * 1024 + 1,
+          max_files: 20000,
+          max_bytes: 268435456,
+        },
+      },
+    };
+    expect(blockerText(en, "env_setup_failed", tooLarge)).toBe(
+      "The project folder in the docs repo is too large to check out: 20,001 files, 4 MiB (at most 20,000 files and 256 MiB).",
+    );
+    expect(blockerText(id, "env_setup_failed", tooLarge)).toBe(
+      "Folder project di repo docs terlalu besar untuk di-checkout: 20.001 file, 4 MiB (paling banyak 20.000 file dan 256 MiB).",
+    );
+    const missing = {
+      error: {
+        code: "docs_commit_missing",
+        params: { commit: "5e6f7a8b9c0d".padEnd(40, "1") },
+      },
+    };
+    expect(blockerText(en, "env_setup_failed", missing)).toBe(
+      "The spec commit 5e6f7a8b9c0d is not in the docs repo.",
+    );
+    expect(blockerText(id, "env_setup_failed", missing)).toBe(
+      "Commit spec 5e6f7a8b9c0d tidak ada di repo docs.",
+    );
     expect(
       blockerText(en, "env_recipe_invalid", {
         code: "env_name_reserved",

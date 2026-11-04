@@ -343,10 +343,10 @@ fn prepared_with(step: u32, recipe: serde_json::Value) -> TaskInput {
         root_path: format!("/envs/{step}"),
         worktree_path: format!("/envs/{step}/worktree"),
         base_sha: sha('a'),
-        setup: saka_core::model::EnvironmentSetup {
+        setup: Box::new(saka_core::model::EnvironmentSetup {
             recipe: Some(recipe),
             ..Default::default()
-        },
+        }),
     }
 }
 

@@ -3289,6 +3289,55 @@
         "type": "object",
         "additionalProperties": false
       },
+      "EnvironmentDocs": {
+        "type": "object",
+        "required": [
+          "repo_id",
+          "full_name",
+          "commit",
+          "project_path",
+          "path",
+          "mode",
+          "base_sha"
+        ],
+        "properties": {
+          "base_sha": {
+            "type": "string",
+            "description": "The commit the checkout started at."
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The docs branch of a `writable` checkout; `null` when `read_only`."
+          },
+          "commit": {
+            "type": "string",
+            "description": "The commit the task's spec revision is pinned to."
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "description": "`read_only` or `writable`."
+          },
+          "path": {
+            "type": "string",
+            "description": "The directory the session reads (`<environment root>/docs/<project_path>`)."
+          },
+          "project_path": {
+            "type": "string",
+            "description": "The project folder in the workspace repo; `.` is the whole repo."
+          },
+          "repo_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The workspace repo the checkout is made from."
+          }
+        }
+      },
       "Failure": {
         "type": "object",
         "required": [
@@ -7143,6 +7192,17 @@
           "toolchains"
         ],
         "properties": {
+          "docs": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentDocs",
+                "description": "Checkout of the project folder from the workspace repo; `null` when the task's repo is\nthe workspace repo."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"

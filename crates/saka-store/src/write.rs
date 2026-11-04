@@ -987,8 +987,9 @@ fn environment(tx: &Transaction<'_>, project: ProjectId, e: &Environment) -> Res
     tx.execute(
         "INSERT INTO environment (id, project_id, work_item_id, spec_draft_id, spec_draft_attempt_id, repo_id,
            root_path, worktree_path, branch, base_sha, state, created_at, updated_at, port_start, port_count,
-           recipe_json, recipe_sha256, toolchains_json, path_scope_json)
-         VALUES (?1, ?2, ?3, ?17, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?19)
+           recipe_json, recipe_sha256, toolchains_json, path_scope_json, docs_json)
+         VALUES (?1, ?2, ?3, ?17, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?19,
+           ?20)
          ON CONFLICT (id) DO UPDATE SET base_sha = excluded.base_sha, state = excluded.state,
            updated_at = excluded.updated_at",
         params![
@@ -1011,6 +1012,7 @@ fn environment(tx: &Transaction<'_>, project: ProjectId, e: &Environment) -> Res
             owner.spec_draft_id,
             owner.spec_draft_attempt_id,
             serde_json::to_string(&e.path_scope)?,
+            e.docs.as_ref().map(serde_json::to_string).transpose()?,
         ],
     )?;
     Ok(())

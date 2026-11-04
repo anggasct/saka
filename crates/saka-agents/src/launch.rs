@@ -14,6 +14,7 @@ pub struct LaunchOptions<'a> {
     pub model: Option<&'a str>,
     pub resume: Option<&'a str>,
     pub author: &'a GitIdentity,
+    pub add_dirs: &'a [PathBuf],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +170,9 @@ pub fn claude(
     .map(String::from)
     .to_vec();
     args.push(session_settings(&paths.worktree)?);
+    for dir in options.add_dirs {
+        args.extend(["--add-dir".to_string(), s(dir)]);
+    }
     if let Some(tools) = options.tools {
         args.extend(["--tools".to_string(), tools.to_string()]);
     }
@@ -272,6 +276,7 @@ mod tests {
                 model: None,
                 resume: None,
                 author: &saka(),
+                add_dirs: &[],
             },
         )
         .unwrap();
@@ -310,6 +315,45 @@ mod tests {
     }
 
     #[test]
+    fn a_docs_checkout_is_an_added_dir_and_leaves_the_memory_scope_on_the_worktree() {
+        let docs = [PathBuf::from("/data/envs/e-1/docs/docs")];
+        let author = saka();
+        let launch = |add_dirs: &[PathBuf]| {
+            claude(
+                &settings(Some("haiku")),
+                Path::new("/home/u/.local/bin/claude"),
+                "s-1",
+                &paths(),
+                vec![],
+                &LaunchOptions {
+                    cwd: Path::new("/data/envs/e-1/worktree"),
+                    tools: None,
+                    model: None,
+                    resume: None,
+                    author: &author,
+                    add_dirs,
+                },
+            )
+            .unwrap()
+        };
+        let with = launch(&docs);
+        let without = launch(&[]);
+        assert_eq!(
+            with.args[14..18],
+            [
+                "{\"attribution\":{\"commit\":\"\",\"pr\":\"\"},\"claudeMdExcludes\":[\"!/data/envs/e-1/worktree/**\"]}",
+                "--add-dir",
+                "/data/envs/e-1/docs/docs",
+                "--model",
+            ]
+        );
+        let mut args = with.args.clone();
+        args.drain(15..17);
+        assert_eq!(args, without.args);
+        assert_eq!(with.env, without.env);
+    }
+
+    #[test]
     fn a_user_authored_session_commits_as_the_user_and_saka_stays_the_committer() {
         let spec = claude(
             &settings(None),
@@ -323,6 +367,7 @@ mod tests {
                 model: None,
                 resume: None,
                 author: &octo(),
+                add_dirs: &[],
             },
         )
         .unwrap();
@@ -361,6 +406,7 @@ mod tests {
                 model: None,
                 resume: Some("cli-abc"),
                 author: &saka(),
+                add_dirs: &[],
             },
         )
         .unwrap();
@@ -386,6 +432,7 @@ mod tests {
                     model: None,
                     resume: None,
                     author: &octo(),
+                    add_dirs: &[],
                 },
             )
             .unwrap();
@@ -482,6 +529,7 @@ mod tests {
                     model: None,
                     resume: None,
                     author: &saka(),
+                    add_dirs: &[],
                 },
             ),
             Err(UnsupportedPath(PathBuf::from("/data/[envs]/e-1/worktree")))

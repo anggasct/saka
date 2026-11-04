@@ -10,7 +10,8 @@ use crate::ids::{
 };
 use crate::job::JobKind;
 use crate::model::{
-    Budget, Coded, ContextRef, DependsOn, DraftDocument, ProjectRepo, RunOwner, ToolchainUse,
+    Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, ProjectRepo, RunOwner,
+    ToolchainUse,
 };
 use crate::time::Timestamp;
 use crate::vocab::{
@@ -365,6 +366,7 @@ pub enum Event {
         #[serde(default)]
         toolchains: Vec<ToolchainUse>,
         path_scope: Vec<String>,
+        docs: Option<DocsCheckout>,
     },
     #[serde(rename = "runtime.environment.torn_down")]
     EnvironmentTornDown {

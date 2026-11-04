@@ -29,6 +29,8 @@ export function text(value: unknown): string {
     : "";
 }
 
+const MIB = 1024 * 1024;
+
 export function sha(value: unknown): string {
   return text(value).slice(0, 12);
 }
@@ -105,6 +107,11 @@ export function blockerText(
       resetsAt !== "" && relative !== undefined ? relative(resetsAt) : NONE,
     error: text(error.code) || "other",
     command_index: number(errorParams.command_index) + 1,
+    docs_commit: sha(errorParams.commit),
+    files: number(errorParams.files),
+    max_files: number(errorParams.max_files),
+    mib: Math.ceil(number(errorParams.bytes) / MIB),
+    max_mib: Math.floor(number(errorParams.max_bytes) / MIB),
     timed_out: errorParams.timed_out === true ? "yes" : "no",
     issue: field ? `${text(params.code)} ${field}` : text(params.code),
     line: text(params.line) || NONE,

@@ -280,6 +280,7 @@ impl Engine {
                     vars: std::collections::BTreeMap::new(),
                     path_prefix: Vec::new(),
                     secrets: Vec::new(),
+                    extra_dirs: Vec::new(),
                 },
                 cwd,
                 raw,

@@ -12,10 +12,10 @@ use crate::ids::{
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeState, ContextOrigin,
-    DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome, GateSource, InterruptBy,
-    LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState, SpecDraftState,
-    SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger, WorkItemOrigin,
-    WorkItemState, WorkflowPreset,
+    DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome, GateSource,
+    InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState,
+    SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
+    WorkItemOrigin, WorkItemState, WorkflowPreset,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -419,6 +419,19 @@ pub struct EnvironmentSetup {
     pub setup: Vec<Value>,
     pub toolchains: Vec<ToolchainUse>,
     pub path_scope: Vec<String>,
+    pub docs: Option<DocsCheckout>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocsCheckout {
+    pub repo_id: RepoId,
+    pub full_name: String,
+    pub commit: String,
+    pub project_path: String,
+    pub path: String,
+    pub mode: DocsMode,
+    pub branch: Option<String>,
+    pub base_sha: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,6 +463,7 @@ pub struct Environment {
     pub recipe_sha256: Option<String>,
     pub toolchains: Vec<ToolchainUse>,
     pub path_scope: Vec<String>,
+    pub docs: Option<DocsCheckout>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

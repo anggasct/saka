@@ -685,6 +685,7 @@ impl Engine {
             vars: BTreeMap::from([("SAKA_ENVIRONMENT_ID".to_string(), env.id.to_string())]),
             path_prefix: Vec::new(),
             secrets: Vec::new(),
+            extra_dirs: Vec::new(),
         }
     }
 
@@ -787,6 +788,7 @@ impl Engine {
             vars: BTreeMap::new(),
             path_prefix: Vec::new(),
             secrets: Vec::new(),
+            extra_dirs: Vec::new(),
         };
         let previous = self.previous_attempt(d, attempt.attempt)?;
         if let Some((_, Some(content))) = &previous {

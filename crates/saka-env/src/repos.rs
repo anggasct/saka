@@ -5,15 +5,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use saka_core::ids::RepoId;
+use saka_core::ids::{EnvironmentId, RepoId};
 use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    Blob, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, EntryKind, EnvRef,
-    Environments, GitAccess, GitRemote, PortError, PortResult, PrepareRequest, PreparedEnvironment,
-    PushCommit, PushOutcome, PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos,
-    Supervisor, TreeEntry, UnitLimits, WorktreeFile, WorktreeState,
+    Blob, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, DOCS_MAX_BYTES,
+    DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, GitAccess, GitRemote, PortError,
+    PortResult, PrepareRequest, PreparedDocs, PreparedEnvironment, PushCommit, PushOutcome,
+    PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor, TreeEntry,
+    UnitLimits, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -21,6 +22,8 @@ use crate::git::{Extra, Git, GitOutput, auth_refused, failed};
 
 const FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
 const BASE_FILE: &str = "base-sha";
+const DOCS_DIR: &str = "docs";
+const DOCS_FILE: &str = "docs-sha";
 const RECIPE_PATH: &str = ".saka/environment.toml";
 const RECIPE_MAX_BYTES: usize = 64 * 1024;
 const REPO_FILE_MAX_BYTES: usize = 256 * 1024;
@@ -112,6 +115,60 @@ fn make_dirs_writable(root: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+// Symlinks are skipped: changing their mode would change the file they point to.
+fn set_tree_modes(
+    root: &Path,
+    file_mode: impl Fn(u32) -> u32,
+    dir_mode: impl Fn(u32) -> u32,
+) -> std::io::Result<()> {
+    let mut dirs = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let meta = std::fs::symlink_metadata(&dir)?;
+        if !meta.is_dir() {
+            continue;
+        }
+        let mode = meta.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode | 0o700))?;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let path = entry.path();
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file() && !(dir == root && entry.file_name() == ".git") {
+                let mode = entry.metadata()?.permissions().mode();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(file_mode(mode)))?;
+            }
+        }
+        dirs.push((dir, mode));
+    }
+    // Directories last and deepest first, so each one is still writable while it is walked.
+    for (dir, mode) in dirs.into_iter().rev() {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(dir_mode(mode)))?;
+    }
+    Ok(())
+}
+
+fn project_path_arg(path: &str) -> PortResult<()> {
+    let plain = path == "."
+        || (!path.starts_with('-')
+            && !path.contains(['\n', '\0', '\\'])
+            && Path::new(path)
+                .components()
+                .all(|c| matches!(c, Component::Normal(_))));
+    if plain && !path.is_empty() && !path.ends_with('/') {
+        Ok(())
+    } else {
+        Err(PortError::permanent(
+            "git_argument_invalid",
+            json!({ "field": "project_path" }),
+        ))
+    }
 }
 
 fn is_sha(s: &str) -> bool {
@@ -343,6 +400,49 @@ impl GitRepos {
         }
         self.git_ok(bare, &["worktree", "prune"], "worktree_prune")
             .await?;
+        Ok(())
+    }
+
+    // The sparse patterns of one worktree need per-worktree config. Older git turns it on
+    // without moving `core.bare`, which then makes every linked worktree bare; this moves it
+    // first, in an order where the mirror stays usable at every step.
+    async fn enable_worktree_config(&self, bare: &Path) -> PortResult<()> {
+        let on = self
+            .cfg
+            .git
+            .local(bare, &["config", "--bool", "extensions.worktreeConfig"])
+            .await?;
+        if on.ok() && on.text() == "true" {
+            return Ok(());
+        }
+        let own = bare.join("config.worktree").to_string_lossy().into_owned();
+        self.git_ok(
+            bare,
+            &["config", "--file", &own, "core.bare", "true"],
+            "config",
+        )
+        .await?;
+        let unset = self
+            .cfg
+            .git
+            .local(bare, &["config", "--local", "--unset", "core.bare"])
+            .await?;
+        // 5: the key was not set.
+        if !unset.ok() && unset.code != Some(5) {
+            return Err(failed("config", &unset));
+        }
+        self.git_ok(
+            bare,
+            &["config", "core.repositoryformatversion", "1"],
+            "config",
+        )
+        .await?;
+        self.git_ok(
+            bare,
+            &["config", "extensions.worktreeConfig", "true"],
+            "config",
+        )
+        .await?;
         Ok(())
     }
 
@@ -895,6 +995,167 @@ impl Environments for GitRepos {
         std::fs::write(&tmp, format!("{base}\n")).map_err(|e| io("write_base", &e))?;
         std::fs::rename(&tmp, &base_file).map_err(|e| io("write_base", &e))?;
         Ok(prepared(base))
+    }
+
+    async fn prepare_docs(&self, request: &DocsRequest) -> PortResult<PreparedDocs> {
+        sha_arg(&request.commit, "commit")?;
+        project_path_arg(&request.project_path)?;
+        let lock = self.lock(request.repo.repo_id);
+        let _guard = lock.lock().await;
+        let root = self.env_root(request.environment_id);
+        let docs = root.join(DOCS_DIR);
+        let marker = root.join(DOCS_FILE);
+        let path = if request.project_path == "." {
+            docs.clone()
+        } else {
+            docs.join(&request.project_path)
+        };
+        let prepared = PreparedDocs {
+            worktree_path: docs.to_string_lossy().into_owned(),
+            path: path.to_string_lossy().into_owned(),
+            base_sha: request.commit.clone(),
+        };
+        if let Ok(done) = std::fs::read_to_string(&marker)
+            && done.trim() == request.commit
+            && docs.join(".git").exists()
+        {
+            return Ok(prepared);
+        }
+        let bare = self.mirror_path(request.repo.repo_id);
+        let object = format!("{}^{{commit}}", request.commit);
+        let present = async || -> PortResult<bool> {
+            if !bare.join("HEAD").is_file() {
+                return Ok(false);
+            }
+            let out = self
+                .cfg
+                .git
+                .local(&bare, &["cat-file", "-e", &object])
+                .await?;
+            Ok(out.ok())
+        };
+        if !present().await? {
+            self.fetch_locked(&request.repo).await?;
+            if !present().await? {
+                return Err(PortError::permanent(
+                    "docs_commit_missing",
+                    json!({ "commit": request.commit }),
+                ));
+            }
+        }
+        let mut list = vec!["ls-tree", "-r", "-l", "-z", request.commit.as_str()];
+        if request.project_path != "." {
+            list.extend(["--", request.project_path.as_str()]);
+        }
+        let listed = self
+            .cfg
+            .git
+            .local_with(
+                &bare,
+                &list,
+                Extra {
+                    env: &LITERAL_PATHS,
+                    input: None,
+                },
+            )
+            .await?;
+        if !listed.ok() {
+            return Err(failed("ls_tree", &listed));
+        }
+        let (files, bytes) = tree_entries(&listed)?
+            .iter()
+            .filter(|e| e.kind == EntryKind::Blob)
+            .fold((0u64, 0u64), |(n, b), e| (n + 1, b + e.bytes.unwrap_or(0)));
+        if files > DOCS_MAX_FILES || bytes > DOCS_MAX_BYTES {
+            return Err(PortError::permanent(
+                "docs_checkout_too_large",
+                json!({
+                    "files": files,
+                    "bytes": bytes,
+                    "max_files": DOCS_MAX_FILES,
+                    "max_bytes": DOCS_MAX_BYTES,
+                }),
+            ));
+        }
+        let _ = std::fs::remove_file(&marker);
+        if docs.exists() && self.inside_envs(&docs) {
+            make_dirs_writable(&docs).map_err(|e| io("make_writable", &e))?;
+        }
+        self.remove_worktree(&bare, &docs).await?;
+        std::fs::create_dir_all(&root).map_err(|e| io("create_env_root", &e))?;
+        let wt = docs.to_string_lossy();
+        self.git_ok(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                "--no-checkout",
+                &wt,
+                &request.commit,
+            ],
+            "worktree_add",
+        )
+        .await?;
+        if request.project_path != "." {
+            self.enable_worktree_config(&bare).await?;
+            self.git_ok(
+                &docs,
+                &["sparse-checkout", "init", "--cone"],
+                "sparse_checkout",
+            )
+            .await?;
+            let cone = format!("{}\n", request.project_path);
+            let out = self
+                .cfg
+                .git
+                .local_with(
+                    &docs,
+                    &["sparse-checkout", "set", "--stdin"],
+                    Extra {
+                        env: &[],
+                        input: Some(cone.as_bytes()),
+                    },
+                )
+                .await?;
+            if !out.ok() {
+                return Err(failed("sparse_checkout", &out));
+            }
+        }
+        self.git_ok(
+            &docs,
+            &["checkout", "--quiet", "--detach", &request.commit],
+            "checkout",
+        )
+        .await?;
+        set_tree_modes(&docs, |_| 0o444, |_| 0o555).map_err(|e| io("make_read_only", &e))?;
+        // Written last: a checkout without it is unfinished and is made again.
+        let tmp = root.join(format!("{DOCS_FILE}.tmp"));
+        std::fs::write(&tmp, format!("{}\n", request.commit)).map_err(|e| io("write_docs", &e))?;
+        std::fs::rename(&tmp, &marker).map_err(|e| io("write_docs", &e))?;
+        Ok(prepared)
+    }
+
+    async fn teardown_docs(&self, environment_id: EnvironmentId, repo: &RepoRef) -> PortResult<()> {
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        let root = self.env_root(environment_id);
+        let docs = root.join(DOCS_DIR);
+        if docs.exists() && self.inside_envs(&docs) {
+            set_tree_modes(&docs, |m| m | 0o200, |m| m | 0o700)
+                .map_err(|e| io("make_writable", &e))?;
+        }
+        let bare = self.mirror_path(repo.repo_id);
+        if bare.join("HEAD").is_file() {
+            self.remove_worktree(&bare, &docs).await?;
+        } else if docs.exists() && self.inside_envs(&docs) {
+            std::fs::remove_dir_all(&docs).map_err(|e| io("remove_docs", &e))?;
+        }
+        match std::fs::remove_file(root.join(DOCS_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io("remove_docs", &e)),
+            _ => Ok(()),
+        }
     }
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState> {

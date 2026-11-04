@@ -493,6 +493,7 @@ pub(crate) fn environment(row: &Row<'_>) -> Result<Environment> {
         recipe_sha256: row.get("recipe_sha256")?,
         toolchains: json(row, "toolchains_json")?,
         path_scope: json(row, "path_scope_json")?,
+        docs: opt_json(row, "docs_json")?,
     })
 }
 

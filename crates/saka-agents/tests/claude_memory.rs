@@ -93,6 +93,7 @@ impl Fixture {
             model: None,
             resume: None,
             author: &saka(),
+            add_dirs: &[],
         };
         launch::claude(&settings, &program, "conformance", &paths, vec![], &options).unwrap()
     }

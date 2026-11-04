@@ -16,8 +16,9 @@ use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    Blob, Checkout, EnvRef, Environments, GitAccess, GitRemote, PortResult, PrepareRequest,
-    PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef, Repos, UnitLimits, WorktreeFile,
+    Blob, Checkout, DocsRequest, EnvRef, Environments, GitAccess, GitRemote, PortResult,
+    PrepareRequest, PreparedDocs, PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef,
+    Repos, UnitLimits, WorktreeFile,
 };
 use uuid::Uuid;
 
@@ -206,7 +207,33 @@ impl World {
             vars: std::collections::BTreeMap::from([("APP_ENV".to_string(), "test".to_string())]),
             path_prefix: vec!["/opt/toolchains/node/bin".into()],
             secrets: Vec::new(),
+            extra_dirs: Vec::new(),
         }
+    }
+
+    fn docs_repo(&self) -> RepoRef {
+        RepoRef {
+            repo_id: RepoId(Uuid::from_u128(2)),
+            integration_id: "github".into(),
+            full_name: "acme/docs".into(),
+            url: "https://scm.invalid/acme/docs".into(),
+        }
+    }
+
+    async fn prepare_docs(
+        &self,
+        env: &EnvRef,
+        commit: &str,
+        project_path: &str,
+    ) -> PortResult<PreparedDocs> {
+        self.repos
+            .prepare_docs(&DocsRequest {
+                environment_id: env.environment_id,
+                repo: self.docs_repo(),
+                commit: commit.into(),
+                project_path: project_path.into(),
+            })
+            .await
     }
 
     async fn run(
@@ -1065,4 +1092,162 @@ async fn more_than_ten_thousand_changed_paths_are_cut_and_marked_truncated() {
     assert!(changed.truncated);
     assert_eq!(changed.paths.len(), saka_core::scope::MAX_CHANGED_PATHS);
     assert_eq!(changed.paths[0], "many/00000");
+}
+
+fn mode(path: &Path) -> u32 {
+    std::fs::symlink_metadata(path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+fn docs_layout(w: &World) -> String {
+    std::fs::create_dir_all(w.other.join("docs/specs")).unwrap();
+    std::fs::create_dir_all(w.other.join("other")).unwrap();
+    std::fs::write(w.other.join("other/x.md"), "other\n").unwrap();
+    std::fs::write(w.other.join("docs/specs/a.md"), "pinned\n").unwrap();
+    let pinned = commit(&w.other, "docs/README.md", "docs\n");
+    commit(&w.other, "docs/specs/a.md", "later\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    pinned
+}
+
+#[tokio::test]
+async fn the_docs_checkout_holds_only_the_project_folder_at_the_pinned_commit_and_is_read_only() {
+    let w = World::new();
+    let pinned = docs_layout(&w);
+    let env = w.prepare(1).await;
+    let docs = w.prepare_docs(&env, &pinned, "docs").await.unwrap();
+    let root = PathBuf::from(&env.root_path);
+    assert_eq!(PathBuf::from(&docs.worktree_path), root.join("docs"));
+    assert_eq!(PathBuf::from(&docs.path), root.join("docs/docs"));
+    assert_eq!(docs.base_sha, pinned);
+    let dir = PathBuf::from(&docs.path);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("specs/a.md")).unwrap(),
+        "pinned\n"
+    );
+    assert!(!root.join("docs/other").exists());
+    assert_eq!(git(&root.join("docs"), &["rev-parse", "HEAD"]), pinned);
+    for file in ["specs/a.md", "README.md"] {
+        assert_eq!(mode(&dir.join(file)), 0o444, "{file}");
+    }
+    for d in [&root.join("docs"), &dir, &dir.join("specs")] {
+        assert_eq!(mode(d), 0o555, "{}", d.display());
+    }
+    assert!(std::fs::write(dir.join("specs/a.md"), "x").is_err());
+    assert!(std::fs::write(dir.join("specs/new.md"), "x").is_err());
+
+    std::fs::write(&w.log, "").unwrap();
+    let again = w.prepare_docs(&env, &pinned, "docs").await.unwrap();
+    assert_eq!(again, docs);
+    assert!(!w.log().contains("worktree add"), "{}", w.log());
+
+    let bare = w.repos.mirror_path(w.docs_repo().repo_id);
+    w.repos
+        .teardown_docs(env.environment_id, &w.docs_repo())
+        .await
+        .unwrap();
+    assert!(!root.join("docs").exists());
+    assert!(
+        !git(&bare, &["worktree", "list"]).contains(&docs.worktree_path),
+        "{}",
+        git(&bare, &["worktree", "list"])
+    );
+    w.repos
+        .teardown_docs(env.environment_id, &w.docs_repo())
+        .await
+        .unwrap();
+    assert!(Path::new(&env.worktree_path).join(".git").exists());
+    w.repos.teardown(&env).await.unwrap();
+    assert!(!root.exists());
+}
+
+#[tokio::test]
+async fn an_unfinished_docs_checkout_is_made_again_and_teardown_removes_it_with_the_environment() {
+    let w = World::new();
+    let pinned = docs_layout(&w);
+    let env = w.prepare(1).await;
+    let same_mirror = w
+        .repos
+        .prepare(&PrepareRequest {
+            environment_id: EnvironmentId(Uuid::from_u128(9)),
+            repo: w.docs_repo(),
+            checkout: Checkout::Branch(BRANCH.into()),
+            base_branch: "main".into(),
+        })
+        .await
+        .unwrap();
+    let docs = w.prepare_docs(&env, &pinned, "docs").await.unwrap();
+    let code = PathBuf::from(&same_mirror.worktree_path);
+    assert_eq!(git(&code, &["rev-parse", "--is-bare-repository"]), "false");
+    assert_eq!(git(&code, &["status", "--porcelain"]), "");
+    assert!(code.join("other/x.md").exists(), "no sparse patterns leak");
+    let bare = w.repos.mirror_path(w.docs_repo().repo_id);
+    assert_eq!(git(&bare, &["rev-parse", "--is-bare-repository"]), "true");
+    std::fs::remove_file(Path::new(&env.root_path).join("docs-sha")).unwrap();
+    let again = w.prepare_docs(&env, &pinned, "docs").await.unwrap();
+    assert_eq!(again, docs);
+    assert_eq!(mode(Path::new(&docs.path)), 0o555);
+    w.repos
+        .teardown_docs(env.environment_id, &w.docs_repo())
+        .await
+        .unwrap();
+    w.repos.teardown(&env).await.unwrap();
+    assert!(!Path::new(&env.root_path).exists());
+}
+
+#[tokio::test]
+async fn a_docs_checkout_of_the_whole_repo_and_its_refusals() {
+    let w = World::new();
+    let pinned = docs_layout(&w);
+    let env = w.prepare(1).await;
+    let whole = w.prepare_docs(&env, &pinned, ".").await.unwrap();
+    assert_eq!(whole.path, whole.worktree_path);
+    let dir = PathBuf::from(&whole.path);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("other/x.md")).unwrap(),
+        "other\n"
+    );
+    assert!(dir.join("README.md").exists());
+    w.repos
+        .teardown_docs(env.environment_id, &w.docs_repo())
+        .await
+        .unwrap();
+
+    std::fs::write(&w.log, "").unwrap();
+    let missing = w
+        .prepare_docs(&env, &"1".repeat(40), "docs")
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "docs_commit_missing");
+    assert!(!missing.retryable);
+    assert_eq!(missing.params["commit"], "1".repeat(40));
+    assert!(w.log().contains("fetch"), "{}", w.log());
+
+    for bad in ["", "../x", "/abs", "-x", "docs/"] {
+        let refused = w.prepare_docs(&env, &pinned, bad).await.unwrap_err();
+        assert_eq!(refused.code, "git_argument_invalid", "{bad:?}");
+    }
+
+    let many = w.other.join("docs/many");
+    std::fs::create_dir_all(&many).unwrap();
+    for i in 0..=saka_ports::DOCS_MAX_FILES {
+        std::fs::write(many.join(format!("{i}.md")), "").unwrap();
+    }
+    let big = commit(&w.other, "docs/specs/a.md", "big\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    let too_large = w.prepare_docs(&env, &big, "docs").await.unwrap_err();
+    assert_eq!(too_large.code, "docs_checkout_too_large");
+    assert!(!too_large.retryable);
+    assert_eq!(
+        too_large.params["files"],
+        saka_ports::DOCS_MAX_FILES + 1 + 2
+    );
+    assert_eq!(too_large.params["max_files"], 20_000);
+    assert_eq!(too_large.params["max_bytes"], 268_435_456);
+    assert!(!Path::new(&env.root_path).join("docs").exists());
+    let other = w.prepare_docs(&env, &big, "other").await.unwrap();
+    assert!(Path::new(&other.path).join("x.md").exists());
 }

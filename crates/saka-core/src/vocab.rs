@@ -49,6 +49,7 @@ vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "int
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });
 vocab!(WorkflowPreset { FullLoop => "full_loop", ReviewOnly => "review_only", BuildOnly => "build_only", Custom => "custom" });
 vocab!(WorkItemOrigin { SpecStep => "spec_step", ExternalChange => "external_change" });
+vocab!(DocsMode { ReadOnly => "read_only", Writable => "writable" });
 vocab!(WorkItemState {
     Queued => "queued",
     AwaitingStart => "awaiting_start",

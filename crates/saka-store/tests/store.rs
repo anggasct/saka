@@ -1081,9 +1081,9 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
     assert_eq!(
         w.store.migration().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(16));
+    assert_eq!(w.store.schema_version().unwrap(), Some(17));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1494,7 +1494,7 @@ fn two_live_environments_never_hold_the_same_port_block() {
             root_path: "/e".into(),
             worktree_path: "/e/w".into(),
             base_sha: sha('a'),
-            setup: saka_core::model::EnvironmentSetup {
+            setup: Box::new(saka_core::model::EnvironmentSetup {
                 port_start: Some(41000),
                 port_count: Some(10),
                 recipe: Some(json!({ "ports": 3, "env": {}, "setup": [], "teardown": [] })),
@@ -1508,7 +1508,17 @@ fn two_live_environments_never_hold_the_same_port_block() {
                     downloaded: true,
                 }],
                 path_scope: vec!["services/api/**".into(), "docs/**".into()],
-            },
+                docs: Some(saka_core::model::DocsCheckout {
+                    repo_id: saka_core::ids::RepoId(Uuid::from_u128(77)),
+                    full_name: "acme/docs".into(),
+                    commit: sha('c'),
+                    project_path: "docs".into(),
+                    path: "/e/docs/docs".into(),
+                    mode: saka_core::vocab::DocsMode::ReadOnly,
+                    branch: None,
+                    base_sha: sha('c'),
+                }),
+            }),
         },
     );
     let env = w
@@ -1522,6 +1532,15 @@ fn two_live_environments_never_hold_the_same_port_block() {
     assert_eq!(env.recipe.unwrap()["ports"], json!(3));
     assert_eq!(env.toolchains[0].version, "26.13.0");
     assert_eq!(env.path_scope, ["services/api/**", "docs/**"]);
+    let docs = env.docs.clone().unwrap();
+    assert_eq!(
+        (docs.path.as_str(), docs.mode, docs.commit.as_str()),
+        (
+            "/e/docs/docs",
+            saka_core::vocab::DocsMode::ReadOnly,
+            sha('c').as_str()
+        )
+    );
     assert!(
         !env.toolchains[0].downloaded,
         "a download is a fact of the event, not of the row"
