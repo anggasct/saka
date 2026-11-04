@@ -203,3 +203,30 @@ describe("live timeline", () => {
     expect(requests.map((r) => r.search.get("after"))).toEqual(["2"]);
   });
 });
+
+describe("settings events", () => {
+  it("refreshes secrets and authorship for project events, and account links for link events", () => {
+    const fake = fakeStream();
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    startEventStream(client, () => fake.stream);
+    const roots = () =>
+      invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    fake.emit("workspace.secret.set.v1", { seq: 1, stream_type: "project" });
+    expect(roots()).toEqual([
+      ["projects"],
+      ["docs"],
+      ["secrets"],
+      ["authorship"],
+    ]);
+    invalidate.mockClear();
+    fake.emit("scm.user_link.linked.v1", { seq: 2, stream_type: "user_link" });
+    expect(roots()).toEqual([["user-links"], ["authorship"]]);
+    invalidate.mockClear();
+    fake.emit("scm.user_link.authorization_ended.v1", {
+      seq: 3,
+      stream_type: "user_link_authorization",
+    });
+    expect(roots()).toEqual([["user-links"]]);
+  });
+});

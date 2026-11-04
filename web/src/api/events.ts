@@ -9,6 +9,15 @@ import type { components } from "./schema";
 export const EVENT_KINDS = [
   "workspace.repo.registered",
   "workspace.project.registered",
+  "workspace.project.config_changed",
+  "workspace.project.config_rejected",
+  "workspace.project.config_error_cleared",
+  "workspace.project.authorship_set",
+  "workspace.project.user_token_set",
+  "workspace.project.user_token_removed",
+  "workspace.project.user_token_invalidated",
+  "workspace.secret.set",
+  "workspace.secret.removed",
   "workspace.doc.committed",
   "spec.spec.registered",
   "spec.revision.recorded",
@@ -66,6 +75,13 @@ export const EVENT_KINDS = [
   "scm.change_request.updated",
   "scm.change_request.merged",
   "scm.change_request.closed",
+  "scm.user_link.authorization_started",
+  "scm.user_link.authorization_slowed",
+  "scm.user_link.authorization_ended",
+  "scm.user_link.linked",
+  "scm.user_link.refreshed",
+  "scm.user_link.relink_required",
+  "scm.user_link.removed",
   "engine.job.exhausted",
 ] as const;
 
@@ -78,11 +94,22 @@ export const QUERY_ROOTS = {
   timeline: "timeline",
   docs: "docs",
   specDrafts: "spec-drafts",
+  secrets: "secrets",
+  authorship: "authorship",
+  userLinks: "user-links",
+  diagnostics: "diagnostics",
 } as const;
 
 const AFFECTS: Record<string, readonly string[]> = {
   repo: [QUERY_ROOTS.projects],
-  project: [QUERY_ROOTS.projects, QUERY_ROOTS.docs],
+  project: [
+    QUERY_ROOTS.projects,
+    QUERY_ROOTS.docs,
+    QUERY_ROOTS.secrets,
+    QUERY_ROOTS.authorship,
+  ],
+  user_link: [QUERY_ROOTS.userLinks, QUERY_ROOTS.authorship],
+  user_link_authorization: [QUERY_ROOTS.userLinks],
   spec: [QUERY_ROOTS.specs],
   work_item: [QUERY_ROOTS.workItems, QUERY_ROOTS.specs],
   spec_draft: [QUERY_ROOTS.specDrafts, QUERY_ROOTS.specs],

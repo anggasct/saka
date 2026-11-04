@@ -13,6 +13,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
+import { Route as SettingsIndexRouteImport } from './routes/settings.index'
+import { Route as SettingsProjectIdRouteImport } from './routes/settings.$projectId'
 import { Route as DeliveryTasksWorkItemIdRouteImport } from './routes/delivery.tasks.$workItemId'
 import { Route as DocsProjectIdDraftsIndexRouteImport } from './routes/docs.$projectId_.drafts.index'
 import { Route as DocsProjectIdDraftsDraftIdRouteImport } from './routes/docs.$projectId_.drafts.$draftId'
@@ -37,6 +39,16 @@ const DocsProjectIdRoute = DocsProjectIdRouteImport.update({
   path: '/docs/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsProjectIdRoute = SettingsProjectIdRouteImport.update({
+  id: '/settings/$projectId',
+  path: '/settings/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeliveryTasksWorkItemIdRoute = DeliveryTasksWorkItemIdRouteImport.update({
   id: '/delivery/tasks/$workItemId',
   path: '/delivery/tasks/$workItemId',
@@ -58,8 +70,10 @@ const DocsProjectIdDraftsDraftIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
+  '/settings/$projectId': typeof SettingsProjectIdRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
   '/docs/$projectId/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
   '/docs/$projectId/drafts/': typeof DocsProjectIdDraftsIndexRoute
@@ -67,8 +81,10 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
+  '/settings/$projectId': typeof SettingsProjectIdRoute
   '/delivery': typeof DeliveryIndexRoute
   '/docs': typeof DocsIndexRoute
+  '/settings': typeof SettingsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
   '/docs/$projectId/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
   '/docs/$projectId/drafts': typeof DocsProjectIdDraftsIndexRoute
@@ -77,8 +93,10 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
+  '/settings/$projectId': typeof SettingsProjectIdRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
   '/docs/$projectId_/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
   '/docs/$projectId_/drafts/': typeof DocsProjectIdDraftsIndexRoute
@@ -88,8 +106,10 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/docs/$projectId'
+    | '/settings/$projectId'
     | '/delivery/'
     | '/docs/'
+    | '/settings/'
     | '/delivery/tasks/$workItemId'
     | '/docs/$projectId/drafts/$draftId'
     | '/docs/$projectId/drafts/'
@@ -97,8 +117,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/docs/$projectId'
+    | '/settings/$projectId'
     | '/delivery'
     | '/docs'
+    | '/settings'
     | '/delivery/tasks/$workItemId'
     | '/docs/$projectId/drafts/$draftId'
     | '/docs/$projectId/drafts'
@@ -106,8 +128,10 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/docs/$projectId'
+    | '/settings/$projectId'
     | '/delivery/'
     | '/docs/'
+    | '/settings/'
     | '/delivery/tasks/$workItemId'
     | '/docs/$projectId_/drafts/$draftId'
     | '/docs/$projectId_/drafts/'
@@ -116,8 +140,10 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DocsProjectIdRoute: typeof DocsProjectIdRoute
+  SettingsProjectIdRoute: typeof SettingsProjectIdRoute
   DeliveryIndexRoute: typeof DeliveryIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
+  SettingsIndexRoute: typeof SettingsIndexRoute
   DeliveryTasksWorkItemIdRoute: typeof DeliveryTasksWorkItemIdRoute
   DocsProjectIdDraftsDraftIdRoute: typeof DocsProjectIdDraftsDraftIdRoute
   DocsProjectIdDraftsIndexRoute: typeof DocsProjectIdDraftsIndexRoute
@@ -153,6 +179,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/': {
+      id: '/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/$projectId': {
+      id: '/settings/$projectId'
+      path: '/settings/$projectId'
+      fullPath: '/settings/$projectId'
+      preLoaderRoute: typeof SettingsProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/delivery/tasks/$workItemId': {
       id: '/delivery/tasks/$workItemId'
       path: '/delivery/tasks/$workItemId'
@@ -180,8 +220,10 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DocsProjectIdRoute: DocsProjectIdRoute,
+  SettingsProjectIdRoute: SettingsProjectIdRoute,
   DeliveryIndexRoute: DeliveryIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
+  SettingsIndexRoute: SettingsIndexRoute,
   DeliveryTasksWorkItemIdRoute: DeliveryTasksWorkItemIdRoute,
   DocsProjectIdDraftsDraftIdRoute: DocsProjectIdDraftsDraftIdRoute,
   DocsProjectIdDraftsIndexRoute: DocsProjectIdDraftsIndexRoute,

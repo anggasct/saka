@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+
 import { useT } from "@/i18n/use-t";
 import { Card } from "@/ui/card";
 import { Skeleton } from "@/ui/skeleton";
@@ -29,6 +31,13 @@ export function ProjectSection({
             branch: project.workspace.base_branch,
           })}
         </p>
+        <Link
+          to="/settings/$projectId"
+          params={{ projectId: project.id }}
+          className="inline-flex min-h-11 items-center text-sm font-medium text-primary underline underline-offset-4"
+        >
+          {t("project.settings")}
+        </Link>
       </header>
       {specs.length === 0 ? (
         <p className="border-t border-border p-4 text-sm text-muted-foreground">
