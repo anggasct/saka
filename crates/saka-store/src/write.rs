@@ -147,6 +147,9 @@ pub struct Batch {
     pub removed_secrets: Vec<(ProjectId, String)>,
     pub webhook_deliveries: Vec<WebhookDeliveryRow>,
     pub prune_webhook_deliveries_before: Option<Timestamp>,
+    pub user_link_authorizations: Vec<crate::user_link::AuthorizationRow>,
+    pub user_links: Vec<crate::user_link::UserLinkRow>,
+    pub removed_user_links: Vec<saka_core::ids::UserLinkId>,
 }
 
 impl Batch {
@@ -225,6 +228,15 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
                 s.updated_at.0,
             ],
         )?;
+    }
+    for a in &b.user_link_authorizations {
+        crate::user_link::write_authorization(tx, a)?;
+    }
+    for id in &b.removed_user_links {
+        crate::user_link::remove_link(tx, *id)?;
+    }
+    for l in &b.user_links {
+        crate::user_link::write_link(tx, l)?;
     }
     for (project, name) in &b.removed_secrets {
         tx.execute(

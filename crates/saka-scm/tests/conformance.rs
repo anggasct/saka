@@ -116,6 +116,7 @@ impl Harness for GitHubHarness {
             draft_change_requests: true,
             delete_branch_after_merge: true,
             commit_status: true,
+            user_authorship: true,
         }
     }
 

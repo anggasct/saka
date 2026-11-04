@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use saka_core::gate::Check;
 use saka_core::ids::RepoId;
+use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{ChangeState, MergeMethod};
+use saka_core::vocab::{AuthorizationFailure, ChangeState, MergeMethod};
 
 use crate::PortResult;
 
@@ -113,6 +114,67 @@ pub trait Scm: Send + Sync {
         headers: &[(String, String)],
         body: &[u8],
     ) -> PortResult<WebhookDelivery>;
+
+    fn device_flow_configured(&self, integration_id: &str) -> PortResult<bool>;
+
+    async fn start_device_flow(&self, integration_id: &str) -> PortResult<DeviceCode>;
+
+    async fn poll_device_flow(
+        &self,
+        integration_id: &str,
+        device_code: &SecretText,
+    ) -> PortResult<DevicePoll>;
+
+    async fn refresh_user_token(
+        &self,
+        integration_id: &str,
+        refresh_token: &SecretText,
+    ) -> PortResult<TokenRefresh>;
+
+    async fn user_identity(
+        &self,
+        integration_id: &str,
+        token: &SecretText,
+    ) -> PortResult<IdentityLookup>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceCode {
+    pub device_code: SecretText,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in_secs: u64,
+    pub interval_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserTokens {
+    pub access_token: SecretText,
+    pub expires_in_secs: Option<u64>,
+    pub refresh_token: Option<SecretText>,
+    pub refresh_expires_in_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevicePoll {
+    Pending,
+    SlowDown { interval_secs: Option<u64> },
+    Expired,
+    Denied,
+    Failed { code: AuthorizationFailure },
+    Token(UserTokens),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenRefresh {
+    Refreshed(UserTokens),
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentityLookup {
+    Found(saka_core::authorship::Identity),
+    Rejected { status: u16 },
 }
 
 pub const MAX_WEBHOOK_TARGETS: usize = 100;
@@ -164,6 +226,7 @@ pub struct ScmCapabilities {
     pub draft_change_requests: bool,
     pub delete_branch_after_merge: bool,
     pub commit_status: bool,
+    pub user_authorship: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

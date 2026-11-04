@@ -745,6 +745,8 @@ impl Engine {
             | K::EnvVerifyMerged
             | K::ScmWebhookPrune
             | K::WorkspaceReloadConfig
+            | K::ScmUserLinkPoll
+            | K::ScmUserLinkRefresh
             | K::GateVerify
             | K::ScmReportStatus
             | K::ScmPollCommit

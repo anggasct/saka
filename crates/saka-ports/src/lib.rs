@@ -29,9 +29,10 @@ pub use git::{
     Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,
 };
 pub use scm::{
-    ChangeSnapshot, MAX_WEBHOOK_TARGETS, MergeOutcome, MergeRequest, OpenChangeRequest,
-    OpenedChange, PushOutcome, PushRequest, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport,
-    StatusState, WebhookDelivery, WebhookSignature, WebhookTarget,
+    ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup, MAX_WEBHOOK_TARGETS, MergeOutcome,
+    MergeRequest, OpenChangeRequest, OpenedChange, PushOutcome, PushRequest, RepoInfo, RepoRef,
+    Scm, ScmCapabilities, StatusReport, StatusState, TokenRefresh, UserTokens, WebhookDelivery,
+    WebhookSignature, WebhookTarget,
 };
 pub use secret::{Sealed, SecretStore};
 pub use supervisor::{

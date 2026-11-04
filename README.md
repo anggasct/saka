@@ -72,6 +72,8 @@ Saka retries some blockers by itself, at most twice per stage, after 1 and then 
 
 Configuration lives in `$XDG_CONFIG_HOME/saka/config.toml` (or the file named by `SAKA_CONFIG`); [`docs/config.example.toml`](docs/config.example.toml) lists every field with its default. Saka needs a GitHub App installed on the repository (see [End-to-end run](#end-to-end-run) for the permissions) and a Claude Code account directory that is already logged in.
 
+Linking your GitHub account to an integration lets Saka author agent work as you. In the GitHub App settings, turn on **Enable Device Flow** and keep user-token expiration on. Then copy the App's **Client ID** (not the App ID) into `[[scm]] client_id`. `saka scm link` prints a code to enter at `https://github.com/login/device` and waits until you approve. `saka scm status` shows the linked login and when its refresh token expires, and `saka scm unlink` removes the link. Saka stores the short-lived user tokens encrypted and refreshes them without a client secret. To revoke them, use GitHub's settings → Applications. `saka_user_link_authorizations_total{integration,state}` and `saka_user_link_refresh_total{integration,outcome}` count link attempts and token refreshes. `[git] name` and `email` are Saka's own identity, the author and committer of agent commits.
+
 ## Development
 
 | Path | Contents |

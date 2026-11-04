@@ -136,6 +136,10 @@ fn hide_input() -> Option<rustix::termios::Termios> {
     Some(saved)
 }
 
+pub fn refuse(code: &str, params: &Value) {
+    err(&format!("error: {code} {params}"));
+}
+
 fn fail(a: &Answer) -> ExitCode {
     let code = a.body["code"].as_str().unwrap_or("error");
     err(&format!("error: {code} {}", a.body["params"]));
@@ -334,6 +338,105 @@ impl Client {
             .await
         {
             Ok(a) => self.finish(&a, |_| format!("secret {name} removed")),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn scm_link(&self, integration: &str, wait: bool) -> ExitCode {
+        let base = format!("/api/v1/scm/{integration}/user-link/authorizations");
+        let mut current = match self.post(&base, &json!({}), None).await {
+            Ok(a) if a.ok() => a.body,
+            Ok(a) => {
+                if self.json {
+                    out(&a.body.to_string());
+                }
+                return fail(&a);
+            }
+            Err(code) => return code,
+        };
+        let prompt = format!(
+            "Open {} and enter {}",
+            text(&current["verification_uri"]),
+            text(&current["user_code"])
+        );
+        if !wait {
+            if self.json {
+                out(&current.to_string());
+            } else {
+                out(&prompt);
+            }
+            return ExitCode::SUCCESS;
+        }
+        if self.json {
+            err(&prompt);
+        } else {
+            out(&prompt);
+        }
+        let id = text(&current["id"]);
+        while current["state"] == "pending" {
+            let secs = current["interval_secs"].as_u64().unwrap_or(5).max(1);
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+            current = match self.get(&format!("{base}/{id}")).await {
+                Ok(a) if a.ok() => a.body,
+                Ok(a) => return fail(&a),
+                Err(code) => return code,
+            };
+        }
+        if self.json {
+            out(&current.to_string());
+        }
+        match text(&current["state"]).as_str() {
+            "completed" => {
+                if !self.json {
+                    out(&format!("linked {}", text(&current["link"]["login"])));
+                }
+                ExitCode::SUCCESS
+            }
+            "failed" => {
+                refuse(
+                    &text(&current["failure"]["code"]),
+                    &current["failure"]["params"],
+                );
+                ExitCode::FAILURE
+            }
+            state => {
+                refuse(state, &json!({}));
+                ExitCode::FAILURE
+            }
+        }
+    }
+
+    pub async fn scm_status(&self, integration: &str) -> ExitCode {
+        match self
+            .get(&format!("/api/v1/scm/{integration}/user-link"))
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                let cause = b["relink_cause"]
+                    .as_str()
+                    .map_or(String::new(), |c| format!(" ({c})"));
+                format!(
+                    "{}{cause} {} refresh_expires_at {}",
+                    text(&b["state"]),
+                    text(&b["login"]),
+                    text(&b["refresh_expires_at"])
+                )
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn scm_unlink(&self, integration: &str) -> ExitCode {
+        let path = format!("/api/v1/scm/{integration}/user-link");
+        match self.keyed(reqwest::Method::DELETE, &path, None).await {
+            Ok(a) if a.ok() => self.done(&a, |_| format!("unlinked {integration}")),
+            Ok(a) => {
+                if self.json {
+                    out(&a.body.to_string());
+                }
+                fail(&a);
+                ExitCode::FAILURE
+            }
             Err(code) => code,
         }
     }

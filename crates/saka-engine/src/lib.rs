@@ -1,3 +1,4 @@
+mod accounts;
 mod action;
 mod commands;
 mod context;
@@ -41,6 +42,7 @@ use saka_store::{Batch, EventRecord, JobOutcome, NewJob, Store, StoreError};
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
+pub use accounts::{AuthorizationView, LinkCredential};
 pub use action::{Action, Produced, Reply, Respond, StoredAction};
 pub use commands::{NewBinding, NewProject, NewRepo, RegisteredSpec, SessionCommand};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
@@ -168,6 +170,7 @@ pub struct Engine {
     counters: metrics::Counters,
     boot: Uuid,
     ports_in_flight: Mutex<std::collections::BTreeMap<saka_core::ids::EnvironmentId, u16>>,
+    accounts: accounts::Accounts,
 }
 
 impl Engine {
@@ -182,6 +185,7 @@ impl Engine {
             changed: Notify::new(),
             counters: metrics::Counters::default(),
             ports_in_flight: Mutex::new(std::collections::BTreeMap::new()),
+            accounts: accounts::Accounts::default(),
         }
     }
 

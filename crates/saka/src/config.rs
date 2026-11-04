@@ -241,6 +241,8 @@ pub struct ScmEntry {
     pub merge_method: MergeMethod,
     #[serde(default)]
     pub webhook_secret_file: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 fn github_api() -> String {
@@ -461,26 +463,45 @@ fn one() -> u32 {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Git {
-    #[serde(default = "author_name")]
-    pub author_name: String,
-    #[serde(default = "author_email")]
-    pub author_email: String,
+    #[serde(default = "git_name")]
+    pub name: String,
+    #[serde(default = "git_email")]
+    pub email: String,
 }
 
 impl Default for Git {
     fn default() -> Git {
         Git {
-            author_name: author_name(),
-            author_email: author_email(),
+            name: git_name(),
+            email: git_email(),
         }
     }
 }
 
-fn author_name() -> String {
+fn git_name() -> String {
     "Saka Agent".into()
 }
-fn author_email() -> String {
+fn git_email() -> String {
     "agent@saka.invalid".into()
+}
+
+fn client_id_ok(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+// The identity ends up in a git author/committer header, where angle brackets and line breaks
+// would end the field early.
+fn git_name_ok(name: &str) -> bool {
+    (1..=255).contains(&name.len()) && !name.contains(['<', '>', '\n', '\r'])
+}
+
+fn git_email_ok(email: &str) -> bool {
+    (3..=254).contains(&email.len())
+        && email.matches('@').count() == 1
+        && !email.contains(['<', '>', '\n', '\r'])
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -612,6 +633,24 @@ impl Config {
                     "scm.web_url and scm.api_url must be https",
                 ));
             }
+            if s.client_id.as_deref().is_some_and(|id| !client_id_ok(id)) {
+                return Err(err(
+                    "config_invalid",
+                    "scm.client_id must be 1 to 64 characters of A-Z, a-z, 0-9, '.', '_' or '-'",
+                ));
+            }
+        }
+        if !git_name_ok(&self.git.name) {
+            return Err(err(
+                "config_invalid",
+                "git.name must be 1 to 255 bytes without '<', '>' or a line break",
+            ));
+        }
+        if !git_email_ok(&self.git.email) {
+            return Err(err(
+                "config_invalid",
+                "git.email must be 3 to 254 bytes with exactly one '@'",
+            ));
         }
         let mut rule_ids = std::collections::BTreeSet::new();
         for r in &self.permission.rule {
@@ -1023,5 +1062,58 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        assert_eq!(
+            cfg.scm[0].client_id.as_deref(),
+            Some("Iv23liAbCdEfGh123456")
+        );
+        assert_eq!(
+            (cfg.git.name.as_str(), cfg.git.email.as_str()),
+            ("Saka Agent", "agent@saka.invalid")
+        );
+    }
+
+    #[test]
+    fn the_client_id_and_the_git_identity_are_checked() {
+        let scm = |extra: &str| {
+            format!(
+                "[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\n{extra}"
+            )
+        };
+        let cfg = Config::parse(&scm("client_id = \"Iv1.abc_DEF-9\"\n")).unwrap();
+        assert_eq!(cfg.scm[0].client_id.as_deref(), Some("Iv1.abc_DEF-9"));
+        assert_eq!(Config::parse(&scm("")).unwrap().scm[0].client_id, None);
+        let long = "a".repeat(65);
+        for bad in ["", "Iv1 abc", "Iv1/abc", long.as_str()] {
+            let e = Config::parse(&scm(&format!("client_id = {bad:?}\n"))).unwrap_err();
+            assert_eq!(e.code, "config_invalid", "{bad}");
+            assert!(e.detail.starts_with("scm.client_id"), "{}", e.detail);
+        }
+        let git = Config::parse("[git]\nname = \"Ann\"\nemail = \"ann@example.test\"\n").unwrap();
+        assert_eq!(
+            (git.git.name.as_str(), git.git.email.as_str()),
+            ("Ann", "ann@example.test")
+        );
+        for bad in [
+            "[git]\nname = \"\"\n",
+            "[git]\nname = \"Ann <a@b>\"\n",
+            "[git]\nname = \"Ann\\nEve\"\n",
+            "[git]\nemail = \"no-at.example\"\n",
+            "[git]\nemail = \"a@b@c\"\n",
+            "[git]\nemail = \"a@\"\n",
+        ] {
+            let e = Config::parse(bad).unwrap_err();
+            assert_eq!(e.code, "config_invalid", "{bad}");
+            assert!(e.detail.starts_with("git."), "{}", e.detail);
+        }
+        for old in [
+            "[git]\nauthor_name = \"Saka Agent\"\n",
+            "[git]\nauthor_email = \"agent@saka.invalid\"\n",
+        ] {
+            assert_eq!(
+                Config::parse(old).unwrap_err().code,
+                "config_unknown_field",
+                "{old}"
+            );
+        }
     }
 }

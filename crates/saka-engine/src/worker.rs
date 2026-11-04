@@ -301,6 +301,12 @@ impl Engine {
         if job.kind == JobKind::WorkspaceReloadConfig {
             return self.reload_job(job).await;
         }
+        if job.kind == JobKind::ScmUserLinkPoll {
+            return self.user_link_poll_job(job).await;
+        }
+        if job.kind == JobKind::ScmUserLinkRefresh {
+            return self.user_link_refresh_job(job).await;
+        }
         let id = match saka_core::job::owner_of(&job.payload) {
             Some(RunOwner::StageRun { work_item_id, .. }) => work_item_id,
             Some(RunOwner::DraftAttempt {
@@ -354,9 +360,11 @@ impl Engine {
             }
             JobKind::ScmReportStatus => self.report_status(&task, p).await,
             JobKind::ScmPollCommit => self.poll_commit(&task, field(p, "sha")?).await,
-            JobKind::DraftLint | JobKind::DraftCommit | JobKind::WorkspaceReloadConfig => {
-                Ok(Effect::Skipped)
-            }
+            JobKind::DraftLint
+            | JobKind::DraftCommit
+            | JobKind::WorkspaceReloadConfig
+            | JobKind::ScmUserLinkPoll
+            | JobKind::ScmUserLinkRefresh => Ok(Effect::Skipped),
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;

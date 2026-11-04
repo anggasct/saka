@@ -30,6 +30,7 @@ pub struct GitHubConfig {
     pub app_id: u64,
     pub private_key_file: PathBuf,
     pub user_agent: String,
+    pub client_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,10 +40,10 @@ struct CachedToken {
 }
 
 pub struct GitHubApp {
-    cfg: GitHubConfig,
+    pub(super) cfg: GitHubConfig,
     api: Url,
-    http: reqwest::Client,
-    clock: Arc<dyn Clock>,
+    pub(super) http: reqwest::Client,
+    pub(super) clock: Arc<dyn Clock>,
     tokens: Mutex<HashMap<String, CachedToken>>,
 }
 
@@ -78,7 +79,7 @@ struct Claims {
     iss: String,
 }
 
-fn unavailable(status: Option<u16>, detail: &str) -> PortError {
+pub(super) fn unavailable(status: Option<u16>, detail: &str) -> PortError {
     PortError::retryable(
         "scm_unavailable",
         json!({ "status": status, "detail": detail }),
@@ -122,7 +123,7 @@ fn next_link(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-fn rate_limit_reset(headers: &HeaderMap, now: Timestamp) -> Option<Timestamp> {
+pub(super) fn rate_limit_reset(headers: &HeaderMap, now: Timestamp) -> Option<Timestamp> {
     let header = |name: &str| headers.get(name)?.to_str().ok()?.trim().parse::<i64>().ok();
     if let Some(secs) = headers
         .get(RETRY_AFTER)
@@ -143,9 +144,10 @@ pub(crate) fn parse_time(value: &Value) -> Option<Timestamp> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum As {
+pub(super) enum As {
     App,
     Installation,
+    User,
 }
 
 impl GitHubApp {
@@ -346,7 +348,7 @@ impl GitHubApp {
         Ok(all)
     }
 
-    async fn send(
+    pub(super) async fn send(
         &self,
         method: Method,
         url: Url,

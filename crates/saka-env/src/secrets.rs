@@ -6,8 +6,7 @@ use chacha20poly1305::aead::{Aead, Generate, Key, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use saka_core::ids::ProjectId;
-use saka_core::secret::{SecretText, aad};
+use saka_core::secret::{SecretScope, SecretText};
 use saka_ports::{PortError, PortResult, Sealed, SecretStore};
 use serde_json::json;
 use sha2::Sha256;
@@ -114,16 +113,16 @@ impl AeadSecrets {
     }
 }
 
-fn unreadable(name: &str) -> PortError {
-    PortError::permanent("secret_unreadable", json!({ "name": name }))
+fn unreadable(scope: &SecretScope<'_>) -> PortError {
+    PortError::permanent("secret_unreadable", json!({ "name": scope.label() }))
 }
 
 impl SecretStore for AeadSecrets {
-    fn seal(&self, project: ProjectId, name: &str, value: &SecretText) -> PortResult<Sealed> {
+    fn seal(&self, scope: &SecretScope<'_>, value: &SecretText) -> PortResult<Sealed> {
         let nonce = XNonce::try_generate().map_err(|e| {
             PortError::retryable("secret_seal_failed", json!({ "detail": e.to_string() }))
         })?;
-        let aad = aad(project.0, name);
+        let aad = scope.aad();
         let ciphertext = self
             .cipher
             .encrypt(
@@ -133,16 +132,18 @@ impl SecretStore for AeadSecrets {
                     aad: &aad,
                 },
             )
-            .map_err(|_| PortError::permanent("secret_seal_failed", json!({ "name": name })))?;
+            .map_err(|_| {
+                PortError::permanent("secret_seal_failed", json!({ "name": scope.label() }))
+            })?;
         Ok(Sealed {
             nonce: nonce.to_vec(),
             ciphertext,
         })
     }
 
-    fn open(&self, project: ProjectId, name: &str, sealed: &Sealed) -> PortResult<SecretText> {
-        let nonce = XNonce::try_from(sealed.nonce.as_slice()).map_err(|_| unreadable(name))?;
-        let aad = aad(project.0, name);
+    fn open(&self, scope: &SecretScope<'_>, sealed: &Sealed) -> PortResult<SecretText> {
+        let nonce = XNonce::try_from(sealed.nonce.as_slice()).map_err(|_| unreadable(scope))?;
+        let aad = scope.aad();
         let plain = Zeroizing::new(
             self.cipher
                 .decrypt(
@@ -152,17 +153,17 @@ impl SecretStore for AeadSecrets {
                         aad: &aad,
                     },
                 )
-                .map_err(|_| unreadable(name))?,
+                .map_err(|_| unreadable(scope))?,
         );
-        let text = std::str::from_utf8(&plain).map_err(|_| unreadable(name))?;
+        let text = std::str::from_utf8(&plain).map_err(|_| unreadable(scope))?;
         Ok(SecretText::new(text.to_string()))
     }
 
-    fn fingerprint(&self, project: ProjectId, name: &str, value: &SecretText) -> String {
+    fn fingerprint(&self, scope: &SecretScope<'_>, value: &SecretText) -> String {
         let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(&*self.fingerprint_key) else {
             return String::new();
         };
-        mac.update(&aad(project.0, name));
+        mac.update(&scope.aad());
         mac.update(&[0]);
         mac.update(value.expose().as_bytes());
         mac.finalize()
@@ -186,13 +187,13 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         assert_eq!(meta.len(), KEY_BYTES as u64);
         let b = AeadSecrets::from_key_file(&path).unwrap();
-        let project = ProjectId(uuid::Uuid::from_u128(1));
+        let scope = SecretScope::Project {
+            project_id: saka_core::ids::ProjectId(uuid::Uuid::from_u128(1)),
+            name: "NPM_TOKEN",
+        };
         let value = SecretText::new("npm-token-abcdef".into());
-        let sealed = a.seal(project, "NPM_TOKEN", &value).unwrap();
-        assert_eq!(b.open(project, "NPM_TOKEN", &sealed).unwrap(), value);
-        assert_eq!(
-            a.fingerprint(project, "NPM_TOKEN", &value),
-            b.fingerprint(project, "NPM_TOKEN", &value)
-        );
+        let sealed = a.seal(&scope, &value).unwrap();
+        assert_eq!(b.open(&scope, &sealed).unwrap(), value);
+        assert_eq!(a.fingerprint(&scope, &value), b.fingerprint(&scope, &value));
     }
 }

@@ -3169,3 +3169,192 @@ fn metrics_count_path_scope_violations_by_stage_and_the_blocker_names_them() {
         "{metrics}"
     );
 }
+
+const LINK: &str = "/api/v1/scm/github/user-link";
+const AUTHORIZE: &str = "/api/v1/scm/github/user-link/authorizations";
+
+fn table_text(api: &Api, table: &str) -> String {
+    let columns = rows(
+        api,
+        &format!("SELECT name FROM pragma_table_info('{table}')"),
+    );
+    let all = columns
+        .iter()
+        .map(|c| format!("COALESCE(CAST({c} AS TEXT), '')"))
+        .collect::<Vec<_>>()
+        .join(" || '|' || ");
+    rows(api, &format!("SELECT {all} FROM {table}")).join("\n")
+}
+
+#[test]
+fn linking_an_account_never_shows_a_token_in_events_jobs_actions_logs_or_responses() {
+    let mut api = Api::new(SimConfig::default());
+    let logs = LogBuffer::default();
+    let out = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || out.clone())
+        .finish();
+    let mut bodies = Vec::new();
+    tracing::subscriber::with_default(subscriber, || {
+        let key = api.key();
+        let started = api.post_with(AUTHORIZE, Some(&key), &[], &json!({}));
+        assert_eq!(started.status, StatusCode::ACCEPTED, "{}", started.body);
+        let id = started.body["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            started.headers["location"].to_str().unwrap(),
+            format!("{AUTHORIZE}/{id}")
+        );
+        assert_eq!(started.body["state"], "pending");
+        assert_eq!(started.body["integration_id"], "github");
+        assert_eq!(started.body["user_code"], "FAKE-0001");
+        assert_eq!(
+            started.body["verification_uri"],
+            "https://github.com/login/device"
+        );
+        assert_eq!(started.body["interval_secs"], 5);
+        assert_eq!(started.body["failure"], Value::Null);
+        assert_eq!(started.body["link"], Value::Null);
+        let replay = api.post_with(AUTHORIZE, Some(&key), &[], &json!({}));
+        assert_eq!(replay.status, StatusCode::ACCEPTED);
+        assert_eq!(replay.headers["idempotent-replayed"], "true");
+        let again = api.post(AUTHORIZE, &[], json!({}));
+        assert_eq!(
+            again.body["id"], started.body["id"],
+            "the pending one is reused"
+        );
+        let missing = api.get(LINK);
+        problem(&missing, StatusCode::NOT_FOUND, "user_link_not_found");
+        bodies.extend([started.body, replay.body, again.body, missing.body]);
+
+        api.sim
+            .world
+            .accounts()
+            .answer(saka_testkit::DeviceAnswer::Approve);
+        assert!(api.sim.run_until(STEPS, |s| {
+            s.engine()
+                .user_link("github", saka_engine::OPERATOR)
+                .is_ok()
+        }));
+        let done = api.get(&format!("{AUTHORIZE}/{id}"));
+        assert_eq!(done.status, StatusCode::OK);
+        assert_eq!(done.body["state"], "completed");
+        assert_eq!(done.body["link"]["login"], "octo");
+        let link = api.get(LINK);
+        assert_eq!(link.status, StatusCode::OK, "{}", link.body);
+        assert_eq!(link.body["state"], "active");
+        assert_eq!(link.body["relink_cause"], Value::Null);
+        assert_eq!(link.body["provider_user_id"], 1);
+        assert_eq!(link.body["name"], "Octo Cat");
+        assert_eq!(link.body["email"], "1+octo@users.noreply.github.com");
+        assert_eq!(link.body["refreshed_at"], Value::Null);
+        assert!(
+            link.body["access_expires_at"]
+                .as_str()
+                .unwrap()
+                .ends_with('Z')
+        );
+        bodies.extend([done.body, link.body]);
+
+        let engine = api.sim.engine();
+        let current = engine.user_link("github", saka_engine::OPERATOR).unwrap();
+        api.sim
+            .clock
+            .set(current.access_expires_at.plus_ms(-60_000));
+        let used = api
+            .sim
+            .block_on(engine.refresh_user_link(current.id, saka_core::vocab::RefreshReason::Use));
+        assert!(matches!(used, Ok(saka_engine::LinkCredential::Ready(_))));
+        api.sim
+            .clock
+            .set(current.refresh_expires_at.plus_ms(-3 * 86_400_000));
+        let refreshes = api.sim.world.accounts().calls_of("refresh").len();
+        assert!(api.sim.run_until(STEPS, |s| {
+            s.world.accounts().calls_of("refresh").len() > refreshes
+        }));
+        let refreshed = api.get(LINK);
+        assert!(refreshed.body["refreshed_at"].is_string());
+        bodies.push(refreshed.body);
+        let metrics = api.get_text("/metrics");
+        for line in [
+            "saka_user_link_authorizations_total{integration=\"github\",state=\"pending\"} 1",
+            "saka_user_link_authorizations_total{integration=\"github\",state=\"completed\"} 1",
+            "saka_user_link_refresh_total{integration=\"github\",outcome=\"refreshed\"} 2",
+        ] {
+            assert!(metrics.contains(line), "{line}\n{metrics}");
+        }
+
+        let key = api.key();
+        let gone = keyed(&api, Method::DELETE, LINK, &key, None);
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.body);
+        let key = api.key();
+        let again = keyed(&api, Method::DELETE, LINK, &key, None);
+        assert_eq!(again.status, StatusCode::NO_CONTENT);
+        problem(&api.get(LINK), StatusCode::NOT_FOUND, "user_link_not_found");
+    });
+    assert_eq!(api.sim.events_of("scm.user_link.removed").len(), 1);
+
+    let mut secrets: Vec<String> = api.sim.world.accounts().device_codes();
+    secrets.extend(api.sim.world.accounts().issued_tokens());
+    assert!(secrets.iter().any(|s| s.starts_with("ghu_")));
+    assert!(secrets.iter().any(|s| s.starts_with("ghr_")));
+    let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("scm.user_link.linked"), "{logs}");
+    let mut haystacks = vec![
+        ("logs", logs),
+        ("responses", bodies.iter().map(Value::to_string).collect()),
+    ];
+    for table in ["event", "action_request", "job"] {
+        haystacks.push((table, table_text(&api, table)));
+    }
+    for (name, text) in &haystacks {
+        for marker in ["ghu_", "ghr_", "github_pat_"] {
+            assert!(!text.contains(marker), "{marker} in {name}");
+        }
+        for secret in &secrets {
+            assert!(!text.contains(secret.as_str()), "a secret in {name}");
+        }
+    }
+}
+
+#[test]
+fn account_link_refusals_carry_their_codes() {
+    let mut api = Api::new(SimConfig::default());
+    for (method, path) in [
+        (Method::POST, "/api/v1/scm/gitlab/user-link/authorizations"),
+        (Method::DELETE, "/api/v1/scm/gitlab/user-link"),
+    ] {
+        let key = api.key();
+        let r = keyed(&api, method, path, &key, Some(&json!({})));
+        problem(&r, StatusCode::NOT_FOUND, "not_found");
+    }
+    problem(
+        &api.get("/api/v1/scm/gitlab/user-link"),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    problem(
+        &api.get(&format!("{AUTHORIZE}/{}", uuid::Uuid::now_v7())),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    let r = api.post_with(AUTHORIZE, None, &[], &json!({}));
+    problem(&r, StatusCode::BAD_REQUEST, "idempotency_key_required");
+    let r = api.post(AUTHORIZE, &[], json!({ "scope": "repo" }));
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+
+    api.sim.world.accounts().set_device_flow(false);
+    let r = api.post(AUTHORIZE, &[], json!({}));
+    problem(&r, StatusCode::CONFLICT, "device_flow_unconfigured");
+    assert_eq!(r.body["params"]["integration_id"], "github");
+
+    api.sim.world.set_capabilities(saka_ports::ScmCapabilities {
+        user_authorship: false,
+        ..saka_testkit::FAKE_CAPABILITIES
+    });
+    let r = api.post(AUTHORIZE, &[], json!({}));
+    problem(&r, StatusCode::CONFLICT, "user_authorship_unsupported");
+    assert_eq!(r.body["params"]["integration_id"], "github");
+    assert!(api.sim.world.accounts().calls_of("device_code").is_empty());
+}

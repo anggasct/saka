@@ -260,6 +260,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/scm/{integration_id}/user-link": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_user_link"];
+    put?: never;
+    post?: never;
+    delete: operations["remove_user_link"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/scm/{integration_id}/user-link/authorizations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["start_user_link"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/scm/{integration_id}/user-link/authorizations/{authorization_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_user_link_authorization"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/sessions": {
     parameters: {
       query?: never;
@@ -1624,6 +1672,8 @@ export interface components {
       state: string;
       trigger: string;
     };
+    /** @description Request body that starts linking an account; no fields. */
+    StartUserLinkBody: Record<string, never>;
     SteerBody: {
       /** @description 1 to 4000 characters, sent to the agent as a user message. */
       text: string;
@@ -1704,6 +1754,64 @@ export interface components {
       status: string;
       /** Format: int32 */
       turn: number;
+    };
+    /**
+     * @description The SCM account linked to an integration, so that changes can be authored as its user.
+     *     Tokens are never part of it.
+     */
+    UserLink: {
+      /** @description When the user access token expires; it is refreshed before use. */
+      access_expires_at: string;
+      /**
+       * @description The noreply address `<id>+<login>@users.noreply.<host of web_url>`, used as the commit
+       *     author email.
+       */
+      email: string;
+      /** Format: uuid */
+      id: string;
+      /** @description `[[scm]].id` from the operator config. */
+      integration_id: string;
+      linked_at: string;
+      login: string;
+      /** @description The profile name, or `null` when the profile has none; commits then use `login`. */
+      name?: string | null;
+      /**
+       * Format: int64
+       * @description The account id at the provider (`GET /user` `id`).
+       */
+      provider_user_id: number;
+      /** @description When the refresh token expires; after it the account has to be linked again. */
+      refresh_expires_at: string;
+      /** @description The last successful token refresh. */
+      refreshed_at?: string | null;
+      /** @description Only with `needs_relink`: `refresh_failed | revoked | expired`. */
+      relink_cause?: string | null;
+      /** @description `active | needs_relink` */
+      state: string;
+    };
+    /**
+     * @description One device-flow attempt to link an account. The user opens `verification_uri` and enters
+     *     `user_code`; the server polls the provider every `interval_secs` until the attempt ends.
+     */
+    UserLinkAuthorization: {
+      /** @description After this time a pending attempt ends as `expired`. */
+      expires_at: string;
+      failure?: components["schemas"]["Failure"] | null;
+      /** Format: uuid */
+      id: string;
+      /** @description `[[scm]].id` from the operator config. */
+      integration_id: string;
+      /**
+       * Format: int32
+       * @description Seconds between polls; raised when the provider asks to slow down.
+       */
+      interval_secs: number;
+      link?: components["schemas"]["UserLink"] | null;
+      /** @description `pending | completed | expired | denied | failed` */
+      state: string;
+      /** @description The code the user enters at `verification_uri`, for example `WDJB-MJHT`. */
+      user_code: string;
+      verification_uri: string;
     };
     WaitingOn:
       | {
@@ -2628,6 +2736,146 @@ export interface operations {
         };
       };
       "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_user_link: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description `[[scm]].id` from the operator config */
+        integration_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UserLink"];
+        };
+      };
+      /** @description `not_found` for an unknown integration, `user_link_not_found` without a linked account */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  remove_user_link: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        /** @description `[[scm]].id` from the operator config */
+        integration_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The link is gone, or there was none; the tokens are not revoked at the provider */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  start_user_link: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        /** @description `[[scm]].id` from the operator config */
+        integration_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartUserLinkBody"];
+      };
+    };
+    responses: {
+      /** @description A pending authorization: a new one, or the one still pending with more than a minute left */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UserLinkAuthorization"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_user_link_authorization: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description `[[scm]].id` from the operator config */
+        integration_id: string;
+        authorization_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UserLinkAuthorization"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

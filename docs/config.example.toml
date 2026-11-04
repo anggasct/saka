@@ -27,6 +27,7 @@ poll_interval_secs = 15            # 5..=300
 ci_appear_timeout_secs = 600       # 60..=3600
 merge_method = "squash"            # merge | squash | rebase
 # webhook_secret_file = "~/.config/saka/github-webhook.secret"   # the GitHub App webhook secret; 0600, 32..=1024 bytes
+client_id = "Iv23liAbCdEfGh123456"  # the GitHub App Client ID (not app_id), 1..=64 of [A-Za-z0-9._-]; needed by `saka scm link`
 
 [agent]
 cli = "claude"
@@ -76,8 +77,8 @@ download_timeout_secs = 600        # 30..=3600; per download
 # `secret.key` next to this file. It is created 0600 on first start; any other mode refuses start.
 
 [git]
-author_name = "Saka Agent"
-author_email = "agent@saka.invalid"
+name = "Saka Agent"                # Saka's identity: committer of every agent commit, author in bot mode; no < > or newline
+email = "agent@saka.invalid"       # 3..=254 bytes with exactly one @
 
 # Permission rules for agent sessions. Built-in rules come first and cannot be turned off:
 # file tools outside the worktree and any Bash command containing `git push` are denied.

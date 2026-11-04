@@ -181,6 +181,7 @@ impl World {
                     app_id: APP_ID,
                     private_key_file: key,
                     user_agent: "saka-test".into(),
+                    client_id: None,
                 },
                 clock.clone(),
             )

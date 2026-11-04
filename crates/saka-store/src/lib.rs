@@ -6,6 +6,7 @@ mod jobs;
 pub mod list;
 mod migrate;
 pub mod read;
+pub mod user_link;
 mod write;
 
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ pub use error::{Result, StoreError};
 pub use jobs::{ClaimedJob, LEASE_EXTEND_MS, LEASE_MS};
 pub use migrate::MigrationReport;
 pub use read::{StoredEvent, TaskSet};
+pub use user_link::{AuthorizationRow, SealedColumns, UserLinkRow};
 pub use write::{
     ActionRecord, Batch, ContextBlobRow, EventRecord, JobOutcome, NewJob, SecretRow,
     SpecRevisionRow, WebhookDeliveryRow,
