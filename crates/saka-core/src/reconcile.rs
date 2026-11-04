@@ -1,4 +1,5 @@
 use crate::admission::{self, Candidate, Waiting};
+use crate::authorship::{ProjectAuthorship, UserLink, resume_trigger};
 use crate::ids::{SpecId, WorkItemId};
 use crate::job::Job;
 use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency};
@@ -22,6 +23,8 @@ pub struct Snapshot {
     pub spec_dependencies: Vec<SpecDependency>,
     pub quotas: Vec<AccountQuota>,
     pub port_blocks: Option<usize>,
+    pub user_links: Vec<UserLink>,
+    pub authorships: Vec<ProjectAuthorship>,
 }
 
 fn holds_port_block(task: &Task) -> bool {
@@ -70,6 +73,17 @@ pub fn waiting(
         })
         .filter(|(_, waits)| !waits.is_empty())
         .collect()
+}
+
+fn credential_resume(snapshot: &Snapshot, task: &Task) -> Option<crate::vocab::ResumeTrigger> {
+    if task.item.state != WorkItemState::Blocked {
+        return None;
+    }
+    let authorship = snapshot
+        .authorships
+        .iter()
+        .find(|a| a.project_id == task.item.project_id);
+    resume_trigger(task.open_blocker()?, &snapshot.user_links, authorship)
 }
 
 pub fn reconcile(
@@ -131,6 +145,9 @@ pub fn reconcile(
         }
         if crate::task::auto_retry_due(task, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::AutoRetry));
+        }
+        if let Some(trigger) = credential_resume(snapshot, task) {
+            actions.push(Action::Decide(task.item.id, TaskInput::Resume { trigger }));
         }
     }
 

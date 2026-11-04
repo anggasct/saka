@@ -17,6 +17,7 @@ use saka_agents::protocol::{LogEvent, RunnerFrame, ServerFrame};
 use saka_agents::redact;
 use saka_agents::runner::{EXIT_OK, EXIT_VERSION_MISMATCH, runner_version};
 use saka_agents::{AgentsConfig, ClaudeAgents, client::RunnerConnection};
+use saka_core::authorship::GitIdentity;
 use saka_core::ids::{EnvironmentId, RepoId, SessionId, StageRunId, WorkItemId};
 use saka_core::model::RunOwner;
 use saka_core::secret::{SecretText, SecretVar};
@@ -84,6 +85,10 @@ fn main() -> ExitCode {
         (
             "session_secrets_reach_only_the_cli_env_and_are_redacted_by_name",
             session_secrets_reach_only_the_cli_env_and_are_redacted_by_name,
+        ),
+        (
+            "an_agent_commit_is_authored_as_the_launch_author_and_committed_by_saka",
+            an_agent_commit_is_authored_as_the_launch_author_and_committed_by_saka,
         ),
         (
             "the_adapter_launches_in_the_physical_worktree_and_scopes_memory_to_it",
@@ -651,8 +656,14 @@ fn settings() -> ClaudeSettings {
         account_dir: "/nonexistent/claude".into(),
         model: None,
         path: vec!["/usr/bin".into(), "/bin".into()],
-        author_name: "Saka Agent".into(),
-        author_email: "agent@saka.invalid".into(),
+        committer: saka(),
+    }
+}
+
+fn saka() -> GitIdentity {
+    GitIdentity {
+        name: "Saka Agent".into(),
+        email: "agent@saka.invalid".into(),
     }
 }
 
@@ -709,6 +720,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
         resume_cli_session_id: None,
         profile: LaunchProfile::Task,
         model: None,
+        author: saka(),
     }
 }
 
@@ -762,6 +774,70 @@ fn the_adapter_starts_drives_and_stops_a_session() {
             "the runner is gone"
         );
         assert!(agents.send_turn(&session, 2, "more").await.is_err());
+    });
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "Seed")
+        .env("GIT_AUTHOR_EMAIL", "seed@example.test")
+        .env("GIT_COMMITTER_NAME", "Seed")
+        .env("GIT_COMMITTER_EMAIL", "seed@example.test")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn an_agent_commit_is_authored_as_the_launch_author_and_committed_by_saka() {
+    block_on(async {
+        let fx = Fixture::new();
+        let supervisor = Arc::new(DirectSupervisor::new(fx.path("logs")));
+        let (agents, mut rx) = adapter(&fx, supervisor, "commit");
+        let mut launch = launch_for(&fx);
+        let worktree = PathBuf::from(&launch.environment.worktree_path);
+        git_in(&worktree, &["init", "-q", "-b", "main"]);
+        git_in(&worktree, &["commit", "-q", "--allow-empty", "-m", "seed"]);
+        launch.author = GitIdentity {
+            name: "Octo Cat".into(),
+            email: "1+octo@users.noreply.github.com".into(),
+        };
+        let launched = agents.start(&launch).await.unwrap();
+        let session = SessionRef {
+            session_id: fx.session,
+            runner_unit: launched.runner_unit.clone(),
+            socket_path: launched.socket_path.clone(),
+        };
+        agents.send_turn(&session, 1, "work").await.unwrap();
+        turn_ends(&mut rx).await;
+        agents
+            .stop(fx.session, Some(&launched.runner_unit))
+            .await
+            .unwrap();
+        assert_eq!(
+            git_in(&worktree, &["log", "-1", "--format=%an <%ae>|%cn <%ce>"]),
+            "Octo Cat <1+octo@users.noreply.github.com>|Saka Agent <agent@saka.invalid>"
+        );
+        assert_eq!(
+            git_in(&worktree, &["log", "-1", "--format=%s"]),
+            "feat: fake change"
+        );
+        let launch_file =
+            std::fs::read_to_string(fx.path(&format!("sessions/{}/launch.json", fx.session)))
+                .unwrap();
+        for marker in ["ghu_", "ghr_", "github_pat_"] {
+            assert!(!launch_file.contains(marker), "{marker} in launch.json");
+        }
     });
 }
 

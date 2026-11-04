@@ -148,6 +148,7 @@ impl ClaudeAgents {
             tools,
             model: launch.model.as_deref(),
             resume: launch.resume_cli_session_id.as_deref(),
+            author: &launch.author,
         };
         let mut spec = launch::claude(
             &self.cfg.claude,
@@ -438,8 +439,10 @@ mod tests {
                     account_dir: "/data/agents/claude/default".into(),
                     model: None,
                     path: vec!["/usr/bin".into(), "/bin".into()],
-                    author_name: "Saka Agent".into(),
-                    author_email: "agent@saka.invalid".into(),
+                    committer: saka_core::authorship::GitIdentity {
+                        name: "Saka Agent".into(),
+                        email: "agent@saka.invalid".into(),
+                    },
                 },
                 sessions_dir: dir.join("sessions"),
                 runtime_dir: dir.join("run"),
@@ -502,6 +505,10 @@ mod tests {
             resume_cli_session_id: None,
             profile,
             model: model.map(String::from),
+            author: saka_core::authorship::GitIdentity {
+                name: "Octo Cat".into(),
+                email: "1+octo@users.noreply.github.com".into(),
+            },
         }
     }
 

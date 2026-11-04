@@ -111,6 +111,7 @@ fn owned_events(owner: RunOwner) -> Vec<Event> {
             log_path: "/l".into(),
             resumed_from_session_id: None,
             resume_cause: None,
+            author: saka_core::authorship::SessionAuthor::saka(),
         },
         Event::SessionReattached {
             owner,
@@ -387,6 +388,7 @@ fn the_session_lifecycle_runs_for_a_draft_owner_with_the_owner_packet() {
             runner_unit: "saka-session-4".into(),
             socket_path: "/s".into(),
             log_path: "/l".into(),
+            author: saka_core::authorship::SessionAuthor::saka(),
         },
     );
     assert_eq!(launched.signal, None);

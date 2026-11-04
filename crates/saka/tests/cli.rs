@@ -1502,3 +1502,73 @@ fn the_old_git_author_keys_and_a_bad_client_id_refuse_the_config() {
     assert!(stderr(&out).contains("scm.client_id"), "{}", stderr(&out));
     assert!(!dir.path().join("data").join("saka.db").exists());
 }
+
+#[test]
+fn project_authorship_prints_the_mode_and_changes_it_or_exits_with_the_refusal() {
+    use saka_testkit::DeviceAnswer;
+    let mut sim = Sim::new(SimConfig::default());
+    let server = serve(&sim);
+
+    let shown = saka(&server, &["project", "authorship", "tasks"]);
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    assert_eq!(
+        stdout(&shown).trim(),
+        "mode bot author Saka Agent <agent@saka.invalid>"
+    );
+    let refused = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "user"],
+    );
+    assert_eq!(code(&refused), 4, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("user_link_missing"),
+        "{}",
+        stderr(&refused)
+    );
+    let pat = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "user-pat"],
+    );
+    assert_eq!(code(&pat), 4);
+    assert!(
+        stderr(&pat).contains("user_token_missing"),
+        "{}",
+        stderr(&pat)
+    );
+    let bad = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "robot"],
+    );
+    assert_eq!(code(&bad), 2);
+
+    let (child, _) = spawn_link(&server);
+    sim.world.accounts().answer(DeviceAnswer::Approve);
+    drive(&mut sim, |s| {
+        authorization_state(s, 0) == Some(saka_core::vocab::AuthorizationState::Completed)
+    });
+    assert_eq!(code(&child.wait_with_output().unwrap()), 0);
+    let user = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "user"],
+    );
+    assert_eq!(code(&user), 0, "{}", stderr(&user));
+    assert_eq!(
+        stdout(&user).trim(),
+        "mode user author Octo Cat <1+octo@users.noreply.github.com>"
+    );
+    let as_json = saka(&server, &["--json", "project", "authorship", "tasks"]);
+    assert_eq!(json(&as_json)["mode"], "user");
+    let unlink = saka(&server, &["scm", "unlink", "github"]);
+    assert_eq!(code(&unlink), 1);
+    assert!(
+        stderr(&unlink).contains("user_link_in_use"),
+        "{}",
+        stderr(&unlink)
+    );
+    let bot = saka(
+        &server,
+        &["project", "authorship", "tasks", "--mode", "bot"],
+    );
+    assert_eq!(code(&bot), 0, "{}", stderr(&bot));
+    assert_eq!(code(&saka(&server, &["scm", "unlink", "github"])), 0);
+}

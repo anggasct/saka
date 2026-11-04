@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use saka_core::authorship::GitIdentity;
 use saka_core::time::Timestamp;
 
 use crate::PortResult;
@@ -41,12 +42,6 @@ pub struct DocOpened {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommitIdentity {
-    pub name: String,
-    pub email: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocExpect {
     Absent,
     Exists,
@@ -60,7 +55,7 @@ pub struct DocCommit {
     pub path: String,
     pub bytes: Vec<u8>,
     pub expect: DocExpect,
-    pub author: CommitIdentity,
+    pub author: GitIdentity,
     pub at: Timestamp,
 }
 

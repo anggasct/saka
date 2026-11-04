@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use saka_core::authorship::GitIdentity;
 use serde::{Deserialize, Serialize};
 
 pub const HEARTBEAT_MS: u64 = 10_000;
@@ -12,6 +13,7 @@ pub struct LaunchOptions<'a> {
     pub tools: Option<&'a str>,
     pub model: Option<&'a str>,
     pub resume: Option<&'a str>,
+    pub author: &'a GitIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,8 +93,7 @@ pub struct ClaudeSettings {
     pub account_dir: String,
     pub model: Option<String>,
     pub path: Vec<String>,
-    pub author_name: String,
-    pub author_email: String,
+    pub committer: GitIdentity,
 }
 
 impl ClaudeSettings {
@@ -188,10 +189,10 @@ pub fn claude(
         ("LANG", "C.UTF-8".to_string()),
         ("TERM", "dumb".to_string()),
         ("CLAUDE_CONFIG_DIR", settings.account_dir.clone()),
-        ("GIT_AUTHOR_NAME", settings.author_name.clone()),
-        ("GIT_AUTHOR_EMAIL", settings.author_email.clone()),
-        ("GIT_COMMITTER_NAME", settings.author_name.clone()),
-        ("GIT_COMMITTER_EMAIL", settings.author_email.clone()),
+        ("GIT_AUTHOR_NAME", options.author.name.clone()),
+        ("GIT_AUTHOR_EMAIL", options.author.email.clone()),
+        ("GIT_COMMITTER_NAME", settings.committer.name.clone()),
+        ("GIT_COMMITTER_EMAIL", settings.committer.email.clone()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -229,8 +230,21 @@ mod tests {
                 "/usr/bin".into(),
                 "/bin".into(),
             ],
-            author_name: "Saka Agent".into(),
-            author_email: "agent@saka.invalid".into(),
+            committer: saka(),
+        }
+    }
+
+    fn saka() -> GitIdentity {
+        GitIdentity {
+            name: "Saka Agent".into(),
+            email: "agent@saka.invalid".into(),
+        }
+    }
+
+    fn octo() -> GitIdentity {
+        GitIdentity {
+            name: "Octo Cat".into(),
+            email: "1+octo@users.noreply.github.com".into(),
         }
     }
 
@@ -257,6 +271,7 @@ mod tests {
                 tools: None,
                 model: None,
                 resume: None,
+                author: &saka(),
             },
         )
         .unwrap();
@@ -295,6 +310,44 @@ mod tests {
     }
 
     #[test]
+    fn a_user_authored_session_commits_as_the_user_and_saka_stays_the_committer() {
+        let spec = claude(
+            &settings(None),
+            Path::new("/usr/bin/claude"),
+            "s-1",
+            &paths(),
+            vec![],
+            &LaunchOptions {
+                cwd: &paths().worktree,
+                tools: None,
+                model: None,
+                resume: None,
+                author: &octo(),
+            },
+        )
+        .unwrap();
+        let git: BTreeMap<&str, &str> = spec
+            .env
+            .iter()
+            .filter(|(k, _)| k.starts_with("GIT_"))
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            git,
+            BTreeMap::from([
+                ("GIT_AUTHOR_EMAIL", "1+octo@users.noreply.github.com"),
+                ("GIT_AUTHOR_NAME", "Octo Cat"),
+                ("GIT_COMMITTER_EMAIL", "agent@saka.invalid"),
+                ("GIT_COMMITTER_NAME", "Saka Agent"),
+            ])
+        );
+        let launch = serde_json::to_string(&spec).unwrap();
+        for marker in ["ghu_", "ghr_", "github_pat_", "TOKEN"] {
+            assert!(!launch.contains(marker), "{marker} in the launch spec");
+        }
+    }
+
+    #[test]
     fn a_resumed_session_continues_the_cli_session() {
         let spec = claude(
             &settings(None),
@@ -307,6 +360,7 @@ mod tests {
                 tools: None,
                 model: None,
                 resume: Some("cli-abc"),
+                author: &saka(),
             },
         )
         .unwrap();
@@ -331,6 +385,7 @@ mod tests {
                     tools: None,
                     model: None,
                     resume: None,
+                    author: &octo(),
                 },
             )
             .unwrap();
@@ -425,7 +480,8 @@ mod tests {
                     cwd: &paths.worktree,
                     tools: None,
                     model: None,
-                    resume: None
+                    resume: None,
+                    author: &saka(),
                 },
             ),
             Err(UnsupportedPath(PathBuf::from("/data/[envs]/e-1/worktree")))

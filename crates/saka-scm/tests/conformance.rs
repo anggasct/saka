@@ -13,7 +13,8 @@ use saka_core::vocab::{
     ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod,
 };
 use saka_ports::{
-    MergeOutcome, MergeRequest, OpenChangeRequest, RepoRef, Scm, ScmCapabilities, WebhookTarget,
+    ChangeCredential, ChangeOpening, MergeOutcome, MergeRequest, OpenChangeRequest, RepoRef, Scm,
+    ScmCapabilities, WebhookTarget,
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -322,9 +323,13 @@ async fn open_change_request_is_idempotent_for_the_same_branch(h: &dyn Harness) 
             base_branch: "main".into(),
             title: "Add the first step".into(),
             body: "body\n\n<!-- saka-task: two-step/s1 -->".to_string(),
+            credential: ChangeCredential::App,
         })
         .await
         .unwrap();
+    let ChangeOpening::Opened(opened) = opened else {
+        panic!("not opened: {opened:?}");
+    };
     assert_eq!((opened.number, opened.head_sha.as_str()), (7, HEAD));
 }
 

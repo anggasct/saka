@@ -163,6 +163,36 @@ enum ProjectCmd {
         #[arg(help = "Project id or name")]
         project: String,
     },
+    #[command(
+        about = "Prints who authors the project's agent changes; with --mode, changes it (exit 4 if refused)"
+    )]
+    Authorship {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(
+            help = "bot: Saka; user: the linked account; user-pat: the owner of the project's user token",
+            long,
+            value_enum
+        )]
+        mode: Option<AuthorshipMode>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AuthorshipMode {
+    Bot,
+    User,
+    UserPat,
+}
+
+impl AuthorshipMode {
+    fn wire(self) -> &'static str {
+        match self {
+            AuthorshipMode::Bot => "bot",
+            AuthorshipMode::User => "user",
+            AuthorshipMode::UserPat => "user_pat",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -429,6 +459,11 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     }
                     ProjectCmd::List => client.project_list().await,
                     ProjectCmd::Reload { project } => client.project_reload(&project).await,
+                    ProjectCmd::Authorship { project, mode } => {
+                        client
+                            .project_authorship(&project, mode.map(AuthorshipMode::wire))
+                            .await
+                    }
                 }
             })
         }

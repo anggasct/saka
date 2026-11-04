@@ -24,6 +24,7 @@ pub use state::{ApiConfig, AppState};
     paths(
         routes::add_project, routes::list_projects, routes::get_project, routes::reload_project,
         routes::set_secret, routes::list_secrets, routes::remove_secret,
+        routes::get_authorship, routes::set_authorship,
         routes::start_user_link, routes::get_user_link_authorization, routes::get_user_link,
         routes::remove_user_link,
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
@@ -66,6 +67,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{project_id}/actions/reload",
             post(routes::reload_project),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/authorship",
+            get(routes::get_authorship).put(routes::set_authorship),
         )
         .route(
             "/api/v1/projects/{project_id}/secrets",

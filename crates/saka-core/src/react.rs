@@ -214,9 +214,12 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
             }
         }
         (Stage::Dev, StagePhase::OpeningChange) => {
+            // Keyed per run: a retry into this phase opens the change again, with the credential
+            // the project's mode names at that moment.
+            let key = run_id.map_or_else(|| id.to_string(), |run| format!("{id}:{run}"));
             jobs.push(Job::new(
                 JobKind::ScmOpenChangeRequest,
-                id,
+                key,
                 json!({
                     "work_item_id": id,
                     "repo_id": item.repo_id,

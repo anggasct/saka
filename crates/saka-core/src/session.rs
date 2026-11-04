@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::Ctx;
+use crate::authorship::SessionAuthor;
 use crate::event::{Event, Prompt};
 use crate::ids::{
     EnvironmentId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId, UsageRecordId,
@@ -86,6 +87,7 @@ pub enum SessionInput {
         runner_unit: String,
         socket_path: String,
         log_path: String,
+        author: SessionAuthor,
     },
     Initialized {
         cli_session_id: String,
@@ -203,6 +205,7 @@ pub fn decide(
             runner_unit,
             socket_path,
             log_path,
+            author,
         } => SessionOutcome::events(d.launched(Launch {
             session_id,
             cli,
@@ -212,6 +215,7 @@ pub fn decide(
             runner_unit,
             socket_path,
             log_path,
+            author,
         })),
         I::Initialized {
             cli_session_id,
@@ -410,6 +414,7 @@ struct Launch {
     runner_unit: String,
     socket_path: String,
     log_path: String,
+    author: SessionAuthor,
 }
 
 struct Decider<'a, 'v> {
@@ -555,6 +560,7 @@ impl Decider<'_, '_> {
                 log_path: launch.log_path,
                 resumed_from_session_id: plan.as_ref().map(|p| p.from),
                 resume_cause: plan.as_ref().map(|p| p.cause),
+                author: launch.author,
             },
             Event::SessionTurnRequested {
                 owner,

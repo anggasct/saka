@@ -53,6 +53,7 @@ const project = {
   },
   repos: [],
   autonomy: "standard",
+  authorship_mode: "bot",
   workflow_preset: "full_loop",
   config_commit: COMMIT,
   created_at: AT,

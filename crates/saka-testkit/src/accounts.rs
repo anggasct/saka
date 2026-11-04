@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use saka_core::authorship::Identity;
@@ -58,6 +58,9 @@ struct State {
     access_secs: Option<u64>,
     refresh_secs: Option<u64>,
     live_refresh: BTreeSet<String>,
+    live_access: BTreeSet<String>,
+    access_of: BTreeMap<String, String>,
+    pull_denial: Option<u16>,
     refresh_outages: u32,
     identity_rejected: bool,
     calls: Vec<AccountCall>,
@@ -89,6 +92,9 @@ impl FakeAccounts {
             access_secs: Some(ACCESS_TOKEN_SECS),
             refresh_secs: Some(REFRESH_TOKEN_SECS),
             live_refresh: BTreeSet::new(),
+            live_access: BTreeSet::new(),
+            access_of: BTreeMap::new(),
+            pull_denial: None,
             refresh_outages: 0,
             identity_rejected: false,
             calls: Vec::new(),
@@ -151,6 +157,24 @@ impl FakeAccounts {
         self.state().live_refresh.clear();
     }
 
+    pub fn revoke_authorization(&self) {
+        let mut s = self.state();
+        s.live_refresh.clear();
+        s.live_access.clear();
+    }
+
+    pub fn deny_user_pulls(&self, status: Option<u16>) {
+        self.state().pull_denial = status;
+    }
+
+    pub(crate) fn user_pull(&self, token: &SecretText) -> Option<u16> {
+        let s = self.state();
+        if !s.live_access.contains(token.expose()) {
+            return Some(401);
+        }
+        s.pull_denial
+    }
+
     pub fn calls(&self) -> Vec<AccountCall> {
         self.state().calls.clone()
     }
@@ -206,10 +230,12 @@ impl FakeAccounts {
         let n = s.next;
         let access = format!("ghu_fakeaccess{n:04}");
         s.issued.push(access.clone());
+        s.live_access.insert(access.clone());
         let refresh = s.refresh_secs.map(|_| {
             let token = format!("ghr_fakerefresh{n:04}");
             s.issued.push(token.clone());
             s.live_refresh.insert(token.clone());
+            s.access_of.insert(token.clone(), access.clone());
             SecretText::new(token)
         });
         UserTokens {
@@ -265,6 +291,10 @@ impl FakeAccounts {
         }
         if !s.live_refresh.remove(refresh_token.expose()) {
             return Ok(TokenRefresh::Rejected);
+        }
+        // Using a refresh token ends the access token issued with it.
+        if let Some(old) = s.access_of.remove(refresh_token.expose()) {
+            s.live_access.remove(&old);
         }
         Ok(TokenRefresh::Refreshed(FakeAccounts::issue(&mut s)))
     }

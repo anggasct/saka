@@ -580,6 +580,7 @@ fn superseded_tasks_never_run_and_never_hold_the_spec() {
         tasks: vec![task_of(item(1, WorkItemState::Queued)), superseded.clone()],
         work_item_dependencies: vec![],
         spec_dependencies: vec![],
+        ..Snapshot::default()
     };
     let admitted: Vec<WorkItemId> = reconcile(&snapshot, &cfg(), 4, NOW)
         .into_iter()
@@ -818,6 +819,7 @@ proptest! {
             tasks: tasks.clone(),
             work_item_dependencies: vec![],
             spec_dependencies: vec![],
+            ..Snapshot::default()
         };
         let admitted: Vec<WorkItemId> = reconcile(&snapshot, &cfg(), slots, NOW)
             .into_iter()

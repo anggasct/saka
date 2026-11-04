@@ -508,6 +508,102 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/authorship": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "get_authorship",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectAuthorship"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "set_authorship",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAuthorshipBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The mode in force; setting the current mode again records nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectAuthorship"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/file": {
       "get": {
         "tags": [
@@ -2887,6 +2983,52 @@
         },
         "additionalProperties": false
       },
+      "AuthorshipAuthor": {
+        "type": "object",
+        "description": "A commit author identity.",
+        "required": [
+          "source",
+          "name",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account login; `null` for `saka`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "`saka | user_link | user_token`"
+          }
+        }
+      },
+      "AuthorshipIntegration": {
+        "type": "object",
+        "description": "An integration of a project and the state of its linked account.",
+        "required": [
+          "integration_id",
+          "user_link_state"
+        ],
+        "properties": {
+          "integration_id": {
+            "type": "string",
+            "description": "`[[scm]].id` from the operator config."
+          },
+          "user_link_state": {
+            "type": "string",
+            "description": "`active | needs_relink | missing`"
+          }
+        }
+      },
       "Blocker": {
         "type": "object",
         "required": [
@@ -3469,6 +3611,7 @@
                 "repos",
                 "autonomy",
                 "workflow_preset",
+                "authorship_mode",
                 "config_commit",
                 "config_sha256",
                 "warnings",
@@ -3476,6 +3619,10 @@
                 "updated_at"
               ],
               "properties": {
+                "authorship_mode": {
+                  "type": "string",
+                  "description": "`bot | user | user_pat`: who authors the agent's commits and opens its pull requests."
+                },
                 "autonomy": {
                   "type": "string",
                   "description": "`standard` in this version."
@@ -4427,6 +4574,7 @@
           "repos",
           "autonomy",
           "workflow_preset",
+          "authorship_mode",
           "config_commit",
           "config_sha256",
           "warnings",
@@ -4434,6 +4582,10 @@
           "updated_at"
         ],
         "properties": {
+          "authorship_mode": {
+            "type": "string",
+            "description": "`bot | user | user_pat`: who authors the agent's commits and opens its pull requests."
+          },
           "autonomy": {
             "type": "string",
             "description": "`standard` in this version."
@@ -4487,6 +4639,61 @@
           },
           "workspace": {
             "$ref": "#/components/schemas/Workspace"
+          }
+        }
+      },
+      "ProjectAuthorship": {
+        "type": "object",
+        "description": "Who authors a project's agent changes. Tokens are never part of it.",
+        "required": [
+          "project_id",
+          "mode",
+          "integrations"
+        ],
+        "properties": {
+          "author": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuthorshipAuthor",
+                "description": "The identity the next session commits as, for the project's default repo; `null` when\nthe mode's credential is not usable."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorshipIntegration"
+            },
+            "description": "The integrations of the repos bound to the project, each with its linked account state."
+          },
+          "mode": {
+            "type": "string",
+            "description": "`bot | user | user_pat`; `bot` for a project whose mode was never set."
+          },
+          "mode_updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the mode last changed; `null` for a project whose mode was never set."
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectUserToken",
+                "description": "The project's user token; `null` without one. Its value is never returned."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -4592,6 +4799,51 @@
           },
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "ProjectUserToken": {
+        "type": "object",
+        "description": "A stored user token, without its value.",
+        "required": [
+          "integration_id",
+          "login",
+          "provider_user_id",
+          "set_at",
+          "state"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` for a token without an expiry."
+          },
+          "integration_id": {
+            "type": "string"
+          },
+          "invalid_cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only with `invalid`: `expired | rejected`."
+          },
+          "login": {
+            "type": "string"
+          },
+          "provider_user_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "set_at": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "`active | invalid`"
           }
         }
       },
@@ -5096,6 +5348,20 @@
             }
           }
         }
+      },
+      "SetAuthorshipBody": {
+        "type": "object",
+        "description": "Request body that sets a project's authorship mode.",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "`bot` (Saka authors and opens pull requests), `user` (the linked account of every\nintegration of the project authors commits and opens pull requests) or `user_pat` (the\nowner of the project's user token)."
+          }
+        },
+        "additionalProperties": false
       },
       "SetSecretBody": {
         "type": "object",

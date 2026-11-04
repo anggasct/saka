@@ -18,6 +18,7 @@ const project = {
   },
   repos: [],
   autonomy: "standard",
+  authorship_mode: "bot",
   workflow_preset: "full_loop",
   config_commit: "9f1c".padEnd(40, "0"),
   created_at: "2026-10-31T10:00:00.000Z",

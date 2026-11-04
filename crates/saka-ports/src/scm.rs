@@ -37,12 +37,26 @@ pub enum PushOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeCredential {
+    App,
+    User(SecretText),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenChangeRequest {
     pub repo: RepoRef,
     pub head_branch: String,
     pub base_branch: String,
     pub title: String,
     pub body: String,
+    pub credential: ChangeCredential,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeOpening {
+    Opened(OpenedChange),
+    CredentialRejected,
+    AccessDenied { status: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +101,7 @@ pub trait Scm: Send + Sync {
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome>;
 
-    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<OpenedChange>;
+    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening>;
 
     async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot>;
 

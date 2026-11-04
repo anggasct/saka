@@ -1,11 +1,10 @@
 use std::fmt;
 
 use async_trait::async_trait;
-
+use saka_core::authorship::GitIdentity;
 use saka_core::time::Timestamp;
 
 use crate::PortResult;
-use crate::docs::CommitIdentity;
 use crate::scm::{PushOutcome, PushRequest, RepoRef};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -124,7 +123,7 @@ pub struct CommitOne {
     pub mode: String,
     pub blob: String,
     pub message: String,
-    pub author: CommitIdentity,
+    pub author: GitIdentity,
     pub at: Timestamp,
 }
 

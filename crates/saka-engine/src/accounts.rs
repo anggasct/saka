@@ -9,7 +9,7 @@ use saka_core::secret::{SecretScope, SecretText};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     AuthorizationFailure, AuthorizationState, RefreshOutcome, RefreshReason, RelinkCause,
-    UserTokenKind,
+    UserLinkCause, UserTokenKind,
 };
 use saka_ports::{DevicePoll, IdentityLookup, PortError, Sealed, TokenRefresh, UserTokens};
 use saka_store::user_link as rows;
@@ -283,6 +283,17 @@ impl Engine {
     ) -> Result<()> {
         self.integration(integration_id)?;
         let _guard = self.locked()?;
+        let in_use = self.user_mode_projects(integration_id)?;
+        if !in_use.is_empty() {
+            let projects: Vec<_> = in_use
+                .iter()
+                .map(|p| json!({ "project_id": p.project_id, "name": p.name }))
+                .collect();
+            return Err(Rejection::UserLinkInUse {
+                projects: json!(projects),
+            }
+            .into());
+        }
         let now = self.now();
         let existing = self
             .store
@@ -575,6 +586,35 @@ impl Engine {
             "scm.user_link.relink_required"
         );
         Ok(LinkCredential::Relink(cause_code))
+    }
+
+    // The provider refused the token it was given: the link needs a relink, unless it was linked
+    // again meanwhile, in which case the job runs again with the new token.
+    pub(crate) fn revoke_user_link(
+        &self,
+        used: &UserLink,
+    ) -> std::result::Result<UserLinkCause, PortError> {
+        let cause = self.cause("system:user_link:use");
+        let row = self
+            .store
+            .read(|c| rows::user_link_by_id(c, used.id))
+            .map_err(|e| internal(e.into()))?;
+        let Some(row) = row else {
+            return Ok(UserLinkCause::Missing);
+        };
+        if row.link.linked_at != used.linked_at {
+            return Err(PortError::retryable(
+                "user_link_changed",
+                json!({ "integration_id": used.integration_id }),
+            ));
+        }
+        match self
+            .mark_relink(&row, RelinkCause::Revoked, &cause)
+            .map_err(internal)?
+        {
+            LinkCredential::Relink(c) => Ok(c.into()),
+            LinkCredential::Ready(_) => Ok(UserLinkCause::Revoked),
+        }
     }
 
     // GitHub refresh tokens are single use and rotate on every refresh, so refreshes of one link

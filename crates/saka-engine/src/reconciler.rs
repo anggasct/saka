@@ -32,6 +32,11 @@ impl Engine {
                 spec_dependencies: read::spec_dependencies(c, None)?,
                 quotas: read::account_quotas(c)?,
                 port_blocks: Some(self.cfg.env.port_blocks()),
+                user_links: saka_store::user_link::active_user_links(c)?
+                    .into_iter()
+                    .filter(|l| l.owner == crate::OPERATOR)
+                    .collect(),
+                authorships: saka_store::authorship::project_authorships(c)?,
             })
         })?;
         self.counters
@@ -51,6 +56,10 @@ impl Engine {
                     let auto_retry = matches!(input, TaskInput::AutoRetry)
                         .then(|| pending_auto_retry(&snapshot, id))
                         .flatten();
+                    let resumed = match &input {
+                        TaskInput::Resume { trigger } => Some(*trigger),
+                        _ => None,
+                    };
                     let advance = matches!(input, TaskInput::Admit)
                         .then(|| latest_merged_dependency(&snapshot, id))
                         .flatten();
@@ -67,6 +76,13 @@ impl Engine {
                                 after_work_item_id = %after,
                                 seconds,
                                 "delivery.advance"
+                            );
+                        }
+                        if let Some(trigger) = resumed {
+                            tracing::info!(
+                                work_item_id = %id,
+                                reason = trigger.as_str(),
+                                "delivery.retry.resumed"
                             );
                         }
                         if let Some((code, attempt)) = auto_retry {

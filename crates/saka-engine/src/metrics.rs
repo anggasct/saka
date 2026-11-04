@@ -32,6 +32,7 @@ pub struct Counters {
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
+    change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -129,6 +130,10 @@ impl Counters {
 
     pub(crate) fn user_link_refresh(&self, integration: &str, outcome: &str) {
         bump(&self.user_link_refreshes, integration, outcome);
+    }
+
+    pub(crate) fn change_request_opened(&self, credential: &str) {
+        bump(&self.change_requests_opened, credential, "");
     }
 
     pub(crate) fn path_scope_violation(&self, stage: &str) {
@@ -294,6 +299,7 @@ pub struct MetricsSnapshot {
     pub path_scope_violations: Vec<(String, u64)>,
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
+    pub change_requests_opened: Vec<(String, u64)>,
 }
 
 pub(crate) enum DodVerification {
@@ -434,6 +440,10 @@ impl Engine {
                 .collect(),
             user_link_authorizations: copy(&self.counters.user_link_authorizations),
             user_link_refreshes: copy(&self.counters.user_link_refreshes),
+            change_requests_opened: copy(&self.counters.change_requests_opened)
+                .into_iter()
+                .map(|(credential, _, n)| (credential, n))
+                .collect(),
         })
     }
 

@@ -21,8 +21,8 @@ use saka_env::{
     ToolchainConfig, ToolchainInstaller, runtime_dir,
 };
 use saka_ports::{
-    ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote, IdentityLookup, Ids,
-    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    ChangeOpening, ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote,
+    IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
     PushOutcome, PushRequest, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport, TokenRefresh,
     UnitLimits, WebhookDelivery,
 };
@@ -79,7 +79,7 @@ impl Scm for ScmRouter {
             .push_branch(request)
             .await
     }
-    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<OpenedChange> {
+    async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening> {
         self.get(&request.repo.integration_id)?
             .open_change_request(request)
             .await
@@ -265,6 +265,13 @@ fn env_config(cfg: &Config, store: &Store) -> Result<EnvConfig, ConfigError> {
                 "a live environment holds ports {start}+{count}; tear it down before changing env.port_range or env.ports_per_env"
             ),
         }),
+    }
+}
+
+fn saka_identity(cfg: &Config) -> saka_core::authorship::GitIdentity {
+    saka_core::authorship::GitIdentity {
+        name: cfg.git.name.clone(),
+        email: cfg.git.email.clone(),
     }
 }
 
@@ -600,8 +607,7 @@ async fn run(
                 account_dir: cfg.account_dir().to_string_lossy().into_owned(),
                 model: Some(cfg.agent.model.clone()).filter(|m| !m.is_empty()),
                 path: config::paths_of(&cfg.agent.path),
-                author_name: cfg.git.name.clone(),
-                author_email: cfg.git.email.clone(),
+                committer: saka_identity(cfg),
             },
             sessions_dir: data_dir.join("sessions"),
             runtime_dir: runtime_dir(),
@@ -641,10 +647,7 @@ async fn run(
             worker_id: format!("serve-{}", std::process::id()),
             integrations,
             env: env_cfg,
-            docs_author: saka_ports::CommitIdentity {
-                name: cfg.git.name.clone(),
-                email: cfg.git.email.clone(),
-            },
+            git_identity: saka_identity(cfg),
             draft: draft_config(cfg),
             architect_model: Some(cfg.architect.model.clone()).filter(|m| !m.is_empty()),
             config_poll_secs: cfg.workspace.config_poll_secs,
