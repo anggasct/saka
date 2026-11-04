@@ -3943,3 +3943,278 @@ fn a_task_shows_its_docs_checkout_in_the_environment_and_null_without_one() {
     assert!(r.body["environment"].is_object());
     assert_eq!(r.body["environment"]["docs"], Value::Null);
 }
+
+const CHECK_CONFIG: &str = "/api/v1/projects/actions/check-config";
+
+fn check(api: &mut Api, workspace: &str, folder: &str, content: &str) -> Reply {
+    api.post(
+        CHECK_CONFIG,
+        &[],
+        json!({ "workspace_url": format!("https://{workspace}"), "project_path": folder, "base_branch": null, "content": content }),
+    )
+}
+
+fn count(api: &Api, table: &str) -> String {
+    rows(api, &format!("SELECT CAST(COUNT(*) AS TEXT) FROM {table}")).remove(0)
+}
+
+fn table_counts(api: &Api) -> Vec<String> {
+    ["event", "project", "repo", "project_repo"]
+        .iter()
+        .map(|t| count(api, t))
+        .collect()
+}
+
+#[test]
+fn a_config_check_resolves_bindings_and_compares_the_remote_without_writing() {
+    let mut api = docs_only();
+    api.sim.world.create_branch(WEB_REPO, "develop");
+    let toml = saka_toml(
+        "shop",
+        &[
+            repo_entry("web", WEB_REPO, "base_branch = \"develop\"\n"),
+            repo_entry(
+                "shop",
+                SHOP_REPO,
+                "default = true\npath_scope = [\"services/api/**\"]\n",
+            ),
+        ],
+    );
+    let before = table_counts(&api);
+    let actions = count(&api, "action_request");
+    let mirror_reads = api.sim.world.stats().mirror_reads;
+    let workspace = format!("github.com/{DOCS_REPO}");
+    let r = check(&mut api, &workspace, "shop", &toml);
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["ok"], true);
+    assert_eq!(r.body["problems"], json!([]));
+    assert_eq!(
+        r.body["workspace"],
+        json!({ "integration_id": "github", "full_name": DOCS_REPO, "default_branch": "main", "base_branch": "main" })
+    );
+    assert_eq!(
+        r.body["repos"],
+        json!([
+            { "name": "shop", "integration_id": "github", "full_name": SHOP_REPO, "url": format!("https://github.com/{SHOP_REPO}"),
+              "is_workspace": false, "is_default": true, "base_branch": "main",
+              "path_scope": ["services/api/**"], "effective_path_scope": ["services/api/**"] },
+            { "name": "web", "integration_id": "github", "full_name": WEB_REPO, "url": format!("https://github.com/{WEB_REPO}"),
+              "is_workspace": false, "is_default": false, "base_branch": "develop",
+              "path_scope": ["**"], "effective_path_scope": ["**"] },
+        ])
+    );
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(toml.as_bytes());
+    let sha = format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(r.body["content_sha256"], sha);
+    assert_eq!(r.body["remote"]["present"], false);
+    assert_eq!(r.body["remote"]["config_sha256"], Value::Null);
+    assert_eq!(r.body["remote"]["matches"], false);
+    assert_eq!(r.body["project"], Value::Null);
+    assert_eq!(table_counts(&api), before);
+    assert_eq!(api.sim.world.stats().mirror_reads, mirror_reads);
+    assert_eq!(
+        count(&api, "action_request"),
+        (actions.parse::<u32>().unwrap() + 1).to_string()
+    );
+
+    let other = api
+        .sim
+        .world
+        .put_doc("shop/saka.toml", b"[project]\nname = \"x\"\n");
+    let r = check(&mut api, &workspace, "shop", &toml);
+    assert_eq!(r.body["remote"]["commit"], other);
+    assert_eq!(r.body["remote"]["present"], true);
+    assert_eq!(r.body["remote"]["matches"], false);
+    let same = api.sim.world.put_doc("shop/saka.toml", toml.as_bytes());
+    let r = check(&mut api, &workspace, "shop", &toml);
+    assert_eq!(
+        r.body["remote"],
+        json!({ "commit": same, "present": true, "config_sha256": sha, "matches": true })
+    );
+    assert_eq!(table_counts(&api), before);
+}
+
+#[test]
+fn a_config_check_names_the_registered_project_and_the_workspace_scope() {
+    let mut api = docs_only();
+    let remote = String::from_utf8(api.sim.world.doc("docs/saka.toml").unwrap()).unwrap();
+    let r = check(
+        &mut api,
+        &format!("github.com/{DOCS_REPO}"),
+        "docs",
+        &remote,
+    );
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let projects = api.get("/api/v1/projects");
+    let project = &projects.body["items"][0];
+    assert!(project["id"].is_string(), "{}", projects.body);
+    assert_eq!(r.body["project"]["id"], project["id"]);
+    assert_eq!(r.body["project"]["name"], project["name"]);
+    assert_eq!(r.body["project"]["config_sha256"], project["config_sha256"]);
+    assert_eq!(r.body["project"]["config_commit"], project["config_commit"]);
+    assert_eq!(r.body["remote"]["matches"], true);
+    assert_eq!(r.body["remote"]["config_sha256"], project["config_sha256"]);
+    assert_eq!(r.body["repos"][0]["is_workspace"], true);
+    assert_eq!(
+        r.body["repos"][0]["effective_path_scope"],
+        project["repos"][0]["effective_path_scope"]
+    );
+}
+
+#[test]
+fn a_config_check_reports_every_problem_in_one_response() {
+    let mut api = docs_only();
+    api.sim.world.make_inaccessible("acme/gone");
+    let toml = saka_toml(
+        "shop",
+        &[
+            "[[repo]]\nname = \"a\"\nurl = \"https://gitlab.example/acme/a\"\ndefault = true\n"
+                .to_string(),
+            repo_entry("b", "acme/gone", ""),
+            repo_entry("web", WEB_REPO, "base_branch = \"nope\"\n"),
+        ],
+    );
+    let r = check(&mut api, &format!("github.com/{DOCS_REPO}"), "shop", &toml);
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["ok"], false);
+    assert_eq!(
+        r.body["problems"],
+        json!([
+            { "code": "project_config_invalid", "params": { "issues": [
+                { "code": "base_branch_not_found", "field": "repo[2].base_branch", "line": 16 }
+            ] } },
+            { "code": "scm_integration_unknown", "params": { "host": "gitlab.example", "repo": "a" } },
+            { "code": "scm_repo_inaccessible", "params": { "repo": "b" } },
+        ])
+    );
+    assert_eq!(r.body["repos"].as_array().unwrap().len(), 1);
+
+    let r = check(
+        &mut api,
+        &format!("github.com/{DOCS_REPO}"),
+        "shop",
+        "[project]\nname = \"x\"\n",
+    );
+    assert_eq!(r.body["problems"].as_array().unwrap().len(), 1);
+    assert_eq!(r.body["problems"][0]["code"], "project_config_invalid");
+    assert_eq!(r.body["repos"], json!([]));
+
+    let r = check(&mut api, "gitlab.example/acme/docs", "shop", &toml);
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["workspace"], Value::Null);
+    assert_eq!(r.body["remote"], Value::Null);
+    assert_eq!(
+        r.body["problems"][1],
+        json!({ "code": "scm_integration_unknown", "params": { "host": "gitlab.example", "repo": null } })
+    );
+
+    let missing = api.post(
+        CHECK_CONFIG,
+        &[],
+        json!({ "workspace_url": format!("https://github.com/{DOCS_REPO}"), "project_path": "shop", "base_branch": "nope", "content": toml }),
+    );
+    assert_eq!(missing.status, StatusCode::OK);
+    assert_eq!(missing.body["remote"], Value::Null);
+    assert_eq!(
+        missing.body["problems"][0]["params"]["issues"][0],
+        json!({ "code": "base_branch_not_found", "field": "base_branch", "line": null })
+    );
+}
+
+#[test]
+fn config_check_refusals_carry_their_codes() {
+    let mut api = docs_only();
+    let workspace = format!("https://github.com/{DOCS_REPO}");
+    let big = "#".repeat(65_537);
+    let r = api.post(
+        CHECK_CONFIG,
+        &[],
+        json!({ "workspace_url": workspace, "project_path": "shop", "content": big }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(
+        r.body["params"]["errors"][0],
+        json!({ "field": "content", "code": "too_large" })
+    );
+    let r = api.post_with(
+        CHECK_CONFIG,
+        None,
+        &[],
+        &json!({ "workspace_url": workspace, "project_path": "shop", "content": "x" }),
+    );
+    problem(&r, StatusCode::BAD_REQUEST, "idempotency_key_required");
+    for (field, body) in [
+        (
+            "project_path",
+            json!({ "workspace_url": workspace, "project_path": "../x", "content": "x" }),
+        ),
+        (
+            "workspace_url",
+            json!({ "workspace_url": "git@github.com:a/b", "project_path": "x", "content": "x" }),
+        ),
+        (
+            "content",
+            json!({ "workspace_url": workspace, "project_path": "x", "content": "" }),
+        ),
+    ] {
+        let r = api.post(CHECK_CONFIG, &[], body);
+        problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        assert_eq!(r.body["params"]["errors"][0]["field"], field);
+    }
+    api.sim.world.fail_provider_reads(true);
+    let r = api.post(
+        CHECK_CONFIG,
+        &[],
+        json!({ "workspace_url": workspace, "project_path": "shop", "content": "x" }),
+    );
+    problem(&r, StatusCode::BAD_GATEWAY, "scm_unavailable");
+}
+
+#[test]
+fn config_checks_are_counted_and_logged() {
+    let mut api = docs_only();
+    let logs = LogBuffer::default();
+    let out = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || out.clone())
+        .finish();
+    let workspace = format!("github.com/{DOCS_REPO}");
+    let good = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    tracing::subscriber::with_default(subscriber, || {
+        assert_eq!(check(&mut api, &workspace, "shop", &good).body["ok"], true);
+        assert_eq!(
+            check(&mut api, &workspace, "shop", "[project]\n").body["ok"],
+            false
+        );
+    });
+    let metrics = api.get_text("/metrics");
+    assert!(
+        metrics.contains("saka_project_config_checks_total{outcome=\"ok\"} 1\n"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("saka_project_config_checks_total{outcome=\"problems\"} 1\n"),
+        "{metrics}"
+    );
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let checked: Vec<Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["fields"]["message"] == "workspace.config.checked")
+        .collect();
+    assert_eq!(checked.len(), 2, "{text}");
+    assert_eq!(checked[0]["fields"]["ok"], true);
+    assert_eq!(checked[1]["fields"]["problems"], 1);
+    assert!(
+        !text.contains("[project]"),
+        "the file content is never logged"
+    );
+}

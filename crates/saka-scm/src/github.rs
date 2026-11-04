@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 pub use app::{API_VERSION, GitHubApp, GitHubConfig};
-use app::{As, Reply, inaccessible, parse_time, split_repo};
+use app::{As, RAW_MEDIA_TYPE, Reply, inaccessible, parse_time, split_repo};
 
 pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     provider: "github",
@@ -149,6 +149,61 @@ impl Scm for GitHub {
             url: text("html_url"),
             default_branch: text("default_branch"),
         })
+    }
+
+    async fn branch_head(
+        &self,
+        _integration_id: &str,
+        full_name: &str,
+        branch: &str,
+    ) -> PortResult<Option<String>> {
+        let reply = self
+            .repo_call(full_name, Method::GET, &["branches", branch], None)
+            .await?;
+        if reply.status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !reply.status.is_success() {
+            return Err(self.app.unexpected("branch_head", &reply));
+        }
+        reply.body["commit"]["sha"]
+            .as_str()
+            .map(|sha| Some(sha.to_string()))
+            .ok_or_else(|| {
+                PortError::retryable("scm_unavailable", json!({ "detail": "branch_incomplete" }))
+            })
+    }
+
+    async fn file_at(
+        &self,
+        _integration_id: &str,
+        full_name: &str,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Option<Vec<u8>>> {
+        let (owner, name) = split_repo(full_name)?;
+        let mut segments = vec!["repos", owner, name, "contents"];
+        segments.extend(path.split('/'));
+        let mut url = self.app.url(&segments)?;
+        url.query_pairs_mut().append_pair("ref", commit);
+        let reply = self
+            .app
+            .call_accepting(full_name, Method::GET, url, None, RAW_MEDIA_TYPE)
+            .await?;
+        if reply.status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !reply.status.is_success() {
+            return Err(self.app.unexpected("file_at", &reply));
+        }
+        if reply.raw.len() as u64 > max_bytes {
+            return Err(PortError::permanent(
+                "file_too_large",
+                json!({ "path": path, "bytes": reply.raw.len(), "max_bytes": max_bytes }),
+            ));
+        }
+        Ok(Some(reply.raw))
     }
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {

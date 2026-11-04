@@ -127,6 +127,12 @@ impl ConfigFile {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BranchLookup {
+    Mirror,
+    Provider,
+}
+
 pub(crate) struct WorkspaceRepo<'a> {
     pub repo: &'a RepoRef,
     pub host: &'a str,
@@ -175,84 +181,105 @@ impl Engine {
         Ok(ConfigFile { commit, content })
     }
 
-    pub(crate) async fn resolve_bindings(
+    pub(crate) async fn resolve_binding(
         &self,
-        config: &project_config::ProjectConfig,
-        workspace: &WorkspaceRepo<'_>,
-    ) -> Result<Vec<NewBinding>> {
-        let mut out = Vec::with_capacity(config.repos.len());
-        for entry in &config.repos {
-            let integration = self.integration_for(&entry.host).ok_or_else(|| {
-                Rejection::ScmIntegrationUnknown {
-                    host: entry.host.clone(),
-                    repo: Some(entry.name.clone()),
+        entry: &project_config::RepoEntry,
+        workspace: Option<&WorkspaceRepo<'_>>,
+    ) -> Result<std::result::Result<NewBinding, Rejection>> {
+        let Some(integration) = self.integration_for(&entry.host) else {
+            return Ok(Err(Rejection::ScmIntegrationUnknown {
+                host: entry.host.clone(),
+                repo: Some(entry.name.clone()),
+            }));
+        };
+        let workspace = workspace.filter(|w| {
+            integration.id == w.repo.integration_id && entry.same_repo(w.host, &w.repo.full_name)
+        });
+        let repo = if let Some(workspace) = workspace {
+            NewRepo {
+                repo_id: Some(workspace.repo.repo_id),
+                integration_id: integration.id.clone(),
+                provider: workspace.provider.to_string(),
+                full_name: workspace.repo.full_name.clone(),
+                url: workspace.repo.url.clone(),
+                default_branch: workspace.default_branch.to_string(),
+            }
+        } else {
+            let info = match self
+                .ports
+                .scm
+                .repository(&integration.id, &entry.full_name)
+                .await
+            {
+                Ok(info) => info,
+                Err(e) if e.code == "scm_repo_inaccessible" => {
+                    return Ok(Err(Rejection::ScmRepoInaccessible {
+                        repo: Some(entry.name.clone()),
+                    }));
                 }
-            })?;
-            let is_workspace = integration.id == workspace.repo.integration_id
-                && entry.same_repo(workspace.host, &workspace.repo.full_name);
-            let repo = if is_workspace {
-                NewRepo {
-                    repo_id: Some(workspace.repo.repo_id),
-                    integration_id: integration.id.clone(),
-                    provider: workspace.provider.to_string(),
-                    full_name: workspace.repo.full_name.clone(),
-                    url: workspace.repo.url.clone(),
-                    default_branch: workspace.default_branch.to_string(),
-                }
-            } else {
-                let info = self
-                    .ports
+                Err(e) => return Err(EngineError::Port(e)),
+            };
+            let known = self
+                .store
+                .read(|c| read::repo_by_name(c, &integration.id, &info.full_name))?;
+            NewRepo {
+                repo_id: Some(known.map_or_else(|| RepoId(self.new_id()), |r| r.id)),
+                integration_id: integration.id.clone(),
+                provider: integration.provider.clone(),
+                full_name: info.full_name,
+                url: info.url,
+                default_branch: info.default_branch,
+            }
+        };
+        let base_branch = match (&entry.base_branch, workspace) {
+            (Some(b), _) => b.clone(),
+            (None, Some(w)) => w.base_branch.to_string(),
+            (None, None) => repo.default_branch.clone(),
+        };
+        Ok(Ok(NewBinding {
+            repo,
+            name: entry.name.clone(),
+            is_default: entry.is_default,
+            base_branch,
+            path_scope: entry.path_scope.clone(),
+        }))
+    }
+
+    pub(crate) async fn branch_exists(
+        &self,
+        lookup: BranchLookup,
+        repo: &NewRepo,
+        branch: &str,
+    ) -> Result<bool> {
+        let head = match lookup {
+            BranchLookup::Mirror => self.ports.docs.branch_tip(&repo.repo_ref(), branch).await?,
+            BranchLookup::Provider => {
+                self.ports
                     .scm
-                    .repository(&integration.id, &entry.full_name)
-                    .await
-                    .map_err(|e| {
-                        if e.code == "scm_repo_inaccessible" {
-                            EngineError::Rejected(Rejection::ScmRepoInaccessible {
-                                repo: Some(entry.name.clone()),
-                            })
-                        } else {
-                            EngineError::Port(e)
-                        }
-                    })?;
-                let known = self
-                    .store
-                    .read(|c| read::repo_by_name(c, &integration.id, &info.full_name))?;
-                NewRepo {
-                    repo_id: Some(known.map_or_else(|| RepoId(self.new_id()), |r| r.id)),
-                    integration_id: integration.id.clone(),
-                    provider: integration.provider.clone(),
-                    full_name: info.full_name,
-                    url: info.url,
-                    default_branch: info.default_branch,
-                }
-            };
-            let base_branch = match (&entry.base_branch, is_workspace) {
-                (Some(b), _) => b.clone(),
-                (None, true) => workspace.base_branch.to_string(),
-                (None, false) => repo.default_branch.clone(),
-            };
-            out.push(NewBinding {
-                repo,
-                name: entry.name.clone(),
-                is_default: entry.is_default,
-                base_branch,
-                path_scope: entry.path_scope.clone(),
-            });
-        }
+                    .branch_head(&repo.integration_id, &repo.full_name, branch)
+                    .await?
+            }
+        };
+        Ok(head.is_some())
+    }
+
+    pub(crate) async fn missing_base_branches(
+        &self,
+        resolved: &[(&project_config::RepoEntry, &NewBinding)],
+        workspace: Option<&WorkspaceRepo<'_>>,
+        lookup: BranchLookup,
+    ) -> Result<Vec<project_config::Issue>> {
         let mut missing = Vec::new();
-        for (entry, binding) in config.repos.iter().zip(&out) {
-            let known_tip = binding.repo.repo_id == Some(workspace.repo.repo_id)
-                && binding.base_branch == workspace.base_branch;
+        for (entry, binding) in resolved {
+            let known_tip = workspace.is_some_and(|w| {
+                binding.repo.repo_id == Some(w.repo.repo_id) && binding.base_branch == w.base_branch
+            });
             if known_tip {
                 continue;
             }
-            let repo = binding.repo.repo_ref();
-            if self
-                .ports
-                .docs
-                .branch_tip(&repo, &binding.base_branch)
+            if !self
+                .branch_exists(lookup, &binding.repo, &binding.base_branch)
                 .await?
-                .is_none()
             {
                 missing.push(project_config::Issue {
                     code: "base_branch_not_found",
@@ -261,6 +288,22 @@ impl Engine {
                 });
             }
         }
+        Ok(missing)
+    }
+
+    pub(crate) async fn resolve_bindings(
+        &self,
+        config: &project_config::ProjectConfig,
+        workspace: &WorkspaceRepo<'_>,
+    ) -> Result<Vec<NewBinding>> {
+        let mut out = Vec::with_capacity(config.repos.len());
+        for entry in &config.repos {
+            out.push(self.resolve_binding(entry, Some(workspace)).await??);
+        }
+        let resolved: Vec<_> = config.repos.iter().zip(&out).collect();
+        let missing = self
+            .missing_base_branches(&resolved, Some(workspace), BranchLookup::Mirror)
+            .await?;
         if !missing.is_empty() {
             return Err(config_invalid(&missing).into());
         }

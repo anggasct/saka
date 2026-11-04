@@ -99,6 +99,22 @@ pub enum MergeOutcome {
 pub trait Scm: Send + Sync {
     async fn repository(&self, integration_id: &str, full_name: &str) -> PortResult<RepoInfo>;
 
+    async fn branch_head(
+        &self,
+        integration_id: &str,
+        full_name: &str,
+        branch: &str,
+    ) -> PortResult<Option<String>>;
+
+    async fn file_at(
+        &self,
+        integration_id: &str,
+        full_name: &str,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Option<Vec<u8>>>;
+
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome>;
 
     async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening>;

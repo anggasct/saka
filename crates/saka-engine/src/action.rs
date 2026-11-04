@@ -18,6 +18,7 @@ pub struct Reply {
 pub enum Produced<'a> {
     Project(&'a ProjectView),
     Reload(&'a crate::reload::ReloadView),
+    ConfigCheck(&'a crate::config_check::ConfigCheckView),
     Spec(&'a SpecView, bool),
     Task(&'a Task),
     Draft(&'a Draft),

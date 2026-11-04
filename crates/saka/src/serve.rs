@@ -74,6 +74,28 @@ impl Scm for ScmRouter {
             .repository(integration_id, full_name)
             .await
     }
+    async fn branch_head(
+        &self,
+        integration_id: &str,
+        full_name: &str,
+        branch: &str,
+    ) -> PortResult<Option<String>> {
+        self.get(integration_id)?
+            .branch_head(integration_id, full_name, branch)
+            .await
+    }
+    async fn file_at(
+        &self,
+        integration_id: &str,
+        full_name: &str,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Option<Vec<u8>>> {
+        self.get(integration_id)?
+            .file_at(integration_id, full_name, commit, path, max_bytes)
+            .await
+    }
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {
         self.get(&request.repo.integration_id)?
             .push_branch(request)

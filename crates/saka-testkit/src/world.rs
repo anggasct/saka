@@ -106,6 +106,7 @@ pub struct Stats {
     pub answer_frames: u32,
     pub steers_to_cli: u32,
     pub reattaches: u32,
+    pub mirror_reads: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +199,7 @@ struct State {
     statuses_refused: bool,
     draft_turns: VecDeque<DraftTurn>,
     push_outages: u32,
+    provider_reads_fail: bool,
     change_reads_fail: bool,
     launches: Vec<Launch>,
     repo_files: BTreeMap<String, String>,
@@ -336,6 +338,7 @@ impl FakeWorld {
                 statuses_refused: false,
                 draft_turns: VecDeque::new(),
                 push_outages: 0,
+                provider_reads_fail: false,
                 change_reads_fail: false,
                 launches: Vec::new(),
                 repo_files: BTreeMap::new(),
@@ -645,6 +648,10 @@ impl FakeWorld {
 
     pub fn refuse_statuses(&self) {
         self.state().statuses_refused = true;
+    }
+
+    pub fn fail_provider_reads(&self, fail: bool) {
+        self.state().provider_reads_fail = fail;
     }
 
     pub fn fail_pushes(&self, times: u32) {
@@ -1476,7 +1483,9 @@ fn worktree_relative(path: &str) -> PortResult<String> {
 #[async_trait]
 impl DocSource for FakeWorld {
     async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>> {
-        Ok(self.state().refs(&repo.full_name).get(branch).cloned())
+        let mut s = self.state();
+        s.stats.mirror_reads += 1;
+        Ok(s.refs(&repo.full_name).get(branch).cloned())
     }
 
     async fn read_at_tip(
@@ -1486,6 +1495,7 @@ impl DocSource for FakeWorld {
         path: &str,
     ) -> PortResult<Option<DocFile>> {
         let mut s = self.state();
+        s.stats.mirror_reads += 1;
         let commit = s
             .refs(&repo.full_name)
             .get(branch)
@@ -1510,7 +1520,8 @@ impl DocSource for FakeWorld {
         path: &str,
         max_bytes: u64,
     ) -> PortResult<Blob> {
-        let s = self.state();
+        let mut s = self.state();
+        s.stats.mirror_reads += 1;
         if !s.is_home(repo) {
             return Ok(Blob::Missing);
         }
@@ -1699,6 +1710,12 @@ impl DocSource for FakeWorld {
 #[async_trait]
 impl Scm for FakeWorld {
     async fn repository(&self, _integration_id: &str, full_name: &str) -> PortResult<RepoInfo> {
+        if self.state().provider_reads_fail {
+            return Err(PortError::retryable(
+                "scm_unavailable",
+                json!({ "status": 500, "detail": "server_error" }),
+            ));
+        }
         if self.state().inaccessible.contains(full_name) {
             return Err(PortError::permanent(
                 "scm_repo_inaccessible",
@@ -1710,6 +1727,52 @@ impl Scm for FakeWorld {
             url: format!("https://github.com/{full_name}"),
             default_branch: BASE_BRANCH.to_string(),
         })
+    }
+
+    async fn branch_head(
+        &self,
+        _integration_id: &str,
+        full_name: &str,
+        branch: &str,
+    ) -> PortResult<Option<String>> {
+        let mut s = self.state();
+        s.call("branch_head");
+        if s.provider_reads_fail {
+            return Err(PortError::retryable(
+                "scm_unavailable",
+                json!({ "status": 500, "detail": "server_error" }),
+            ));
+        }
+        Ok(s.refs(full_name).get(branch).cloned())
+    }
+
+    async fn file_at(
+        &self,
+        _integration_id: &str,
+        full_name: &str,
+        commit: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> PortResult<Option<Vec<u8>>> {
+        let mut s = self.state();
+        s.call("file_at");
+        if s.provider_reads_fail {
+            return Err(PortError::retryable(
+                "scm_unavailable",
+                json!({ "status": 500, "detail": "server_error" }),
+            ));
+        }
+        if full_name != s.home {
+            return Ok(None);
+        }
+        let docs = s.doc_history.get(commit).unwrap_or(&s.docs);
+        match docs.get(path) {
+            Some(b) if b.len() as u64 > max_bytes => Err(PortError::permanent(
+                "file_too_large",
+                json!({ "path": path, "bytes": b.len(), "max_bytes": max_bytes }),
+            )),
+            other => Ok(other.cloned()),
+        }
     }
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {

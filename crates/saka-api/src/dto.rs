@@ -1688,6 +1688,144 @@ pub struct AddProjectBody {
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CheckConfigBody {
+    /// HTTPS URL of the repo that holds the project folder; same rules as `POST /projects`.
+    pub workspace_url: String,
+    /// `.` for the repo root, or a relative folder path; same rules as `POST /projects`.
+    pub project_path: String,
+    /// `null` = the default branch of the workspace repo.
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    /// The `saka.toml` text to check, 1 to 65 536 bytes.
+    pub content: String,
+}
+
+/// The workspace repo as the check resolved it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CheckedWorkspace {
+    pub integration_id: String,
+    pub full_name: String,
+    pub default_branch: String,
+    /// The effective base branch: the requested one, or the default branch.
+    pub base_branch: String,
+}
+
+/// A `[[repo]]` binding that resolved; same shape as `Project.repos[]` without ids.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CheckedRepo {
+    pub name: String,
+    pub integration_id: String,
+    pub full_name: String,
+    pub url: String,
+    pub is_workspace: bool,
+    pub is_default: bool,
+    pub base_branch: String,
+    pub path_scope: Vec<String>,
+    /// `path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`.
+    pub effective_path_scope: Vec<String>,
+}
+
+/// A problem that would refuse registration.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConfigProblem {
+    /// `project_config_invalid | scm_integration_unknown | scm_repo_inaccessible`
+    pub code: String,
+    pub params: Value,
+}
+
+/// `saka.toml` at the tip of the workspace base branch.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RemoteConfig {
+    /// Commit at the tip of the base branch.
+    pub commit: String,
+    /// `false` when the file does not exist at that commit.
+    pub present: bool,
+    /// `sha256:<hex>` of the remote file; `null` when it is missing or larger than 65 536 bytes.
+    pub config_sha256: Option<String>,
+    /// `config_sha256 == content_sha256`.
+    pub matches: bool,
+}
+
+/// The project already registered for this workspace repo and folder.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CheckedProject {
+    pub id: Uuid,
+    pub name: String,
+    pub config_commit: String,
+    pub config_sha256: String,
+}
+
+/// Result of checking a `saka.toml` without registering it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConfigCheck {
+    /// `true` when `problems` is empty.
+    pub ok: bool,
+    /// `sha256:<hex>` of `content`.
+    pub content_sha256: String,
+    /// `null` when the workspace host has no integration or the App cannot read the repo.
+    pub workspace: Option<CheckedWorkspace>,
+    /// Resolved bindings, default first, then by `name`.
+    pub repos: Vec<CheckedRepo>,
+    /// In order: content issues, the workspace, then repos in `[[repo]]` order.
+    pub problems: Vec<ConfigProblem>,
+    /// `null` when `workspace` is `null` or its base branch does not exist.
+    pub remote: Option<RemoteConfig>,
+    /// `null` when no project is registered for this workspace repo and folder.
+    pub project: Option<CheckedProject>,
+}
+
+impl ConfigCheck {
+    pub fn from_view(v: &saka_engine::ConfigCheckView) -> ConfigCheck {
+        ConfigCheck {
+            ok: v.ok,
+            content_sha256: v.content_sha256.clone(),
+            workspace: v.workspace.as_ref().map(|w| CheckedWorkspace {
+                integration_id: w.integration_id.clone(),
+                full_name: w.full_name.clone(),
+                default_branch: w.default_branch.clone(),
+                base_branch: w.base_branch.clone(),
+            }),
+            repos: v
+                .repos
+                .iter()
+                .map(|r| CheckedRepo {
+                    name: r.name.clone(),
+                    integration_id: r.integration_id.clone(),
+                    full_name: r.full_name.clone(),
+                    url: r.url.clone(),
+                    is_workspace: r.is_workspace,
+                    is_default: r.is_default,
+                    base_branch: r.base_branch.clone(),
+                    path_scope: r.path_scope.clone(),
+                    effective_path_scope: r.effective_path_scope.clone(),
+                })
+                .collect(),
+            problems: v
+                .problems
+                .iter()
+                .map(|p| ConfigProblem {
+                    code: p.code.clone(),
+                    params: p.params.clone(),
+                })
+                .collect(),
+            remote: v.remote.as_ref().map(|r| RemoteConfig {
+                commit: r.commit.clone(),
+                present: r.present,
+                config_sha256: r.config_sha256.clone(),
+                matches: r.matches,
+            }),
+            project: v.project.as_ref().map(|p| CheckedProject {
+                id: p.id.0,
+                name: p.name.clone(),
+                config_commit: p.config_commit.clone(),
+                config_sha256: p.config_sha256.clone(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddSpecBody {
     pub path: String,
 }

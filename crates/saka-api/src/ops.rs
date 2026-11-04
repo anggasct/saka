@@ -250,6 +250,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_project_config_checks_total",
+        "counter",
+        "Checks of a saka.toml before registration, by outcome.",
+    );
+    for (outcome, n) in &m.config_checks {
+        t.sample(
+            "saka_project_config_checks_total",
+            &[("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
         "saka_path_scope_violations_total",
         "counter",
         "Task diffs found outside their allowed paths, by the stage that checked them.",

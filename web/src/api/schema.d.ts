@@ -116,6 +116,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/actions/check-config": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["check_project_config"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}": {
     parameters: {
       query?: never;
@@ -834,6 +850,65 @@ export interface components {
       state: string;
       url: string;
     };
+    CheckConfigBody: {
+      /** @description `null` = the default branch of the workspace repo. */
+      base_branch?: string | null;
+      /** @description The `saka.toml` text to check, 1 to 65 536 bytes. */
+      content: string;
+      /** @description `.` for the repo root, or a relative folder path; same rules as `POST /projects`. */
+      project_path: string;
+      /** @description HTTPS URL of the repo that holds the project folder; same rules as `POST /projects`. */
+      workspace_url: string;
+    };
+    /** @description The project already registered for this workspace repo and folder. */
+    CheckedProject: {
+      config_commit: string;
+      config_sha256: string;
+      /** Format: uuid */
+      id: string;
+      name: string;
+    };
+    /** @description A `[[repo]]` binding that resolved; same shape as `Project.repos[]` without ids. */
+    CheckedRepo: {
+      base_branch: string;
+      /** @description `path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`. */
+      effective_path_scope: string[];
+      full_name: string;
+      integration_id: string;
+      is_default: boolean;
+      is_workspace: boolean;
+      name: string;
+      path_scope: string[];
+      url: string;
+    };
+    /** @description The workspace repo as the check resolved it. */
+    CheckedWorkspace: {
+      /** @description The effective base branch: the requested one, or the default branch. */
+      base_branch: string;
+      default_branch: string;
+      full_name: string;
+      integration_id: string;
+    };
+    /** @description Result of checking a `saka.toml` without registering it. */
+    ConfigCheck: {
+      /** @description `sha256:<hex>` of `content`. */
+      content_sha256: string;
+      /** @description `true` when `problems` is empty. */
+      ok: boolean;
+      /** @description In order: content issues, the workspace, then repos in `[[repo]]` order. */
+      problems: components["schemas"]["ConfigProblem"][];
+      project?: components["schemas"]["CheckedProject"] | null;
+      remote?: components["schemas"]["RemoteConfig"] | null;
+      /** @description Resolved bindings, default first, then by `name`. */
+      repos: components["schemas"]["CheckedRepo"][];
+      workspace?: components["schemas"]["CheckedWorkspace"] | null;
+    };
+    /** @description A problem that would refuse registration. */
+    ConfigProblem: {
+      /** @description `project_config_invalid | scm_integration_unknown | scm_repo_inaccessible` */
+      code: string;
+      params: unknown;
+    };
     ContextDoc: {
       /** Format: int64 */
       bytes: number;
@@ -1375,6 +1450,17 @@ export interface components {
     };
     /** @description Request body of a reload; no fields. */
     ReloadBody: Record<string, never>;
+    /** @description `saka.toml` at the tip of the workspace base branch. */
+    RemoteConfig: {
+      /** @description Commit at the tip of the base branch. */
+      commit: string;
+      /** @description `sha256:<hex>` of the remote file; `null` when it is missing or larger than 65 536 bytes. */
+      config_sha256?: string | null;
+      /** @description `config_sha256 == content_sha256`. */
+      matches: boolean;
+      /** @description `false` when the file does not exist at that commit. */
+      present: boolean;
+    };
     RequiredReason: {
       reason: string;
     };
@@ -2324,6 +2410,48 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Project"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  check_project_config: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CheckConfigBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConfigCheck"];
         };
       };
       502: {
