@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
 use crate::metadata;
+use crate::tools::Installer;
 
 const CRATE: &str = "saka-wasm";
 const TARGET: &str = "wasm32-unknown-unknown";
@@ -14,14 +14,15 @@ const OUT_NAME: &str = "saka_wasm";
 pub fn run() -> Result<()> {
     let root = metadata::workspace_root()?;
     let meta = metadata::load()?;
-    let target_dir = PathBuf::from(
-        meta["target_directory"]
-            .as_str()
-            .context("metadata has no target_directory")?,
-    );
+    let target_dir = metadata::target_directory(&meta)?;
     let lock = std::fs::read_to_string(root.join("Cargo.lock")).context("read Cargo.lock")?;
     let version = bindgen_version(&lock)?;
-    let cli = install_cli(&target_dir, &version)?;
+    let cli = Installer::new(&target_dir, false).install(
+        "wasm-bindgen",
+        "wasm-bindgen-cli",
+        &version,
+        "wasm-bindgen",
+    )?;
     run_tool(
         Command::new(metadata::cargo())
             .args([
@@ -53,29 +54,6 @@ pub fn run() -> Result<()> {
             .arg(&wasm),
         "wasm-bindgen",
     )
-}
-
-fn install_cli(target_dir: &Path, version: &str) -> Result<PathBuf> {
-    let root = target_dir
-        .join("tools")
-        .join(format!("wasm-bindgen-{version}"));
-    let cli = root.join("bin").join("wasm-bindgen");
-    if !cli.exists() {
-        run_tool(
-            Command::new(metadata::cargo())
-                .args(["install", "wasm-bindgen-cli", "--locked", "--version"])
-                .arg(format!("={version}"))
-                .arg("--root")
-                .arg(&root),
-            "cargo install wasm-bindgen-cli",
-        )?;
-    }
-    let out = Command::new(&cli)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("run {} --version", cli.display()))?;
-    check_cli_version(&String::from_utf8_lossy(&out.stdout), version)?;
-    Ok(cli)
 }
 
 fn run_tool(cmd: &mut Command, what: &str) -> Result<()> {
@@ -114,18 +92,6 @@ pub fn bindgen_version(lock: &str) -> Result<String> {
     }
 }
 
-pub fn check_cli_version(output: &str, version: &str) -> Result<()> {
-    let expected = format!("wasm-bindgen {version}");
-    if output.trim() == expected {
-        Ok(())
-    } else {
-        bail!(
-            "wasm-bindgen CLI reports {:?}, expected {expected:?}",
-            output.trim()
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,10 +127,11 @@ mod tests {
 
     #[test]
     fn a_cli_of_another_version_is_refused() {
-        assert!(check_cli_version("wasm-bindgen 0.2.130\n", "0.2.130").is_ok());
-        assert!(check_cli_version("wasm-bindgen 0.2.129\n", "0.2.130").is_err());
-        assert!(check_cli_version("wasm-bindgen 0.2.1300\n", "0.2.130").is_err());
-        assert!(check_cli_version("", "0.2.130").is_err());
+        let check = |out| crate::tools::check_version("wasm-bindgen", out, "0.2.130");
+        assert!(check("wasm-bindgen 0.2.130\n").is_ok());
+        assert!(check("wasm-bindgen 0.2.129\n").is_err());
+        assert!(check("wasm-bindgen 0.2.1300\n").is_err());
+        assert!(check("").is_err());
     }
 
     #[test]

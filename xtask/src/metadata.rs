@@ -32,11 +32,25 @@ pub fn load() -> Result<Value> {
 }
 
 pub fn product_packages(meta: &Value) -> Result<Vec<String>> {
+    members_under(meta, &["crates", "xtask"])
+}
+
+pub fn spike_packages(meta: &Value) -> Result<Vec<String>> {
+    members_under(meta, &["spikes"])
+}
+
+pub fn target_directory(meta: &Value) -> Result<PathBuf> {
+    meta["target_directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .context("metadata has no target_directory")
+}
+
+fn members_under(meta: &Value, dirs: &[&str]) -> Result<Vec<String>> {
     let root = meta["workspace_root"]
         .as_str()
         .context("metadata has no workspace_root")?;
-    let crates_dir = Path::new(root).join("crates");
-    let xtask_dir = Path::new(root).join("xtask");
+    let dirs: Vec<PathBuf> = dirs.iter().map(|dir| Path::new(root).join(dir)).collect();
     let members: Vec<&str> = meta["workspace_members"]
         .as_array()
         .context("metadata has no workspace_members")?
@@ -56,9 +70,7 @@ pub fn product_packages(meta: &Value) -> Result<Vec<String>> {
             continue;
         };
         let manifest = Path::new(manifest);
-        if members.contains(&id)
-            && (manifest.starts_with(&crates_dir) || manifest.starts_with(&xtask_dir))
-        {
+        if members.contains(&id) && dirs.iter().any(|dir| manifest.starts_with(dir)) {
             names.push(name.to_string());
         }
     }

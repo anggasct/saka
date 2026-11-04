@@ -1,0 +1,14 @@
+[package]
+name = "bans-fixture"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+openssl-sys = { path = "openssl-sys" }
+dup-one = { package = "dup", path = "dup-1" }
+dup-two = { package = "dup", path = "dup-2" }
+
+[workspace]
+exclude = ["dup-1", "dup-2"]

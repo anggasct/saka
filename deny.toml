@@ -1,0 +1,55 @@
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+unused-ignored-advisory = "deny"
+maximum-db-staleness = "P7D"
+ignore = []
+
+[licenses]
+allow = ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0", "CC0-1.0", "ISC", "MIT", "MIT-0", "Unicode-3.0", "Unicode-DFS-2016", "Unlicense", "Zlib"]
+confidence-threshold = 0.93
+include-dev = false
+unused-allowed-license = "allow"
+unused-license-exception = "deny"
+exceptions = [
+    # Mozilla CA certificate data, not code; permissive data licence.
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "deny"
+multiple-versions-include-dev = false
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+    { crate = "openssl", use-instead = "rustls", reason = "TLS is rustls across the workspace" },
+    { crate = "openssl-sys", use-instead = "rustls", reason = "TLS is rustls across the workspace" },
+    { crate = "native-tls", use-instead = "rustls", reason = "TLS is rustls across the workspace" },
+]
+skip = [
+    { crate = "base64@0.22.1", reason = "jsonwebtoken 11.1 and pem 3 still depend on base64 0.22" },
+    { crate = "getrandom@0.2.17", reason = "jsonwebtoken 11.1 still depends on getrandom 0.2" },
+    { crate = "syn@2.0.119", reason = "jiff-static, jni-macros, rust-embed-impl, tracing-attributes and zeroize_derive are still on syn 2" },
+    { crate = "untrusted@0.7.1", reason = "aws-lc-rs 1.19 still depends on untrusted 0.7" },
+]
+
+[bans.workspace-dependencies]
+duplicates = "deny"
+include-path-dependencies = false
+unused = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
