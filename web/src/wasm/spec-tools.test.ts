@@ -36,6 +36,7 @@ const EXAMPLE_PARAMS: Record<string, unknown> = {
   option: 2,
   origin: "link",
   path: "docs/context.md",
+  repo: "web",
   reason: "docs",
   slug: "tasks-done",
   step: "S2",

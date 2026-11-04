@@ -4,7 +4,7 @@ use saka_core::ids::{
 };
 use saka_core::model::{
     AccountQuota, Budget, ContextRef, PermissionRequest, PermissionRule, Project, Repo, Session,
-    SessionActivity, Spec, StageRun, Task, Usage, UsageRecord,
+    SessionActivity, Spec, StageRun, StepPlan, Task, Usage, UsageRecord, step_repo,
 };
 use saka_core::plan::RevisionPlan;
 use saka_core::spec as core_spec;
@@ -102,9 +102,17 @@ pub struct SpecView {
     pub spec: Spec,
     pub revision: RevisionInfo,
     pub approved_revision: Option<RevisionRef>,
-    pub work_items: Vec<(String, WorkItemId)>,
+    pub work_items: Vec<StepItem>,
+    pub step_repos: Vec<(String, Option<RepoId>)>,
     pub depends_on: Vec<DependencyView>,
     pub revision_plan: Option<RevisionPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepItem {
+    pub step_id: String,
+    pub work_item_id: WorkItemId,
+    pub repo_id: RepoId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,11 +186,17 @@ pub struct Paged<T> {
     pub next: Option<Key>,
 }
 
-pub(crate) fn step_items(tasks: &[Task]) -> Vec<(String, WorkItemId)> {
+pub(crate) fn step_items(tasks: &[Task]) -> Vec<StepItem> {
     tasks
         .iter()
         .filter(|t| t.item.state != WorkItemState::Superseded)
-        .filter_map(|t| t.item.step_id.clone().map(|s| (s, t.item.id)))
+        .filter_map(|t| {
+            t.item.step_id.clone().map(|step_id| StepItem {
+                step_id,
+                work_item_id: t.item.id,
+                repo_id: t.item.repo_id,
+            })
+        })
         .collect()
 }
 
@@ -276,7 +290,7 @@ impl Engine {
         &self,
         spec: Spec,
         revision: RevisionInfo,
-        work_items: Vec<(String, WorkItemId)>,
+        work_items: Vec<StepItem>,
     ) -> Result<SpecView> {
         let (approved_revision, declared) = match spec.approved_revision_id {
             Some(id) if id != revision.id => {
@@ -319,14 +333,45 @@ impl Engine {
                 .collect::<saka_store::Result<Vec<_>>>()
         })?;
         let revision_plan = self.revision_plan(&spec, &revision)?;
+        let step_repos = self.step_repos(&spec, &revision, &work_items)?;
         Ok(SpecView {
             spec,
             revision,
             approved_revision,
             work_items,
+            step_repos,
             depends_on,
             revision_plan,
         })
+    }
+
+    fn step_repos(
+        &self,
+        spec: &Spec,
+        revision: &RevisionInfo,
+        work_items: &[StepItem],
+    ) -> Result<Vec<(String, Option<RepoId>)>> {
+        let steps: Vec<StepPlan> = revision
+            .model
+            .get("steps")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let project = self
+            .store
+            .read(|c| read::load_project(c, spec.project_id))?;
+        Ok(steps
+            .into_iter()
+            .map(|step| {
+                let repo_id = match work_items.iter().find(|w| w.step_id == step.id) {
+                    Some(item) => Some(item.repo_id),
+                    None => project
+                        .as_ref()
+                        .and_then(|p| step_repo(&p.repos, step.repo.as_deref())),
+                };
+                (step.id, repo_id)
+            })
+            .collect())
     }
 
     fn revision_plan(&self, spec: &Spec, latest: &RevisionInfo) -> Result<Option<RevisionPlan>> {

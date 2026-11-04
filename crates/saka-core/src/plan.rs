@@ -67,6 +67,9 @@ pub fn changed_fields(from: &StepPlan, to: &StepPlan) -> Vec<StepField> {
     if from.after != to.after {
         fields.push(StepField::After);
     }
+    if from.repo != to.repo {
+        fields.push(StepField::Repo);
+    }
     fields
 }
 

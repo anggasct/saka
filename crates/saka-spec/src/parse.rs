@@ -10,13 +10,14 @@ use crate::graph::cycles;
 use crate::lint::{LintCode, LintIssue};
 use crate::model::{AcceptanceCriterion, Link, SpecModel, Step};
 
-pub const PARSER_VERSION: u32 = 4;
+pub const PARSER_VERSION: u32 = 5;
 pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 pub const MAX_STEPS: usize = 50;
 
 const REQUIRED_COLUMNS: [&str; 4] = ["step", "work", "ac", "done when"];
-const UNSUPPORTED_COLUMNS: [&str; 1] = ["repo"];
 const AFTER_COLUMN: &str = "after";
+const REPO_COLUMN: &str = "repo";
+const MAX_REPO_NAME: usize = 32;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parsed {
@@ -433,6 +434,7 @@ fn one_step(
         ac,
         commands,
         after: Vec::new(),
+        repo: None,
         line: done_when.line,
     }]
 }
@@ -474,15 +476,6 @@ fn steps_from_table(
 ) -> Vec<Step> {
     let column = |name: &str| table.columns.iter().position(|c| c == name);
     let mut broken = false;
-    for name in UNSUPPORTED_COLUMNS {
-        if column(name).is_some() {
-            issues.push(
-                LintIssue::new(LintCode::StepsColumnUnsupported, table.header_line)
-                    .with("column", name),
-            );
-            broken = true;
-        }
-    }
     let mut index = [0usize; 4];
     for (slot, name) in REQUIRED_COLUMNS.iter().enumerate() {
         match column(name) {
@@ -505,6 +498,7 @@ fn steps_from_table(
     }
     let [step_col, work_col, ac_col, done_col] = index;
     let after_col = column(AFTER_COLUMN);
+    let repo_col = column(REPO_COLUMN);
     let empty = Cell {
         text: String::new(),
         code: Vec::new(),
@@ -563,6 +557,16 @@ fn steps_from_table(
                     .with("step", expected.clone()),
             );
         }
+        let repo = repo_col
+            .map(|c| cell(c).text.clone())
+            .filter(|r| !r.is_empty());
+        if let Some(name) = repo.as_deref().filter(|r| !is_repo_name(r)) {
+            issues.push(
+                LintIssue::new(LintCode::StepRepoInvalid, row.line)
+                    .with("step", expected.clone())
+                    .with("repo", name),
+            );
+        }
         written_after.push(after_col.map(|c| split_ids(&cell(c).text)));
         let after = match position {
             1 => Vec::new(),
@@ -575,6 +579,7 @@ fn steps_from_table(
             ac,
             commands,
             after,
+            repo,
             line: row.line,
         });
     }
@@ -582,6 +587,13 @@ fn steps_from_table(
         apply_after(&mut steps, &written_after, issues);
     }
     steps
+}
+
+fn is_repo_name(name: &str) -> bool {
+    (1..=MAX_REPO_NAME).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 fn split_ids(text: &str) -> Vec<String> {

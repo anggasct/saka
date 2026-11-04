@@ -4144,7 +4144,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Changed fields in the order `work`, `ac`, `commands`, `after`; only for `changed`."
+            "description": "Changed fields in the order `work`, `ac`, `commands`, `after`, `repo`; only for `changed`."
           },
           "reason": {
             "type": [
@@ -5836,6 +5836,21 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `Repo` cell as written; null when the column is absent or the cell is empty (the project's default repo)."
+          },
+          "repo_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Repo the step runs in: the task's repo once the step has a task, otherwise `repo` resolved against the project's current repos; null when the name is not bound to the project."
           },
           "work": {
             "type": "string"

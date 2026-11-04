@@ -11,4 +11,6 @@ saka: spec
 
 | Step | Work | AC | Repo | Done when |
 |---|---|---|---|---|
-| S1 | x | AC-01 | app | `true` |
+| S1 | x | AC-01 | web | `true` |
+| S2 | x | AC-01 |  | `true` |
+| S3 | x | AC-01 | Web! | `true` |

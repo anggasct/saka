@@ -573,7 +573,7 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
            repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
          ON CONFLICT (id) DO UPDATE SET spec_revision_id = excluded.spec_revision_id,
-           step_index = excluded.step_index, work = excluded.work, state = excluded.state, stage = excluded.stage,
+           step_index = excluded.step_index, work = excluded.work, repo_id = excluded.repo_id, state = excluded.state, stage = excluded.stage,
            stage_phase = excluded.stage_phase, priority = excluded.priority, version = excluded.version,
            admitted_at = excluded.admitted_at, done_at = excluded.done_at, updated_at = excluded.updated_at",
         params![

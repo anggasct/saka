@@ -509,7 +509,7 @@ fn rounds_content_and_packet_follow_a_draft_that_succeeds() {
         .collect();
     assert_eq!(shape, [(1, 1, "failed"), (1, 2, "passed")]);
     assert!(!items[0]["issues"].as_array().unwrap().is_empty());
-    assert_eq!(items[0]["parser_version"], 4);
+    assert_eq!(items[0]["parser_version"], 5);
     assert!(items[0]["session_id"].is_string());
 
     let content = api.get(&format!("{base}/content")).body;
@@ -534,7 +534,7 @@ fn rounds_content_and_packet_follow_a_draft_that_succeeds() {
     );
     let docs = packet["documents"].as_array().unwrap();
     assert_eq!(docs[0]["origin"], "template");
-    assert_eq!(docs[0]["source"], "saka:spec-template/en (parser 4)");
+    assert_eq!(docs[0]["source"], "saka:spec-template/en (parser 5)");
     assert_eq!(docs[0]["path"], Value::Null);
     assert_eq!(docs[1]["origin"], "rules");
     let prd = docs.iter().find(|d| d["path"] == "docs/prd.md").unwrap();

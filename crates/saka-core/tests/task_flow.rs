@@ -11,7 +11,9 @@ use saka_core::ids::{
     SpecRevisionId,
 };
 use saka_core::job::{Job, JobKind};
-use saka_core::model::{Coded, RevisionView, Spec, StepPlan, Task, WorkItemDependency};
+use saka_core::model::{
+    Coded, ProjectRepo, RevisionView, Spec, StepPlan, Task, WorkItemDependency,
+};
 use saka_core::policy::{Decision, DecisionSource, Effect};
 use saka_core::react::react;
 use saka_core::reconcile::{Action, Snapshot, reconcile};
@@ -71,11 +73,21 @@ struct World {
     jobs: Vec<Job>,
 }
 
+fn bindings(repo: RepoId) -> &'static [ProjectRepo] {
+    Box::leak(Box::new([ProjectRepo {
+        repo_id: repo,
+        name: "app".into(),
+        is_default: true,
+        base_branch: "main".into(),
+        path_scope: vec!["**".into()],
+    }]))
+}
+
 fn approval(if_match: SpecRevisionId, repo: RepoId) -> spec::Approval<'static> {
     spec::Approval {
         if_match,
         reason: None,
-        default_repo: repo,
+        repos: bindings(repo),
         parser_version: 2,
         depends_on_line: 1,
         project_specs: &[],
@@ -138,6 +150,8 @@ impl World {
                     ac: vec![],
                     commands: vec![],
                     after: vec![],
+                    repo: None,
+                    line: 0,
                 },
                 StepPlan {
                     id: "S2".into(),
@@ -146,6 +160,8 @@ impl World {
                     ac: vec![],
                     commands: vec![],
                     after: vec!["S1".into()],
+                    repo: None,
+                    line: 0,
                 },
             ],
             parser_version: 2,

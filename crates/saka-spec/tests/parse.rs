@@ -33,8 +33,8 @@ fn after(parsed: &saka_spec::Parsed) -> Vec<(String, Vec<String>)> {
 }
 
 #[test]
-fn the_parser_is_version_four() {
-    assert_eq!(PARSER_VERSION, 4);
+fn the_parser_is_version_five() {
+    assert_eq!(PARSER_VERSION, 5);
 }
 
 fn links_of(text: &str) -> (Vec<(String, u32)>, Vec<LintIssue>) {
@@ -137,6 +137,46 @@ fn two_step_spec_parses_into_the_model() {
         vec!["cd web && npm test", "cd cli && go vet ./..."]
     );
     assert_eq!(s2.after, vec!["S1"]);
+    assert!(model.steps.iter().all(|s| s.repo.is_none()));
+}
+
+#[test]
+fn the_repo_column_names_each_step_repository() {
+    let parsed = parse("x.md", fixture!("step_repo_invalid"));
+    let repos: Vec<Option<&str>> = parsed
+        .model
+        .iter()
+        .flat_map(|m| &m.steps)
+        .map(|s| s.repo.as_deref())
+        .collect();
+    assert_eq!(repos, vec![Some("web"), None, Some("Web!")]);
+    assert_eq!(
+        found(&parsed.issues),
+        vec![(
+            LintCode::StepRepoInvalid,
+            Severity::Error,
+            16,
+            json!({"step": "S3", "repo": "Web!"})
+        )]
+    );
+    let model = serde_json::to_value(parsed.model.unwrap()).unwrap();
+    assert_eq!(model["steps"][0]["repo"], json!("web"));
+    assert_eq!(model["steps"][1]["repo"], Value::Null);
+    let text = std::str::from_utf8(fixture!("step_repo_invalid"))
+        .unwrap()
+        .replace("| Web! |", "| a-32-character-repo-name-is-okay |");
+    assert!(parse("x.md", text.as_bytes()).issues.is_empty());
+    let long = text.replace("a-32-character-repo-name-is-okay", &"r".repeat(33));
+    assert_eq!(
+        parse("x.md", long.as_bytes()).issues[0].code,
+        LintCode::StepRepoInvalid
+    );
+}
+
+#[test]
+fn a_done_when_spec_uses_the_default_repo() {
+    let parsed = parse("x.md", fixture!("one-step"));
+    assert!(parsed.model.unwrap().steps.iter().all(|s| s.repo.is_none()));
 }
 
 #[test]
@@ -209,10 +249,10 @@ fn each_lint_code_has_a_fixture() {
         ),
         (
             "x.md",
-            fixture!("steps_column_unsupported"),
-            C::StepsColumnUnsupported,
-            12,
-            json!({"column": "repo"}),
+            fixture!("step_repo_invalid"),
+            C::StepRepoInvalid,
+            16,
+            json!({"step": "S3", "repo": "Web!"}),
         ),
         (
             "x.md",
@@ -960,6 +1000,6 @@ fn the_rules_list_every_lint_code_once() {
             code.as_str()
         );
     }
-    assert_eq!(LintCode::ALL.len(), 45);
+    assert_eq!(LintCode::ALL.len(), 46);
     assert!(rules.contains("## Decisions"));
 }

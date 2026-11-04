@@ -1113,7 +1113,7 @@ export interface components {
     PlanStep: {
       /** @description `keep | repin | restore | add | supersede | conflict` */
       action: string;
-      /** @description Changed fields in the order `work`, `ac`, `commands`, `after`; only for `changed`. */
+      /** @description Changed fields in the order `work`, `ac`, `commands`, `after`, `repo`; only for `changed`. */
       fields: string[];
       /** @description `changed | removed`, only for `conflict`. */
       reason?: string | null;
@@ -1636,6 +1636,13 @@ export interface components {
       id: string;
       /** Format: int32 */
       index: number;
+      /** @description The `Repo` cell as written; null when the column is absent or the cell is empty (the project's default repo). */
+      repo?: string | null;
+      /**
+       * Format: uuid
+       * @description Repo the step runs in: the task's repo once the step has a task, otherwise `repo` resolved against the project's current repos; null when the name is not bound to the project.
+       */
+      repo_id?: string | null;
       work: string;
       /** Format: uuid */
       work_item_id?: string | null;

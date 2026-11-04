@@ -1,4 +1,4 @@
-# Saka spec format (parser 4)
+# Saka spec format (parser 5)
 
 A spec is one markdown file. Saka reads its structure exactly as written here; anything else in the file is free prose for people and agents.
 
@@ -21,15 +21,16 @@ A spec is one markdown file. Saka reads its structure exactly as written here; a
 
 ## Steps
 
-- A level 2 heading `## Steps` holds one table with the columns `Step`, `Work`, `AC`, and `Done when` (in any order), plus the optional column `After`.
+- A level 2 heading `## Steps` holds one table with the columns `Step`, `Work`, `AC`, and `Done when` (in any order), plus the optional columns `After` and `Repo`.
 - Rows are numbered `S1`, `S2`, … in order, at most 50 rows.
 - `Work` says what the step builds. `AC` lists the criteria ids the step delivers, separated by commas; every id must exist. Every criterion should be covered by at least one step.
 - `Done when` lists the commands that must pass before the step is done, each in backticks: `` `make test` `make lint` ``. Every step needs at least one command.
 - Without an `After` column the steps run in order. With it, each cell lists the steps that step waits for (`S1` or `S1, S2`); an empty cell means it waits for nothing. Only the first step should start with nothing to wait for unless steps really run in parallel. Waiting must not form a cycle.
+- `Repo` names the code repository of the project the step changes: lowercase letters, digits, and `-`, at most 32 characters, matching a `[[repo]]` name in the project's `saka.toml`. An empty cell, or no `Repo` column, means the project's default repository.
 
 ## Done when
 
-- A small change can replace the Steps section with a level 2 heading `## Done when` and a list. Each item holds exactly one command in backticks. The spec is then a single step `S1` that delivers every criterion.
+- A small change can replace the Steps section with a level 2 heading `## Done when` and a list. Each item holds exactly one command in backticks. The spec is then a single step `S1` that delivers every criterion, in the project's default repository.
 - A spec has either a Steps table or a Done when list, never both.
 
 ## Context links
@@ -71,12 +72,12 @@ Each line is one code Saka can report, when it is reported, and its level. Any e
 - `ac_id_duplicate` — a criterion id is used twice. Error.
 - `steps_missing` — there is neither a Steps table with rows nor a Done when list. Error.
 - `steps_column_missing` — the Steps table lacks one of the required columns. Error.
-- `steps_column_unsupported` — the Steps table has a column this parser does not support. Error.
 - `step_id_invalid` — a row is not numbered in order (`S1`, `S2`, …). Error.
 - `step_limit_exceeded` — the Steps table has more than 50 rows. Error.
 - `step_ac_empty` — a step lists no criteria. Error.
 - `step_ac_unknown` — a step lists a criterion id that does not exist. Error.
 - `step_command_missing` — a step has no command in Done when. Error.
+- `step_repo_invalid` — a Repo cell is not a valid repository name. Error.
 - `frontmatter_invalid` — a frontmatter line is not a key, or a known key appears twice. Error.
 - `priority_invalid` — priority is not an integer from -1000 to 1000. Error.
 - `depends_on_invalid` — a depends_on entry is not a valid slug. Error.
@@ -92,6 +93,7 @@ Each line is one code Saka can report, when it is reported, and its level. Any e
 - `depends_on_unknown` — no spec in the project has a slug named in depends_on. Error.
 - `depends_on_withdrawn` — a spec named in depends_on is withdrawn. Error.
 - `depends_on_cycle` — specs depend on each other in a cycle. Error.
+- `step_repo_unknown` — at approve, a Repo cell names a repository the project does not bind. Error.
 - `links_limit_exceeded` — the spec has more than 256 links; the rest are not read. Warning.
 - `reference_outside_workspace` — a link points outside the workspace. Error.
 - `reference_not_doc` — a link points at a file that is not markdown, so it is not context. Warning.

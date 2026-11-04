@@ -58,7 +58,7 @@ pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{
     AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
-    RevisionRef, ScopeWarning, SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    RevisionRef, ScopeWarning, SessionView, SpecView, StepItem, TaskDetail, TaskView, UsageView,
 };
 pub use worker::{JobReport, JobResult};
 

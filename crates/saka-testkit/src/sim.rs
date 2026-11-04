@@ -493,8 +493,16 @@ impl Sim {
     }
 
     pub fn occupy_branch(&self, project_id: ProjectId, branch: &str) {
+        self.occupy_branch_in(project_id, self.spec_task_repo(), branch);
+    }
+
+    pub fn occupy_branch_in(
+        &self,
+        project_id: ProjectId,
+        repo_id: saka_core::ids::RepoId,
+        branch: &str,
+    ) {
         let now = self.clock.now();
-        let repo_id = self.spec_task_repo();
         let mut batch = Batch::new(now);
         batch.tasks.push(Task::new(WorkItem {
             id: WorkItemId(

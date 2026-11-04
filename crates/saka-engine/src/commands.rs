@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use saka_core::Ctx;
 use saka_core::event::Event;
 use saka_core::ids::{
@@ -438,7 +440,12 @@ impl Engine {
         cause: &Cause,
     ) -> Result<Vec<WorkItemId>> {
         self.approve_spec_with(spec_id, if_match, reason, cause, None)
-            .map(|view| view.work_items.into_iter().map(|(_, id)| id).collect())
+            .map(|view| {
+                view.work_items
+                    .into_iter()
+                    .map(|w| w.work_item_id)
+                    .collect()
+            })
     }
 
     pub fn approve_spec_with(
@@ -489,15 +496,12 @@ impl Engine {
             .store
             .read(|c| read::load_project(c, spec.project_id))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
-        let default_repo = project
-            .default_repo()
-            .ok_or_else(|| EngineError::Internal("project has no default repo".into()))?;
         let mut ids = IdsSource(&*self.ports.ids);
         let mut ctx = Ctx { now, ids: &mut ids };
         let approval = spec::Approval {
             if_match,
             reason,
-            default_repo,
+            repos: &project.repos,
             parser_version: PARSER_VERSION,
             depends_on_line,
             project_specs: &project_specs,
@@ -512,14 +516,17 @@ impl Engine {
             spec::approval_graph(&spec, &view, &events, &items);
         batch.replaced_spec_dependencies.push(spec.id);
         let mut after = Some(spec.clone());
-        let mut created = Vec::new();
+        let mut placed: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
         let mut current = tasks.clone();
         for e in &events {
             after = spec::evolve(after, e, now);
             match e {
                 Event::WorkItemCreated { .. } => {
                     if let Some(t) = task::evolve(None, e, now) {
-                        created.push(t.clone());
+                        placed
+                            .entry(t.item.repo_id)
+                            .or_default()
+                            .push(t.item.branch.clone());
                         batch.tasks.push(t.clone());
                         current.push(t);
                     }
@@ -532,6 +539,12 @@ impl Engine {
                     if let Some(t) = current.iter_mut().find(|t| t.item.id == *work_item_id)
                         && let Some(next) = task::evolve(Some(t.clone()), e, now)
                     {
+                        if next.item.repo_id != t.item.repo_id {
+                            placed
+                                .entry(next.item.repo_id)
+                                .or_default()
+                                .push(next.item.branch.clone());
+                        }
                         *t = next.clone();
                         batch.tasks.push(next);
                     }
@@ -540,10 +553,18 @@ impl Engine {
             }
             self.push_event(&mut batch, e, Some(spec.project_id), cause, now);
         }
-        let branches: Vec<String> = created.iter().map(|t| t.item.branch.clone()).collect();
-        let taken = self
-            .store
-            .read(|c| list::branches_in_use(c, default_repo, &branches, spec.project_id))?;
+        let taken = self.store.read(|c| {
+            let mut taken = Vec::new();
+            for (repo_id, branches) in &placed {
+                taken.extend(list::branches_in_use(
+                    c,
+                    *repo_id,
+                    branches,
+                    spec.project_id,
+                )?);
+            }
+            Ok(taken)
+        })?;
         if !taken.is_empty() {
             return Err(Rejection::TaskBranchConflict { branches: taken }.into());
         }

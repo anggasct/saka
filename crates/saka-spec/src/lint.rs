@@ -31,12 +31,13 @@ pub enum LintCode {
     AcIdDuplicate,
     StepsMissing,
     StepsColumnMissing,
-    StepsColumnUnsupported,
     StepIdInvalid,
     StepLimitExceeded,
     StepAcEmpty,
     StepAcUnknown,
     StepCommandMissing,
+    StepRepoInvalid,
+    StepRepoUnknown,
     FrontmatterInvalid,
     PriorityInvalid,
     DependsOnInvalid,
@@ -69,7 +70,7 @@ pub enum LintCode {
 }
 
 impl LintCode {
-    pub const ALL: [LintCode; 45] = [
+    pub const ALL: [LintCode; 46] = [
         LintCode::NotASpec,
         LintCode::FileTooLarge,
         LintCode::InvalidUtf8,
@@ -80,12 +81,13 @@ impl LintCode {
         LintCode::AcIdDuplicate,
         LintCode::StepsMissing,
         LintCode::StepsColumnMissing,
-        LintCode::StepsColumnUnsupported,
         LintCode::StepIdInvalid,
         LintCode::StepLimitExceeded,
         LintCode::StepAcEmpty,
         LintCode::StepAcUnknown,
         LintCode::StepCommandMissing,
+        LintCode::StepRepoInvalid,
+        LintCode::StepRepoUnknown,
         LintCode::FrontmatterInvalid,
         LintCode::PriorityInvalid,
         LintCode::DependsOnInvalid,
@@ -129,12 +131,13 @@ impl LintCode {
             LintCode::AcIdDuplicate => "ac_id_duplicate",
             LintCode::StepsMissing => "steps_missing",
             LintCode::StepsColumnMissing => "steps_column_missing",
-            LintCode::StepsColumnUnsupported => "steps_column_unsupported",
             LintCode::StepIdInvalid => "step_id_invalid",
             LintCode::StepLimitExceeded => "step_limit_exceeded",
             LintCode::StepAcEmpty => "step_ac_empty",
             LintCode::StepAcUnknown => "step_ac_unknown",
             LintCode::StepCommandMissing => "step_command_missing",
+            LintCode::StepRepoInvalid => "step_repo_invalid",
+            LintCode::StepRepoUnknown => "step_repo_unknown",
             LintCode::FrontmatterInvalid => "frontmatter_invalid",
             LintCode::PriorityInvalid => "priority_invalid",
             LintCode::DependsOnInvalid => "depends_on_invalid",
@@ -185,12 +188,13 @@ impl LintCode {
             | LintCode::AcIdDuplicate
             | LintCode::StepsMissing
             | LintCode::StepsColumnMissing
-            | LintCode::StepsColumnUnsupported
             | LintCode::StepIdInvalid
             | LintCode::StepLimitExceeded
             | LintCode::StepAcEmpty
             | LintCode::StepAcUnknown
             | LintCode::StepCommandMissing
+            | LintCode::StepRepoInvalid
+            | LintCode::StepRepoUnknown
             | LintCode::FrontmatterInvalid
             | LintCode::PriorityInvalid
             | LintCode::DependsOnInvalid
