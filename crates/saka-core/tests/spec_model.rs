@@ -4,7 +4,7 @@ use saka_core::Ctx;
 use saka_core::admission::{Waiting, waiting_on};
 use saka_core::event::Event;
 use saka_core::ids::{IdSource, ProjectId, RepoId, SpecId, SpecRevisionId};
-use saka_core::model::{DependsOn, RevisionView, Spec, SpecDependency, StepPlan};
+use saka_core::model::{DependsOn, ProjectRepo, RevisionView, Spec, SpecDependency, StepPlan};
 use saka_core::rejection::Rejection;
 use saka_core::spec::{self, Approval, NewRevision};
 use saka_core::task;
@@ -44,6 +44,16 @@ fn spec(n: u128, slug: &str, state: SpecState) -> Spec {
     }
 }
 
+fn bindings(repo: RepoId) -> &'static [ProjectRepo] {
+    Box::leak(Box::new([ProjectRepo {
+        repo_id: repo,
+        name: "app".into(),
+        is_default: true,
+        base_branch: "main".into(),
+        path_scope: vec!["**".into()],
+    }]))
+}
+
 fn step(n: u32, after: &[&str]) -> StepPlan {
     StepPlan {
         id: format!("S{n}"),
@@ -52,6 +62,8 @@ fn step(n: u32, after: &[&str]) -> StepPlan {
         ac: vec!["AC-01".into()],
         commands: vec![format!("make s{n}")],
         after: after.iter().map(|a| a.to_string()).collect(),
+        repo: None,
+        line: 10 + n,
     }
 }
 
@@ -94,7 +106,7 @@ fn approve(
         Approval {
             if_match: s.latest_revision_id,
             reason: None,
-            default_repo: RepoId(Uuid::from_u128(901)),
+            repos: bindings(RepoId(Uuid::from_u128(901))),
             parser_version: 2,
             depends_on_line: 3,
             project_specs: specs,

@@ -5,7 +5,9 @@ use saka_core::Ctx;
 use saka_core::admission::waiting_on;
 use saka_core::event::Event;
 use saka_core::ids::{IdSource, ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
-use saka_core::model::{RevisionView, Spec, StepPlan, Task, WorkItem, WorkItemDependency};
+use saka_core::model::{
+    ProjectRepo, RevisionView, Spec, StepPlan, Task, WorkItem, WorkItemDependency,
+};
 use saka_core::plan::{PlanStep, RevisionPlan, plan_revision};
 use saka_core::reconcile::{Action, Snapshot, reconcile};
 use saka_core::rejection::Rejection;
@@ -61,6 +63,16 @@ fn cfg() -> LoopConfig {
     }
 }
 
+fn bindings(repo: RepoId) -> &'static [ProjectRepo] {
+    Box::leak(Box::new([ProjectRepo {
+        repo_id: repo,
+        name: "app".into(),
+        is_default: true,
+        base_branch: "main".into(),
+        path_scope: vec!["**".into()],
+    }]))
+}
+
 fn step(n: u32) -> StepPlan {
     StepPlan {
         id: format!("S{n}"),
@@ -73,6 +85,8 @@ fn step(n: u32) -> StepPlan {
         } else {
             vec![format!("S{}", n - 1)]
         },
+        repo: None,
+        line: 10 + n,
     }
 }
 
@@ -172,7 +186,7 @@ fn approve(
         Approval {
             if_match: to.id,
             reason: None,
-            default_repo: REPO,
+            repos: bindings(REPO),
             parser_version: 2,
             depends_on_line: 1,
             project_specs: &[],
@@ -272,6 +286,28 @@ fn each_row_of_the_plan_table() {
     assert!(the(&removed, "S3").fields.is_empty());
 }
 
+#[test]
+fn a_repo_the_project_does_not_bind_is_an_issue_on_its_step_line() {
+    let from = revision(FROM, steps(3), 0);
+    let mut to_steps = steps(3);
+    to_steps[1].repo = Some("ghost".into());
+    to_steps[2].repo = Some("app".into());
+    let to = revision(TO, to_steps, 0);
+    let tasks = vec![
+        item(1, WorkItemState::Done),
+        item(2, WorkItemState::Queued),
+        item(3, WorkItemState::Queued),
+    ];
+    let spec = approved_spec(TO);
+    let Err(Rejection::SpecNotReady { issues }) = approve(&spec, &from, &to, &tasks) else {
+        panic!("an unknown repo was approved");
+    };
+    assert_eq!(
+        issues,
+        json!([{"code": "step_repo_unknown", "severity": "error", "line": 12, "params": {"step": "S2", "repo": "ghost"}}])
+    );
+}
+
 type Change = fn(&mut StepPlan);
 
 #[test]
@@ -292,6 +328,14 @@ fn every_changed_field_is_named_in_order() {
                 s.commands.push("make y".into());
             },
             vec![StepField::Work, StepField::Commands, StepField::After],
+        ),
+        (|s| s.repo = Some("web".into()), vec![StepField::Repo]),
+        (
+            |s| {
+                s.repo = Some("web".into());
+                s.after = vec![];
+            },
+            vec![StepField::After, StepField::Repo],
         ),
     ];
     for (change, fields) in cases {
@@ -362,6 +406,7 @@ fn re_approval_repins_supersedes_and_keeps_the_first_approval_time() {
             spec_revision_id: TO,
             step_index: 2,
             work: "changed 2".into(),
+            repo_id: REPO,
             priority: 7,
             restored: false,
         }
@@ -678,6 +723,9 @@ fn changed(n: u32, mask: u8) -> StepPlan {
             s.after.clear();
         }
     }
+    if mask & 16 != 0 {
+        s.repo = Some("app".into());
+    }
     s
 }
 
@@ -690,7 +738,7 @@ proptest! {
         states in prop::collection::vec(0usize..7, 6),
         gone in 0u32..3,
         to_len in 1u32..8,
-        masks in prop::collection::vec(0u8..16, 8),
+        masks in prop::collection::vec(0u8..32, 8),
     ) {
         let from = revision(FROM, steps(from_len), 0);
         let mut tasks: Vec<WorkItem> = (1..=from_len)

@@ -284,6 +284,10 @@ pub struct Step {
     pub commands: Vec<String>,
     /// Step ids this step waits for.
     pub after: Vec<String>,
+    /// The `Repo` cell as written; null when the column is absent or the cell is empty (the project's default repo).
+    pub repo: Option<String>,
+    /// Repo the step runs in: the task's repo once the step has a task, otherwise `repo` resolved against the project's current repos; null when the name is not bound to the project.
+    pub repo_id: Option<Uuid>,
     pub work_item_id: Option<Uuid>,
 }
 
@@ -295,7 +299,7 @@ pub struct PlanStep {
     pub work_item_id: Option<Uuid>,
     /// `changed | removed`, only for `conflict`.
     pub reason: Option<String>,
-    /// Changed fields in the order `work`, `ac`, `commands`, `after`; only for `changed`.
+    /// Changed fields in the order `work`, `ac`, `commands`, `after`, `repo`; only for `changed`.
     pub fields: Vec<String>,
 }
 
@@ -380,6 +384,8 @@ struct ModelStep {
     commands: Vec<String>,
     #[serde(default)]
     after: Vec<String>,
+    #[serde(default)]
+    repo: Option<String>,
 }
 
 impl Spec {
@@ -471,14 +477,20 @@ impl Spec {
                     work_item_id: v
                         .work_items
                         .iter()
+                        .find(|w| w.step_id == st.id)
+                        .map(|w| w.work_item_id.0),
+                    repo_id: v
+                        .step_repos
+                        .iter()
                         .find(|(id, _)| *id == st.id)
-                        .map(|(_, w)| w.0),
+                        .and_then(|(_, r)| r.map(|r| r.0)),
                     id: st.id,
                     index: st.index,
                     work: st.work,
                     ac: st.ac,
                     commands: st.commands,
                     after: st.after,
+                    repo: st.repo,
                 })
                 .collect(),
             decisions,

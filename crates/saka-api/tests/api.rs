@@ -1036,7 +1036,7 @@ fn a_spec_shows_priority_dependencies_effective_steps_and_severities() {
         .map(|s| &s["after"])
         .collect();
     assert_eq!(after, [&json!([]), &json!(["S1"]), &json!([])]);
-    assert_eq!(b["revision"]["parser_version"], 4);
+    assert_eq!(b["revision"]["parser_version"], 5);
     assert_eq!(b["lint"]["ok"], true);
     assert_eq!(
         b["lint"]["issues"],
@@ -1134,7 +1134,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
     let again = api.register_doc("docs/specs/kept.md", &text);
     assert_eq!(again.body["id"], spec.0.to_string());
     assert_ne!(again.body["revision"]["id"], old.0.to_string());
-    assert_eq!(again.body["revision"]["parser_version"], 4);
+    assert_eq!(again.body["revision"]["parser_version"], 5);
     let versions: Vec<i64> = api
         .sim
         .engine()
@@ -1147,7 +1147,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
             Ok(rows.collect::<Result<Vec<i64>, _>>()?)
         })
         .unwrap();
-    assert_eq!(versions, vec![1, 4]);
+    assert_eq!(versions, vec![1, 5]);
     assert_eq!(api.approve_reply(&again).status, StatusCode::OK);
 }
 
@@ -1214,7 +1214,7 @@ fn the_spec_template_comes_in_english_and_indonesian() {
     let en = api.get("/api/v1/spec-template");
     assert_eq!(en.status, StatusCode::OK);
     assert_eq!(en.body["locale"], "en");
-    assert_eq!(en.body["parser_version"], 4);
+    assert_eq!(en.body["parser_version"], 5);
     let id = api.get("/api/v1/spec-template?locale=id");
     assert_eq!(id.body["locale"], "id");
     assert_ne!(id.body["content"], en.body["content"]);
@@ -3017,5 +3017,109 @@ fn reload_reports_its_outcome_refusals_and_replays_by_key() {
     assert_eq!(
         api.get(&format!("/api/v1/projects/{id}")).body["config_error"]["code"],
         "project_repo_in_use"
+    );
+}
+
+const REPO_COLUMN_SPEC: &str = "---
+saka: spec
+---
+# Multi
+
+## Acceptance criteria
+
+- **AC-01**: every part works.
+
+## Steps
+
+| Step | Work | AC | Repo | Done when |
+|------|------|----|------|-----------|
+| S1 | Part 1 | AC-01 |  | `make test` |
+| S2 | Part 2 | AC-01 | mobile | `make test` |
+";
+
+#[test]
+fn approve_refuses_a_repo_the_project_does_not_bind_until_a_reload_binds_it() {
+    let layout = Layout {
+        saka_toml: saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]),
+        ..Layout::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(SimConfig::default(), &layout));
+    let project = api.sim.project_id.0;
+    let repo_named = |api: &Api, name: &str| {
+        api.get(&format!("/api/v1/projects/{project}")).body["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .map(|r| r["repo_id"].clone())
+            .unwrap()
+    };
+    let shop = repo_named(&api, "shop");
+
+    let spec = api.register_doc("docs/specs/multi.md", REPO_COLUMN_SPEC);
+    let id = spec.body["id"].as_str().unwrap().to_string();
+    let steps = |api: &Api| {
+        api.get(&format!("/api/v1/specs/{id}")).body["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (s["repo"].clone(), s["repo_id"].clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        steps(&api),
+        [(Value::Null, shop.clone()), (json!("mobile"), Value::Null)]
+    );
+
+    let before = api.last_seq();
+    let refused = api.approve_reply(&spec);
+    problem(&refused, StatusCode::UNPROCESSABLE_ENTITY, "spec_not_ready");
+    assert_eq!(
+        refused.body["params"]["issues"],
+        json!([{"code": "step_repo_unknown", "severity": "error", "line": 15, "params": {"step": "S2", "repo": "mobile"}}])
+    );
+    assert_eq!(api.last_seq(), before);
+
+    let bound = saka_toml(
+        "shop",
+        &[
+            repo_entry("shop", SHOP_REPO, "default = true\n"),
+            repo_entry("mobile", WEB_REPO, ""),
+        ],
+    );
+    api.sim.world.put_doc("docs/saka.toml", bound.as_bytes());
+    let r = api.post(
+        &format!("/api/v1/projects/{project}/actions/reload"),
+        &[],
+        json!({}),
+    );
+    assert_eq!(r.body["outcome"], "changed", "{}", r.body);
+    let mobile = repo_named(&api, "mobile");
+    assert_eq!(
+        steps(&api),
+        [
+            (Value::Null, shop.clone()),
+            (json!("mobile"), mobile.clone())
+        ]
+    );
+
+    let approved = api.approve_reply(&spec);
+    assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
+    assert_eq!(approved.body["revision"]["id"], spec.body["revision"]["id"]);
+    let created = api.sim.events_of("delivery.work_item.created");
+    let placed: Vec<_> = created
+        .iter()
+        .filter(|e| {
+            e.payload["task_key"]
+                .as_str()
+                .unwrap()
+                .starts_with("multi/")
+        })
+        .map(|e| e.payload["repo_id"].clone())
+        .collect();
+    assert_eq!(placed, [shop.clone(), mobile.clone()]);
+    assert_eq!(
+        steps(&api),
+        [(Value::Null, shop), (json!("mobile"), mobile)]
     );
 }

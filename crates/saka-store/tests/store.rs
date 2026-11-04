@@ -216,7 +216,7 @@ impl World {
             spec::Approval {
                 if_match: self.spec.latest_revision_id,
                 reason: None,
-                default_repo: self.project.default_repo().unwrap(),
+                repos: &self.project.repos,
                 parser_version: 2,
                 depends_on_line: 1,
                 project_specs: &[],
@@ -730,7 +730,7 @@ fn re_approval_repins_the_row_and_replaces_its_dependencies() {
         spec::Approval {
             if_match: v2,
             reason: None,
-            default_repo: w.project.default_repo().unwrap(),
+            repos: &w.project.repos,
             parser_version: 2,
             depends_on_line: 1,
             project_specs: &[],
@@ -1105,6 +1105,8 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
             ac: vec!["AC-01".into()],
             commands: vec!["npm test".into()],
             after: vec!["S1".into()],
+            repo: None,
+            line: 4,
         }
     );
     assert_eq!(

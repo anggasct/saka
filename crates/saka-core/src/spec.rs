@@ -7,8 +7,8 @@ use crate::Ctx;
 use crate::event::Event;
 use crate::ids::{ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
 use crate::model::{
-    ContextRef, DependsOn, RevisionView, Spec, SpecDependency, StepPlan, WorkItem,
-    WorkItemDependency,
+    ContextRef, DependsOn, ProjectRepo, RevisionView, Spec, SpecDependency, StepPlan, WorkItem,
+    WorkItemDependency, step_repo,
 };
 use crate::plan::{RevisionPlan, plan_revision};
 use crate::rejection::Rejection;
@@ -78,7 +78,7 @@ pub fn record_revision(
 pub struct Approval<'a> {
     pub if_match: SpecRevisionId,
     pub reason: Option<String>,
-    pub default_repo: RepoId,
+    pub repos: &'a [ProjectRepo],
     pub parser_version: u32,
     pub depends_on_line: u32,
     pub project_specs: &'a [Spec],
@@ -133,7 +133,34 @@ pub fn approve(
             });
         }
     };
-    let (depends_on, issues) = resolve_dependencies(spec, latest, &approval);
+    let (depends_on, mut issues) = resolve_dependencies(spec, latest, &approval);
+    let placed: Vec<&StepPlan> = match &plan {
+        None => latest.steps.iter().collect(),
+        Some(plan) => plan
+            .steps
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.action,
+                    PlanAction::Add | PlanAction::Repin | PlanAction::Restore
+                )
+            })
+            .filter_map(|p| latest.steps.iter().find(|s| s.id == p.step_id))
+            .collect(),
+    };
+    let mut repo_of = BTreeMap::new();
+    for step in placed {
+        match step_repo(approval.repos, step.repo.as_deref()) {
+            Some(repo_id) => {
+                repo_of.insert(step.id.as_str(), repo_id);
+            }
+            None => issues.push(approval_issue(
+                "step_repo_unknown",
+                step.line,
+                json!({ "step": step.id, "repo": step.repo }),
+            )),
+        }
+    }
     if !issues.is_empty() {
         return Err(Rejection::SpecNotReady {
             issues: Value::Array(issues),
@@ -147,7 +174,8 @@ pub fn approve(
         depends_on,
         previous_revision_id: plan.as_ref().map(|p| p.from_revision_id),
     }];
-    let created = |step: &StepPlan, ctx: &mut Ctx<'_>| {
+    let placed_repo = |step: &StepPlan| repo_of.get(step.id.as_str()).copied();
+    let created = |step: &StepPlan, repo_id: RepoId, ctx: &mut Ctx<'_>| {
         let key = format!("{}/s{}", spec.slug, step.index);
         Event::WorkItemCreated {
             work_item_id: WorkItemId::new(ctx.ids),
@@ -159,31 +187,42 @@ pub fn approve(
             branch: format!("saka/{key}"),
             task_key: key,
             work: step.work.clone(),
-            repo_id: approval.default_repo,
+            repo_id,
             priority: latest.priority,
         }
     };
     let Some(plan) = plan else {
         for step in &latest.steps {
-            events.push(created(step, ctx));
+            if let Some(repo_id) = placed_repo(step) {
+                events.push(created(step, repo_id, ctx));
+            }
         }
         return Ok(events);
     };
     for planned in &plan.steps {
         let step = latest.steps.iter().find(|s| s.id == planned.step_id);
-        match (planned.action, step, planned.work_item_id) {
-            (PlanAction::Add, Some(step), _) => events.push(created(step, ctx)),
-            (PlanAction::Repin | PlanAction::Restore, Some(step), Some(work_item_id)) => {
+        let repo_id = step.and_then(placed_repo);
+        match (planned.action, step, planned.work_item_id, repo_id) {
+            (PlanAction::Add, Some(step), _, Some(repo_id)) => {
+                events.push(created(step, repo_id, ctx));
+            }
+            (
+                PlanAction::Repin | PlanAction::Restore,
+                Some(step),
+                Some(work_item_id),
+                Some(repo_id),
+            ) => {
                 events.push(Event::WorkItemRepinned {
                     work_item_id,
                     spec_revision_id: latest.id,
                     step_index: step.index,
                     work: step.work.clone(),
+                    repo_id,
                     priority: latest.priority,
                     restored: planned.action == PlanAction::Restore,
                 });
             }
-            (PlanAction::Supersede, _, Some(work_item_id)) => {
+            (PlanAction::Supersede, _, Some(work_item_id), _) => {
                 events.push(Event::WorkItemSuperseded {
                     work_item_id,
                     spec_revision_id: latest.id,
@@ -259,7 +298,7 @@ pub fn withdraw(spec: &Spec, tasks: &[WorkItem], reason: String) -> Result<Vec<E
     Ok(events)
 }
 
-fn dependency_issue(code: &str, line: u32, params: Value) -> Value {
+fn approval_issue(code: &str, line: u32, params: Value) -> Value {
     json!({ "code": code, "severity": "error", "line": line, "params": params })
 }
 
@@ -277,12 +316,12 @@ fn resolve_dependencies(
             .iter()
             .find(|s| s.project_id == spec.project_id && s.slug == *slug && s.id != spec.id);
         match target {
-            None => issues.push(dependency_issue(
+            None => issues.push(approval_issue(
                 "depends_on_unknown",
                 line,
                 json!({ "slug": slug }),
             )),
-            Some(t) if t.state == SpecState::Withdrawn => issues.push(dependency_issue(
+            Some(t) if t.state == SpecState::Withdrawn => issues.push(approval_issue(
                 "depends_on_withdrawn",
                 line,
                 json!({ "slug": slug }),
@@ -297,7 +336,7 @@ fn resolve_dependencies(
         if let Some(path) = path_back(dep.spec_id, spec.id, approval.project_graph) {
             let mut cycle = vec![spec.slug.clone(), dep.slug.clone()];
             cycle.extend(path);
-            issues.push(dependency_issue(
+            issues.push(approval_issue(
                 "depends_on_cycle",
                 line,
                 json!({ "cycle": cycle }),

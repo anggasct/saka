@@ -63,7 +63,7 @@ vocab!(WorkItemState {
 vocab!(SupersedeReason { StepRemoved => "step_removed", SpecWithdrawn => "spec_withdrawn" });
 vocab!(PlanAction { Keep => "keep", Repin => "repin", Restore => "restore", Add => "add", Supersede => "supersede", Conflict => "conflict" });
 vocab!(ConflictReason { Changed => "changed", Removed => "removed" });
-vocab!(StepField { Work => "work", Ac => "ac", Commands => "commands", After => "after" });
+vocab!(StepField { Work => "work", Ac => "ac", Commands => "commands", After => "after", Repo => "repo" });
 vocab!(Stage { Dev => "dev", Review => "review", Fix => "fix", Merge => "merge", Sync => "sync" });
 vocab!(
     StagePhase {

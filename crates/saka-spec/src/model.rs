@@ -57,5 +57,7 @@ pub struct Step {
     pub commands: Vec<String>,
     #[serde(default)]
     pub after: Vec<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
     pub line: u32,
 }

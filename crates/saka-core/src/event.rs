@@ -234,6 +234,7 @@ pub enum Event {
         spec_revision_id: SpecRevisionId,
         step_index: u32,
         work: String,
+        repo_id: RepoId,
         priority: i64,
         restored: bool,
     },

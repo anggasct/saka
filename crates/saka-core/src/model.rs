@@ -114,6 +114,16 @@ pub struct ConfigError {
     pub observed_at: Timestamp,
 }
 
+pub fn step_repo(repos: &[ProjectRepo], name: Option<&str>) -> Option<RepoId> {
+    repos
+        .iter()
+        .find(|r| match name {
+            None => r.is_default,
+            Some(name) => r.name == name,
+        })
+        .map(|r| r.repo_id)
+}
+
 impl Project {
     pub fn default_repo(&self) -> Option<RepoId> {
         self.repos.iter().find(|r| r.is_default).map(|r| r.repo_id)
@@ -165,6 +175,10 @@ pub struct StepPlan {
     pub commands: Vec<String>,
     #[serde(default)]
     pub after: Vec<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

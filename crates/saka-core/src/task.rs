@@ -1465,6 +1465,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             spec_revision_id,
             step_index,
             work,
+            repo_id,
             priority,
             restored,
             ..
@@ -1472,6 +1473,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             t.item.spec_revision_id = Some(*spec_revision_id);
             t.item.step_index = Some(*step_index);
             t.item.work.clone_from(work);
+            t.item.repo_id = *repo_id;
             t.item.priority = *priority;
             if *restored {
                 set_place(&mut t.item, WorkItemState::Queued, None);

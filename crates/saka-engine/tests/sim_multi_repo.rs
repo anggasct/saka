@@ -328,3 +328,190 @@ fn a_reload_can_swap_the_default_and_rename_bindings() {
         "the projection survives a restart"
     );
 }
+
+const MULTI_PATH: &str = "docs/specs/multi.md";
+
+fn multi_spec(repos: [&str; 3]) -> String {
+    let rows: String = repos
+        .iter()
+        .enumerate()
+        .map(|(i, repo)| {
+            let n = i + 1;
+            format!("| S{n} | Part {n} | AC-01 | {repo} | `make test` |\n")
+        })
+        .collect();
+    format!(
+        "---\nsaka: spec\n---\n# Multi\n\n## Acceptance criteria\n\n- **AC-01**: every part works.\n\n## Steps\n\n| Step | Work | AC | Repo | Done when |\n|------|------|----|------|-----------|\n{rows}"
+    )
+}
+
+fn three_repos() -> Layout {
+    layout(&[
+        shop("default = true\n"),
+        web(""),
+        repo_entry("api", DOCS_REPO, ""),
+    ])
+}
+
+fn repo_of(sim: &Sim, name: &str) -> saka_core::ids::RepoId {
+    sim.project()
+        .project
+        .repos
+        .iter()
+        .find(|r| r.name == name)
+        .map(|r| r.repo_id)
+        .unwrap()
+}
+
+#[test]
+fn each_step_runs_in_the_repo_its_repo_cell_names() {
+    let mut sim = Sim::multi_repo(SimConfig::default(), &three_repos());
+    let spec = sim.register(MULTI_PATH, &multi_spec(["", "web", "api"]));
+    assert!(spec.lint_ok, "{:?}", spec.issues);
+    sim.approve_spec(spec.spec_id, spec.revision_id).unwrap();
+    let placed: Vec<_> = sim
+        .tasks_of(spec.spec_id)
+        .iter()
+        .map(|t| t.item.repo_id)
+        .collect();
+    assert_eq!(
+        placed,
+        [
+            repo_of(&sim, "shop"),
+            repo_of(&sim, "web"),
+            repo_of(&sim, "api")
+        ]
+    );
+
+    assert!(
+        sim.run_until(STEPS, |s| s.spec_of(spec.spec_id).state
+            == SpecState::Shipped),
+        "not shipped: {:?}",
+        sim.tasks_of(spec.spec_id)
+            .iter()
+            .map(|t| (t.item.state, t.open_blocker().map(|b| b.code)))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        sim.tasks_of(spec.spec_id)
+            .iter()
+            .all(|t| t.item.state == WorkItemState::Done)
+    );
+    let mut prepared: Vec<_> = sim.world.prepared().into_iter().map(|p| p.repo).collect();
+    prepared.sort();
+    assert_eq!(prepared, [DOCS_REPO, SHOP_REPO, WEB_REPO]);
+    let mut prs: Vec<_> = sim
+        .world
+        .prs()
+        .into_iter()
+        .map(|p| (p.head_branch, p.repo, p.merge_commit_sha))
+        .collect();
+    prs.sort();
+    let expected = [
+        ("saka/multi/s1", SHOP_REPO),
+        ("saka/multi/s2", WEB_REPO),
+        ("saka/multi/s3", DOCS_REPO),
+    ];
+    assert_eq!(prs.len(), expected.len());
+    for ((branch, repo, merge), (want_branch, want_repo)) in prs.iter().zip(expected) {
+        assert_eq!((branch.as_str(), repo.as_str()), (want_branch, want_repo));
+        let main = sim.world.branches_of(want_repo)["main"].clone();
+        assert!(sim.world.is_ancestor(merge.as_ref().unwrap(), &main));
+    }
+    let mut checked: Vec<_> = sim
+        .world
+        .merge_checks()
+        .into_iter()
+        .map(|(repo, _, _)| repo)
+        .collect();
+    checked.sort();
+    checked.dedup();
+    assert_eq!(checked, [DOCS_REPO, SHOP_REPO, WEB_REPO]);
+}
+
+fn other_project_on(sim: &Sim, full_name: &str) -> saka_core::ids::ProjectId {
+    sim.world.put_doc(
+        "other/saka.toml",
+        saka_toml("other", &[repo_entry("app", full_name, "")]).as_bytes(),
+    );
+    let engine = sim.engine();
+    let cause = engine.cause("human:operator:local");
+    let add = saka_engine::AddProject {
+        workspace_url: format!("https://github.com/{DOCS_REPO}"),
+        project_path: "other".into(),
+        base_branch: None,
+    };
+    sim.block_on(engine.add_project(&add, &cause, None))
+        .unwrap()
+        .project
+        .id
+}
+
+#[test]
+fn re_approval_moves_only_queued_steps_to_another_repo() {
+    let mut sim = Sim::multi_repo(
+        SimConfig {
+            max_active_tasks: 1,
+            ..SimConfig::default()
+        },
+        &three_repos(),
+    );
+    let first = sim.register(MULTI_PATH, &multi_spec(["", "web", "web"]));
+    sim.approve_spec(first.spec_id, first.revision_id).unwrap();
+    let state = |s: &Sim, n: usize| s.tasks_of(first.spec_id)[n - 1].item.state;
+    assert!(sim.run_until(STEPS, |s| state(s, 1) == WorkItemState::InStage));
+    assert_eq!(state(&sim, 2), WorkItemState::Queued);
+
+    let started = sim.register(MULTI_PATH, &multi_spec(["web", "web", "web"]));
+    let seq = sim.engine().last_seq().unwrap();
+    let Err(EngineError::Rejected(Rejection::RevisionConflict { steps })) =
+        sim.approve_spec(first.spec_id, started.revision_id)
+    else {
+        panic!("a started step changed its repo");
+    };
+    assert_eq!(steps[0]["step_id"], "S1");
+    assert_eq!(steps[0]["fields"], json!(["repo"]));
+    assert_eq!(sim.engine().last_seq().unwrap(), seq);
+
+    let other = other_project_on(&sim, DOCS_REPO);
+    sim.occupy_branch_in(other, repo_of(&sim, "api"), "saka/multi/s2");
+    let taken = sim.register(MULTI_PATH, &multi_spec(["", "api", "web"]));
+    let seq = sim.engine().last_seq().unwrap();
+    let Err(EngineError::Rejected(Rejection::TaskBranchConflict { branches })) =
+        sim.approve_spec(first.spec_id, taken.revision_id)
+    else {
+        panic!("the branch is taken in the target repo");
+    };
+    assert_eq!(branches, ["saka/multi/s2"]);
+    assert_eq!(sim.engine().last_seq().unwrap(), seq);
+
+    let moved = sim.register(MULTI_PATH, &multi_spec(["", "", "web"]));
+    sim.approve_spec(first.spec_id, moved.revision_id).unwrap();
+    let repinned = sim.events_of("delivery.work_item.repinned");
+    let s2 = sim.tasks_of(first.spec_id)[1].item.clone();
+    let shop_id = repo_of(&sim, "shop");
+    let moved_event = repinned
+        .iter()
+        .find(|e| e.payload["work_item_id"] == json!(s2.id))
+        .unwrap();
+    assert_eq!(moved_event.payload["repo_id"], json!(shop_id));
+    assert_eq!(s2.repo_id, shop_id);
+    assert_eq!(s2.branch, "saka/multi/s2");
+
+    assert!(
+        sim.run_until(STEPS, |s| s.spec_of(first.spec_id).state
+            == SpecState::Shipped),
+        "not shipped"
+    );
+    let pr_repo = |branch: &str| {
+        sim.world
+            .prs()
+            .into_iter()
+            .find(|p| p.head_branch == branch)
+            .map(|p| p.repo)
+            .unwrap()
+    };
+    assert_eq!(pr_repo("saka/multi/s1"), SHOP_REPO);
+    assert_eq!(pr_repo("saka/multi/s2"), SHOP_REPO);
+    assert_eq!(pr_repo("saka/multi/s3"), WEB_REPO);
+}
