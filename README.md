@@ -18,6 +18,28 @@ saka task steer <task> "<message>"                     # also: interrupt, stop -
 saka permission answer <request> allow --remember      # allow the same request in this project from now on
 ```
 
+A project is a folder in a workspace repo. Its `saka.toml` names the project and binds the code repos its tasks change. Code repos do not have to be the workspace repo, so docs can live in a repo of their own:
+
+```toml
+[project]
+name = "shop"
+
+[[repo]]
+name = "api"                                    # lowercase letters, digits, and -; at most 32 characters
+url = "https://github.com/acme/shop"
+default = true                                  # exactly one default when there is more than one repo
+base_branch = "main"                            # optional
+path_scope = ["services/api/**", "pnpm-lock.yaml", "!services/api/fixtures/**"]   # optional, default ["**"]
+
+[[repo]]
+name = "web"
+url = "https://github.com/acme/web"
+```
+
+A project binds 1 to 16 repos. Each binding has its own base branch for worktrees, `.saka/environment.toml`, pull requests, and merge checks. Without `base_branch`, the workspace repo uses the project's base branch and any other repo uses its default branch. Saka re-reads `saka.toml` at the tip of the workspace base branch every `[workspace] config_poll_secs` and on `saka project reload <project>`. An invalid file, or one that drops a repo that still has live tasks, is refused and shown as the project's `config_error`, and the old bindings stay in effect.
+
+A spec's Steps table can name each step's repo in an optional `Repo` column; an empty cell means the default repo. Approve refuses a name the project does not bind (`step_repo_unknown`). A task may only change paths inside its binding's `path_scope`, plus the project folder when the repo is the workspace repo. Patterns are globs: `*` stays within one directory, `**` crosses directories, and a pattern starting with `!` excludes. Saka checks the branch's diff against its base before it pushes and again before it merges. A diff outside the scope first gets a follow-up turn, then blocks the task with `path_scope_violation`.
+
 A spec's context is pinned with it. Saka reads two kinds of markdown doc at the same commit as the spec and stores them with each revision:
 
 - docs the spec links to with ordinary markdown links;
