@@ -24,6 +24,8 @@ pub use state::{ApiConfig, AppState};
     paths(
         routes::add_project, routes::list_projects, routes::get_project, routes::reload_project,
         routes::set_secret, routes::list_secrets, routes::remove_secret,
+        routes::start_user_link, routes::get_user_link_authorization, routes::get_user_link,
+        routes::remove_user_link,
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
         routes::spec_template,
         routes::list_files, routes::get_file, routes::put_file,
@@ -40,7 +42,7 @@ pub use state::{ApiConfig, AppState};
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
-        (name = "projects"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"),
+        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"),
         (name = "spec-drafts"), (name = "system"), (name = "ops"),
     )
 )]
@@ -170,6 +172,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel",
             post(routes::cancel_spec_draft),
+        )
+        .route(
+            "/api/v1/scm/{integration_id}/user-link/authorizations",
+            post(routes::start_user_link),
+        )
+        .route(
+            "/api/v1/scm/{integration_id}/user-link/authorizations/{authorization_id}",
+            get(routes::get_user_link_authorization),
+        )
+        .route(
+            "/api/v1/scm/{integration_id}/user-link",
+            get(routes::get_user_link).delete(routes::remove_user_link),
         )
         .route("/api/v1/agent-accounts", get(routes::list_agent_accounts))
         .route("/api/v1/usage-records", get(routes::list_usage_records))

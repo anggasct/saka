@@ -689,8 +689,12 @@ fn stored_secret(sim: &Sim, name: &str) -> Option<String> {
             nonce: r.nonce,
             ciphertext: r.ciphertext,
         };
+        let scope = saka_core::secret::SecretScope::Project {
+            project_id: sim.project_id,
+            name,
+        };
         sim.world
-            .open(sim.project_id, name, &sealed)
+            .open(&scope, &sealed)
             .unwrap()
             .expose()
             .to_string()
@@ -1340,4 +1344,161 @@ fn serve_refuses_a_config_poll_outside_its_range() {
     let err = stderr(&out);
     assert!(err.contains("config_invalid"), "{err}");
     assert!(err.contains("workspace.config_poll_secs"), "{err}");
+}
+
+fn spawn_link(server: &str) -> (std::process::Child, String) {
+    use std::io::BufRead;
+    let mut child = Command::new(SAKA)
+        .arg("--server")
+        .arg(server)
+        .args(["scm", "link", "github"])
+        .env_remove("SAKA_CONFIG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.as_mut().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    (child, line)
+}
+
+fn authorization_state(sim: &Sim, n: usize) -> Option<saka_core::vocab::AuthorizationState> {
+    let rows = sim
+        .engine()
+        .store()
+        .read(|c| {
+            let mut stmt =
+                c.prepare("SELECT state FROM user_link_authorization ORDER BY created_at, id")?;
+            let out = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(out)
+        })
+        .unwrap();
+    rows.get(n).and_then(|s| s.parse().ok())
+}
+
+#[test]
+fn scm_link_waits_for_the_device_flow_and_exits_by_its_outcome() {
+    use saka_core::vocab::AuthorizationState;
+    use saka_testkit::DeviceAnswer;
+    let mut sim = Sim::new(SimConfig::default());
+    sim.world.accounts().set_device_timing(1, 900);
+    let server = serve(&sim);
+
+    let missing = saka(&server, &["scm", "status", "github"]);
+    assert_eq!(code(&missing), 1);
+    assert!(
+        stderr(&missing).contains("user_link_not_found"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let (child, prompt) = spawn_link(&server);
+    assert_eq!(
+        prompt.trim(),
+        "Open https://github.com/login/device and enter FAKE-0001"
+    );
+    sim.world.accounts().answer(DeviceAnswer::Approve);
+    drive(&mut sim, |s| {
+        authorization_state(s, 0) == Some(AuthorizationState::Completed)
+    });
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "linked octo");
+    assert!(!stdout(&out).contains("fakedevicecode"));
+
+    let status = saka(&server, &["scm", "status", "github"]);
+    assert_eq!(code(&status), 0, "{}", stderr(&status));
+    assert!(
+        stdout(&status).starts_with("active octo refresh_expires_at 20"),
+        "{}",
+        stdout(&status)
+    );
+
+    let quick = saka(&server, &["scm", "link", "github", "--no-wait"]);
+    assert_eq!(code(&quick), 0, "{}", stderr(&quick));
+    assert!(
+        stdout(&quick).starts_with("Open https://github.com/login/device and enter FAKE-"),
+        "{}",
+        stdout(&quick)
+    );
+    let (child, prompt) = spawn_link(&server);
+    assert_eq!(prompt, stdout(&quick), "the pending code is reused");
+    sim.world.accounts().answer(DeviceAnswer::Deny);
+    drive(&mut sim, |s| {
+        authorization_state(s, 1) == Some(AuthorizationState::Denied)
+    });
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(stderr(&out).contains("error: denied"), "{}", stderr(&out));
+
+    let unlinked = saka(&server, &["scm", "unlink", "github"]);
+    assert_eq!(code(&unlinked), 0, "{}", stderr(&unlinked));
+    assert_eq!(stdout(&unlinked).trim(), "unlinked github");
+    assert_eq!(code(&saka(&server, &["scm", "status", "github"])), 1);
+    let unknown = saka(&server, &["scm", "status", "gitlab"]);
+    assert_eq!(code(&unknown), 1);
+    assert!(stderr(&unknown).contains("not_found"));
+}
+
+#[test]
+fn scm_commands_need_an_integration_when_the_config_has_several() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("app.pem");
+    private_file(&key, b"not a real key", 0o600);
+    let entry = |id: &str| {
+        format!(
+            "[[scm]]\nid = \"{id}\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"{}\"\n",
+            key.display()
+        )
+    };
+    let two = write_config(
+        dir.path(),
+        &format!("\n{}{}", entry("github"), entry("ghe")),
+    );
+    for args in [
+        &["scm", "status"][..],
+        &["scm", "link", "--no-wait"],
+        &["scm", "unlink"],
+    ] {
+        let out = run_saka(&two, args);
+        assert_eq!(code(&out), 2, "{args:?}");
+        assert!(
+            stderr(&out).contains("integration_required"),
+            "{}",
+            stderr(&out)
+        );
+        assert!(stderr(&out).contains("\"ghe\""), "{}", stderr(&out));
+    }
+}
+
+#[test]
+fn the_old_git_author_keys_and_a_bad_client_id_refuse_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = write_config(dir.path(), "\n[git]\nauthor_name = \"Saka Agent\"\n");
+    let out = run_saka(&old, &["serve"]);
+    assert_eq!(code(&out), 2);
+    assert!(
+        stderr(&out).contains("config_unknown_field"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("author_name"), "{}", stderr(&out));
+
+    let bad = write_config(
+        dir.path(),
+        "\n[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\nclient_id = \"not valid!\"\n",
+    );
+    let out = run_saka(&bad, &["serve"]);
+    assert_eq!(code(&out), 2);
+    assert!(
+        stderr(&out).contains("\"code\":\"config_invalid\""),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("scm.client_id"), "{}", stderr(&out));
+    assert!(!dir.path().join("data").join("saka.db").exists());
 }

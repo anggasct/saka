@@ -72,6 +72,14 @@ pub enum Rejection {
     FilePushRejected { branch: String },
     #[error("file cannot be edited")]
     FileUnsupported { reason: FileUnsupported },
+    #[error("the integration has no linked account")]
+    UserLinkNotFound,
+    #[error("the integration has no OAuth client id for the device flow")]
+    DeviceFlowUnconfigured { integration_id: String },
+    #[error("the integration cannot author changes as a user")]
+    UserAuthorshipUnsupported { integration_id: String },
+    #[error("projects in user mode still use the linked account")]
+    UserLinkInUse { projects: Value },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -111,6 +119,10 @@ impl Rejection {
             Rejection::FilePathConflict { .. } => "file_path_conflict",
             Rejection::FilePushRejected { .. } => "file_push_rejected",
             Rejection::FileUnsupported { .. } => "file_unsupported",
+            Rejection::UserLinkNotFound => "user_link_not_found",
+            Rejection::DeviceFlowUnconfigured { .. } => "device_flow_unconfigured",
+            Rejection::UserAuthorshipUnsupported { .. } => "user_authorship_unsupported",
+            Rejection::UserLinkInUse { .. } => "user_link_in_use",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -161,6 +173,11 @@ impl Rejection {
             Rejection::FilePathConflict { path } => json!({ "path": path }),
             Rejection::FilePushRejected { branch } => json!({ "branch": branch }),
             Rejection::FileUnsupported { reason } => reason.params(),
+            Rejection::DeviceFlowUnconfigured { integration_id }
+            | Rejection::UserAuthorshipUnsupported { integration_id } => {
+                json!({ "integration_id": integration_id })
+            }
+            Rejection::UserLinkInUse { projects } => json!({ "projects": projects }),
             Rejection::Invalid { field, code } => {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }

@@ -3,23 +3,23 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use saka_core::gate::Check;
-use saka_core::ids::ProjectId;
 use saka_core::ids::{EnvironmentId, SessionId};
 use saka_core::model::{RunOwner, ToolchainUse};
 use saka_core::policy::RequestPath;
-use saka_core::secret::{SecretText, SecretVar, aad};
+use saka_core::secret::{SecretScope, SecretText, SecretVar};
 use saka_core::time::Timestamp;
 use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
-    Agents, Blob, ChangeSnapshot, ChangedPaths, Clock, DocBlob, DocCommit, DocEntry, DocExpect,
-    DocFile, DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments, LaunchProfile,
-    LaunchedSession, Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
-    PortResult, PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached,
-    RecipeCommand, RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm,
-    ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Toolchains,
-    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    Agents, Blob, ChangeSnapshot, ChangedPaths, Clock, DeviceCode, DevicePoll, DocBlob, DocCommit,
+    DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments,
+    IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
+    OpenChangeRequest, OpenedChange, PortError, PortResult, PrepareRequest, PreparedEnvironment,
+    PushOutcome, PushRequest, Reattached, RecipeCommand, RecipeCommandOutcome, RepoInfo, RepoRef,
+    RunnerEvent, RunnerEventKind, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch,
+    SessionRef, StatusReport, TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature,
+    WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -242,6 +242,7 @@ pub struct ScopeCheck {
 pub struct FakeWorld {
     clock: Arc<FakeClock>,
     state: Mutex<State>,
+    accounts: crate::accounts::FakeAccounts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,6 +284,7 @@ impl FakeWorld {
         remote.insert(BASE_BRANCH.to_string(), root);
         let remotes = BTreeMap::from([(HOME_REPO.to_string(), remote)]);
         FakeWorld {
+            accounts: crate::accounts::FakeAccounts::new(Arc::clone(&clock)),
             clock,
             state: Mutex::new(State {
                 script,
@@ -335,6 +337,10 @@ impl FakeWorld {
                 resumes: Vec::new(),
             }),
         }
+    }
+
+    pub fn accounts(&self) -> &crate::accounts::FakeAccounts {
+        &self.accounts
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -1784,6 +1790,37 @@ impl Scm for FakeWorld {
             targets,
         })
     }
+    fn device_flow_configured(&self, _integration_id: &str) -> PortResult<bool> {
+        Ok(self.accounts.configured())
+    }
+
+    async fn start_device_flow(&self, _integration_id: &str) -> PortResult<DeviceCode> {
+        self.accounts.device_code()
+    }
+
+    async fn poll_device_flow(
+        &self,
+        _integration_id: &str,
+        device_code: &SecretText,
+    ) -> PortResult<DevicePoll> {
+        self.accounts.poll(device_code)
+    }
+
+    async fn refresh_user_token(
+        &self,
+        _integration_id: &str,
+        refresh_token: &SecretText,
+    ) -> PortResult<TokenRefresh> {
+        self.accounts.refresh(refresh_token).await
+    }
+
+    async fn user_identity(
+        &self,
+        _integration_id: &str,
+        token: &SecretText,
+    ) -> PortResult<IdentityLookup> {
+        self.accounts.identity(token)
+    }
 }
 
 pub const FAKE_INTEGRATION: &str = "github";
@@ -1795,6 +1832,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     draft_change_requests: true,
     delete_branch_after_merge: true,
     commit_status: true,
+    user_authorship: true,
 };
 pub const FAKE_SIGNATURE_HEADER: &str = "x-fake-signature";
 
@@ -2132,10 +2170,10 @@ impl Toolchains for FakeWorld {
 }
 
 // Not encryption: the AAD followed by the value XOR a constant, so a row moved to another
-// project fails to open and the plain value never lands in the database.
+// scope fails to open and the plain value never lands in the database.
 impl SecretStore for FakeWorld {
-    fn seal(&self, project: ProjectId, name: &str, value: &SecretText) -> PortResult<Sealed> {
-        let mut ciphertext = aad(project.0, name);
+    fn seal(&self, scope: &SecretScope<'_>, value: &SecretText) -> PortResult<Sealed> {
+        let mut ciphertext = scope.aad();
         ciphertext.push(0xff);
         ciphertext.extend(value.expose().bytes().map(|b| b ^ 0x5a));
         Ok(Sealed {
@@ -2144,12 +2182,13 @@ impl SecretStore for FakeWorld {
         })
     }
 
-    fn open(&self, project: ProjectId, name: &str, sealed: &Sealed) -> PortResult<SecretText> {
-        let unreadable = || PortError::permanent("secret_unreadable", json!({ "name": name }));
+    fn open(&self, scope: &SecretScope<'_>, sealed: &Sealed) -> PortResult<SecretText> {
+        let unreadable =
+            || PortError::permanent("secret_unreadable", json!({ "name": scope.label() }));
         if self.state().secrets_unreadable {
             return Err(unreadable());
         }
-        let mut prefix = aad(project.0, name);
+        let mut prefix = scope.aad();
         prefix.push(0xff);
         let value = sealed
             .ciphertext
@@ -2160,10 +2199,10 @@ impl SecretStore for FakeWorld {
             .map_err(|_| unreadable())
     }
 
-    fn fingerprint(&self, project: ProjectId, name: &str, value: &SecretText) -> String {
+    fn fingerprint(&self, scope: &SecretScope<'_>, value: &SecretText) -> String {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (project.0, name, value.expose()).hash(&mut h);
+        (scope.aad(), value.expose()).hash(&mut h);
         format!("fake:{:016x}", h.finish())
     }
 }

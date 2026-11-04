@@ -55,6 +55,8 @@ job_kinds! {
     DraftLint => "draft.lint", 3;
     DraftCommit => "draft.commit", 5;
     WorkspaceReloadConfig => "workspace.reload_config", 3;
+    ScmUserLinkPoll => "scm.user_link_poll", 3;
+    ScmUserLinkRefresh => "scm.user_link_refresh", 3;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -92,7 +94,9 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmReportStatus
         | JobKind::DraftLint
         | JobKind::DraftCommit
-        | JobKind::WorkspaceReloadConfig => None,
+        | JobKind::WorkspaceReloadConfig
+        | JobKind::ScmUserLinkPoll
+        | JobKind::ScmUserLinkRefresh => None,
     }
 }
 
@@ -164,5 +168,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::DraftLint => "draft.lint",
         JobKind::DraftCommit => "draft.commit",
         JobKind::WorkspaceReloadConfig => "workspace.reload_config",
+        JobKind::ScmUserLinkPoll => "scm.user_link_poll",
+        JobKind::ScmUserLinkRefresh => "scm.user_link_refresh",
     }
 }

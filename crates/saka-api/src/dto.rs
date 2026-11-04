@@ -2076,3 +2076,99 @@ fn gates_at_head(t: &saka_core::model::Task) -> Vec<Gate> {
     })
     .collect()
 }
+
+/// Request body that starts linking an account; no fields.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartUserLinkBody {}
+
+/// The SCM account linked to an integration, so that changes can be authored as its user.
+/// Tokens are never part of it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UserLink {
+    pub id: Uuid,
+    /// `[[scm]].id` from the operator config.
+    pub integration_id: String,
+    /// `active | needs_relink`
+    pub state: String,
+    /// Only with `needs_relink`: `refresh_failed | revoked | expired`.
+    pub relink_cause: Option<String>,
+    /// The account id at the provider (`GET /user` `id`).
+    pub provider_user_id: u64,
+    pub login: String,
+    /// The profile name, or `null` when the profile has none; commits then use `login`.
+    pub name: Option<String>,
+    /// The noreply address `<id>+<login>@users.noreply.<host of web_url>`, used as the commit
+    /// author email.
+    pub email: String,
+    pub linked_at: String,
+    /// The last successful token refresh.
+    pub refreshed_at: Option<String>,
+    /// When the user access token expires; it is refreshed before use.
+    pub access_expires_at: String,
+    /// When the refresh token expires; after it the account has to be linked again.
+    pub refresh_expires_at: String,
+}
+
+impl From<&saka_core::authorship::UserLink> for UserLink {
+    fn from(l: &saka_core::authorship::UserLink) -> UserLink {
+        UserLink {
+            id: l.id.0,
+            integration_id: l.integration_id.clone(),
+            state: l.state.as_str().to_string(),
+            relink_cause: l.relink_cause.map(|c| c.as_str().to_string()),
+            provider_user_id: l.provider_user_id,
+            login: l.login.clone(),
+            name: l.display_name.clone(),
+            email: l.email.clone(),
+            linked_at: time(l.linked_at),
+            refreshed_at: opt_time(l.refreshed_at),
+            access_expires_at: time(l.access_expires_at),
+            refresh_expires_at: time(l.refresh_expires_at),
+        }
+    }
+}
+
+/// One device-flow attempt to link an account. The user opens `verification_uri` and enters
+/// `user_code`; the server polls the provider every `interval_secs` until the attempt ends.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UserLinkAuthorization {
+    pub id: Uuid,
+    /// `[[scm]].id` from the operator config.
+    pub integration_id: String,
+    /// `pending | completed | expired | denied | failed`
+    pub state: String,
+    /// The code the user enters at `verification_uri`, for example `WDJB-MJHT`.
+    pub user_code: String,
+    pub verification_uri: String,
+    /// Seconds between polls; raised when the provider asks to slow down.
+    pub interval_secs: u32,
+    /// After this time a pending attempt ends as `expired`.
+    pub expires_at: String,
+    /// Only with `failed`. `code`: `device_flow_disabled | incorrect_client_credentials |
+    /// incorrect_device_code | unsupported_grant_type | bad_verification_code |
+    /// token_not_expiring | identity_unavailable`.
+    pub failure: Option<Failure>,
+    /// The linked account once `completed`, otherwise `null`.
+    pub link: Option<UserLink>,
+}
+
+impl UserLinkAuthorization {
+    pub fn from_view(v: &saka_engine::AuthorizationView) -> UserLinkAuthorization {
+        let a = &v.authorization;
+        UserLinkAuthorization {
+            id: a.id.0,
+            integration_id: a.integration_id.clone(),
+            state: a.state.as_str().to_string(),
+            user_code: a.user_code.clone(),
+            verification_uri: a.verification_uri.clone(),
+            interval_secs: a.interval_secs,
+            expires_at: time(a.expires_at),
+            failure: a.failure.as_ref().map(|f| Failure {
+                code: f.code.clone(),
+                params: f.params.clone(),
+            }),
+            link: v.link.as_ref().map(UserLink::from),
+        }
+    }
+}

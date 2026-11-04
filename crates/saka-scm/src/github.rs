@@ -1,16 +1,19 @@
 pub mod app;
 pub mod ci;
+pub mod user;
 mod webhook;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
+use saka_core::secret::SecretText;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
-    ChangeSnapshot, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
-    PortResult, PushOutcome, PushRequest, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
-    StatusReport, WebhookDelivery, WebhookSignature,
+    ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup, MergeOutcome, MergeRequest,
+    OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
+    RepoRef, Repos, Scm, ScmCapabilities, StatusReport, TokenRefresh, WebhookDelivery,
+    WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -26,6 +29,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     draft_change_requests: true,
     delete_branch_after_merge: true,
     commit_status: true,
+    user_authorship: true,
 };
 
 pub struct GitHub {
@@ -353,5 +357,37 @@ impl Scm for GitHub {
             .as_ref()
             .ok_or_else(|| PortError::permanent("webhook_not_configured", json!({})))?;
         webhook::parse(secret, headers, body)
+    }
+
+    fn device_flow_configured(&self, _integration_id: &str) -> PortResult<bool> {
+        Ok(self.app.config().client_id.is_some())
+    }
+
+    async fn start_device_flow(&self, _integration_id: &str) -> PortResult<DeviceCode> {
+        self.app.device_code().await
+    }
+
+    async fn poll_device_flow(
+        &self,
+        _integration_id: &str,
+        device_code: &SecretText,
+    ) -> PortResult<DevicePoll> {
+        self.app.poll_device(device_code).await
+    }
+
+    async fn refresh_user_token(
+        &self,
+        _integration_id: &str,
+        refresh_token: &SecretText,
+    ) -> PortResult<TokenRefresh> {
+        self.app.refresh_user(refresh_token).await
+    }
+
+    async fn user_identity(
+        &self,
+        _integration_id: &str,
+        token: &SecretText,
+    ) -> PortResult<IdentityLookup> {
+        self.app.identity(token).await
     }
 }

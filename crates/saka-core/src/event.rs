@@ -5,7 +5,7 @@ use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
     ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
-    StageRunId, UsageRecordId, WorkItemId,
+    StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
@@ -13,9 +13,10 @@ use crate::model::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, BudgetDimension, DraftFailureCode, DraftLocale, GateOutcome,
-    GateSource, InterruptBy, LintOutcome, MergeMethod, PermissionState, ReloadTrigger, ResumeCause,
-    ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, Trigger,
+    AuthorizationState, BlockerCode, BlockerResolution, BudgetDimension, DraftFailureCode,
+    DraftLocale, GateOutcome, GateSource, InterruptBy, LintOutcome, MergeMethod, PermissionState,
+    RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, SessionState, SpecOrigin, Stage,
+    StagePhase, SupersedeReason, Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -543,6 +544,45 @@ pub enum Event {
         kind: JobKind,
         last_error: Coded,
     },
+    #[serde(rename = "scm.user_link.authorization_started")]
+    UserLinkAuthorizationStarted {
+        authorization_id: UserLinkAuthorizationId,
+        integration_id: String,
+        expires_at: Timestamp,
+    },
+    #[serde(rename = "scm.user_link.authorization_slowed")]
+    UserLinkAuthorizationSlowed {
+        authorization_id: UserLinkAuthorizationId,
+        interval_secs: u32,
+    },
+    #[serde(rename = "scm.user_link.authorization_ended")]
+    UserLinkAuthorizationEnded {
+        authorization_id: UserLinkAuthorizationId,
+        state: AuthorizationState,
+        failure: Option<Coded>,
+    },
+    #[serde(rename = "scm.user_link.linked")]
+    UserLinked {
+        link_id: UserLinkId,
+        integration_id: String,
+        authorization_id: UserLinkAuthorizationId,
+        provider_user_id: u64,
+        login: String,
+        replaced_login: Option<String>,
+    },
+    #[serde(rename = "scm.user_link.refreshed")]
+    UserLinkRefreshed {
+        link_id: UserLinkId,
+        access_expires_at: Timestamp,
+        refresh_expires_at: Timestamp,
+    },
+    #[serde(rename = "scm.user_link.relink_required")]
+    UserLinkRelinkRequired {
+        link_id: UserLinkId,
+        cause: RelinkCause,
+    },
+    #[serde(rename = "scm.user_link.removed")]
+    UserLinkRemoved { link_id: UserLinkId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -588,6 +628,8 @@ pub enum Stream {
     Session(SessionId),
     PermissionRequest(PermissionRequestId),
     Job(uuid::Uuid),
+    UserLinkAuthorization(UserLinkAuthorizationId),
+    UserLink(UserLinkId),
 }
 
 impl Stream {
@@ -601,6 +643,8 @@ impl Stream {
             Stream::Session(_) => "session",
             Stream::PermissionRequest(_) => "permission_request",
             Stream::Job(_) => "job",
+            Stream::UserLinkAuthorization(_) => "user_link_authorization",
+            Stream::UserLink(_) => "user_link",
         }
     }
 
@@ -614,6 +658,8 @@ impl Stream {
             Stream::Session(id) => id.0,
             Stream::PermissionRequest(id) => id.0,
             Stream::Job(id) => id,
+            Stream::UserLinkAuthorization(id) => id.0,
+            Stream::UserLink(id) => id.0,
         }
     }
 }
@@ -723,6 +769,19 @@ impl Event {
             | E::EnvironmentTeardownFailed { owner, .. }
             | E::BudgetWarned { owner, .. } => Stream::of_owner(owner),
             E::JobExhausted { job_id, .. } => Stream::Job(*job_id),
+            E::UserLinkAuthorizationStarted {
+                authorization_id, ..
+            }
+            | E::UserLinkAuthorizationSlowed {
+                authorization_id, ..
+            }
+            | E::UserLinkAuthorizationEnded {
+                authorization_id, ..
+            } => Stream::UserLinkAuthorization(*authorization_id),
+            E::UserLinked { link_id, .. }
+            | E::UserLinkRefreshed { link_id, .. }
+            | E::UserLinkRelinkRequired { link_id, .. }
+            | E::UserLinkRemoved { link_id } => Stream::UserLink(*link_id),
         }
     }
 

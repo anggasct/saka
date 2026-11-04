@@ -65,6 +65,52 @@ enum Command {
     #[command(about = "Project secrets for environment recipes (write-only)")]
     #[command(subcommand)]
     Secret(SecretCmd),
+    #[command(
+        about = "Your account at an SCM integration, so agent changes can be authored as you"
+    )]
+    #[command(subcommand)]
+    Scm(ScmCmd),
+}
+
+#[derive(Subcommand)]
+enum ScmCmd {
+    #[command(
+        about = "Links your account with the device flow: prints a code to enter at the provider, then waits"
+    )]
+    Link {
+        #[arg(help = "The `[[scm]].id`; optional when the config has exactly one")]
+        integration: Option<String>,
+        #[arg(help = "Print the code and exit without waiting for the link", long)]
+        no_wait: bool,
+    },
+    #[command(about = "Shows the linked account; exits 1 when there is none")]
+    Status {
+        #[arg(help = "The `[[scm]].id`; optional when the config has exactly one")]
+        integration: Option<String>,
+    },
+    #[command(about = "Removes the link; revoke the tokens in the provider's settings")]
+    Unlink {
+        #[arg(help = "The `[[scm]].id`; optional when the config has exactly one")]
+        integration: Option<String>,
+    },
+}
+
+fn integration_of(given: Option<String>) -> Result<String, ExitCode> {
+    if let Some(id) = given {
+        return Ok(id);
+    }
+    let cfg = load_config()?;
+    match cfg.scm.as_slice() {
+        [only] => Ok(only.id.clone()),
+        all => {
+            let ids: Vec<&str> = all.iter().map(|s| s.id.as_str()).collect();
+            cli::refuse(
+                "integration_required",
+                &serde_json::json!({ "integrations": ids }),
+            );
+            Err(ExitCode::from(serve::EXIT_REFUSED))
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -349,6 +395,22 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     },
                     SecretCmd::List { project } => client.secret_list(&project).await,
                     SecretCmd::Rm { project, name } => client.secret_rm(&project, &name).await,
+                }
+            })
+        }
+        Command::Scm(cmd) => {
+            let given = match &cmd {
+                ScmCmd::Link { integration, .. }
+                | ScmCmd::Status { integration }
+                | ScmCmd::Unlink { integration } => integration.clone(),
+            };
+            let integration = integration_of(given)?;
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(async {
+                match cmd {
+                    ScmCmd::Link { no_wait, .. } => client.scm_link(&integration, !no_wait).await,
+                    ScmCmd::Status { .. } => client.scm_status(&integration).await,
+                    ScmCmd::Unlink { .. } => client.scm_unlink(&integration).await,
                 }
             })
         }

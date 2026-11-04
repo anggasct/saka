@@ -84,7 +84,7 @@ impl IntoResponse for ApiError {
 fn rejection_status(r: &Rejection) -> StatusCode {
     use Rejection as R;
     match r {
-        R::NotFound | R::SpecFileNotFound { .. } => StatusCode::NOT_FOUND,
+        R::NotFound | R::SpecFileNotFound { .. } | R::UserLinkNotFound => StatusCode::NOT_FOUND,
         R::RevisionStale | R::VersionStale | R::FileStale { .. } => StatusCode::PRECONDITION_FAILED,
         R::SpecNotReady { .. }
         | R::ScmIntegrationUnknown { .. }
@@ -110,7 +110,10 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FilePathConflict { .. }
         | R::FilePushRejected { .. }
         | R::RetryLimitReached { .. }
-        | R::SpecDraftTargetTaken { .. } => StatusCode::CONFLICT,
+        | R::SpecDraftTargetTaken { .. }
+        | R::DeviceFlowUnconfigured { .. }
+        | R::UserAuthorshipUnsupported { .. }
+        | R::UserLinkInUse { .. } => StatusCode::CONFLICT,
     }
 }
 

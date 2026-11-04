@@ -1223,6 +1223,202 @@
         }
       }
     },
+    "/api/v1/scm/{integration_id}/user-link": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "operationId": "get_user_link",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "`[[scm]].id` from the operator config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserLink"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found` for an unknown integration, `user_link_not_found` without a linked account",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "operationId": "remove_user_link",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "`[[scm]].id` from the operator config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The link is gone, or there was none; the tokens are not revoked at the provider"
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scm/{integration_id}/user-link/authorizations": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "operationId": "start_user_link",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "`[[scm]].id` from the operator config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartUserLinkBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "A pending authorization: a new one, or the one still pending with more than a minute left",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserLinkAuthorization"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scm/{integration_id}/user-link/authorizations/{authorization_id}": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "operationId": "get_user_link_authorization",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "description": "`[[scm]].id` from the operator config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "authorization_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserLinkAuthorization"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sessions": {
       "get": {
         "tags": [
@@ -5786,6 +5982,11 @@
           }
         }
       },
+      "StartUserLinkBody": {
+        "type": "object",
+        "description": "Request body that starts linking an account; no fields.",
+        "additionalProperties": false
+      },
       "SteerBody": {
         "type": "object",
         "required": [
@@ -6027,6 +6228,146 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "UserLink": {
+        "type": "object",
+        "description": "The SCM account linked to an integration, so that changes can be authored as its user.\nTokens are never part of it.",
+        "required": [
+          "id",
+          "integration_id",
+          "state",
+          "provider_user_id",
+          "login",
+          "email",
+          "linked_at",
+          "access_expires_at",
+          "refresh_expires_at"
+        ],
+        "properties": {
+          "access_expires_at": {
+            "type": "string",
+            "description": "When the user access token expires; it is refreshed before use."
+          },
+          "email": {
+            "type": "string",
+            "description": "The noreply address `<id>+<login>@users.noreply.<host of web_url>`, used as the commit\nauthor email."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "integration_id": {
+            "type": "string",
+            "description": "`[[scm]].id` from the operator config."
+          },
+          "linked_at": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile name, or `null` when the profile has none; commits then use `login`."
+          },
+          "provider_user_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The account id at the provider (`GET /user` `id`).",
+            "minimum": 0
+          },
+          "refresh_expires_at": {
+            "type": "string",
+            "description": "When the refresh token expires; after it the account has to be linked again."
+          },
+          "refreshed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last successful token refresh."
+          },
+          "relink_cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only with `needs_relink`: `refresh_failed | revoked | expired`."
+          },
+          "state": {
+            "type": "string",
+            "description": "`active | needs_relink`"
+          }
+        }
+      },
+      "UserLinkAuthorization": {
+        "type": "object",
+        "description": "One device-flow attempt to link an account. The user opens `verification_uri` and enters\n`user_code`; the server polls the provider every `interval_secs` until the attempt ends.",
+        "required": [
+          "id",
+          "integration_id",
+          "state",
+          "user_code",
+          "verification_uri",
+          "interval_secs",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "description": "After this time a pending attempt ends as `expired`."
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Failure",
+                "description": "Only with `failed`. `code`: `device_flow_disabled | incorrect_client_credentials |\nincorrect_device_code | unsupported_grant_type | bad_verification_code |\ntoken_not_expiring | identity_unavailable`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "integration_id": {
+            "type": "string",
+            "description": "`[[scm]].id` from the operator config."
+          },
+          "interval_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seconds between polls; raised when the provider asks to slow down.",
+            "minimum": 0
+          },
+          "link": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserLink",
+                "description": "The linked account once `completed`, otherwise `null`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending | completed | expired | denied | failed`"
+          },
+          "user_code": {
+            "type": "string",
+            "description": "The code the user enters at `verification_uri`, for example `WDJB-MJHT`."
+          },
+          "verification_uri": {
+            "type": "string"
           }
         }
       },
@@ -6582,6 +6923,9 @@
   "tags": [
     {
       "name": "projects"
+    },
+    {
+      "name": "accounts"
     },
     {
       "name": "specs"

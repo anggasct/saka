@@ -258,6 +258,30 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_path_scope_violations_total", &[("stage", stage)], n);
     }
     t.family(
+        "saka_user_link_authorizations_total",
+        "counter",
+        "Device-flow authorizations that link an SCM account, by integration and the state reached.",
+    );
+    for (integration, state, n) in &m.user_link_authorizations {
+        t.sample(
+            "saka_user_link_authorizations_total",
+            &[("integration", integration), ("state", state)],
+            n,
+        );
+    }
+    t.family(
+        "saka_user_link_refresh_total",
+        "counter",
+        "Refreshes of linked SCM account tokens, by integration and outcome.",
+    );
+    for (integration, outcome, n) in &m.user_link_refreshes {
+        t.sample(
+            "saka_user_link_refresh_total",
+            &[("integration", integration), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
         "saka_gate_runs_total",
         "counter",
         "Gate runs by source and outcome.",

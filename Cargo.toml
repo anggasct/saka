@@ -24,7 +24,7 @@ jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_
 proptest = "1.12.0"
 ra-ap-rustc_lexer = "0.181.0"
 regex = "1.13.1"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["form", "json", "query", "rustls"] }
 rustix = { version = "1.1.6", default-features = false, features = ["std"] }
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }

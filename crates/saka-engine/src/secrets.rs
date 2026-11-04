@@ -1,7 +1,9 @@
 use saka_core::event::Event;
 use saka_core::ids::ProjectId;
 use saka_core::rejection::Rejection;
-use saka_core::secret::{PER_PROJECT_MAX, SecretText, SecretVar, VALUE_MAX_BYTES, VALUE_MIN_BYTES};
+use saka_core::secret::{
+    PER_PROJECT_MAX, SecretScope, SecretText, SecretVar, VALUE_MAX_BYTES, VALUE_MIN_BYTES,
+};
 use saka_core::time::Timestamp;
 use saka_core::vocab::BlockerCode;
 use saka_ports::{PortError, Sealed};
@@ -54,7 +56,11 @@ impl Engine {
     }
 
     pub fn secret_fingerprint(&self, project: ProjectId, name: &str, value: &SecretText) -> String {
-        self.ports.secrets.fingerprint(project, name, value)
+        let scope = SecretScope::Project {
+            project_id: project,
+            name,
+        };
+        self.ports.secrets.fingerprint(&scope, value)
     }
 
     pub fn secrets(&self, project: ProjectId) -> Result<Vec<SecretInfo>> {
@@ -91,7 +97,11 @@ impl Engine {
                 code: "too_many_secrets",
             }));
         }
-        let sealed = self.ports.secrets.seal(project, name, value)?;
+        let scope = SecretScope::Project {
+            project_id: project,
+            name,
+        };
+        let sealed = self.ports.secrets.seal(&scope, value)?;
         let mut batch = Batch::new(now);
         let event = Event::SecretSet {
             project_id: project,
@@ -189,7 +199,11 @@ impl Engine {
                 nonce: row.nonce.clone(),
                 ciphertext: row.ciphertext.clone(),
             };
-            match self.ports.secrets.open(project, name, &sealed) {
+            let scope = SecretScope::Project {
+                project_id: project,
+                name,
+            };
+            match self.ports.secrets.open(&scope, &sealed) {
                 Ok(value) => out.push(SecretVar {
                     name: name.clone(),
                     value,

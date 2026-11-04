@@ -100,6 +100,7 @@ impl Engine {
         for (project, job) in self.reload_jobs(now)? {
             self.push_job(&mut jobs, job, Some(project), &cause);
         }
+        self.reconcile_user_links(now, &cause, &mut jobs)?;
         for job in self.monitor_sessions(snapshot.tasks.iter().filter_map(Task::live_session)) {
             let project = project_of(&snapshot.tasks, &job);
             self.push_job(&mut jobs, job, project, &cause);

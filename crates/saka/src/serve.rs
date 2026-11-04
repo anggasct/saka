@@ -10,6 +10,7 @@ use saka_agents::{AgentsConfig, ClaudeAgents};
 use saka_api::{ApiConfig, AppState};
 use saka_core::model::Budget;
 use saka_core::policy::Policy;
+use saka_core::secret::SecretText;
 use saka_core::task::LoopConfig;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{MergeMethod, Stage};
@@ -20,9 +21,10 @@ use saka_env::{
     ToolchainConfig, ToolchainInstaller, runtime_dir,
 };
 use saka_ports::{
-    ChangeSnapshot, Clock, GitAccess, GitRemote, Ids, MergeOutcome, MergeRequest,
-    OpenChangeRequest, OpenedChange, PortError, PortResult, PushOutcome, PushRequest, RepoInfo,
-    RepoRef, Scm, ScmCapabilities, StatusReport, UnitLimits, WebhookDelivery,
+    ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote, IdentityLookup, Ids,
+    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PushOutcome, PushRequest, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport, TokenRefresh,
+    UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
 use saka_store::{Store, StoreError};
@@ -128,6 +130,42 @@ impl Scm for ScmRouter {
     ) -> PortResult<WebhookDelivery> {
         self.get(integration_id)?
             .parse_webhook(integration_id, headers, body)
+    }
+    fn device_flow_configured(&self, integration_id: &str) -> PortResult<bool> {
+        self.get(integration_id)?
+            .device_flow_configured(integration_id)
+    }
+    async fn start_device_flow(&self, integration_id: &str) -> PortResult<DeviceCode> {
+        self.get(integration_id)?
+            .start_device_flow(integration_id)
+            .await
+    }
+    async fn poll_device_flow(
+        &self,
+        integration_id: &str,
+        device_code: &SecretText,
+    ) -> PortResult<DevicePoll> {
+        self.get(integration_id)?
+            .poll_device_flow(integration_id, device_code)
+            .await
+    }
+    async fn refresh_user_token(
+        &self,
+        integration_id: &str,
+        refresh_token: &SecretText,
+    ) -> PortResult<TokenRefresh> {
+        self.get(integration_id)?
+            .refresh_user_token(integration_id, refresh_token)
+            .await
+    }
+    async fn user_identity(
+        &self,
+        integration_id: &str,
+        token: &SecretText,
+    ) -> PortResult<IdentityLookup> {
+        self.get(integration_id)?
+            .user_identity(integration_id, token)
+            .await
     }
 }
 
@@ -383,6 +421,9 @@ fn capability_refusal(
         if s.webhook_secret_file.is_some() && caps.webhook_signature.is_none() {
             return Some(("config_webhook_unsupported", s.id.clone()));
         }
+        if s.client_id.is_some() && !caps.user_authorship {
+            return Some(("config_user_authorship_unsupported", s.id.clone()));
+        }
         None
     })
 }
@@ -470,6 +511,7 @@ async fn run(
                 app_id: s.app_id,
                 private_key_file: config::expand(&s.private_key_file),
                 user_agent: format!("saka/{VERSION}"),
+                client_id: s.client_id.clone(),
             },
             clock.clone(),
         ) {
@@ -558,8 +600,8 @@ async fn run(
                 account_dir: cfg.account_dir().to_string_lossy().into_owned(),
                 model: Some(cfg.agent.model.clone()).filter(|m| !m.is_empty()),
                 path: config::paths_of(&cfg.agent.path),
-                author_name: cfg.git.author_name.clone(),
-                author_email: cfg.git.author_email.clone(),
+                author_name: cfg.git.name.clone(),
+                author_email: cfg.git.email.clone(),
             },
             sessions_dir: data_dir.join("sessions"),
             runtime_dir: runtime_dir(),
@@ -600,8 +642,8 @@ async fn run(
             integrations,
             env: env_cfg,
             docs_author: saka_ports::CommitIdentity {
-                name: cfg.git.author_name.clone(),
-                email: cfg.git.author_email.clone(),
+                name: cfg.git.name.clone(),
+                email: cfg.git.email.clone(),
             },
             draft: draft_config(cfg),
             architect_model: Some(cfg.architect.model.clone()).filter(|m| !m.is_empty()),
@@ -650,6 +692,7 @@ mod capability_tests {
         draft_change_requests: false,
         delete_branch_after_merge: false,
         commit_status: false,
+        user_authorship: false,
     };
 
     fn config(extra: &str) -> Config {
@@ -676,6 +719,19 @@ mod capability_tests {
                 |_| Some(LIMITED)
             ),
             Some(("config_webhook_unsupported", "github".to_string()))
+        );
+        assert_eq!(
+            capability_refusal(
+                &config("merge_method = \"merge\"\nclient_id = \"Iv23liAbCdEfGh123456\"\n"),
+                |_| Some(LIMITED)
+            ),
+            Some(("config_user_authorship_unsupported", "github".to_string()))
+        );
+        assert_eq!(
+            capability_refusal(&config("client_id = \"Iv23liAbCdEfGh123456\"\n"), |_| {
+                Some(full.clone())
+            }),
+            None
         );
         assert_eq!(capability_refusal(&config(""), |_| None), None);
     }

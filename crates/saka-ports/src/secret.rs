@@ -1,5 +1,4 @@
-use saka_core::ids::ProjectId;
-use saka_core::secret::SecretText;
+use saka_core::secret::{SecretScope, SecretText};
 
 use crate::PortResult;
 
@@ -10,10 +9,10 @@ pub struct Sealed {
 }
 
 pub trait SecretStore: Send + Sync {
-    fn seal(&self, project: ProjectId, name: &str, value: &SecretText) -> PortResult<Sealed>;
+    fn seal(&self, scope: &SecretScope<'_>, value: &SecretText) -> PortResult<Sealed>;
 
-    fn open(&self, project: ProjectId, name: &str, sealed: &Sealed) -> PortResult<SecretText>;
+    fn open(&self, scope: &SecretScope<'_>, sealed: &Sealed) -> PortResult<SecretText>;
 
     // Keyed, so a stored request hash cannot be used to guess the value offline.
-    fn fingerprint(&self, project: ProjectId, name: &str, value: &SecretText) -> String;
+    fn fingerprint(&self, scope: &SecretScope<'_>, value: &SecretText) -> String;
 }

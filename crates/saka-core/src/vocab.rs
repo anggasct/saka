@@ -121,6 +121,27 @@ vocab!(ScopeStage { Dev => "dev", Merge => "merge" });
 vocab!(ScopeViolationReason { OutsideScope => "outside_scope", TooManyPaths => "too_many_paths" });
 vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
 vocab!(SecretPurpose { Setup => "setup", Session => "session" });
+vocab!(UserLinkState { Active => "active", NeedsRelink => "needs_relink" });
+vocab!(RelinkCause { RefreshFailed => "refresh_failed", Revoked => "revoked", Expired => "expired" });
+vocab!(AuthorizationState {
+    Pending => "pending",
+    Completed => "completed",
+    Expired => "expired",
+    Denied => "denied",
+    Failed => "failed",
+});
+vocab!(AuthorizationFailure {
+    DeviceFlowDisabled => "device_flow_disabled",
+    IncorrectClientCredentials => "incorrect_client_credentials",
+    IncorrectDeviceCode => "incorrect_device_code",
+    UnsupportedGrantType => "unsupported_grant_type",
+    BadVerificationCode => "bad_verification_code",
+    TokenNotExpiring => "token_not_expiring",
+    IdentityUnavailable => "identity_unavailable",
+});
+vocab!(RefreshReason { Use => "use", Proactive => "proactive" });
+vocab!(RefreshOutcome { Refreshed => "refreshed", Rejected => "rejected", Failed => "failed" });
+vocab!(UserTokenKind { Access => "access", Refresh => "refresh" });
 vocab!(ContextOrigin { Link => "link", Always => "always" });
 vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });

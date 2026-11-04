@@ -1817,7 +1817,14 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SpecDraftSucceeded { .. }
         | E::SpecDraftFailed { .. }
         | E::SpecDraftRetried { .. }
-        | E::SpecDraftCancelled { .. } => {}
+        | E::SpecDraftCancelled { .. }
+        | E::UserLinkAuthorizationStarted { .. }
+        | E::UserLinkAuthorizationSlowed { .. }
+        | E::UserLinkAuthorizationEnded { .. }
+        | E::UserLinked { .. }
+        | E::UserLinkRefreshed { .. }
+        | E::UserLinkRelinkRequired { .. }
+        | E::UserLinkRemoved { .. } => {}
         E::EnvironmentPrepared { .. }
         | E::EnvironmentTornDown { .. }
         | E::EnvironmentTeardownFailed { .. }

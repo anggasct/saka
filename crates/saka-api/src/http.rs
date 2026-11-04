@@ -72,6 +72,18 @@ pub fn reply_response(reply: &Reply, replayed: bool) -> Response {
     {
         response.headers_mut().insert(header::LOCATION, location);
     }
+    if status == StatusCode::ACCEPTED
+        && let (Some(integration), Some(id)) = (
+            reply.body.get("integration_id").and_then(Value::as_str),
+            reply.body.get("id").and_then(Value::as_str),
+        )
+        && reply.body.get("user_code").is_some()
+        && let Ok(location) = HeaderValue::from_str(&format!(
+            "/api/v1/scm/{integration}/user-link/authorizations/{id}"
+        ))
+    {
+        response.headers_mut().insert(header::LOCATION, location);
+    }
     if replayed {
         response
             .headers_mut()

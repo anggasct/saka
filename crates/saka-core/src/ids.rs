@@ -44,4 +44,6 @@ id_type!(
     UsageRecordId,
     SpecDraftId,
     SpecDraftAttemptId,
+    UserLinkId,
+    UserLinkAuthorizationId,
 );
