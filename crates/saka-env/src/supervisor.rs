@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::io::Read;
 
 use async_trait::async_trait;
+use saka_core::diagnostics::SupervisorProbe;
 use saka_core::secret::SecretText;
 use saka_ports::{
     COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, PortError, PortResult, RunnerUnit, Supervisor,
@@ -20,6 +21,9 @@ const KILL_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(100);
 
 const RUN_BACKSTOP: Duration = Duration::from_secs(30);
+
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_DETAIL_MAX: usize = 512;
 
 const SOURCE_SECRETS: &str = r#"set -a; . "$0" || exit 125; set +a; rm -f -- "$0"; exec "$@""#;
 
@@ -148,6 +152,41 @@ async fn collect(
         output: captured.output,
         truncated: captured.truncated,
     })
+}
+
+pub async fn probe_systemd(program: &std::ffi::OsStr, timeout: Duration) -> SupervisorProbe {
+    let run = Command::new(program)
+        .args([
+            "--user",
+            "--wait",
+            "--pipe",
+            "--quiet",
+            "--collect",
+            "--",
+            "/bin/true",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .output();
+    let unavailable = |exit_code, detail: &str| {
+        let detail = detail.trim();
+        let cut = (0..=detail.len().min(PROBE_DETAIL_MAX))
+            .rev()
+            .find(|i| detail.is_char_boundary(*i))
+            .unwrap_or(0);
+        SupervisorProbe::Unavailable {
+            exit_code,
+            detail: detail[..cut].to_string(),
+        }
+    };
+    match tokio::time::timeout(timeout, run).await {
+        Ok(Ok(out)) if out.status.success() => SupervisorProbe::Available,
+        Ok(Ok(out)) => unavailable(out.status.code(), &String::from_utf8_lossy(&out.stderr)),
+        Ok(Err(e)) => unavailable(None, &e.to_string()),
+        Err(_) => unavailable(None, "timed out"),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -314,6 +353,10 @@ impl Supervisor for SystemdSupervisor {
         drop(secrets);
         result
     }
+
+    async fn probe(&self) -> PortResult<SupervisorProbe> {
+        Ok(probe_systemd(std::ffi::OsStr::new("systemd-run"), PROBE_TIMEOUT).await)
+    }
 }
 
 pub struct DirectSupervisor {
@@ -436,5 +479,9 @@ impl Supervisor for DirectSupervisor {
                 collect(reader, None, true).await
             }
         }
+    }
+
+    async fn probe(&self) -> PortResult<SupervisorProbe> {
+        Ok(SupervisorProbe::Available)
     }
 }

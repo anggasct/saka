@@ -9,5 +9,7 @@ pub use git::Git;
 pub use releases::{HttpReleaseIndex, ReleaseIndexConfig};
 pub use repos::{GitRepos, RecipeRunner, ReposConfig};
 pub use secrets::{AeadSecrets, KeyFileError};
-pub use supervisor::{DirectSupervisor, SystemdSupervisor, runtime_dir};
-pub use toolchain::{Platform, ToolchainConfig, ToolchainInstaller};
+pub use supervisor::{
+    DirectSupervisor, PROBE_TIMEOUT, SystemdSupervisor, probe_systemd, runtime_dir,
+};
+pub use toolchain::{Platform, ToolchainConfig, ToolchainInstaller, cache_status};

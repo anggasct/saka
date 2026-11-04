@@ -1,0 +1,47 @@
+#!/bin/sh
+# Stands in for the agent CLI: answers `--version`, `auth status --json`, and `auth login`
+# as the files next to it say, and records every call's argv and environment there.
+here=$(dirname "$0")
+{
+  printf 'argv %s\n' "$*"
+  tr '\000' '\n' < /proc/$$/environ | sed 's/^/env /'
+  printf 'end\n'
+} >> "$here/calls"
+case "$1 $2" in
+  "--version "*)
+    echo "2.1.7 (Claude Code)"
+    ;;
+  "auth status")
+    mode=$(cat "$here/status" 2>/dev/null || echo auto)
+    if [ "$mode" = auto ]; then
+      if [ -f "$CLAUDE_CONFIG_DIR/.fake-login" ]; then mode=in; else mode=out; fi
+    fi
+    case "$mode" in
+      in)
+        echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"operator@example.com","orgId":"org-0042","orgName":"Acme Secret Org","subscriptionType":"max"}'
+        ;;
+      out)
+        echo '{"loggedIn":false}'
+        exit 1
+        ;;
+      exit3)
+        echo '{"loggedIn":true}'
+        exit 3
+        ;;
+      garbage)
+        echo 'Logged in as operator@example.com'
+        ;;
+      hang)
+        exec sleep 60
+        ;;
+    esac
+    ;;
+  "auth login")
+    if [ "$(cat "$here/login" 2>/dev/null)" != noop ]; then
+      mkdir -p "$CLAUDE_CONFIG_DIR" && : > "$CLAUDE_CONFIG_DIR/.fake-login"
+    fi
+    ;;
+  *)
+    exit 64
+    ;;
+esac

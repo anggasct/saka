@@ -365,3 +365,36 @@ async fn an_archive_that_links_outside_its_root_is_refused() {
     assert!(!fx.root.join("node").join("26.13.0-linux-x64").exists());
     assert!(fx.leftovers().is_empty(), "{:?}", fx.leftovers());
 }
+
+#[test]
+fn the_cache_lists_installed_toolchains_and_reports_a_read_only_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("toolchains");
+    let installed = root.join("go").join("1.26.1-linux-x64");
+    std::fs::create_dir_all(&installed).unwrap();
+    std::fs::write(
+        installed.join(".saka-toolchain.json"),
+        json!({ "tool": "go", "version": "1.26.1", "digest": "sha256:00" }).to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("node").join("22.0.0-linux-x64")).unwrap();
+    let cache = saka_env::cache_status(&root);
+    assert!(cache.writable);
+    assert_eq!(
+        cache.installed,
+        [saka_core::diagnostics::InstalledToolchain {
+            tool: Tool::Go,
+            version: "1.26.1".into(),
+        }]
+    );
+    let staged: Vec<_> = std::fs::read_dir(root.join(".tmp")).unwrap().collect();
+    assert!(staged.is_empty(), "the test file is removed");
+
+    let locked = dir.path().join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let cache = saka_env::cache_status(&locked.join("toolchains"));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!cache.writable);
+    assert_eq!(cache.path, locked.join("toolchains").to_string_lossy());
+}

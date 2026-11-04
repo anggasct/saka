@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use saka_core::authorship::GitIdentity;
+use saka_core::diagnostics::{AgentCli, AgentLogin, SupervisorProbe, ToolchainCache};
 use saka_core::gate::Check;
 use saka_core::ids::{EnvironmentId, SessionId};
 use saka_core::model::{RunOwner, ToolchainUse};
@@ -13,15 +14,16 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
-    Agents, Blob, ChangeCredential, ChangeOpening, ChangeSnapshot, ChangedPaths, Clock, DeviceCode,
-    DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree,
-    DocWrite, DocsRequest, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession,
-    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached,
-    RecipeCommand, RecipeCommandOutcome, RepoAccess, RepoInfo, RepoRef, RunnerEvent,
-    RunnerEventKind, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef,
-    StatusReport, TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget,
-    WorktreeFile, WorktreeState,
+    Agents, Blob, ChangeCredential, ChangeOpening, ChangeSnapshot, ChangedPaths, Clock,
+    CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect,
+    DocFile, DocOpened, DocSource, DocTree, DocWrite, DocsRequest, EnvRef, Environments,
+    IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
+    OpenChangeRequest, OpenedChange, PortError, PortResult, PrepareRequest, PreparedDocs,
+    PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand, RecipeCommandOutcome,
+    Release, ReleaseIndex, RepoAccess, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, RunnerUnit,
+    Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor,
+    TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile,
+    WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -292,6 +294,7 @@ pub struct FakeWorld {
     clock: Arc<FakeClock>,
     state: Mutex<State>,
     accounts: crate::accounts::FakeAccounts,
+    host: crate::diagnostics::FakeHost,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,6 +337,7 @@ impl FakeWorld {
         let remotes = BTreeMap::from([(HOME_REPO.to_string(), remote)]);
         FakeWorld {
             accounts: crate::accounts::FakeAccounts::new(Arc::clone(&clock)),
+            host: crate::diagnostics::FakeHost::default(),
             clock,
             state: Mutex::new(State {
                 script,
@@ -398,6 +402,10 @@ impl FakeWorld {
 
     pub fn accounts(&self) -> &crate::accounts::FakeAccounts {
         &self.accounts
+    }
+
+    pub fn host(&self) -> &crate::diagnostics::FakeHost {
+        &self.host
     }
 
     pub fn scm_calls(&self) -> Vec<ScmCall> {
@@ -2404,6 +2412,14 @@ impl Agents for FakeWorld {
         }
         Ok(())
     }
+
+    async fn agent_cli(&self) -> PortResult<AgentCli> {
+        self.host.agent_cli().await
+    }
+
+    async fn agent_login(&self) -> PortResult<AgentLogin> {
+        self.host.agent_login().await
+    }
 }
 
 #[async_trait]
@@ -2461,6 +2477,40 @@ impl Toolchains for FakeWorld {
             env,
             downloaded,
         })
+    }
+
+    async fn cache(&self) -> PortResult<ToolchainCache> {
+        self.host.cache().await
+    }
+}
+
+#[async_trait]
+impl Supervisor for FakeWorld {
+    async fn start(&self, _unit: &RunnerUnit) -> PortResult<()> {
+        Err(PortError::permanent("supervisor_unsupported", json!({})))
+    }
+
+    async fn stop(&self, _name: &str) -> PortResult<()> {
+        Err(PortError::permanent("supervisor_unsupported", json!({})))
+    }
+
+    async fn is_active(&self, _name: &str) -> PortResult<bool> {
+        Err(PortError::permanent("supervisor_unsupported", json!({})))
+    }
+
+    async fn run(&self, _unit: &CommandUnit) -> PortResult<CommandOutcome> {
+        Err(PortError::permanent("supervisor_unsupported", json!({})))
+    }
+
+    async fn probe(&self) -> PortResult<SupervisorProbe> {
+        self.host.probe().await
+    }
+}
+
+#[async_trait]
+impl ReleaseIndex for FakeWorld {
+    async fn releases(&self, tool: Tool) -> PortResult<Vec<Release>> {
+        self.host.releases(tool).await
     }
 }
 

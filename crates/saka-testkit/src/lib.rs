@@ -6,6 +6,7 @@
 
 mod accounts;
 mod clock;
+pub mod diagnostics;
 pub mod fake_claude;
 pub mod fixtures;
 pub mod logs;

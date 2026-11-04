@@ -13,8 +13,9 @@ use saka_core::vocab::{
 };
 use saka_core::vocab::{ReloadTrigger, SpecOrigin, WorkItemOrigin};
 use saka_engine::{
-    AddProject, Engine, EngineConfig, EngineError, EnvConfig, Integration, JobReport, NewBinding,
-    NewProject, NewRepo, NewSpecDraft, Ports, ProjectView, RegisteredSpec, ReloadView, StoredEvent,
+    AddProject, DiagnosticLimits, Engine, EngineConfig, EngineError, EnvConfig, Integration,
+    JobReport, NewBinding, NewProject, NewRepo, NewSpecDraft, Ports, ProjectView, RegisteredSpec,
+    ReloadView, StoredEvent,
 };
 use saka_ports::Clock;
 use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, list, read};
@@ -81,6 +82,7 @@ pub struct SimConfig {
     pub draft: DraftConfig,
     pub architect_model: Option<String>,
     pub config_poll_secs: u32,
+    pub diagnostics: DiagnosticLimits,
 }
 
 pub fn draft_config() -> DraftConfig {
@@ -141,6 +143,7 @@ impl Default for SimConfig {
             draft: draft_config(),
             architect_model: None,
             config_poll_secs: 0,
+            diagnostics: DiagnosticLimits::default(),
         }
     }
 }
@@ -335,6 +338,8 @@ impl Sim {
             docs: self.world.clone(),
             toolchains: self.world.clone(),
             secrets: self.world.clone(),
+            supervisor: self.world.clone(),
+            releases: self.world.clone(),
         };
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),
@@ -361,6 +366,7 @@ impl Sim {
             draft: self.cfg.draft.clone(),
             architect_model: self.cfg.architect_model.clone(),
             config_poll_secs: self.cfg.config_poll_secs,
+            diagnostics: self.cfg.diagnostics,
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

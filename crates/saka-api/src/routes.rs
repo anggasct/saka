@@ -8,15 +8,18 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
+use saka_core::diagnostics::{self, CheckResult, Report, Subject};
 use saka_core::ids::{
     PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId, SpecId,
     SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
-use saka_core::vocab::{AuthorshipMode, DraftLocale, ReloadTrigger};
+use saka_core::time::Timestamp;
+use saka_core::vocab::{AuthorshipMode, CheckId, DraftLocale, ReloadTrigger, ReportMode};
 use saka_engine::{
-    AddProject, CheckConfig, EngineError, NewSpecDraft, PermissionFilter, Precondition, Produced,
-    Reply, RunOf, SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
+    AddProject, CheckConfig, DiagnosticFilter, EngineError, NewSpecDraft, PermissionFilter,
+    Precondition, Produced, Reply, RunOf, SessionCommand, SessionView, StoredEvent, TimelineCursor,
+    WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -1601,8 +1604,8 @@ pub async fn meta(State(s): State<AppState>) -> Response {
         StatusCode::OK,
         &dto::Meta {
             server_version: s.config().server_version.clone(),
-            api_version: "1".into(),
-            min_client_api_version: "1".into(),
+            api_version: dto::API_VERSION.into(),
+            min_client_api_version: dto::API_VERSION.into(),
             capabilities: CAPABILITIES.iter().map(|c| c.to_string()).collect(),
         },
     )
@@ -2120,4 +2123,69 @@ pub async fn remove_user_link(
         },
     )
     .await
+}
+
+fn diagnostic_filter(pairs: Vec<(String, String)>) -> Result<DiagnosticFilter, ApiError> {
+    let mut checks = std::collections::BTreeSet::new();
+    let mut project = None;
+    for (key, value) in pairs {
+        match key.as_str() {
+            "check" => match value.parse::<CheckId>() {
+                Ok(id) if !id.is_client() => {
+                    checks.insert(id);
+                }
+                _ => return Err(ApiError::validation("check", "unknown")),
+            },
+            "project_id" => project = opt_id(Some(&value), "project_id")?.map(ProjectId),
+            _ => {}
+        }
+    }
+    Ok(DiagnosticFilter {
+        checks: (!checks.is_empty()).then_some(checks),
+        project_id: project,
+    })
+}
+
+fn without_engine(filter: &DiagnosticFilter, server_version: &str) -> Report {
+    let failing: Vec<&str> = ["db", "migrations", "worker", "reconciler"].to_vec();
+    let checks = CheckId::server()
+        .filter(|id| filter.checks.as_ref().is_none_or(|c| c.contains(id)))
+        .map(|id| CheckResult {
+            id,
+            subject: Subject::instance(),
+            finding: if id == CheckId::ServerReady {
+                diagnostics::server_ready(&failing)
+            } else {
+                diagnostics::engine_not_ready()
+            },
+            duration_ms: 0,
+        })
+        .collect();
+    let now = Timestamp(jiff::Timestamp::now().as_millisecond());
+    Report::new(now, server_version, ReportMode::Online, checks)
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/diagnostics", tag = "system", params(dto::DiagnosticsQuery),
+    responses(
+        (status = 200, body = dto::DiagnosticReport, headers(("Cache-Control" = String, description = "Always `no-store`: every request runs the checks again."))),
+        (status = 422, body = dto::Problem, content_type = "application/problem+json")
+    )
+)]
+pub async fn diagnostics(
+    State(s): State<AppState>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Response {
+    let filter = tri!(diagnostic_filter(pairs));
+    let version = &s.config().server_version;
+    let report = match s.engine_if_ready() {
+        Some(engine) => tri!(engine.diagnostics(&filter, version).await),
+        None => without_engine(&filter, version),
+    };
+    let mut response = ok(StatusCode::OK, &dto::DiagnosticReport::from(&report));
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }

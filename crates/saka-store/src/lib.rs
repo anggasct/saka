@@ -13,7 +13,8 @@ mod write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use saka_core::diagnostics::MigrationState;
 use saka_core::time::Timestamp;
 use uuid::Uuid;
 
@@ -88,4 +89,21 @@ impl Store {
     pub fn schema_version(&self) -> Result<Option<i64>> {
         self.read(migrate::current_version)
     }
+}
+
+pub fn latest_migration() -> i64 {
+    migrate::MIGRATIONS.iter().map(|m| m.0).max().unwrap_or(0)
+}
+
+pub fn migration_status(path: &Path) -> Result<MigrationState> {
+    let latest = latest_migration();
+    if !path.exists() {
+        return Ok(MigrationState { applied: 0, latest });
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let applied = migrate::current_version(&conn)?.unwrap_or(0);
+    Ok(MigrationState { applied, latest })
 }

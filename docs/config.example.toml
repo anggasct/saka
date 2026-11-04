@@ -32,7 +32,7 @@ client_id = "Iv23liAbCdEfGh123456"  # the GitHub App Client ID (not app_id), 1..
 [agent]
 cli = "claude"
 command = "claude"                 # looked up in agent.path
-account_dir = "~/.local/share/saka/agents/claude/default"   # CLAUDE_CONFIG_DIR; log in once by hand
+account_dir = "~/.local/share/saka/agents/claude/default"   # CLAUDE_CONFIG_DIR; log in with `saka agent login`
 model = ""                         # empty = the CLI default
 path = ["~/.local/bin", "/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin"]
 max_followup_turns = 1

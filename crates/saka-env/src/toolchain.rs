@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine as _;
+use saka_core::diagnostics::{InstalledToolchain, ToolchainCache};
 use saka_core::model::ToolchainUse;
 use saka_core::vocab::Tool;
 use saka_ports::{PortError, PortResult, Toolchains};
@@ -578,5 +579,56 @@ impl Toolchains for ToolchainInstaller {
         }
         self.fetch(tool, version, p, &dir).await?;
         self.used(tool, version, &dir, true)
+    }
+
+    async fn cache(&self) -> PortResult<ToolchainCache> {
+        let root = self.cfg.root.clone();
+        tokio::task::spawn_blocking(move || cache_status(&root))
+            .await
+            .map_err(|e| {
+                PortError::retryable(
+                    "env_io_failed",
+                    json!({ "op": "read_toolchain_cache", "error": e.to_string() }),
+                )
+            })
+    }
+}
+
+fn writable(root: &Path) -> bool {
+    let staging = root.join(".tmp");
+    std::fs::create_dir_all(&staging).is_ok()
+        && tempfile::NamedTempFile::new_in(&staging)
+            .and_then(|mut f| f.write_all(b"saka").and_then(|()| f.as_file().sync_all()))
+            .is_ok()
+}
+
+#[derive(Deserialize)]
+struct Marker {
+    tool: Tool,
+    version: String,
+}
+
+pub fn cache_status(root: &Path) -> ToolchainCache {
+    let mut installed = Vec::new();
+    for tool in Tool::ALL {
+        let Ok(entries) = std::fs::read_dir(root.join(tool.as_str())) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let marker = std::fs::read(entry.path().join(MARKER))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok());
+            if let Some(m) = marker.filter(|m| m.tool == *tool) {
+                installed.push(InstalledToolchain {
+                    tool: m.tool,
+                    version: m.version,
+                });
+            }
+        }
+    }
+    ToolchainCache {
+        path: root.to_string_lossy().into_owned(),
+        writable: writable(root),
+        installed,
     }
 }

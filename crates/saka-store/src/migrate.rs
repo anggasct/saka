@@ -195,6 +195,29 @@ mod tests {
     const M2: (i64, &str) = (2, "CREATE TABLE b (y INTEGER) STRICT;");
 
     #[test]
+    fn the_status_reads_the_applied_version_without_migrating_or_creating() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("saka.db");
+        let latest = crate::latest_migration();
+        let state = |applied| saka_core::diagnostics::MigrationState { applied, latest };
+        assert_eq!(crate::migration_status(&path).unwrap(), state(0));
+        assert!(!path.exists());
+        let mut conn = Connection::open(&path).unwrap();
+        migrate_with(
+            &mut conn,
+            &MIGRATIONS[..2],
+            &dir.path().join("b"),
+            Timestamp(1),
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(crate::migration_status(&path).unwrap(), state(2));
+        assert_eq!(crate::migration_status(&path).unwrap(), state(2));
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), Some(2));
+    }
+
+    #[test]
     fn pending_migrations_on_an_existing_database_are_backed_up_first() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("saka.db");

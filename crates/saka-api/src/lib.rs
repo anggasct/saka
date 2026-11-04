@@ -39,7 +39,7 @@ pub use state::{ApiConfig, AppState};
         routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
         routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
         routes::retry_spec_draft, routes::cancel_spec_draft,
-        routes::meta, routes::events,
+        routes::meta, routes::events, routes::diagnostics,
         ops::healthz, ops::readyz, ops::metrics,
     ),
     components(schemas(dto::ActivityNotice)),
@@ -202,6 +202,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/agent-accounts", get(routes::list_agent_accounts))
         .route("/api/v1/usage-records", get(routes::list_usage_records))
         .route("/api/v1/meta", get(routes::meta))
+        .route("/api/v1/diagnostics", get(routes::diagnostics))
         .route("/api/v1/events", get(routes::events))
         .route(
             "/api/{*rest}",

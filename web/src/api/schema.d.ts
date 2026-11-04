@@ -20,6 +20,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/diagnostics": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["diagnostics"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/events": {
     parameters: {
       query?: never;
@@ -936,6 +952,51 @@ export interface components {
     };
     /** @enum {string} */
     Decision: "allow" | "deny";
+    DiagnosticCheck: {
+      /** @description What was found; the client turns it and `params` into text. Never holds a token, key, secret, or account email. */
+      code: string;
+      /** Format: int64 */
+      duration_ms: number;
+      fix?: components["schemas"]["DiagnosticFix"] | null;
+      /** @description Stable dotted id, for example `agent.login`. */
+      id: string;
+      params: unknown;
+      /** @description `pass`, `warn`, `fail`, or `skip`. */
+      status: string;
+      subject: components["schemas"]["DiagnosticSubject"];
+    };
+    DiagnosticFix: {
+      code: string;
+      /** @description `command` holds the command that fixes it, when there is one. */
+      params: unknown;
+    };
+    DiagnosticReport: {
+      /** @description In catalog order, then by `subject.label`. */
+      checks: components["schemas"]["DiagnosticCheck"][];
+      generated_at: string;
+      /** @description `online` from the server; `saka doctor` writes `offline` when it ran the local checks itself. */
+      mode: string;
+      server_version: string;
+      summary: components["schemas"]["DiagnosticSummary"];
+    };
+    DiagnosticSubject: {
+      /** @description For example `instance`, `claude:default`, or an integration, repo, or project id. */
+      id: string;
+      /** @description `instance`, `agent_account`, `integration`, `repo`, `project`, or `project_repo`. */
+      kind: string;
+      /** @description For display, for example `claude:default` or `acme/shop`. */
+      label: string;
+    };
+    DiagnosticSummary: {
+      /** Format: int32 */
+      fail: number;
+      /** Format: int32 */
+      pass: number;
+      /** Format: int32 */
+      skip: number;
+      /** Format: int32 */
+      warn: number;
+    };
     DocsChangeRequest: {
       base_branch: string;
       head_sha: string;
@@ -2210,6 +2271,40 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentAccountList"];
+        };
+      };
+    };
+  };
+  diagnostics: {
+    parameters: {
+      query?: {
+        /** @description Only this project's `project`, `project_repo`, and `repo` checks; instance, agent account, and integration checks always run. */
+        project_id?: string;
+        /** @description A check id from the catalog, for example `agent.login`; repeat for more. Without it, every check runs. */
+        check?: string[];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          /** @description Always `no-store`: every request runs the checks again. */
+          "Cache-Control"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DiagnosticReport"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
     };

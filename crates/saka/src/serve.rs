@@ -15,10 +15,10 @@ use saka_core::task::LoopConfig;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{MergeMethod, Stage};
 use saka_docs::GitDocs;
-use saka_engine::{Engine, EngineConfig, EnvConfig, Integration, Ports};
+use saka_engine::{DiagnosticLimits, Engine, EngineConfig, EnvConfig, Integration, Ports};
 use saka_env::{
-    AeadSecrets, Git, GitRepos, Platform, RecipeRunner, ReposConfig, SystemdSupervisor,
-    ToolchainConfig, ToolchainInstaller, runtime_dir,
+    AeadSecrets, Git, GitRepos, HttpReleaseIndex, Platform, RecipeRunner, ReleaseIndexConfig,
+    ReposConfig, SystemdSupervisor, ToolchainConfig, ToolchainInstaller, runtime_dir,
 };
 use saka_ports::{
     ChangeOpening, ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote,
@@ -300,6 +300,57 @@ fn env_config(cfg: &Config, store: &Store) -> Result<EnvConfig, ConfigError> {
     }
 }
 
+pub fn claude_settings(cfg: &Config) -> ClaudeSettings {
+    ClaudeSettings {
+        command: cfg.agent.command.clone(),
+        account: cfg.account_name(),
+        account_dir: cfg.account_dir().to_string_lossy().into_owned(),
+        model: Some(cfg.agent.model.clone()).filter(|m| !m.is_empty()),
+        path: config::paths_of(&cfg.agent.path),
+        committer: saka_identity(cfg),
+    }
+}
+
+pub fn agents_config(cfg: &Config) -> AgentsConfig {
+    AgentsConfig {
+        claude: claude_settings(cfg),
+        sessions_dir: cfg.data_dir().join("sessions"),
+        runtime_dir: runtime_dir(),
+        runner_program: std::env::current_exe().unwrap_or_else(|_| "saka".into()),
+        limits: UnitLimits {
+            memory_max: cfg.agent.limits.memory_max.clone(),
+            cpu_quota: cfg.agent.limits.cpu_quota.clone(),
+            tasks_max: cfg.agent.limits.tasks_max,
+        },
+        known_values: Vec::new(),
+        server_version: VERSION.to_string(),
+        extra_env: Vec::new(),
+    }
+}
+
+pub fn toolchain_config(cfg: &Config) -> ToolchainConfig {
+    let data_dir = cfg.data_dir();
+    ToolchainConfig {
+        root: data_dir.join("toolchains"),
+        caches: data_dir.join("caches"),
+        go_dl_url: cfg.toolchain.go_dl_url.clone(),
+        node_dist_url: cfg.toolchain.node_dist_url.clone(),
+        npm_registry_url: cfg.toolchain.npm_registry_url.clone(),
+        timeout: Duration::from_secs(cfg.toolchain.download_timeout_secs),
+        user_agent: format!("saka/{VERSION}"),
+        platform: Platform::current(),
+    }
+}
+
+pub fn release_index_config(cfg: &Config) -> ReleaseIndexConfig {
+    ReleaseIndexConfig {
+        go_dl_url: cfg.toolchain.go_dl_url.clone(),
+        node_dist_url: cfg.toolchain.node_dist_url.clone(),
+        npm_registry_url: cfg.toolchain.npm_registry_url.clone(),
+        user_agent: format!("saka/{VERSION}"),
+    }
+}
+
 fn saka_identity(cfg: &Config) -> saka_core::authorship::GitIdentity {
     saka_core::authorship::GitIdentity {
         name: cfg.git.name.clone(),
@@ -569,16 +620,7 @@ async fn run(
             web_url: s.web_url.clone(),
         });
     }
-    let toolchains = match ToolchainInstaller::new(ToolchainConfig {
-        root: data_dir.join("toolchains"),
-        caches: data_dir.join("caches"),
-        go_dl_url: cfg.toolchain.go_dl_url.clone(),
-        node_dist_url: cfg.toolchain.node_dist_url.clone(),
-        npm_registry_url: cfg.toolchain.npm_registry_url.clone(),
-        timeout: Duration::from_secs(cfg.toolchain.download_timeout_secs),
-        user_agent: format!("saka/{VERSION}"),
-        platform: Platform::current(),
-    }) {
+    let toolchains = match ToolchainInstaller::new(toolchain_config(cfg)) {
         Ok(t) => Arc::new(t),
         Err(e) => {
             tracing::error!(code = %e.code, "toolchain installer refused");
@@ -631,31 +673,16 @@ async fn run(
         .is_none_or(|c| c.delete_branch_after_merge);
     let commit_status = first_caps.as_ref().is_some_and(|c| c.commit_status);
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
-    let agents = ClaudeAgents::new(
-        AgentsConfig {
-            claude: ClaudeSettings {
-                command: cfg.agent.command.clone(),
-                account: cfg.account_name(),
-                account_dir: cfg.account_dir().to_string_lossy().into_owned(),
-                model: Some(cfg.agent.model.clone()).filter(|m| !m.is_empty()),
-                path: config::paths_of(&cfg.agent.path),
-                committer: saka_identity(cfg),
-            },
-            sessions_dir: data_dir.join("sessions"),
-            runtime_dir: runtime_dir(),
-            runner_program: std::env::current_exe().unwrap_or_else(|_| "saka".into()),
-            limits: UnitLimits {
-                memory_max: cfg.agent.limits.memory_max.clone(),
-                cpu_quota: cfg.agent.limits.cpu_quota.clone(),
-                tasks_max: cfg.agent.limits.tasks_max,
-            },
-            known_values: Vec::new(),
-            server_version: VERSION.to_string(),
-            extra_env: Vec::new(),
-        },
-        Arc::new(SystemdSupervisor),
-        events_tx,
-    );
+    let releases = match HttpReleaseIndex::new(release_index_config(cfg)) {
+        Ok(r) => Arc::new(r),
+        Err(e) => {
+            tracing::error!(code = %e.code, "release index refused");
+            let _ = stop.send(true);
+            let _ = http.await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
+    let agents = ClaudeAgents::new(agents_config(cfg), Arc::new(SystemdSupervisor), events_tx);
     let engine = Arc::new(Engine::new(
         store,
         Ports {
@@ -667,6 +694,8 @@ async fn run(
             docs: Arc::new(GitDocs::new(repos)),
             toolchains,
             secrets,
+            supervisor: Arc::new(SystemdSupervisor),
+            releases,
         },
         EngineConfig {
             loop_cfg: LoopConfig {
@@ -683,6 +712,7 @@ async fn run(
             draft: draft_config(cfg),
             architect_model: Some(cfg.architect.model.clone()).filter(|m| !m.is_empty()),
             config_poll_secs: cfg.workspace.config_poll_secs,
+            diagnostics: DiagnosticLimits::default(),
         },
     ));
     match engine.recover() {
