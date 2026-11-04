@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use saka_core::scope::{PathScope, ScopeIssue};
 use saka_core::workspace::MAX_BINDINGS;
+use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use toml::Spanned;
@@ -35,7 +36,7 @@ impl RepoEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Issue {
     pub code: &'static str,
     pub field: Option<String>,

@@ -38,7 +38,7 @@ impl Unpinned {
     }
 }
 
-fn exact(version: &str) -> bool {
+pub fn exact(version: &str) -> bool {
     let parts: Vec<&str> = version.split('.').collect();
     parts.len() == 3
         && parts
@@ -64,20 +64,15 @@ fn go_version(raw: &str) -> Option<String> {
     })
 }
 
-fn pinned(tool: Tool, source: &'static str, raw: &str) -> Result<String, Unpinned> {
+pub fn exact_version(tool: Tool, raw: &str) -> Option<String> {
     let value = raw.trim();
-    let version = match tool {
+    match tool {
         Tool::Go => go_version(value.strip_prefix("go").unwrap_or(value)),
         Tool::Node => {
             Some(value.strip_prefix('v').unwrap_or(value).to_string()).filter(|v| exact(v))
         }
         Tool::Pnpm => Some(value.to_string()).filter(|v| exact(v)),
-    };
-    version.ok_or_else(|| Unpinned {
-        tool,
-        source,
-        value: Some(value.to_string()),
-    })
+    }
 }
 
 fn go_mod(text: &str, directive: &str) -> Option<String> {
@@ -99,26 +94,49 @@ fn engine<'a>(package: &'a Value, field: &str, name: &str) -> Option<&'a Value> 
     }
 }
 
-fn version_file(text: &str) -> Option<String> {
+pub(crate) fn version_file(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
         .find(|l| !l.is_empty() && !l.starts_with('#'))
         .map(String::from)
 }
 
-fn first_found(
-    tool: Tool,
-    candidates: Vec<(&'static str, Option<String>)>,
-) -> Option<Result<String, Unpinned>> {
-    candidates
-        .into_iter()
-        .find_map(|(source, value)| value.map(|v| pinned(tool, source, &v)))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declared {
+    pub tool: Tool,
+    pub source: &'static str,
+    pub value: String,
+    pub version: Option<String>,
 }
 
-pub fn detect(
-    recipe: &BTreeMap<Tool, String>,
-    files: &Files,
-) -> Result<Vec<(Tool, String)>, Unpinned> {
+impl Declared {
+    fn into_result(self) -> Result<String, Unpinned> {
+        let Declared {
+            tool,
+            source,
+            value,
+            version,
+        } = self;
+        version.ok_or(Unpinned {
+            tool,
+            source,
+            value: Some(value),
+        })
+    }
+}
+
+fn declare(tool: Tool, source: &'static str, raw: &str) -> Declared {
+    let value = raw.trim().to_string();
+    let version = exact_version(tool, &value);
+    Declared {
+        tool,
+        source,
+        value,
+        version,
+    }
+}
+
+fn candidates(tool: Tool, files: &Files) -> Vec<(&'static str, Option<String>)> {
     let package: Option<Value> = files
         .package_json
         .as_deref()
@@ -132,16 +150,8 @@ pub fn detect(
                 .to_string()
         })
     };
-    let package_manager = package
-        .and_then(|p| p.get("packageManager"))
-        .and_then(Value::as_str)
-        .and_then(|pm| pm.strip_prefix("pnpm@"))
-        .map(|v| v.split('+').next().unwrap_or("").to_string());
-
-    let go = first_found(
-        Tool::Go,
-        vec![
-            ("recipe", recipe.get(&Tool::Go).cloned()),
+    match tool {
+        Tool::Go => vec![
             (
                 "go_mod_toolchain",
                 files.go_mod.as_deref().and_then(|t| go_mod(t, "toolchain")),
@@ -151,11 +161,7 @@ pub fn detect(
                 files.go_mod.as_deref().and_then(|t| go_mod(t, "go")),
             ),
         ],
-    );
-    let node = first_found(
-        Tool::Node,
-        vec![
-            ("recipe", recipe.get(&Tool::Node).cloned()),
+        Tool::Node => vec![
             ("package_json_dev_engines", dev_engine("runtime", "node")),
             (
                 "node_version_file",
@@ -163,18 +169,41 @@ pub fn detect(
             ),
             ("nvmrc", files.nvmrc.as_deref().and_then(version_file)),
         ],
-    );
-    let pnpm = first_found(
-        Tool::Pnpm,
-        vec![
-            ("recipe", recipe.get(&Tool::Pnpm).cloned()),
-            ("package_json_package_manager", package_manager),
+        Tool::Pnpm => vec![
+            (
+                "package_json_package_manager",
+                package
+                    .and_then(|p| p.get("packageManager"))
+                    .and_then(Value::as_str)
+                    .and_then(|pm| pm.strip_prefix("pnpm@"))
+                    .map(|v| v.split('+').next().unwrap_or("").to_string()),
+            ),
             (
                 "package_json_dev_engines",
                 dev_engine("packageManager", "pnpm"),
             ),
         ],
-    );
+    }
+}
+
+pub fn declared(tool: Tool, files: &Files) -> Option<Declared> {
+    candidates(tool, files)
+        .into_iter()
+        .find_map(|(source, value)| value.map(|v| declare(tool, source, &v)))
+}
+
+pub fn detect(
+    recipe: &BTreeMap<Tool, String>,
+    files: &Files,
+) -> Result<Vec<(Tool, String)>, Unpinned> {
+    let found = |tool: Tool| {
+        recipe
+            .get(&tool)
+            .map(|v| declare(tool, "recipe", v))
+            .or_else(|| declared(tool, files))
+            .map(Declared::into_result)
+    };
+    let (go, node, pnpm) = (found(Tool::Go), found(Tool::Node), found(Tool::Pnpm));
     if pnpm.is_some() && node.is_none() {
         return Err(Unpinned {
             tool: Tool::Node,

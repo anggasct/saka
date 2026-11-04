@@ -17,6 +17,7 @@ mod secrets;
 mod text;
 mod timeline;
 pub mod toolchain;
+pub mod versions;
 mod views;
 pub mod webhooks;
 mod worker;
