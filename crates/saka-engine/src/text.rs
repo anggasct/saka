@@ -81,6 +81,16 @@ impl Engine {
                 count,
                 scope,
             } => Ok(out_of_scope(paths, *count, scope)),
+            Prompt::DocsUncommitted { path } => Ok(docs_uncommitted(path)),
+            Prompt::DocsOutOfScope {
+                path,
+                paths,
+                count,
+                scope,
+            } => Ok(format!(
+                "In the project docs checkout {path}: {}",
+                out_of_scope(paths, *count, scope)
+            )),
             Prompt::WorkPacket { retry_of } => {
                 let retry = retry_of.as_ref().and_then(retry_text);
                 Ok(self.packet_of(task, retry)?.text)
@@ -233,6 +243,12 @@ fn packet_step(task: &Task, pinned: &Pinned) -> PacketStep {
     }
 }
 
+pub(crate) fn docs_uncommitted(path: &str) -> String {
+    format!(
+        "You have uncommitted changes in the project docs checkout {path}. Commit them with a Conventional Commits message."
+    )
+}
+
 pub(crate) fn out_of_scope(paths: &[String], count: u32, scope: &[String]) -> String {
     if paths.is_empty() {
         return format!(
@@ -276,11 +292,15 @@ pub(crate) fn retry_text(retry_of: &Coded) -> Option<String> {
                 .and_then(Value::as_u64)
                 .and_then(|n| u32::try_from(n).ok())
                 .unwrap_or(0);
-            Some(out_of_scope(
+            let text = out_of_scope(
                 &strings(params.get("paths")),
                 count,
                 &strings(params.get("scope")),
-            ))
+            );
+            Some(match params.get("target").and_then(Value::as_str) {
+                Some("docs") => format!("In the project docs checkout: {text}"),
+                _ => text,
+            })
         }
         _ => None,
     }

@@ -356,6 +356,7 @@ impl World {
         self.step(
             id,
             TaskInput::WorktreeInspected {
+                docs: None,
                 turn: 1,
                 dirty: false,
                 commits_ahead: 1,
@@ -363,10 +364,17 @@ impl World {
                 outside: None,
             },
         );
-        self.step(id, TaskInput::BranchPushed { sha: sha('b') });
+        self.step(
+            id,
+            TaskInput::BranchPushed {
+                target: saka_core::vocab::ChangeRole::Code,
+                sha: sha('b'),
+            },
+        );
         self.step(
             id,
             TaskInput::ChangeOpened {
+                role: saka_core::vocab::ChangeRole::Code,
                 change_request_id: ChangeRequestId(Uuid::from_u128(n + 2)),
                 number: u64::try_from(n).unwrap(),
                 url: format!("https://github.com/acme/app/pull/{n}"),
@@ -378,6 +386,7 @@ impl World {
         self.step(
             id,
             TaskInput::ChangeObserved {
+                role: saka_core::vocab::ChangeRole::Code,
                 state: ChangeState::Open,
                 head_sha: sha('b'),
                 merge_commit_sha: None,
@@ -412,6 +421,7 @@ impl World {
         self.step(
             id,
             TaskInput::ChangeObserved {
+                role: saka_core::vocab::ChangeRole::Code,
                 state: ChangeState::Merged,
                 head_sha: sha('b'),
                 merge_commit_sha: Some(sha('c')),
@@ -422,6 +432,7 @@ impl World {
         self.step(
             id,
             TaskInput::MergeVerified {
+                docs_found: None,
                 found: true,
                 base_tip: None,
             },
@@ -535,6 +546,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     w.step(
         id,
         TaskInput::WorktreeInspected {
+            docs: None,
             turn: 1,
             dirty: false,
             commits_ahead: 1,
@@ -542,10 +554,17 @@ fn a_whole_task_round_trips_through_the_schema() {
             outside: None,
         },
     );
-    w.step(id, TaskInput::BranchPushed { sha: sha('b') });
+    w.step(
+        id,
+        TaskInput::BranchPushed {
+            target: saka_core::vocab::ChangeRole::Code,
+            sha: sha('b'),
+        },
+    );
     w.step(
         id,
         TaskInput::ChangeOpened {
+            role: saka_core::vocab::ChangeRole::Code,
             change_request_id: ChangeRequestId(Uuid::from_u128(79)),
             number: 12,
             url: "https://github.com/acme/app/pull/12".into(),
@@ -564,6 +583,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     w.step(
         id,
         TaskInput::ChangeObserved {
+            role: saka_core::vocab::ChangeRole::Code,
             state: ChangeState::Open,
             head_sha: sha('b'),
             merge_commit_sha: None,
@@ -603,6 +623,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     w.step(
         id,
         TaskInput::MergeSucceeded {
+            role: saka_core::vocab::ChangeRole::Code,
             merge_commit_sha: sha('c'),
             merged_at: Some(Timestamp(5)),
         },
@@ -610,6 +631,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     w.step(
         id,
         TaskInput::MergeVerified {
+            docs_found: None,
             found: true,
             base_tip: None,
         },
@@ -1081,9 +1103,11 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
     assert_eq!(
         w.store.migration().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
+        ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(17));
+    assert_eq!(w.store.schema_version().unwrap(), Some(18));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1517,6 +1541,7 @@ fn two_live_environments_never_hold_the_same_port_block() {
                     mode: saka_core::vocab::DocsMode::ReadOnly,
                     branch: None,
                     base_sha: sha('c'),
+                    pushed_sha: None,
                 }),
             }),
         },

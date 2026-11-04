@@ -344,6 +344,7 @@ fn an_operator_interrupt_leaves_the_session_idle_waiting_for_a_steer() {
     );
     assert_eq!(
         r.decide(task::TaskInput::WorktreeInspected {
+            docs: None,
             turn: 1,
             dirty: false,
             commits_ahead: 1,
@@ -1129,6 +1130,7 @@ fn the_turn_budget_is_checked_before_the_next_turn_is_sent() {
     let mut f = Run::running(budget(60, 1, 0, 0));
     f.end_turn(1, "success");
     f.decide(task::TaskInput::WorktreeInspected {
+        docs: None,
         turn: 1,
         dirty: true,
         commits_ahead: 0,

@@ -214,6 +214,10 @@ struct State {
     scm_calls: Vec<ScmCall>,
     docs_checkouts: BTreeMap<EnvironmentId, DocsCheckoutState>,
     docs_refusal: Option<PortError>,
+    docs_turns: VecDeque<DocsTurn>,
+    merge_scripts: HashMap<u64, VecDeque<String>>,
+    merge_calls: Vec<(String, u64)>,
+    lost_merge_repos: BTreeSet<String>,
 }
 
 impl State {
@@ -244,6 +248,16 @@ pub struct DocsCheckoutState {
     pub commit: String,
     pub project_path: String,
     pub torn_down: bool,
+    pub branch: Option<String>,
+    pub head: String,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocsTurn {
+    Commit(Vec<FileEdit>),
+    Dirty,
+    Nothing,
 }
 
 fn injected(secrets: &[SecretVar], purpose: SecretPurpose) -> BTreeMap<String, String> {
@@ -353,6 +367,10 @@ impl FakeWorld {
                 scm_calls: Vec::new(),
                 docs_checkouts: BTreeMap::new(),
                 docs_refusal: None,
+                docs_turns: VecDeque::new(),
+                merge_scripts: HashMap::new(),
+                merge_calls: Vec::new(),
+                lost_merge_repos: BTreeSet::new(),
                 next_sha: 1,
                 parents,
                 home: HOME_REPO.to_string(),
@@ -413,6 +431,24 @@ impl FakeWorld {
 
     pub fn docs_checkouts(&self) -> BTreeMap<EnvironmentId, DocsCheckoutState> {
         self.state().docs_checkouts.clone()
+    }
+
+    pub fn script_docs(&self, turns: Vec<DocsTurn>) {
+        self.state().docs_turns = turns.into();
+    }
+
+    pub fn script_merges(&self, number: u64, reasons: Vec<&str>) {
+        self.state()
+            .merge_scripts
+            .insert(number, reasons.into_iter().map(String::from).collect());
+    }
+
+    pub fn lose_merges_in(&self, repo: &str) {
+        self.state().lost_merge_repos.insert(repo.to_string());
+    }
+
+    pub fn merge_calls(&self) -> Vec<(String, u64)> {
+        self.state().merge_calls.clone()
     }
 
     pub fn refuse_docs_checkouts(&self, refusal: Option<PortError>) {
@@ -936,7 +972,7 @@ impl State {
         }
         let merge = self.new_commit(vec![base, head.clone()]);
         self.trees.insert(merge.clone(), tree);
-        if !self.lose_merges {
+        if !self.lose_merges && !self.lost_merge_repos.contains(&pr.repo) {
             self.refs(&pr.repo)
                 .insert(pr.base_branch.clone(), merge.clone());
         }
@@ -995,6 +1031,26 @@ impl State {
                 && let Some(w) = self.worktrees.get_mut(&env)
             {
                 w.files.insert(path, bytes);
+            }
+        }
+        if !architect
+            && let Some(turn) = self.docs_turns.pop_front()
+            && let Some(d) = self.docs_checkouts.get(&env).cloned()
+        {
+            match turn {
+                DocsTurn::Commit(edits) => {
+                    let c = self.commit_edits(&d.head, &edits);
+                    if let Some(d) = self.docs_checkouts.get_mut(&env) {
+                        d.head = c;
+                        d.dirty = false;
+                    }
+                }
+                DocsTurn::Dirty => {
+                    if let Some(d) = self.docs_checkouts.get_mut(&env) {
+                        d.dirty = true;
+                    }
+                }
+                DocsTurn::Nothing => {}
             }
         }
         let usage = self.script.usage;
@@ -1163,6 +1219,9 @@ impl Environments for FakeWorld {
                 commit: request.commit.clone(),
                 project_path: request.project_path.clone(),
                 torn_down: false,
+                branch: request.branch.clone(),
+                head: request.commit.clone(),
+                dirty: false,
             },
         );
         Ok(prepared)
@@ -1184,6 +1243,24 @@ impl Environments for FakeWorld {
             d.torn_down = true;
         }
         Ok(())
+    }
+
+    async fn inspect_docs(
+        &self,
+        environment_id: EnvironmentId,
+        base_sha: &str,
+    ) -> PortResult<WorktreeState> {
+        let s = self.state();
+        let d = s
+            .docs_checkouts
+            .get(&environment_id)
+            .filter(|d| !d.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        Ok(WorktreeState {
+            dirty: d.dirty,
+            commits_ahead: s.commits_ahead(base_sha, &d.head),
+            head_sha: d.head.clone(),
+        })
     }
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState> {
@@ -1900,6 +1977,15 @@ impl Scm for FakeWorld {
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         let mut s = self.state();
         s.call("merge");
+        s.merge_calls
+            .push((request.repo.full_name.clone(), request.number));
+        if let Some(reason) = s
+            .merge_scripts
+            .get_mut(&request.number)
+            .and_then(VecDeque::pop_front)
+        {
+            return Ok(MergeOutcome::Rejected { reason });
+        }
         Ok(s.merge(request.number, Some(&request.head_sha)))
     }
 
@@ -2062,7 +2148,12 @@ impl Agents for FakeWorld {
             path_prefix: launch.environment.path_prefix.clone(),
             secrets: injected(&launch.environment.secrets, SecretPurpose::Session),
             redacted: redacted(&launch.environment.secrets),
-            extra_dirs: launch.environment.extra_dirs.clone(),
+            extra_dirs: launch
+                .environment
+                .extra_dirs
+                .iter()
+                .map(|d| d.path.clone())
+                .collect(),
         });
         let id = launch.session_id;
         if s.sessions.get(&id).is_some_and(|old| old.running) {

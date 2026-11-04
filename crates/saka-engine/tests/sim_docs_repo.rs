@@ -51,7 +51,7 @@ fn docs_line(text: &str) -> Option<String> {
 }
 
 #[test]
-fn a_task_in_a_code_repo_reads_the_project_folder_read_only_at_the_spec_commit() {
+fn a_task_in_a_code_repo_gets_a_writable_docs_branch_at_the_spec_commit() {
     let sim = started(("shop", SHOP_REPO), AgentOutcome::Hang);
     let commit = source_commit(&sim);
     sim.world.put_doc("docs/later.md", b"after the pin\n");
@@ -70,9 +70,10 @@ fn a_task_in_a_code_repo_reads_the_project_folder_read_only_at_the_spec_commit()
             "commit": commit,
             "project_path": "docs",
             "path": path,
-            "mode": "read_only",
-            "branch": null,
+            "mode": "writable",
+            "branch": "saka/tasks-done/s1-docs",
             "base_sha": commit,
+            "pushed_sha": null,
         })
     );
     let checkout = &sim.world.docs_checkouts()[&env.id];
@@ -86,10 +87,10 @@ fn a_task_in_a_code_repo_reads_the_project_folder_read_only_at_the_spec_commit()
     assert_eq!(
         docs_line(&sent).unwrap(),
         format!(
-            "- Project docs (read-only): {path} ({DOCS_REPO}/docs at {})",
-            &commit[..12]
+            "- Project docs: {path}, a checkout of {DOCS_REPO} on branch saka/tasks-done/s1-docs. Edit docs only under docs/ there and commit them in that checkout; Saka opens a separate docs pull request after the code pull request."
         )
     );
+    assert!(sent.contains("- Commit docs changes only in the project docs checkout.\n"));
     let (_, packet) = sim.engine().work_packet(task.item.id).unwrap();
     assert_eq!(packet.text, sent, "the packet is the one turn 1 sent");
 

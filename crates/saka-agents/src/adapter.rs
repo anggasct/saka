@@ -149,7 +149,8 @@ impl ClaudeAgents {
                 .extra_dirs
                 .iter()
                 .map(|dir| {
-                    std::fs::canonicalize(dir).map_err(|e| io_error("docs_dir_unreadable", &e))
+                    std::fs::canonicalize(&dir.path)
+                        .map_err(|e| io_error("docs_dir_unreadable", &e))
                 })
                 .collect::<PortResult<Vec<_>>>()?,
             LaunchProfile::Architect { .. } => Vec::new(),
@@ -583,7 +584,10 @@ mod tests {
         let agents = agents(dir.path());
         let mut task = launch(&root, LaunchProfile::Task, None);
         let docs_dir = docs.to_string_lossy().into_owned();
-        task.environment.extra_dirs = vec![docs_dir.clone()];
+        task.environment.extra_dirs = vec![saka_ports::ExtraDir {
+            path: docs_dir.clone(),
+            writable: true,
+        }];
         task.environment
             .vars
             .insert("SAKA_DOCS_DIR".into(), docs_dir.clone());
@@ -599,13 +603,19 @@ mod tests {
         assert_eq!(spec.env["SAKA_DOCS_DIR"], docs_dir);
 
         let mut architect = launch(&root, LaunchProfile::Architect { cwd: ".".into() }, None);
-        architect.environment.extra_dirs = vec![docs_dir];
+        architect.environment.extra_dirs = vec![saka_ports::ExtraDir {
+            path: docs_dir,
+            writable: true,
+        }];
         let (spec, _paths) = agents
             .launch_spec(Path::new("/usr/bin/claude"), &architect)
             .unwrap_or_else(|e| panic!("{e:?}"));
         assert!(!spec.args.contains(&"--add-dir".to_string()));
 
-        task.environment.extra_dirs = vec![root.join("gone").to_string_lossy().into_owned()];
+        task.environment.extra_dirs = vec![saka_ports::ExtraDir {
+            path: root.join("gone").to_string_lossy().into_owned(),
+            writable: true,
+        }];
         let missing = agents
             .launch_spec(Path::new("/usr/bin/claude"), &task)
             .unwrap_err();

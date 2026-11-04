@@ -16,10 +16,10 @@ use crate::model::{
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, DraftFailureCode, DraftLocale, GateOutcome, GateSource, InterruptBy,
-    LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause,
-    ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, TokenInvalidCause,
-    Trigger,
+    ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, GateOutcome, GateSource,
+    InterruptBy, LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger,
+    ResumeCause, ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
+    TokenInvalidCause, Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -288,6 +288,8 @@ pub enum Event {
         stage_run_id: StageRunId,
         phase: StagePhase,
         head_sha: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        docs_head_sha: Option<String>,
     },
     #[serde(rename = "delivery.stage_run.succeeded")]
     StageRunSucceeded {
@@ -366,7 +368,7 @@ pub enum Event {
         #[serde(default)]
         toolchains: Vec<ToolchainUse>,
         path_scope: Vec<String>,
-        docs: Option<DocsCheckout>,
+        docs: Option<Box<DocsCheckout>>,
     },
     #[serde(rename = "runtime.environment.torn_down")]
     EnvironmentTornDown {
@@ -530,6 +532,7 @@ pub enum Event {
     #[serde(rename = "scm.branch.pushed")]
     BranchPushed {
         work_item_id: WorkItemId,
+        target: ChangeRole,
         branch: String,
         sha: String,
     },
@@ -537,6 +540,7 @@ pub enum Event {
     ChangeRequestOpened {
         work_item_id: WorkItemId,
         change_request_id: ChangeRequestId,
+        role: ChangeRole,
         repo_id: RepoId,
         number: u64,
         url: String,
@@ -549,12 +553,14 @@ pub enum Event {
     ChangeRequestUpdated {
         work_item_id: WorkItemId,
         change_request_id: ChangeRequestId,
+        role: ChangeRole,
         head_sha: String,
     },
     #[serde(rename = "scm.change_request.merged")]
     ChangeRequestMerged {
         work_item_id: WorkItemId,
         change_request_id: ChangeRequestId,
+        role: ChangeRole,
         merge_commit_sha: String,
         merged_at: Option<Timestamp>,
         merged_by_saka: bool,
@@ -563,6 +569,14 @@ pub enum Event {
     ChangeRequestClosed {
         work_item_id: WorkItemId,
         change_request_id: ChangeRequestId,
+        role: ChangeRole,
+    },
+    #[serde(rename = "delivery.docs_change.skipped")]
+    DocsChangeSkipped {
+        work_item_id: WorkItemId,
+        change_request_id: ChangeRequestId,
+        number: u64,
+        reason: String,
     },
     #[serde(rename = "engine.job.exhausted")]
     JobExhausted {
@@ -622,6 +636,15 @@ pub enum Prompt {
         commits_ahead: u32,
     },
     OutOfScope {
+        paths: Vec<String>,
+        count: u32,
+        scope: Vec<String>,
+    },
+    DocsUncommitted {
+        path: String,
+    },
+    DocsOutOfScope {
+        path: String,
         paths: Vec<String>,
         count: u32,
         scope: Vec<String>,
@@ -793,7 +816,8 @@ impl Event {
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }
             | E::ChangeRequestMerged { work_item_id, .. }
-            | E::ChangeRequestClosed { work_item_id, .. } => Stream::WorkItem(*work_item_id),
+            | E::ChangeRequestClosed { work_item_id, .. }
+            | E::DocsChangeSkipped { work_item_id, .. } => Stream::WorkItem(*work_item_id),
             E::EnvironmentPrepared { owner, .. }
             | E::EnvironmentTornDown { owner, .. }
             | E::EnvironmentTeardownFailed { owner, .. }

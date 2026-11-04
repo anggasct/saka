@@ -48,6 +48,7 @@ pub struct DocsRequest {
     pub repo: RepoRef,
     pub commit: String,
     pub project_path: String,
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +68,13 @@ pub struct EnvRef {
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
     pub secrets: Vec<SecretVar>,
-    pub extra_dirs: Vec<String>,
+    pub extra_dirs: Vec<ExtraDir>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraDir {
+    pub path: String,
+    pub writable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +185,12 @@ pub trait Environments: Send + Sync {
     async fn teardown_docs(&self, environment_id: EnvironmentId, repo: &RepoRef) -> PortResult<()>;
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState>;
+
+    async fn inspect_docs(
+        &self,
+        environment_id: EnvironmentId,
+        base_sha: &str,
+    ) -> PortResult<WorktreeState>;
 
     async fn contains_commit(
         &self,

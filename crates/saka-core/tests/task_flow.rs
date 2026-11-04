@@ -268,7 +268,13 @@ impl World {
         );
         self.decide(step, turn_ended(1, "success"));
         self.decide(step, inspected(1, false, 1));
-        self.decide(step, TaskInput::BranchPushed { sha: sha('b') });
+        self.decide(
+            step,
+            TaskInput::BranchPushed {
+                target: saka_core::vocab::ChangeRole::Code,
+                sha: sha('b'),
+            },
+        );
         self.decide(step, opened(step));
         self.jobs.clear();
     }
@@ -290,6 +296,7 @@ impl World {
         self.decide(
             step,
             TaskInput::MergeSucceeded {
+                role: saka_core::vocab::ChangeRole::Code,
                 merge_commit_sha: sha('c'),
                 merged_at: None,
             },
@@ -297,6 +304,7 @@ impl World {
         self.decide(
             step,
             TaskInput::MergeVerified {
+                docs_found: None,
                 found: true,
                 base_tip: None,
             },
@@ -403,6 +411,7 @@ fn turn_ended(turn: u32, status: &str) -> TaskInput {
 
 fn inspected(turn: u32, dirty: bool, commits_ahead: u32) -> TaskInput {
     TaskInput::WorktreeInspected {
+        docs: None,
         turn,
         dirty,
         commits_ahead,
@@ -413,6 +422,7 @@ fn inspected(turn: u32, dirty: bool, commits_ahead: u32) -> TaskInput {
 
 fn opened(step: u32) -> TaskInput {
     TaskInput::ChangeOpened {
+        role: saka_core::vocab::ChangeRole::Code,
         change_request_id: ChangeRequestId(Uuid::from_u128(700 + u128::from(step))),
         number: 10 + u64::from(step),
         url: "https://example.test/pr".into(),
@@ -438,6 +448,7 @@ fn check(name: &str, conclusion: Option<CheckConclusion>) -> Check {
 
 fn observed(head: char, checks: Vec<Check>) -> TaskInput {
     TaskInput::ChangeObserved {
+        role: saka_core::vocab::ChangeRole::Code,
         state: ChangeState::Open,
         head_sha: sha(head),
         merge_commit_sha: None,
@@ -585,7 +596,13 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
         vec![JobKind::SessionStop, JobKind::ScmPushBranch]
     );
 
-    w.decide(1, TaskInput::BranchPushed { sha: sha('b') });
+    w.decide(
+        1,
+        TaskInput::BranchPushed {
+            target: saka_core::vocab::ChangeRole::Code,
+            sha: sha('b'),
+        },
+    );
     assert_eq!(w.take_jobs(), vec![JobKind::ScmOpenChangeRequest]);
     w.decide(1, opened(1));
     assert_eq!(
@@ -651,6 +668,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     w.decide(
         1,
         TaskInput::MergeSucceeded {
+            role: saka_core::vocab::ChangeRole::Code,
             merge_commit_sha: sha('c'),
             merged_at: None,
         },
@@ -667,6 +685,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     w.decide(
         1,
         TaskInput::MergeVerified {
+            docs_found: None,
             found: true,
             base_tip: None,
         },
@@ -689,6 +708,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     w.decide(
         2,
         TaskInput::ChangeObserved {
+            role: saka_core::vocab::ChangeRole::Code,
             state: ChangeState::Merged,
             head_sha: sha('b'),
             merge_commit_sha: Some(sha('d')),
@@ -704,6 +724,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
     w.decide(
         2,
         TaskInput::MergeVerified {
+            docs_found: None,
             found: true,
             base_tip: Some(sha('d')),
         },
@@ -932,6 +953,7 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
     w.decide(
         1,
         TaskInput::WorktreeInspected {
+            docs: None,
             turn: 1,
             dirty: false,
             commits_ahead: 2,
@@ -940,7 +962,13 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
         },
     );
     w.jobs.clear();
-    let events = w.decide(1, TaskInput::BranchPushed { sha: sha('e') });
+    let events = w.decide(
+        1,
+        TaskInput::BranchPushed {
+            target: saka_core::vocab::ChangeRole::Code,
+            sha: sha('e'),
+        },
+    );
     assert!(
         events
             .iter()
@@ -1149,6 +1177,7 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
     w.decide(
         1,
         TaskInput::PushRejected {
+            target: saka_core::vocab::ChangeRole::Code,
             remote_sha: sha('f'),
             local_sha: sha('b'),
         },
@@ -1183,6 +1212,7 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
     w.decide(
         1,
         TaskInput::MergeRejected {
+            role: saka_core::vocab::ChangeRole::Code,
             reason: "head_changed".into(),
         },
     );
@@ -1209,6 +1239,7 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
     w.decide(
         1,
         TaskInput::ChangeObserved {
+            role: saka_core::vocab::ChangeRole::Code,
             state: ChangeState::Closed,
             head_sha: sha('b'),
             merge_commit_sha: None,
@@ -1249,6 +1280,7 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
     w.decide(
         1,
         TaskInput::ChangeObserved {
+            role: saka_core::vocab::ChangeRole::Code,
             state: ChangeState::Merged,
             head_sha: sha('b'),
             merge_commit_sha: Some(sha('c')),
@@ -1259,6 +1291,7 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
     w.decide(
         1,
         TaskInput::MergeVerified {
+            docs_found: None,
             found: false,
             base_tip: None,
         },
@@ -1354,6 +1387,7 @@ fn saka_verify_read_back_at_the_merge_commit_is_not_ci() {
     w.decide(
         1,
         TaskInput::ChangeObserved {
+            role: saka_core::vocab::ChangeRole::Code,
             state: ChangeState::Merged,
             head_sha: sha('b'),
             merge_commit_sha: Some(sha('m')),
@@ -1364,6 +1398,7 @@ fn saka_verify_read_back_at_the_merge_commit_is_not_ci() {
     w.decide(
         1,
         TaskInput::MergeVerified {
+            docs_found: None,
             found: true,
             base_tip: Some(sha('m')),
         },
@@ -1425,6 +1460,7 @@ fn an_open_change_is_polled_in_every_state_until_sync() {
     w.decide(
         1,
         TaskInput::ChangeObserved {
+            role: saka_core::vocab::ChangeRole::Code,
             state: ChangeState::Merged,
             head_sha: sha('b'),
             merge_commit_sha: Some(sha('m')),

@@ -31,6 +31,7 @@ pub struct Counters {
     config_reloads: Mutex<BTreeMap<(String, String), u64>>,
     config_checks: Mutex<BTreeMap<(String, String), u64>>,
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
+    docs_changes: Mutex<BTreeMap<(String, String), u64>>,
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
@@ -143,6 +144,10 @@ impl Counters {
 
     pub(crate) fn path_scope_violation(&self, stage: &str) {
         bump(&self.path_scope_violations, stage, "");
+    }
+
+    pub(crate) fn docs_change(&self, outcome: &str) {
+        bump(&self.docs_changes, outcome, "");
     }
 
     pub(crate) fn dod(&self, outcome: &str) {
@@ -303,6 +308,7 @@ pub struct MetricsSnapshot {
     pub config_reloads: Vec<(String, u64)>,
     pub config_checks: Vec<(String, u64)>,
     pub path_scope_violations: Vec<(String, u64)>,
+    pub docs_changes: Vec<(String, u64)>,
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
     pub change_requests_opened: Vec<(String, u64)>,
@@ -447,6 +453,16 @@ impl Engine {
             path_scope_violations: copy(&self.counters.path_scope_violations)
                 .into_iter()
                 .map(|(stage, _, n)| (stage, n))
+                .collect(),
+            docs_changes: ["merged", "skipped"]
+                .iter()
+                .map(|outcome| {
+                    let n = copy(&self.counters.docs_changes)
+                        .into_iter()
+                        .find(|(o, _, _)| o == outcome)
+                        .map_or(0, |(_, _, n)| n);
+                    ((*outcome).to_string(), n)
+                })
                 .collect(),
             user_link_authorizations: copy(&self.counters.user_link_authorizations),
             user_link_refreshes: copy(&self.counters.user_link_refreshes),

@@ -51,6 +51,7 @@ const GATE_REASONS = [
   "worktree_moved",
   "runner_failed",
   "not_in_base",
+  "docs_not_in_base",
 ];
 
 function gateCase(code: string, params: Record<string, unknown>): string {
@@ -73,10 +74,12 @@ export function blockerText(
   params: Record<string, unknown>,
   relative?: Relative,
 ): string {
-  const key = `blocker.${code}`;
-  if (!known(key)) {
+  const base = `blocker.${code}`;
+  if (!known(base)) {
     return t("blocker.unknown", { code });
   }
+  const docsKey = `${base}.docs`;
+  const key = params.target === "docs" && known(docsKey) ? docsKey : base;
   const error = record(params.error);
   const errorParams = record(error.params);
   const field = text(params.field);
@@ -139,6 +142,7 @@ export function blockerText(
     credential: text(params.credential) || "other",
     login: text(params.login),
     status: text(params.status),
+    number: text(params.number),
   };
   return t(key, values);
 }

@@ -446,6 +446,43 @@ impl GitRepos {
         Ok(())
     }
 
+    async fn worktree_state(
+        &self,
+        wt: &Path,
+        environment_id: EnvironmentId,
+        base_sha: &str,
+    ) -> PortResult<WorktreeState> {
+        if !is_sha(base_sha) {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                json!({ "field": "base_sha" }),
+            ));
+        }
+        if !wt.join(".git").exists() {
+            return Err(PortError::permanent(
+                "worktree_missing",
+                json!({ "environment_id": environment_id }),
+            ));
+        }
+        let status = self
+            .git_ok(
+                wt,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+                "status",
+            )
+            .await?;
+        let range = format!("{base_sha}..HEAD");
+        let count = self
+            .git_ok(wt, &["rev-list", "--count", &range], "rev_list")
+            .await?;
+        let head = self.git_ok(wt, &["rev-parse", "HEAD"], "rev_parse").await?;
+        Ok(WorktreeState {
+            dirty: !status.stdout.iter().all(u8::is_ascii_whitespace),
+            commits_ahead: count.text().parse().unwrap_or(0),
+            head_sha: head.text(),
+        })
+    }
+
     fn inside_envs(&self, path: &Path) -> bool {
         path.starts_with(&self.cfg.envs_dir) && path != self.cfg.envs_dir
     }
@@ -1000,6 +1037,9 @@ impl Environments for GitRepos {
     async fn prepare_docs(&self, request: &DocsRequest) -> PortResult<PreparedDocs> {
         sha_arg(&request.commit, "commit")?;
         project_path_arg(&request.project_path)?;
+        if let Some(branch) = &request.branch {
+            arg(branch, "branch")?;
+        }
         let lock = self.lock(request.repo.repo_id);
         let _guard = lock.lock().await;
         let root = self.env_root(request.environment_id);
@@ -1081,12 +1121,32 @@ impl Environments for GitRepos {
         if docs.exists() && self.inside_envs(&docs) {
             make_dirs_writable(&docs).map_err(|e| io("make_writable", &e))?;
         }
+        let branch_ref = request.branch.as_ref().map(|b| format!("refs/heads/{b}"));
+        for (path, held) in self.worktrees(&bare).await? {
+            let stale = path == docs || (held.is_some() && held == branch_ref);
+            if stale && self.inside_envs(&path) {
+                if path.exists() {
+                    make_dirs_writable(&path).map_err(|e| io("make_writable", &e))?;
+                }
+                self.remove_worktree(&bare, &path).await?;
+            }
+        }
         self.remove_worktree(&bare, &docs).await?;
         std::fs::create_dir_all(&root).map_err(|e| io("create_env_root", &e))?;
         let wt = docs.to_string_lossy();
-        self.git_ok(
-            &bare,
-            &[
+        let add: Vec<&str> = match &request.branch {
+            Some(branch) => vec![
+                "worktree",
+                "add",
+                "--quiet",
+                "--no-checkout",
+                "--no-track",
+                "-B",
+                branch,
+                &wt,
+                &request.commit,
+            ],
+            None => vec![
                 "worktree",
                 "add",
                 "--quiet",
@@ -1095,9 +1155,8 @@ impl Environments for GitRepos {
                 &wt,
                 &request.commit,
             ],
-            "worktree_add",
-        )
-        .await?;
+        };
+        self.git_ok(&bare, &add, "worktree_add").await?;
         if request.project_path != "." {
             self.enable_worktree_config(&bare).await?;
             self.git_ok(
@@ -1123,13 +1182,22 @@ impl Environments for GitRepos {
                 return Err(failed("sparse_checkout", &out));
             }
         }
-        self.git_ok(
-            &docs,
-            &["checkout", "--quiet", "--detach", &request.commit],
-            "checkout",
-        )
-        .await?;
-        set_tree_modes(&docs, |_| 0o444, |_| 0o555).map_err(|e| io("make_read_only", &e))?;
+        match &request.branch {
+            Some(branch) => {
+                self.git_ok(&docs, &["checkout", "--quiet", branch], "checkout")
+                    .await?;
+            }
+            None => {
+                self.git_ok(
+                    &docs,
+                    &["checkout", "--quiet", "--detach", &request.commit],
+                    "checkout",
+                )
+                .await?;
+                set_tree_modes(&docs, |_| 0o444, |_| 0o555)
+                    .map_err(|e| io("make_read_only", &e))?;
+            }
+        }
         // Written last: a checkout without it is unfinished and is made again.
         let tmp = root.join(format!("{DOCS_FILE}.tmp"));
         std::fs::write(&tmp, format!("{}\n", request.commit)).map_err(|e| io("write_docs", &e))?;
@@ -1148,7 +1216,20 @@ impl Environments for GitRepos {
         }
         let bare = self.mirror_path(repo.repo_id);
         if bare.join("HEAD").is_file() {
+            let held = self
+                .worktrees(&bare)
+                .await?
+                .into_iter()
+                .find(|(p, _)| *p == docs)
+                .and_then(|(_, b)| b);
             self.remove_worktree(&bare, &docs).await?;
+            if let Some(branch) = held.as_deref().and_then(|b| b.strip_prefix("refs/heads/")) {
+                // Fails when the branch is already gone.
+                self.cfg
+                    .git
+                    .local(&bare, &["branch", "-D", "--quiet", branch])
+                    .await?;
+            }
         } else if docs.exists() && self.inside_envs(&docs) {
             std::fs::remove_dir_all(&docs).map_err(|e| io("remove_docs", &e))?;
         }
@@ -1158,39 +1239,18 @@ impl Environments for GitRepos {
         }
     }
 
+    async fn inspect_docs(
+        &self,
+        environment_id: EnvironmentId,
+        base_sha: &str,
+    ) -> PortResult<WorktreeState> {
+        let docs = self.env_root(environment_id).join(DOCS_DIR);
+        self.worktree_state(&docs, environment_id, base_sha).await
+    }
+
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState> {
-        if !is_sha(base_sha) {
-            return Err(PortError::permanent(
-                "git_argument_invalid",
-                json!({ "field": "base_sha" }),
-            ));
-        }
-        let wt = PathBuf::from(&env.worktree_path);
-        if !wt.join(".git").exists() {
-            return Err(PortError::permanent(
-                "worktree_missing",
-                json!({ "environment_id": env.environment_id }),
-            ));
-        }
-        let status = self
-            .git_ok(
-                &wt,
-                &["status", "--porcelain=v1", "--untracked-files=all"],
-                "status",
-            )
-            .await?;
-        let range = format!("{base_sha}..HEAD");
-        let count = self
-            .git_ok(&wt, &["rev-list", "--count", &range], "rev_list")
-            .await?;
-        let head = self
-            .git_ok(&wt, &["rev-parse", "HEAD"], "rev_parse")
-            .await?;
-        Ok(WorktreeState {
-            dirty: !status.stdout.iter().all(u8::is_ascii_whitespace),
-            commits_ahead: count.text().parse().unwrap_or(0),
-            head_sha: head.text(),
-        })
+        self.worktree_state(Path::new(&env.worktree_path), env.environment_id, base_sha)
+            .await
     }
 
     async fn contains_commit(
@@ -1480,8 +1540,18 @@ impl Environments for GitRepos {
         write_file_in(Path::new(&env.worktree_path), path, bytes)
     }
 
+    // A writable docs checkout counts as a second worktree; a read-only one never does.
     fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath {
-        resolve_in(Path::new(&env.worktree_path), cwd, raw)
+        let resolved = resolve_in(Path::new(&env.worktree_path), cwd, raw);
+        if resolved.inside_worktree {
+            return resolved;
+        }
+        env.extra_dirs
+            .iter()
+            .filter(|d| d.writable)
+            .map(|d| resolve_in(Path::new(&d.path), cwd, raw))
+            .find(|r| r.inside_worktree)
+            .unwrap_or(resolved)
     }
 }
 

@@ -1075,7 +1075,7 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
                     })
                     .collect(),
                 path_scope: path_scope.clone(),
-                docs: docs.clone(),
+                docs: docs.as_deref().cloned(),
             });
         }
         E::EnvironmentTornDown { environment_id, .. } => {
@@ -1192,7 +1192,10 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
                 s.turns = *turn;
                 if matches!(
                     prompt,
-                    Prompt::Uncommitted { .. } | Prompt::OutOfScope { .. }
+                    Prompt::Uncommitted { .. }
+                        | Prompt::OutOfScope { .. }
+                        | Prompt::DocsUncommitted { .. }
+                        | Prompt::DocsOutOfScope { .. }
                 ) {
                     s.followups += 1;
                 }
