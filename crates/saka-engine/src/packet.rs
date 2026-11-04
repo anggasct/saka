@@ -21,8 +21,17 @@ pub struct PacketSpec {
     pub content: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacketRepo {
+    pub name: String,
+    pub full_name: String,
+    pub base_branch: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EnvironmentFacts {
+    pub repo: Option<PacketRepo>,
+    pub path_scope: Vec<String>,
     pub ports: Option<(u16, u16)>,
     pub toolchains: Vec<(Tool, String)>,
     pub session_secrets: Vec<String>,
@@ -172,9 +181,24 @@ pub fn render(input: &PacketInput) -> Packet {
         .collect();
     let mut secrets = env.session_secrets.clone();
     secrets.sort();
+    text.push_str("\nEnvironment:\n");
+    if let Some(repo) = &env.repo {
+        let everything = saka_core::scope::PathScope::parse(&env.path_scope)
+            .is_ok_and(|scope| scope.allows_everything());
+        let paths = if everything {
+            "all".to_string()
+        } else {
+            env.path_scope.join(", ")
+        };
+        let _ = write!(
+            text,
+            "- Repository: {} ({}), base branch {}\n- Paths you may change: {paths}\n",
+            repo.name, repo.full_name, repo.base_branch
+        );
+    }
     let _ = write!(
         text,
-        "\nEnvironment:\n- Ports: {ports}\n- Toolchains: {}\n- Secrets available as environment variables: {}\n\n",
+        "- Ports: {ports}\n- Toolchains: {}\n- Secrets available as environment variables: {}\n\n",
         listed(&toolchains),
         listed(&secrets)
     );
@@ -183,7 +207,7 @@ pub fn render(input: &PacketInput) -> Packet {
     }
     text.push_str(
         "Rules:\n\
-         - Work only inside this repository.\n\
+         - Work only inside this repository, and only in the paths you may change.\n\
          - Commit all your changes with a Conventional Commits message before you finish.\n\
          - Do not push. Saka pushes the branch and opens the pull request.\n",
     );

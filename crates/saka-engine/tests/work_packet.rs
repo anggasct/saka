@@ -2,7 +2,9 @@
 
 use saka_core::model::ContextRef;
 use saka_core::vocab::{ContextOrigin, Tool};
-use saka_engine::packet::{EnvironmentFacts, PacketInput, PacketSpec, PacketStep, render};
+use saka_engine::packet::{
+    EnvironmentFacts, PacketInput, PacketRepo, PacketSpec, PacketStep, render,
+};
 
 const GOLDEN: &str = include_str!("fixtures/work_packet.txt");
 
@@ -49,6 +51,12 @@ fn full() -> PacketInput {
             ),
         ],
         environment: EnvironmentFacts {
+            repo: Some(PacketRepo {
+                name: "api".into(),
+                full_name: "acme/shop".into(),
+                base_branch: "main".into(),
+            }),
+            path_scope: vec!["services/api/**".into(), "docs/**".into()],
             ports: Some((41000, 3)),
             toolchains: vec![
                 (Tool::Node, "26.13.0".into()),
@@ -78,6 +86,37 @@ fn a_full_packet_matches_the_golden_text() {
         ]
     );
     assert_eq!(render(&full()), packet);
+}
+
+fn environment_lines(input: &PacketInput) -> Vec<String> {
+    let text = render(input).text;
+    let (_, rest) = text.split_once("\nEnvironment:\n").unwrap();
+    let (env, _) = rest.split_once("\n\n").unwrap();
+    env.lines().map(String::from).collect()
+}
+
+#[test]
+fn the_environment_names_the_repository_and_the_paths_the_task_may_change() {
+    let mut input = full();
+    assert_eq!(
+        environment_lines(&input)[..2],
+        [
+            "- Repository: api (acme/shop), base branch main",
+            "- Paths you may change: services/api/**, docs/**",
+        ]
+    );
+    input.environment.path_scope = vec!["**".into()];
+    assert_eq!(environment_lines(&input)[1], "- Paths you may change: all");
+    input.environment.path_scope = vec!["**".into(), "docs/**".into()];
+    assert_eq!(environment_lines(&input)[1], "- Paths you may change: all");
+    input.environment.path_scope = vec!["**".into(), "!secrets/**".into()];
+    assert_eq!(
+        environment_lines(&input)[1],
+        "- Paths you may change: **, !secrets/**"
+    );
+    assert!(render(&input).text.contains(
+        "Rules:\n- Work only inside this repository, and only in the paths you may change.\n"
+    ));
 }
 
 #[test]

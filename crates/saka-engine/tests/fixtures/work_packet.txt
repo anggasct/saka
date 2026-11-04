@@ -43,11 +43,13 @@ Done when (run these and make them pass before you finish):
 - `make lint`
 
 Environment:
+- Repository: api (acme/shop), base branch main
+- Paths you may change: services/api/**, docs/**
 - Ports: 41000–41002 (SAKA_PORT_BASE, SAKA_PORT_COUNT, PORT)
 - Toolchains: go 1.26.2, node 26.13.0
 - Secrets available as environment variables: TEST_API_KEY
 
 Rules:
-- Work only inside this repository.
+- Work only inside this repository, and only in the paths you may change.
 - Commit all your changes with a Conventional Commits message before you finish.
 - Do not push. Saka pushes the branch and opens the pull request.

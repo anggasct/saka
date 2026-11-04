@@ -114,8 +114,11 @@ vocab!(
         DodFailed => "dod_failed",
         HookFailed => "hook_failed",
         BudgetExhausted => "budget_exhausted",
+        PathScopeViolation => "path_scope_violation",
     }
 );
+vocab!(ScopeStage { Dev => "dev", Merge => "merge" });
+vocab!(ScopeViolationReason { OutsideScope => "outside_scope", TooManyPaths => "too_many_paths" });
 vocab!(Tool { Go => "go", Node => "node", Pnpm => "pnpm" });
 vocab!(SecretPurpose { Setup => "setup", Session => "session" });
 vocab!(ContextOrigin { Link => "link", Always => "always" });

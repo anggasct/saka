@@ -1024,7 +1024,7 @@ impl Engine {
             ),
             Prompt::Resume { cause, .. } => saka_core::resume::text(*cause),
             Prompt::Steer { text } => text.clone(),
-            Prompt::WorkPacket { .. } | Prompt::Uncommitted { .. } => {
+            Prompt::WorkPacket { .. } | Prompt::Uncommitted { .. } | Prompt::OutOfScope { .. } => {
                 return Err(PortError::permanent(
                     "prompt_invalid",
                     json!({ "prompt": "task" }),

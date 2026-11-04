@@ -1,8 +1,35 @@
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::vocab::{ScopeStage, ScopeViolationReason};
 
 pub const MAX_PATTERNS: usize = 64;
 pub const MAX_PATTERN_BYTES: usize = 256;
 pub const EVERYTHING: &str = "**";
+pub const MAX_CHANGED_PATHS: usize = 10_000;
+pub const MAX_REPORTED_PATHS: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeViolation {
+    pub reason: ScopeViolationReason,
+    pub paths: Vec<String>,
+    pub count: u32,
+    pub scope: Vec<String>,
+}
+
+impl ScopeViolation {
+    pub fn params(&self, stage: ScopeStage, head_sha: &str) -> Value {
+        json!({
+            "stage": stage,
+            "head_sha": head_sha,
+            "reason": self.reason,
+            "paths": self.paths,
+            "count": self.count,
+            "scope": self.scope,
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeIssue {
@@ -110,6 +137,34 @@ impl PathScope {
             .filter(|p| !self.contains(p))
             .cloned()
             .collect()
+    }
+
+    pub fn allows_everything(&self) -> bool {
+        self.exclude.is_empty() && self.patterns.iter().any(|p| p == EVERYTHING)
+    }
+
+    pub fn violation(&self, changed: &[String], truncated: bool) -> Option<ScopeViolation> {
+        if self.allows_everything() {
+            return None;
+        }
+        let mut outside = self.outside(changed);
+        outside.sort();
+        outside.dedup();
+        let reason = if truncated {
+            ScopeViolationReason::TooManyPaths
+        } else if outside.is_empty() {
+            return None;
+        } else {
+            ScopeViolationReason::OutsideScope
+        };
+        let count = u32::try_from(outside.len()).unwrap_or(u32::MAX);
+        outside.truncate(MAX_REPORTED_PATHS);
+        Some(ScopeViolation {
+            reason,
+            paths: outside,
+            count,
+            scope: self.patterns.clone(),
+        })
     }
 }
 
@@ -226,6 +281,38 @@ mod tests {
         .unwrap();
         assert!(s.contains("docs/api.md"));
         assert!(!s.contains("docs/private/x.md"));
+    }
+
+    #[test]
+    fn a_violation_lists_at_most_twenty_sorted_paths_and_counts_all() {
+        let s = scope(&["services/api/**"]);
+        let mut changed: Vec<String> = (0..25).rev().map(|i| format!("web/{i:02}.ts")).collect();
+        changed.push("services/api/a.rs".into());
+        changed.push("web/00.ts".into());
+        let v = s.violation(&changed, false).unwrap();
+        assert_eq!(v.reason, ScopeViolationReason::OutsideScope);
+        assert_eq!(v.count, 25);
+        assert_eq!(v.paths.len(), MAX_REPORTED_PATHS);
+        assert_eq!(v.paths[0], "web/00.ts");
+        assert_eq!(v.paths[19], "web/19.ts");
+        assert_eq!(v.scope, strings(&["services/api/**"]));
+        assert_eq!(s.violation(&strings(&["services/api/a.rs"]), false), None);
+        let too_many = s.violation(&strings(&["services/api/a.rs"]), true).unwrap();
+        assert_eq!(
+            (too_many.reason, too_many.count),
+            (ScopeViolationReason::TooManyPaths, 0)
+        );
+    }
+
+    #[test]
+    fn a_scope_that_allows_everything_never_reports_a_violation() {
+        let changed = strings(&["a/b.rs", "c.md"]);
+        assert!(scope(&["**"]).allows_everything());
+        assert!(scope(&["**", "docs/**"]).allows_everything());
+        assert_eq!(scope(&["**"]).violation(&changed, true), None);
+        let fenced = scope(&["**", "!c.md"]);
+        assert!(!fenced.allows_everything());
+        assert_eq!(fenced.violation(&changed, false).unwrap().paths, ["c.md"]);
     }
 
     #[test]

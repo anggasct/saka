@@ -77,6 +77,7 @@ fn owned_events(owner: RunOwner) -> Vec<Event> {
             recipe_sha256: None,
             setup: vec![],
             toolchains: vec![],
+            path_scope: vec!["**".into()],
         },
         Event::EnvironmentTornDown {
             owner,

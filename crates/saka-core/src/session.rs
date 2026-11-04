@@ -1042,6 +1042,7 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
             recipe,
             recipe_sha256,
             toolchains,
+            path_scope,
             ..
         } => {
             *run.environment = Some(Environment {
@@ -1066,6 +1067,7 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
                         ..t.clone()
                     })
                     .collect(),
+                path_scope: path_scope.clone(),
             });
         }
         E::EnvironmentTornDown { environment_id, .. } => {
@@ -1180,7 +1182,10 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
         } => {
             if let Some(s) = session_mut(run.session, *session_id, now) {
                 s.turns = *turn;
-                if matches!(prompt, Prompt::Uncommitted { .. }) {
+                if matches!(
+                    prompt,
+                    Prompt::Uncommitted { .. } | Prompt::OutOfScope { .. }
+                ) {
                     s.followups += 1;
                 }
                 if s.interrupt_requested == Some(InterruptBy::Operator) {

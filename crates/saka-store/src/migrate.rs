@@ -29,6 +29,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         12,
         include_str!("../migrations/0012_multi_repo_bindings.sql"),
     ),
+    (13, include_str!("../migrations/0013_path_scope.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {

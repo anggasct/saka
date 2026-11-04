@@ -418,6 +418,7 @@ pub struct EnvironmentSetup {
     pub recipe_sha256: Option<String>,
     pub setup: Vec<Value>,
     pub toolchains: Vec<ToolchainUse>,
+    pub path_scope: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +449,7 @@ pub struct Environment {
     pub recipe: Option<Value>,
     pub recipe_sha256: Option<String>,
     pub toolchains: Vec<ToolchainUse>,
+    pub path_scope: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
