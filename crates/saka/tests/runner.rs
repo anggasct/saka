@@ -716,6 +716,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
             vars: Default::default(),
             path_prefix: Vec::new(),
             secrets: Vec::new(),
+            extra_dirs: Vec::new(),
         },
         resume_cli_session_id: None,
         profile: LaunchProfile::Task,

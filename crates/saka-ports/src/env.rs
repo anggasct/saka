@@ -39,6 +39,24 @@ pub struct PreparedEnvironment {
     pub base_sha: String,
 }
 
+pub const DOCS_MAX_FILES: u64 = 20_000;
+pub const DOCS_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocsRequest {
+    pub environment_id: EnvironmentId,
+    pub repo: RepoRef,
+    pub commit: String,
+    pub project_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedDocs {
+    pub worktree_path: String,
+    pub path: String,
+    pub base_sha: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvRef {
     pub environment_id: EnvironmentId,
@@ -49,6 +67,7 @@ pub struct EnvRef {
     pub vars: BTreeMap<String, String>,
     pub path_prefix: Vec<String>,
     pub secrets: Vec<SecretVar>,
+    pub extra_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +172,10 @@ pub trait ReleaseIndex: Send + Sync {
 #[async_trait]
 pub trait Environments: Send + Sync {
     async fn prepare(&self, request: &PrepareRequest) -> PortResult<PreparedEnvironment>;
+
+    async fn prepare_docs(&self, request: &DocsRequest) -> PortResult<PreparedDocs>;
+
+    async fn teardown_docs(&self, environment_id: EnvironmentId, repo: &RepoRef) -> PortResult<()>;
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState>;
 

@@ -41,6 +41,25 @@ export function EnvironmentSection({ task }: { task: WorkItem }) {
               t("task.env.noRecipe")
             )}
           </dd>
+          {env.docs && (
+            <>
+              <dt className="font-medium">{t("task.env.docs")}</dt>
+              <dd className="flex flex-wrap gap-x-2 break-words">
+                <code className="break-all">{env.docs.path}</code>
+                <span>
+                  {t("task.env.docsSource", {
+                    folder:
+                      env.docs.project_path === "."
+                        ? env.docs.full_name
+                        : `${env.docs.full_name}/${env.docs.project_path}`,
+                    commit: sha(env.docs.commit),
+                    mode: env.docs.mode,
+                    branch: env.docs.branch ?? "",
+                  })}
+                </span>
+              </dd>
+            </>
+          )}
         </dl>
       )}
       {budget && <BudgetList title={t("task.budget.title")} budget={budget} />}

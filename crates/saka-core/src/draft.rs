@@ -275,6 +275,7 @@ impl Decider<'_> {
                 setup: vec![],
                 toolchains: vec![],
                 path_scope: vec![crate::scope::EVERYTHING.to_string()],
+                docs: None,
             },
             Event::SpecDraftPacketRendered {
                 spec_draft_id: self.id(),

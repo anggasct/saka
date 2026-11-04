@@ -8,7 +8,7 @@ use saka_store::{SpecRevisionRow, read};
 use serde_json::Value;
 
 use crate::packet::{
-    self, EnvironmentFacts, Packet, PacketInput, PacketRepo, PacketSpec, PacketStep,
+    self, EnvironmentFacts, Packet, PacketDocs, PacketInput, PacketRepo, PacketSpec, PacketStep,
 };
 use crate::recipe::Recipe;
 use crate::{Engine, EngineError, Result};
@@ -35,6 +35,10 @@ pub(crate) struct Pinned {
 }
 
 impl Pinned {
+    pub(crate) fn source_commit(&self) -> &str {
+        &self.revision.source_commit
+    }
+
     pub(crate) fn step(&self, task: &Task) -> Option<&Step> {
         let id = task.item.step_id.as_deref()?;
         self.model.steps.iter().find(|s| s.id == id)
@@ -139,6 +143,14 @@ impl Engine {
         Ok(EnvironmentFacts {
             repo,
             path_scope: env.path_scope.clone(),
+            docs: env.docs.as_ref().map(|d| PacketDocs {
+                path: d.path.clone(),
+                full_name: d.full_name.clone(),
+                project_path: d.project_path.clone(),
+                commit: d.commit.clone(),
+                mode: d.mode,
+                branch: d.branch.clone(),
+            }),
             ports: env
                 .port_start
                 .filter(|_| count > 0)

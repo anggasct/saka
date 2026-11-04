@@ -862,6 +862,26 @@ export interface components {
     /** @enum {string} */
     Decision: "allow" | "deny";
     EmptyBody: Record<string, never>;
+    EnvironmentDocs: {
+      /** @description The commit the checkout started at. */
+      base_sha: string;
+      /** @description The docs branch of a `writable` checkout; `null` when `read_only`. */
+      branch?: string | null;
+      /** @description The commit the task's spec revision is pinned to. */
+      commit: string;
+      full_name: string;
+      /** @description `read_only` or `writable`. */
+      mode: string;
+      /** @description The directory the session reads (`<environment root>/docs/<project_path>`). */
+      path: string;
+      /** @description The project folder in the workspace repo; `.` is the whole repo. */
+      project_path: string;
+      /**
+       * Format: uuid
+       * @description The workspace repo the checkout is made from.
+       */
+      repo_id: string;
+    };
     Failure: {
       code: string;
       params: unknown;
@@ -2004,6 +2024,7 @@ export interface components {
       stage_runs: components["schemas"]["StageRunItem"][];
     };
     WorkItemEnvironment: {
+      docs?: components["schemas"]["EnvironmentDocs"] | null;
       /** Format: uuid */
       id: string;
       ports?: components["schemas"]["PortBlock"] | null;

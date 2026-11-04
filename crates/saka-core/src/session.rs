@@ -1049,6 +1049,7 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
             recipe_sha256,
             toolchains,
             path_scope,
+            docs,
             ..
         } => {
             *run.environment = Some(Environment {
@@ -1074,6 +1075,7 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
                     })
                     .collect(),
                 path_scope: path_scope.clone(),
+                docs: docs.clone(),
             });
         }
         E::EnvironmentTornDown { environment_id, .. } => {

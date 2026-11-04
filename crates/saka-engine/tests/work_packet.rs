@@ -57,6 +57,7 @@ fn full() -> PacketInput {
                 base_branch: "main".into(),
             }),
             path_scope: vec!["services/api/**".into(), "docs/**".into()],
+            docs: None,
             ports: Some((41000, 3)),
             toolchains: vec![
                 (Tool::Node, "26.13.0".into()),

@@ -72,7 +72,7 @@ pub enum TaskInput {
         root_path: String,
         worktree_path: String,
         base_sha: String,
-        setup: EnvironmentSetup,
+        setup: Box<EnvironmentSetup>,
     },
     EnvironmentFailed {
         code: BlockerCode,
@@ -190,7 +190,7 @@ pub fn decide(
             worktree_path,
             base_sha,
             setup,
-        } => d.environment_prepared(environment_id, root_path, worktree_path, base_sha, setup),
+        } => d.environment_prepared(environment_id, root_path, worktree_path, base_sha, *setup),
         I::EnvironmentFailed { code, params } => d.environment_failed(code, params, ctx),
         I::Session(input) => return d.session(input, ctx),
         I::WorktreeInspected {
@@ -475,6 +475,7 @@ impl Decider<'_> {
             setup: setup.setup,
             toolchains: setup.toolchains,
             path_scope: setup.path_scope,
+            docs: setup.docs,
         }];
         events.extend(self.phase(StagePhase::RunningSession, None));
         events
@@ -1969,9 +1970,10 @@ pub fn auto_retryable(code: BlockerCode, params: &Value) -> bool {
     let text = |key: &str| params.get(key).and_then(Value::as_str);
     match code {
         BlockerCode::SessionLost | BlockerCode::ScmUnavailable => true,
-        BlockerCode::EnvSetupFailed => {
-            params.pointer("/error/code").and_then(Value::as_str) != Some("setup_command_failed")
-        }
+        BlockerCode::EnvSetupFailed => !matches!(
+            params.pointer("/error/code").and_then(Value::as_str),
+            Some("setup_command_failed" | "docs_commit_missing" | "docs_checkout_too_large")
+        ),
         BlockerCode::MergeConflict => text("reason") == Some("head_changed"),
         BlockerCode::CiRed => {
             text("source") == Some("saka") && text("reason") == Some("runner_failed")
@@ -2109,6 +2111,14 @@ mod retry_tests {
             (
                 BlockerCode::EnvSetupFailed,
                 json!({ "error": { "code": "setup_command_failed" } }),
+            ),
+            (
+                BlockerCode::EnvSetupFailed,
+                json!({ "error": { "code": "docs_commit_missing" } }),
+            ),
+            (
+                BlockerCode::EnvSetupFailed,
+                json!({ "error": { "code": "docs_checkout_too_large" } }),
             ),
         ];
         for (code, params) in no {

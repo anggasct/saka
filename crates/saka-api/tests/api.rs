@@ -3900,3 +3900,46 @@ fn user_token_refusals_carry_their_codes() {
         "nothing is sent to a code host before the project is known to fit one token"
     );
 }
+
+#[test]
+fn a_task_shows_its_docs_checkout_in_the_environment_and_null_without_one() {
+    let layout = Layout {
+        saka_toml: saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]),
+        ..Layout::default()
+    };
+    let cfg = SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(cfg, &layout));
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| !s.world.prompts().is_empty()));
+    let task = api.sim.task(1);
+    let docs = task.environment.as_ref().unwrap().docs.clone().unwrap();
+    let r = api.get(&format!("/api/v1/work-items/{}", task.item.id.0));
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(
+        r.body["environment"]["docs"],
+        json!({
+            "repo_id": docs.repo_id.0.to_string(),
+            "full_name": DOCS_REPO,
+            "commit": docs.commit,
+            "project_path": "docs",
+            "path": docs.path,
+            "mode": "read_only",
+            "branch": null,
+            "base_sha": docs.commit,
+        })
+    );
+
+    let mut api = Api::new(SimConfig {
+        agent: hang_script(),
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| !s.world.prompts().is_empty()));
+    let r = api.get(&format!("/api/v1/work-items/{}", api.sim.task(1).item.id.0));
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(r.body["environment"].is_object());
+    assert_eq!(r.body["environment"]["docs"], Value::Null);
+}

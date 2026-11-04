@@ -15,12 +15,13 @@ use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, Mer
 use saka_ports::{
     Agents, Blob, ChangeCredential, ChangeOpening, ChangeSnapshot, ChangedPaths, Clock, DeviceCode,
     DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree,
-    DocWrite, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link,
-    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
-    RecipeCommandOutcome, RepoAccess, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm,
-    ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, TokenRefresh,
-    Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    DocWrite, DocsRequest, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession,
+    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached,
+    RecipeCommand, RecipeCommandOutcome, RepoAccess, RepoInfo, RepoRef, RunnerEvent,
+    RunnerEventKind, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef,
+    StatusReport, TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget,
+    WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -209,6 +210,8 @@ struct State {
     agent_edits: VecDeque<Vec<FileEdit>>,
     scope_checks: Vec<ScopeCheck>,
     scm_calls: Vec<ScmCall>,
+    docs_checkouts: BTreeMap<EnvironmentId, DocsCheckoutState>,
+    docs_refusal: Option<PortError>,
 }
 
 impl State {
@@ -230,6 +233,15 @@ pub struct Launch {
     pub path_prefix: Vec<String>,
     pub secrets: BTreeMap<String, String>,
     pub redacted: Vec<String>,
+    pub extra_dirs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocsCheckoutState {
+    pub repo: String,
+    pub commit: String,
+    pub project_path: String,
+    pub torn_down: bool,
 }
 
 fn injected(secrets: &[SecretVar], purpose: SecretPurpose) -> BTreeMap<String, String> {
@@ -336,6 +348,8 @@ impl FakeWorld {
                 agent_edits: VecDeque::new(),
                 scope_checks: Vec::new(),
                 scm_calls: Vec::new(),
+                docs_checkouts: BTreeMap::new(),
+                docs_refusal: None,
                 next_sha: 1,
                 parents,
                 home: HOME_REPO.to_string(),
@@ -392,6 +406,14 @@ impl FakeWorld {
         let commit = s.commit_edits(&parent, edits);
         s.refs(repo).insert(branch.to_string(), commit.clone());
         commit
+    }
+
+    pub fn docs_checkouts(&self) -> BTreeMap<EnvironmentId, DocsCheckoutState> {
+        self.state().docs_checkouts.clone()
+    }
+
+    pub fn refuse_docs_checkouts(&self, refusal: Option<PortError>) {
+        self.state().docs_refusal = refusal;
     }
 
     pub fn scope_checks(&self) -> Vec<ScopeCheck> {
@@ -1097,6 +1119,64 @@ impl Environments for FakeWorld {
             worktree_path: path,
             base_sha: base,
         })
+    }
+
+    async fn prepare_docs(&self, request: &DocsRequest) -> PortResult<PreparedDocs> {
+        let mut s = self.state();
+        let root = format!("/sim/envs/{}/docs", request.environment_id);
+        let path = if request.project_path == "." {
+            root.clone()
+        } else {
+            format!("{root}/{}", request.project_path)
+        };
+        let prepared = PreparedDocs {
+            worktree_path: root,
+            path,
+            base_sha: request.commit.clone(),
+        };
+        if s.docs_checkouts
+            .get(&request.environment_id)
+            .is_some_and(|d| !d.torn_down && d.commit == request.commit)
+        {
+            return Ok(prepared);
+        }
+        if let Some(refusal) = s.docs_refusal.clone() {
+            return Err(refusal);
+        }
+        if !s.parents.contains_key(&request.commit) {
+            return Err(PortError::permanent(
+                "docs_commit_missing",
+                json!({ "commit": request.commit }),
+            ));
+        }
+        s.docs_checkouts.insert(
+            request.environment_id,
+            DocsCheckoutState {
+                repo: request.repo.full_name.clone(),
+                commit: request.commit.clone(),
+                project_path: request.project_path.clone(),
+                torn_down: false,
+            },
+        );
+        Ok(prepared)
+    }
+
+    async fn teardown_docs(
+        &self,
+        environment_id: EnvironmentId,
+        _repo: &RepoRef,
+    ) -> PortResult<()> {
+        let mut s = self.state();
+        if s.refuse_teardowns {
+            return Err(PortError::retryable(
+                "env_io_failed",
+                json!({ "op": "remove_docs", "error": "Permission denied (os error 13)" }),
+            ));
+        }
+        if let Some(d) = s.docs_checkouts.get_mut(&environment_id) {
+            d.torn_down = true;
+        }
+        Ok(())
     }
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState> {
@@ -1919,6 +1999,7 @@ impl Agents for FakeWorld {
             path_prefix: launch.environment.path_prefix.clone(),
             secrets: injected(&launch.environment.secrets, SecretPurpose::Session),
             redacted: redacted(&launch.environment.secrets),
+            extra_dirs: launch.environment.extra_dirs.clone(),
         });
         let id = launch.session_id;
         if s.sessions.get(&id).is_some_and(|old| old.running) {

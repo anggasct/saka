@@ -585,6 +585,25 @@ pub struct Toolchain {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct EnvironmentDocs {
+    /// The workspace repo the checkout is made from.
+    pub repo_id: Uuid,
+    pub full_name: String,
+    /// The commit the task's spec revision is pinned to.
+    pub commit: String,
+    /// The project folder in the workspace repo; `.` is the whole repo.
+    pub project_path: String,
+    /// The directory the session reads (`<environment root>/docs/<project_path>`).
+    pub path: String,
+    /// `read_only` or `writable`.
+    pub mode: String,
+    /// The docs branch of a `writable` checkout; `null` when `read_only`.
+    pub branch: Option<String>,
+    /// The commit the checkout started at.
+    pub base_sha: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WorkItemEnvironment {
     pub id: Uuid,
     /// `preparing`, `ready`, `failed`, `teardown_failed` or `torn_down`.
@@ -595,6 +614,9 @@ pub struct WorkItemEnvironment {
     pub recipe_sha256: Option<String>,
     /// Toolchains on `PATH`; empty when the repo declares no versions.
     pub toolchains: Vec<Toolchain>,
+    /// Checkout of the project folder from the workspace repo; `null` when the task's repo is
+    /// the workspace repo.
+    pub docs: Option<EnvironmentDocs>,
 }
 
 impl WorkItemEnvironment {
@@ -626,6 +648,16 @@ impl WorkItemEnvironment {
                     version: t.version.clone(),
                 })
                 .collect(),
+            docs: e.docs.as_ref().map(|d| EnvironmentDocs {
+                repo_id: d.repo_id.0,
+                full_name: d.full_name.clone(),
+                commit: d.commit.clone(),
+                project_path: d.project_path.clone(),
+                path: d.path.clone(),
+                mode: d.mode.as_str().to_string(),
+                branch: d.branch.clone(),
+                base_sha: d.base_sha.clone(),
+            }),
         }
     }
 }

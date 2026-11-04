@@ -90,6 +90,16 @@ const blocked = detail(
       ports: { start: 41000, count: 3 },
       recipe_sha256: "9f2c1d0e8b7a".padEnd(64, "0"),
       toolchains: [{ tool: "node", version: "26.13.0" }],
+      docs: {
+        repo_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344dd",
+        full_name: "acme/docs",
+        commit: "5e6f7a8b9c0d".padEnd(40, "1"),
+        project_path: "docs",
+        path: "/var/lib/saka/envs/e-1/docs/docs",
+        mode: "read_only",
+        branch: null,
+        base_sha: "5e6f7a8b9c0d".padEnd(40, "1"),
+      },
     },
     budget: {
       stage_run_id: "0193f0c4-1b2a-7c3d-9e8f-0011223344bb",
@@ -205,6 +215,13 @@ describe("TaskPage", () => {
     const env = screen.getByRole("region", { name: "Environment" });
     expect(within(env).getByText("41000–41002")).toBeInTheDocument();
     expect(within(env).getByText("node 26.13.0")).toBeInTheDocument();
+    expect(within(env).getByText("Project docs")).toBeInTheDocument();
+    expect(
+      within(env).getByText("/var/lib/saka/envs/e-1/docs/docs"),
+    ).toBeInTheDocument();
+    expect(
+      within(env).getByText("acme/docs/docs at 5e6f7a8b9c0d, read-only"),
+    ).toBeInTheDocument();
     expect(within(env).getByText("12.5 of 60")).toBeInTheDocument();
     expect(within(env).getByText("9 of 10")).toBeInTheDocument();
     expect(within(env).getByText("near the limit")).toBeInTheDocument();

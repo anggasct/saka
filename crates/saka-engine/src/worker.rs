@@ -4,11 +4,11 @@ use saka_core::authorship::{self, CredentialBlock, ResolvedAuthor, SessionAuthor
 use saka_core::draft::DraftInput;
 use saka_core::event::{Event, Prompt};
 use saka_core::gate::{Check, GatePolicy};
-use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId};
+use saka_core::ids::{ChangeRequestId, EnvironmentId, RepoId, SessionId, StageRunId};
 use saka_core::job::{Job, JobKind};
 use saka_core::model::{
-    Coded, Environment, EnvironmentSetup, PermissionRequest, Project, ProjectRepo, RunOwner,
-    Session, Task, ToolchainUse,
+    Coded, DocsCheckout, Environment, EnvironmentSetup, PermissionRequest, Project, ProjectRepo,
+    RunOwner, Session, Task, ToolchainUse,
 };
 use saka_core::rejection::Rejection;
 use saka_core::scope::{PathScope, ScopeViolation};
@@ -17,13 +17,14 @@ use saka_core::task::TaskInput;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     AuthorshipMode, BlockerCode, ChangeCredentialKind, ChangeState, CheckConclusion, CheckKind,
-    CheckStatus, EnvironmentState, PermissionState, RefreshReason, ScopeStage, Stage, StagePhase,
-    TokenInvalidCause, UserLinkCause, UserTokenCause,
+    CheckStatus, DocsMode, EnvironmentState, PermissionState, RefreshReason, ScopeStage, Stage,
+    StagePhase, TokenInvalidCause, UserLinkCause, UserTokenCause, WorkItemOrigin,
 };
 use saka_ports::{
-    ChangeCredential, ChangeOpening, Checkout, EnvRef, LaunchProfile, MergeOutcome, MergeRequest,
-    OpenChangeRequest, PortError, PortResult, PrepareRequest, PushOutcome, PushRequest,
-    RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef, StatusReport, StatusState,
+    ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnvRef, LaunchProfile, MergeOutcome,
+    MergeRequest, OpenChangeRequest, PortError, PortResult, PrepareRequest, PushOutcome,
+    PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef, StatusReport,
+    StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
@@ -603,13 +604,15 @@ impl Engine {
     }
 
     fn repo_ref(&self, task: &Task) -> std::result::Result<RepoRef, PortError> {
+        self.repo_ref_of(task.item.repo_id)
+    }
+
+    fn repo_ref_of(&self, repo_id: RepoId) -> std::result::Result<RepoRef, PortError> {
         let repo = self
             .store
-            .read(|c| read::load_repo(c, task.item.repo_id))
+            .read(|c| read::load_repo(c, repo_id))
             .map_err(|e| internal(e.into()))?
-            .ok_or_else(|| {
-                PortError::permanent("repo_not_found", json!({ "repo_id": task.item.repo_id }))
-            })?;
+            .ok_or_else(|| PortError::permanent("repo_not_found", json!({ "repo_id": repo_id })))?;
         Ok(RepoRef {
             repo_id: repo.id,
             integration_id: repo.integration_id,
@@ -632,6 +635,28 @@ impl Engine {
 
     fn base_branch(&self, task: &Task) -> std::result::Result<String, PortError> {
         self.bound(task).map(|(_, binding)| binding.base_branch)
+    }
+
+    // A task in another repo than the workspace reads the project folder at its spec's commit.
+    fn docs_request(
+        &self,
+        task: &Task,
+        environment_id: EnvironmentId,
+    ) -> std::result::Result<Option<DocsRequest>, PortError> {
+        if task.item.origin != WorkItemOrigin::SpecStep {
+            return Ok(None);
+        }
+        let (project, _) = self.bound(task)?;
+        if project.workspace_repo_id == task.item.repo_id {
+            return Ok(None);
+        }
+        let pinned = self.pinned(task).map_err(internal)?;
+        Ok(Some(DocsRequest {
+            environment_id,
+            repo: self.repo_ref_of(project.workspace_repo_id)?,
+            commit: pinned.source_commit().to_string(),
+            project_path: project.project_path,
+        }))
     }
 
     fn effective_scope(&self, task: &Task) -> std::result::Result<Vec<String>, PortError> {
@@ -690,9 +715,17 @@ impl Engine {
             branch: env.branch.clone(),
             root_path: env.root_path.clone(),
             worktree_path: env.worktree_path.clone(),
-            vars: self.env_vars(task, env.id, env.port_start, &recipe, &env.toolchains),
+            vars: self.env_vars(
+                task,
+                env.id,
+                env.port_start,
+                &recipe,
+                &env.toolchains,
+                env.docs.as_ref(),
+            ),
             path_prefix: env.toolchains.iter().map(|t| t.bin_dir.clone()).collect(),
             secrets: Vec::new(),
+            extra_dirs: env.docs.iter().map(|d| d.path.clone()).collect(),
         })
     }
 
@@ -718,10 +751,14 @@ impl Engine {
         port_start: Option<u16>,
         recipe: &Recipe,
         toolchains: &[ToolchainUse],
+        docs: Option<&DocsCheckout>,
     ) -> BTreeMap<String, String> {
         let mut vars = recipe.env.clone();
         for t in toolchains {
             vars.extend(t.env.clone());
+        }
+        if let Some(docs) = docs {
+            vars.insert("SAKA_DOCS_DIR".into(), docs.path.clone());
         }
         vars.insert("SAKA_TASK_KEY".into(), task.item.task_key.clone());
         vars.insert("SAKA_ENVIRONMENT_ID".into(), environment_id.to_string());
@@ -794,11 +831,18 @@ impl Engine {
     async fn abandon_environment(
         &self,
         env: &EnvRef,
+        docs: Option<&RepoRef>,
         recipe: &Recipe,
         code: BlockerCode,
         params: Value,
     ) -> Execution {
         let _ = self.run_teardown_commands(env, recipe).await;
+        if let Some(repo) = docs {
+            self.ports
+                .env
+                .teardown_docs(env.environment_id, repo)
+                .await?;
+        }
         self.ports.env.teardown(env).await?;
         Ok(Effect::Fact(TaskInput::EnvironmentFailed { code, params }))
     }
@@ -865,7 +909,39 @@ impl Engine {
             vars: BTreeMap::new(),
             path_prefix: Vec::new(),
             secrets: Vec::new(),
+            extra_dirs: Vec::new(),
         };
+        let request = self.docs_request(task, environment_id)?;
+        let docs_repo = request.as_ref().map(|r| &r.repo);
+        let docs = match &request {
+            None => None,
+            Some(request) => match self.ports.env.prepare_docs(request).await {
+                Ok(prepared) => Some(DocsCheckout {
+                    repo_id: request.repo.repo_id,
+                    full_name: request.repo.full_name.clone(),
+                    commit: request.commit.clone(),
+                    project_path: request.project_path.clone(),
+                    path: prepared.path,
+                    mode: DocsMode::ReadOnly,
+                    branch: None,
+                    base_sha: prepared.base_sha,
+                }),
+                Err(e) if !e.retryable => {
+                    let params = json!({ "error": e.to_json() });
+                    return self
+                        .abandon_environment(
+                            &env,
+                            docs_repo,
+                            &Recipe::default(),
+                            BlockerCode::EnvSetupFailed,
+                            params,
+                        )
+                        .await;
+                }
+                Err(e) => return Err(e),
+            },
+        };
+        env.extra_dirs = docs.iter().map(|d| d.path.clone()).collect();
         let text = match self.ports.env.read_recipe(&repo, &prepared.base_sha).await {
             Ok(text) => text,
             Err(e) if !e.retryable => {
@@ -873,6 +949,7 @@ impl Engine {
                 return self
                     .abandon_environment(
                         &env,
+                        docs_repo,
                         &Recipe::default(),
                         BlockerCode::EnvRecipeInvalid,
                         params,
@@ -898,6 +975,7 @@ impl Engine {
                 return self
                     .abandon_environment(
                         &env,
+                        docs_repo,
                         &Recipe::default(),
                         BlockerCode::EnvRecipeInvalid,
                         params,
@@ -910,7 +988,7 @@ impl Engine {
             Ok(s) => s,
             Err(Refusal::Block(code, params)) => {
                 return self
-                    .abandon_environment(&env, &Recipe::default(), code, params)
+                    .abandon_environment(&env, docs_repo, &Recipe::default(), code, params)
                     .await;
             }
             Err(Refusal::Fail(e)) => return Err(e),
@@ -922,13 +1000,20 @@ impl Engine {
             Ok(t) => t,
             Err(Refusal::Block(code, params)) => {
                 return self
-                    .abandon_environment(&env, &Recipe::default(), code, params)
+                    .abandon_environment(&env, docs_repo, &Recipe::default(), code, params)
                     .await;
             }
             Err(Refusal::Fail(e)) => return Err(e),
         };
         let port_start = self.reserve_ports(environment_id)?;
-        env.vars = self.env_vars(task, environment_id, Some(port_start), &recipe, &toolchains);
+        env.vars = self.env_vars(
+            task,
+            environment_id,
+            Some(port_start),
+            &recipe,
+            &toolchains,
+            docs.as_ref(),
+        );
         env.path_prefix = toolchains.iter().map(|t| t.bin_dir.clone()).collect();
         let mut setup = Vec::new();
         for (index, command) in recipe.setup.iter().enumerate() {
@@ -956,7 +1041,13 @@ impl Engine {
                 let params =
                     json!({ "error": { "code": "setup_command_failed", "params": failed } });
                 return self
-                    .abandon_environment(&env, &recipe, BlockerCode::EnvSetupFailed, params)
+                    .abandon_environment(
+                        &env,
+                        docs_repo,
+                        &recipe,
+                        BlockerCode::EnvSetupFailed,
+                        params,
+                    )
                     .await;
             }
         }
@@ -965,7 +1056,7 @@ impl Engine {
             root_path: prepared.root_path,
             worktree_path: prepared.worktree_path,
             base_sha: prepared.base_sha,
-            setup: EnvironmentSetup {
+            setup: Box::new(EnvironmentSetup {
                 port_start: Some(port_start),
                 port_count: Some(self.cfg.env.ports_per_env),
                 recipe: text.as_ref().map(|_| recipe.to_json()),
@@ -973,7 +1064,8 @@ impl Engine {
                 setup,
                 toolchains,
                 path_scope,
-            },
+                docs,
+            }),
         }))
     }
 
@@ -1627,6 +1719,10 @@ impl Engine {
                 .unwrap_or_default();
             self.run_teardown_commands(&env_ref, &recipe).await
         };
+        if let Some(docs) = &env.docs {
+            let repo = self.repo_ref_of(docs.repo_id)?;
+            self.ports.env.teardown_docs(env.id, &repo).await?;
+        }
         self.ports.env.teardown(&env_ref).await?;
         Ok(Effect::Fact(TaskInput::EnvironmentTornDown {
             teardown_failures: failures,
