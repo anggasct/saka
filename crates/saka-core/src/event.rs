@@ -341,6 +341,7 @@ pub enum Event {
         setup: Vec<Value>,
         #[serde(default)]
         toolchains: Vec<ToolchainUse>,
+        path_scope: Vec<String>,
     },
     #[serde(rename = "runtime.environment.torn_down")]
     EnvironmentTornDown {
@@ -553,6 +554,11 @@ pub enum Prompt {
     Uncommitted {
         dirty: bool,
         commits_ahead: u32,
+    },
+    OutOfScope {
+        paths: Vec<String>,
+        count: u32,
+        scope: Vec<String>,
     },
     Resume {
         cause: ResumeReason,

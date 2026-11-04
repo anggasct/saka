@@ -12,13 +12,14 @@ use crate::model::{
     StageRun, Task, Usage, WorkItem,
 };
 use crate::rejection::Rejection;
+use crate::scope::ScopeViolation;
 use crate::session::{
     self, RunRetry, RunView, SessionConfig, SessionInput, SessionOutcome, SessionSignal,
 };
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, ChangeState, EnvironmentState, GateOutcome, GateSource,
-    MergeMethod, ResumeCause, SessionState, Stage, StagePhase, StageRunState, Trigger,
+    MergeMethod, ResumeCause, ScopeStage, SessionState, Stage, StagePhase, StageRunState, Trigger,
     WorkItemOrigin, WorkItemState,
 };
 
@@ -82,6 +83,11 @@ pub enum TaskInput {
         dirty: bool,
         commits_ahead: u32,
         head_sha: String,
+        outside: Option<ScopeViolation>,
+    },
+    PathScopeViolated {
+        head_sha: String,
+        violation: ScopeViolation,
     },
     Tick,
     BranchPushed {
@@ -184,7 +190,22 @@ pub fn decide(
             dirty,
             commits_ahead,
             head_sha,
-        } => d.worktree_inspected(turn, dirty, commits_ahead, head_sha, ctx),
+            outside,
+        } => d.worktree_inspected(turn, dirty, commits_ahead, head_sha, outside, ctx),
+        I::PathScopeViolated {
+            head_sha,
+            violation,
+        } => {
+            if task.is_at(Stage::Merge, StagePhase::Merging) {
+                d.block(
+                    BlockerCode::PathScopeViolation,
+                    violation.params(ScopeStage::Merge, &head_sha),
+                    ctx,
+                )
+            } else {
+                vec![]
+            }
+        }
         I::Tick => d.tick(ctx),
         I::BranchPushed { sha } => d.branch_pushed(sha, ctx),
         I::PushRejected {
@@ -423,6 +444,7 @@ impl Decider<'_> {
             recipe_sha256: setup.recipe_sha256,
             setup: setup.setup,
             toolchains: setup.toolchains,
+            path_scope: setup.path_scope,
         }];
         events.extend(self.phase(StagePhase::RunningSession, None));
         events
@@ -455,6 +477,7 @@ impl Decider<'_> {
         dirty: bool,
         commits_ahead: u32,
         head_sha: String,
+        outside: Option<ScopeViolation>,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let Some(session) = self.task.live_session() else {
@@ -467,22 +490,38 @@ impl Decider<'_> {
         {
             return vec![];
         }
-        if !dirty && commits_ahead > 0 {
+        let committed = !dirty && commits_ahead > 0;
+        if committed && outside.is_none() {
             let mut events = self.end_session(SessionState::Ended, "completed", json!({}));
             events.extend(self.phase(StagePhase::Pushing, Some(head_sha)));
             return events;
         }
+        let violation = outside.filter(|_| committed);
         if session.followups < self.cfg.max_followup_turns {
             let Some(view) = run_view(self.task) else {
                 return vec![];
             };
-            let prompt = Prompt::Uncommitted {
-                dirty,
-                commits_ahead,
+            let prompt = match violation {
+                Some(v) => Prompt::OutOfScope {
+                    paths: v.paths,
+                    count: v.count,
+                    scope: v.scope,
+                },
+                None => Prompt::Uncommitted {
+                    dirty,
+                    commits_ahead,
+                },
             };
             let outcome =
                 session::next_turn(&view, turn + 1, prompt, &self.cfg.session(), self.now);
             return self.settle(outcome, ctx);
+        }
+        if let Some(v) = violation {
+            let params = v.params(ScopeStage::Dev, &head_sha);
+            let mut events =
+                self.end_session(SessionState::Ended, "path_scope_violation", params.clone());
+            events.extend(self.block(BlockerCode::PathScopeViolation, params, ctx));
+            return events;
         }
         let params = json!({ "dirty": dirty, "commits": commits_ahead });
         let mut events = self.end_session(SessionState::Ended, "no_changes", params.clone());
@@ -1357,7 +1396,8 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::PermissionExpired
         | B::BudgetExhausted
         | B::QuotaExhausted
-        | B::NoChanges => (Stage::Dev, StagePhase::RunningSession),
+        | B::NoChanges
+        | B::PathScopeViolation => (Stage::Dev, StagePhase::RunningSession),
         B::CiRed if params.get("reason").and_then(Value::as_str) == Some("runner_failed") => {
             (Stage::Merge, StagePhase::AwaitingCi)
         }
@@ -1993,6 +2033,8 @@ mod retry_tests {
             ),
             (BlockerCode::PushRejected, json!({})),
             (BlockerCode::NoChanges, json!({})),
+            (BlockerCode::PathScopeViolation, json!({ "stage": "dev" })),
+            (BlockerCode::PathScopeViolation, json!({ "stage": "merge" })),
             (BlockerCode::BudgetExhausted, json!({})),
             (
                 BlockerCode::MergeConflict,

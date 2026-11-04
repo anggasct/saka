@@ -3123,3 +3123,49 @@ fn approve_refuses_a_repo_the_project_does_not_bind_until_a_reload_binds_it() {
         [(Value::Null, shop), (json!("mobile"), mobile)]
     );
 }
+
+#[test]
+fn metrics_count_path_scope_violations_by_stage_and_the_blocker_names_them() {
+    let layout = Layout {
+        saka_toml: saka_toml(
+            "shop",
+            &[repo_entry(
+                "shop",
+                SHOP_REPO,
+                "path_scope = [\"services/api/**\"]\n",
+            )],
+        ),
+        ..Layout::default()
+    };
+    let cfg = SimConfig {
+        max_active_tasks: 1,
+        ..SimConfig::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(cfg, &layout));
+    let metrics = api.get_text("/metrics");
+    assert!(metrics.contains("# TYPE saka_project_config_reloads_total counter"));
+    assert!(metrics.contains("# TYPE saka_path_scope_violations_total counter"));
+
+    api.sim.world.script_edits(vec![vec![(
+        "services/web/a.ts".into(),
+        Some("export {}\n".into()),
+    )]]);
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(5_000, |s| s.task(1).item.state == WorkItemState::Blocked)
+    );
+    let id = api.sim.task(1).item.id;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    let blocker = &detail.body["blocker"];
+    assert_eq!(blocker["code"], "path_scope_violation");
+    assert_eq!(blocker["params"]["stage"], "dev");
+    assert_eq!(blocker["params"]["paths"], json!(["services/web/a.ts"]));
+    assert_eq!(blocker["params"]["scope"], json!(["services/api/**"]));
+    let metrics = api.get_text("/metrics");
+    assert!(
+        metrics.contains("saka_path_scope_violations_total{stage=\"dev\"} 2"),
+        "{metrics}"
+    );
+}

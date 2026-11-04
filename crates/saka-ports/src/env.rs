@@ -125,6 +125,12 @@ pub struct WorktreeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedPaths {
+    pub paths: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorktreeFile {
     Missing,
     NotRegular,
@@ -144,6 +150,14 @@ pub trait Environments: Send + Sync {
         commit: &str,
         base_branch: &str,
     ) -> PortResult<Option<String>>;
+
+    async fn changed_paths(
+        &self,
+        repo: &RepoRef,
+        base: &str,
+        head_sha: &str,
+        fetch: bool,
+    ) -> PortResult<ChangedPaths>;
 
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()>;
 

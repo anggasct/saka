@@ -403,6 +403,7 @@ fn inspected(turn: u32, dirty: bool, commits_ahead: u32) -> TaskInput {
         dirty,
         commits_ahead,
         head_sha: sha('b'),
+        outside: None,
     }
 }
 
@@ -929,6 +930,7 @@ fn red_ci_blocks_with_failing_checks_and_retry_returns_to_the_session() {
             dirty: false,
             commits_ahead: 2,
             head_sha: sha('e'),
+            outside: None,
         },
     );
     w.jobs.clear();

@@ -359,6 +359,7 @@ impl World {
                 dirty: false,
                 commits_ahead: 1,
                 head_sha: sha('b'),
+                outside: None,
             },
         );
         self.step(id, TaskInput::BranchPushed { sha: sha('b') });
@@ -535,6 +536,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             dirty: false,
             commits_ahead: 1,
             head_sha: sha('b'),
+            outside: None,
         },
     );
     w.step(id, TaskInput::BranchPushed { sha: sha('b') });
@@ -1075,9 +1077,9 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
     assert_eq!(
         w.store.migration().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(12));
+    assert_eq!(w.store.schema_version().unwrap(), Some(13));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1500,6 +1502,7 @@ fn two_live_environments_never_hold_the_same_port_block() {
                     env: Default::default(),
                     downloaded: true,
                 }],
+                path_scope: vec!["services/api/**".into(), "docs/**".into()],
             },
         },
     );
@@ -1513,6 +1516,7 @@ fn two_live_environments_never_hold_the_same_port_block() {
     assert_eq!((env.port_start, env.port_count), (Some(41000), Some(10)));
     assert_eq!(env.recipe.unwrap()["ports"], json!(3));
     assert_eq!(env.toolchains[0].version, "26.13.0");
+    assert_eq!(env.path_scope, ["services/api/**", "docs/**"]);
     assert!(
         !env.toolchains[0].downloaded,
         "a download is a fact of the event, not of the row"

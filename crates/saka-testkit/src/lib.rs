@@ -22,6 +22,7 @@ pub use sim::{
 };
 pub use world::{
     AgentOutcome, AgentScript, CiScript, CommandScript, DraftTurn, FAKE_CAPABILITIES,
-    FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, HOME_REPO, Launch, Prepared, RecipeRun,
-    SIM_RUNNER_VERSION, Stats, ToolchainScript, TurnUsage, fake_signature, git_blob,
+    FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, FileEdit, HOME_REPO, Launch, Prepared,
+    RecipeRun, SIM_RUNNER_VERSION, ScopeCheck, Stats, ToolchainScript, TurnUsage, fake_signature,
+    git_blob,
 };

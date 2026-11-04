@@ -243,6 +243,50 @@ const VARIANTS: [string, Record<string, unknown>][] = [
       resets_at: "2026-10-31T13:00:00.000Z",
     },
   ],
+  [
+    "path_scope_violation",
+    {
+      stage: "dev",
+      head_sha: HEAD,
+      reason: "outside_scope",
+      paths: ["services/web/a.ts"],
+      count: 1,
+      scope: ["services/api/**"],
+    },
+  ],
+  [
+    "path_scope_violation",
+    {
+      stage: "merge",
+      head_sha: HEAD,
+      reason: "outside_scope",
+      paths: ["services/web/a.ts", "web/b.ts"],
+      count: 5,
+      scope: ["services/api/**", "docs/**"],
+    },
+  ],
+  [
+    "path_scope_violation",
+    {
+      stage: "dev",
+      head_sha: HEAD,
+      reason: "too_many_paths",
+      paths: [],
+      count: 0,
+      scope: ["services/api/**"],
+    },
+  ],
+  [
+    "path_scope_violation",
+    {
+      stage: "merge",
+      head_sha: HEAD,
+      reason: "too_many_paths",
+      paths: [],
+      count: 0,
+      scope: ["services/api/**"],
+    },
+  ],
   ["no_changes", { dirty: true, commits: 0 }],
   ["no_changes", { dirty: false, commits: 0 }],
   ["push_rejected", { remote_sha: HEAD, local_sha: "f".repeat(40) }],
@@ -485,6 +529,33 @@ describe("catalog coverage", () => {
       }),
     ).toBe(
       "The gate at a1b2c3d4e5f6 is Pending, so the pull request cannot be merged yet.",
+    );
+  });
+
+  it("names the paths outside the scope and the allowed paths", () => {
+    const en = translator("en");
+    expect(
+      blockerText(en, "path_scope_violation", {
+        stage: "merge",
+        head_sha: HEAD,
+        reason: "outside_scope",
+        paths: ["services/web/a.ts", "web/b.ts"],
+        count: 5,
+        scope: ["services/api/**", "docs/**"],
+      }),
+    ).toBe(
+      "The pull request head a1b2c3d4e5f6 changes 5 files outside the allowed paths: services/web/a.ts, web/b.ts, and 3 more. Allowed paths: services/api/**, docs/**.",
+    );
+    expect(
+      blockerText(en, "path_scope_violation", {
+        stage: "dev",
+        reason: "outside_scope",
+        paths: ["services/web/a.ts"],
+        count: 1,
+        scope: ["services/api/**"],
+      }),
+    ).toBe(
+      "The commits change 1 file outside the allowed paths: services/web/a.ts. Allowed paths: services/api/**.",
     );
   });
 

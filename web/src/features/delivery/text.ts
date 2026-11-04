@@ -116,6 +116,15 @@ export function blockerText(
     phase_known: phase !== "" ? "yes" : "no",
     phase: label(t, "phase", phase),
     dirty: params.dirty === true ? "yes" : "no",
+    scope_stage: text(params.stage) || "other",
+    paths: text(params.paths),
+    count: number(params.count),
+    more: Math.max(
+      0,
+      number(params.count) -
+        (Array.isArray(params.paths) ? params.paths.length : 0),
+    ),
+    scope: text(params.scope),
     shas: remote !== "" && local !== "" ? "yes" : "no",
     remote,
     local,

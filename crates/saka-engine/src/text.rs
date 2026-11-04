@@ -7,7 +7,9 @@ use saka_spec::{SpecModel, Step};
 use saka_store::{SpecRevisionRow, read};
 use serde_json::Value;
 
-use crate::packet::{self, EnvironmentFacts, Packet, PacketInput, PacketSpec, PacketStep};
+use crate::packet::{
+    self, EnvironmentFacts, Packet, PacketInput, PacketRepo, PacketSpec, PacketStep,
+};
 use crate::recipe::Recipe;
 use crate::{Engine, EngineError, Result};
 
@@ -70,13 +72,18 @@ impl Engine {
                 "Your changes are not committed yet (dirty: {dirty}, commits ahead of base: {commits_ahead}). \
                  Commit all changes now with a Conventional Commits message. Do not push."
             )),
+            Prompt::OutOfScope {
+                paths,
+                count,
+                scope,
+            } => Ok(out_of_scope(paths, *count, scope)),
             Prompt::WorkPacket { retry_of } => {
-                let retry = retry_of.as_ref().and_then(ci_failure);
+                let retry = retry_of.as_ref().and_then(retry_text);
                 Ok(self.packet_of(task, retry)?.text)
             }
             Prompt::Resume { cause, retry_of } => {
                 let text = saka_core::resume::text(*cause);
-                Ok(match retry_of.as_ref().and_then(ci_failure) {
+                Ok(match retry_of.as_ref().and_then(retry_text) {
                     Some(ci) => format!("{text}\n\n{ci}"),
                     None => text,
                 })
@@ -92,10 +99,10 @@ impl Engine {
         let pinned = self.pinned(task)?;
         let revision = SpecRevisionId(pinned.revision.id);
         let context = self.store.read(|c| read::context_contents(c, revision))?;
-        let environment = task
-            .ready_environment()
-            .map(|env| self.environment_facts(env))
-            .unwrap_or_default();
+        let environment = match task.ready_environment() {
+            Some(env) => self.environment_facts(task, env)?,
+            None => EnvironmentFacts::default(),
+        };
         Ok(packet::render(&PacketInput {
             step: packet_step(task, &pinned),
             spec: PacketSpec {
@@ -110,14 +117,28 @@ impl Engine {
         }))
     }
 
-    fn environment_facts(&self, env: &Environment) -> EnvironmentFacts {
+    fn environment_facts(&self, task: &Task, env: &Environment) -> Result<EnvironmentFacts> {
         let recipe = env
             .recipe
             .as_ref()
             .map(Recipe::from_json)
             .unwrap_or_default();
         let count = recipe.ports_or(self.cfg.env.ports_per_env);
-        EnvironmentFacts {
+        let (repo, project) = self.store.read(|c| {
+            Ok((
+                read::load_repo(c, env.repo_id)?,
+                read::load_project(c, task.item.project_id)?,
+            ))
+        })?;
+        let binding = project.as_ref().and_then(|p| p.binding(env.repo_id));
+        let repo = repo.zip(binding).map(|(repo, binding)| PacketRepo {
+            name: binding.name.clone(),
+            full_name: repo.full_name,
+            base_branch: binding.base_branch.clone(),
+        });
+        Ok(EnvironmentFacts {
+            repo,
+            path_scope: env.path_scope.clone(),
             ports: env
                 .port_start
                 .filter(|_| count > 0)
@@ -133,7 +154,7 @@ impl Engine {
                 .filter(|(_, purposes)| purposes.contains(&SecretPurpose::Session))
                 .map(|(name, _)| name.clone())
                 .collect(),
-        }
+        })
     }
 
     pub fn work_packet(&self, id: WorkItemId) -> Result<(Task, Packet)> {
@@ -200,10 +221,60 @@ fn packet_step(task: &Task, pinned: &Pinned) -> PacketStep {
     }
 }
 
-pub(crate) fn ci_failure(retry_of: &Coded) -> Option<String> {
-    if retry_of.code != "ci_red" {
-        return None;
+pub(crate) fn out_of_scope(paths: &[String], count: u32, scope: &[String]) -> String {
+    if paths.is_empty() {
+        return format!(
+            "Your commits change more than {} files, too many to check against the paths this task may change. \
+             Allowed paths: {}. Remove the changes outside the allowed paths so the branch differs from its base only inside them, then commit again.",
+            saka_core::scope::MAX_CHANGED_PATHS,
+            scope.join(", ")
+        );
     }
+    let listed = u32::try_from(paths.len()).unwrap_or(u32::MAX);
+    let more = match count.saturating_sub(listed) {
+        0 => String::new(),
+        n => format!(", and {n} more"),
+    };
+    format!(
+        "Your commits change files outside the paths this task may change: {}{more}. Allowed paths: {}. \
+         Remove those changes so the branch differs from its base only inside the allowed paths, then commit again.",
+        paths.join(", "),
+        scope.join(", ")
+    )
+}
+
+fn strings(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+pub(crate) fn retry_text(retry_of: &Coded) -> Option<String> {
+    match retry_of.code.as_str() {
+        "ci_red" => ci_failure(retry_of),
+        "path_scope_violation" => {
+            let params = &retry_of.params;
+            let count = params
+                .get("count")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0);
+            Some(out_of_scope(
+                &strings(params.get("paths")),
+                count,
+                &strings(params.get("scope")),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn ci_failure(retry_of: &Coded) -> Option<String> {
     if retry_of.params.get("source").and_then(Value::as_str) == Some("saka") {
         return saka_failure(&retry_of.params);
     }
@@ -304,6 +375,32 @@ mod tests {
             code: "session_lost".into(),
             params: serde_json::json!({}),
         };
-        assert_eq!(ci_failure(&other), None);
+        assert_eq!(retry_text(&other), None);
+    }
+
+    #[test]
+    fn a_scope_retry_names_the_paths_the_rest_and_the_allowed_paths() {
+        let retry = Coded {
+            code: "path_scope_violation".into(),
+            params: serde_json::json!({
+                "stage": "dev", "head_sha": "abc", "reason": "outside_scope",
+                "paths": ["services/web/a.ts", "web/b.ts"], "count": 5,
+                "scope": ["services/api/**", "docs/**"],
+            }),
+        };
+        assert_eq!(
+            retry_text(&retry).as_deref(),
+            Some(
+                "Your commits change files outside the paths this task may change: services/web/a.ts, web/b.ts, and 3 more. Allowed paths: services/api/**, docs/**. Remove those changes so the branch differs from its base only inside the allowed paths, then commit again."
+            )
+        );
+        assert_eq!(
+            out_of_scope(&["a.ts".to_string()], 1, &["b/**".to_string()]),
+            "Your commits change files outside the paths this task may change: a.ts. Allowed paths: b/**. Remove those changes so the branch differs from its base only inside the allowed paths, then commit again."
+        );
+        assert_eq!(
+            out_of_scope(&[], 0, &["b/**".to_string()]),
+            "Your commits change more than 10000 files, too many to check against the paths this task may change. Allowed paths: b/**. Remove the changes outside the allowed paths so the branch differs from its base only inside them, then commit again."
+        );
     }
 }

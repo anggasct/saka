@@ -10,10 +10,10 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    Blob, Checkout, CommandUnit, CommitOne, CommitPush, EntryKind, EnvRef, Environments, GitAccess,
-    GitRemote, PortError, PortResult, PrepareRequest, PreparedEnvironment, PushCommit, PushOutcome,
-    PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor, TreeEntry,
-    UnitLimits, WorktreeFile, WorktreeState,
+    Blob, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, EntryKind, EnvRef,
+    Environments, GitAccess, GitRemote, PortError, PortResult, PrepareRequest, PreparedEnvironment,
+    PushCommit, PushOutcome, PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos,
+    Supervisor, TreeEntry, UnitLimits, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -958,6 +958,62 @@ impl Environments for GitRepos {
             Some(1 | 128) => Ok(None),
             _ => Err(failed("merge_base", &out)),
         }
+    }
+
+    async fn changed_paths(
+        &self,
+        repo: &RepoRef,
+        base: &str,
+        head_sha: &str,
+        fetch: bool,
+    ) -> PortResult<ChangedPaths> {
+        sha_arg(head_sha, "head_sha")?;
+        arg(base, "base")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        if fetch {
+            self.fetch_locked(repo).await?;
+        }
+        let bare = self.mirror_path(repo.repo_id);
+        let object = format!("{head_sha}^{{commit}}");
+        let present = self
+            .cfg
+            .git
+            .local(&bare, &["cat-file", "-e", &object])
+            .await?;
+        if !present.ok() {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            ));
+        }
+        let merge_base = self
+            .git_ok(&bare, &["merge-base", base, head_sha], "merge_base")
+            .await?
+            .text();
+        let diff = self
+            .git_ok(
+                &bare,
+                &[
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--no-renames",
+                    &merge_base,
+                    head_sha,
+                ],
+                "diff",
+            )
+            .await?;
+        let mut paths: Vec<String> = diff
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
+        let truncated = paths.len() > saka_core::scope::MAX_CHANGED_PATHS;
+        paths.truncate(saka_core::scope::MAX_CHANGED_PATHS);
+        Ok(ChangedPaths { paths, truncated })
     }
 
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()> {

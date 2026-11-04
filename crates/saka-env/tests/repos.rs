@@ -959,3 +959,110 @@ async fn a_failing_or_slow_recipe_command_is_reported_and_killed() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(!Path::new(&env.worktree_path).join("survived").exists());
 }
+
+fn commit_at(dir: &Path, file: &str, text: &str) -> String {
+    std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+    commit(dir, file, text)
+}
+
+#[tokio::test]
+async fn changed_paths_are_the_clean_diff_from_the_merge_base_without_renames() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let base = git(&wt, &["rev-parse", "HEAD"]);
+    commit(&w.other, "NEWS.md", "moved on\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+
+    commit_at(&wt, "services/api/a.rs", "fn a() {}\n");
+    std::fs::create_dir_all(wt.join("docs")).unwrap();
+    git(&wt, &["mv", "README.md", "docs/README.md"]);
+    git(&wt, &["commit", "-q", "-m", "move"]);
+    commit_at(&wt, "services/web/a.ts", "export {}\n");
+    git(&wt, &["rm", "-q", "services/web/a.ts"]);
+    git(&wt, &["commit", "-q", "-m", "revert"]);
+    let head = git(&wt, &["rev-parse", "HEAD"]);
+
+    let changed = w
+        .repos
+        .changed_paths(&w.repo, &base, &head, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        changed.paths,
+        ["README.md", "docs/README.md", "services/api/a.rs"]
+    );
+    assert!(!changed.truncated);
+    let against_tip = w
+        .repos
+        .changed_paths(&w.repo, "refs/remotes/origin/main", &head, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        against_tip, changed,
+        "the base's own change is not the task's"
+    );
+
+    let missing = w
+        .repos
+        .changed_paths(&w.repo, &base, &"1".repeat(40), false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (missing.code.as_str(), missing.retryable),
+        ("commit_missing", false)
+    );
+    let invalid = w
+        .repos
+        .changed_paths(&w.repo, "-x", &head, false)
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code, "git_argument_invalid");
+}
+
+#[tokio::test]
+async fn changed_paths_fetch_a_head_pushed_from_outside_first() {
+    let w = World::new();
+    w.prepare(1).await;
+    git(&w.other, &["checkout", "-q", "-b", "outside"]);
+    let head = commit_at(&w.other, "services/web/x.ts", "x\n");
+    git(&w.other, &["push", "-q", "origin", "outside"]);
+
+    let unseen = w
+        .repos
+        .changed_paths(&w.repo, "refs/remotes/origin/main", &head, false)
+        .await
+        .unwrap_err();
+    assert_eq!(unseen.code, "commit_missing");
+    let changed = w
+        .repos
+        .changed_paths(&w.repo, "refs/remotes/origin/main", &head, true)
+        .await
+        .unwrap();
+    assert_eq!(changed.paths, ["services/web/x.ts"]);
+}
+
+#[tokio::test]
+async fn more_than_ten_thousand_changed_paths_are_cut_and_marked_truncated() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let base = git(&wt, &["rev-parse", "HEAD"]);
+    let many = wt.join("many");
+    std::fs::create_dir_all(&many).unwrap();
+    let total = saka_core::scope::MAX_CHANGED_PATHS + 1;
+    for i in 0..total {
+        std::fs::write(many.join(format!("{i:05}")), b"").unwrap();
+    }
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-q", "-m", "many"]);
+    let head = git(&wt, &["rev-parse", "HEAD"]);
+    let changed = w
+        .repos
+        .changed_paths(&w.repo, &base, &head, false)
+        .await
+        .unwrap();
+    assert!(changed.truncated);
+    assert_eq!(changed.paths.len(), saka_core::scope::MAX_CHANGED_PATHS);
+    assert_eq!(changed.paths[0], "many/00000");
+}

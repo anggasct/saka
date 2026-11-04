@@ -347,6 +347,7 @@ fn an_operator_interrupt_leaves_the_session_idle_waiting_for_a_steer() {
             dirty: false,
             commits_ahead: 1,
             head_sha: "b".repeat(40),
+            outside: None,
         }),
         vec![]
     );
@@ -1131,6 +1132,7 @@ fn the_turn_budget_is_checked_before_the_next_turn_is_sent() {
         dirty: true,
         commits_ahead: 0,
         head_sha: "b".repeat(40),
+        outside: None,
     });
     assert_eq!(f.blocker().map(|b| b.0), Some(BlockerCode::BudgetExhausted));
 }

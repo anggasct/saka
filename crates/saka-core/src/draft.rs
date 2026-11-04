@@ -274,6 +274,7 @@ impl Decider<'_> {
                 recipe_sha256: None,
                 setup: vec![],
                 toolchains: vec![],
+                path_scope: vec![crate::scope::EVERYTHING.to_string()],
             },
             Event::SpecDraftPacketRendered {
                 spec_draft_id: self.id(),

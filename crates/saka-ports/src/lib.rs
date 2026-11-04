@@ -21,9 +21,9 @@ pub use docs::{
     DocTree, DocWrite,
 };
 pub use env::{
-    Checkout, EnvRef, Environments, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest,
-    PreparedEnvironment, RecipeCommand, RecipeCommandOutcome, RecipePhase, WorktreeFile,
-    WorktreeState, output_tail,
+    ChangedPaths, Checkout, EnvRef, Environments, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES,
+    PrepareRequest, PreparedEnvironment, RecipeCommand, RecipeCommandOutcome, RecipePhase,
+    WorktreeFile, WorktreeState, output_tail,
 };
 pub use git::{
     Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,

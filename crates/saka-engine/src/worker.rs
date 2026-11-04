@@ -6,13 +6,15 @@ use saka_core::gate::{Check, GatePolicy};
 use saka_core::ids::{ChangeRequestId, EnvironmentId, SessionId, StageRunId};
 use saka_core::job::{Job, JobKind};
 use saka_core::model::{
-    Coded, Environment, EnvironmentSetup, PermissionRequest, RunOwner, Session, Task, ToolchainUse,
+    Coded, Environment, EnvironmentSetup, PermissionRequest, Project, ProjectRepo, RunOwner,
+    Session, Task, ToolchainUse,
 };
+use saka_core::scope::{PathScope, ScopeViolation};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
 use saka_core::vocab::{
     BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
-    PermissionState, Stage, StagePhase,
+    PermissionState, ScopeStage, Stage, StagePhase,
 };
 use saka_ports::{
     Checkout, EnvRef, LaunchProfile, MergeOutcome, MergeRequest, OpenChangeRequest, PortError,
@@ -574,18 +576,64 @@ impl Engine {
         })
     }
 
-    fn base_branch(&self, task: &Task) -> std::result::Result<String, PortError> {
+    fn bound(&self, task: &Task) -> std::result::Result<(Project, ProjectRepo), PortError> {
         let project = self
             .store
             .read(|c| read::load_project(c, task.item.project_id))
             .map_err(|e| internal(e.into()))?
             .ok_or_else(|| PortError::permanent("project_not_found", json!({})))?;
-        project
-            .binding(task.item.repo_id)
-            .map(|b| b.base_branch.clone())
-            .ok_or_else(|| {
-                PortError::permanent("repo_not_bound", json!({ "repo_id": task.item.repo_id }))
-            })
+        let binding = project.binding(task.item.repo_id).cloned().ok_or_else(|| {
+            PortError::permanent("repo_not_bound", json!({ "repo_id": task.item.repo_id }))
+        })?;
+        Ok((project, binding))
+    }
+
+    fn base_branch(&self, task: &Task) -> std::result::Result<String, PortError> {
+        self.bound(task).map(|(_, binding)| binding.base_branch)
+    }
+
+    fn effective_scope(&self, task: &Task) -> std::result::Result<Vec<String>, PortError> {
+        self.bound(task)
+            .map(|(project, binding)| project.effective_scope(&binding))
+    }
+
+    // The scope is read at use time, so a reload applies to the next check of a running task.
+    async fn scope_violation(
+        &self,
+        task: &Task,
+        base: &str,
+        head_sha: &str,
+        fetch: bool,
+        stage: ScopeStage,
+    ) -> std::result::Result<Option<ScopeViolation>, PortError> {
+        let patterns = self.effective_scope(task)?;
+        let scope = PathScope::parse(&patterns).map_err(|_| {
+            PortError::permanent(
+                "path_scope_invalid",
+                json!({ "repo_id": task.item.repo_id }),
+            )
+        })?;
+        if scope.allows_everything() {
+            return Ok(None);
+        }
+        let repo = self.repo_ref(task)?;
+        let changed = self
+            .ports
+            .env
+            .changed_paths(&repo, base, head_sha, fetch)
+            .await?;
+        let violation = scope.violation(&changed.paths, changed.truncated);
+        if let Some(v) = &violation {
+            self.counters.path_scope_violation(stage.as_str());
+            tracing::warn!(
+                work_item_id = %task.item.id,
+                stage = stage.as_str(),
+                head_sha,
+                count = v.count,
+                "delivery.path_scope.violated"
+            );
+        }
+        Ok(violation)
     }
 
     fn env_ref(&self, task: &Task, env: &Environment) -> std::result::Result<EnvRef, PortError> {
@@ -765,6 +813,7 @@ impl Engine {
                 base_branch: self.base_branch(task)?,
             })
             .await?;
+        let path_scope = self.effective_scope(task)?;
         let mut env = EnvRef {
             environment_id,
             repo: repo.clone(),
@@ -881,6 +930,7 @@ impl Engine {
                 recipe_sha256: text.as_deref().map(recipe::sha256),
                 setup,
                 toolchains,
+                path_scope,
             },
         }))
     }
@@ -940,7 +990,7 @@ impl Engine {
         };
         let body = match &prompt {
             Prompt::WorkPacket { retry_of } => {
-                let retry = retry_of.as_ref().and_then(crate::text::ci_failure);
+                let retry = retry_of.as_ref().and_then(crate::text::retry_text);
                 let packet = self.packet_of(task, retry).map_err(internal)?;
                 let bytes = packet.text.len() as u64;
                 self.counters.work_packet(bytes);
@@ -975,11 +1025,18 @@ impl Engine {
             .env
             .inspect(&self.env_ref(task, env)?, &base)
             .await?;
+        let outside = if !state.dirty && state.commits_ahead > 0 {
+            self.scope_violation(task, &base, &state.head_sha, false, ScopeStage::Dev)
+                .await?
+        } else {
+            None
+        };
         Ok(Effect::Fact(TaskInput::WorktreeInspected {
             turn,
             dirty: state.dirty,
             commits_ahead: state.commits_ahead,
             head_sha: state.head_sha,
+            outside,
         }))
     }
 
@@ -1252,6 +1309,17 @@ impl Engine {
                 }));
             }
             ChangeState::Open => {}
+        }
+        // The merge names this head, so the head checked here is the head that lands.
+        let base = format!("refs/remotes/origin/{}", change.base_branch);
+        if let Some(violation) = self
+            .scope_violation(task, &base, &head_sha, true, ScopeStage::Merge)
+            .await?
+        {
+            return Ok(Effect::Fact(TaskInput::PathScopeViolated {
+                head_sha,
+                violation,
+            }));
         }
         let outcome = self
             .ports

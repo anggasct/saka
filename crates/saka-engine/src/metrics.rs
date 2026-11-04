@@ -29,6 +29,7 @@ pub struct Counters {
     drafts_finished: Mutex<BTreeMap<(String, String), u64>>,
     draft_lint_rounds: Mutex<BTreeMap<(String, String), u64>>,
     config_reloads: Mutex<BTreeMap<(String, String), u64>>,
+    path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -118,6 +119,10 @@ impl Counters {
 
     pub(crate) fn config_reload(&self, outcome: &str) {
         bump(&self.config_reloads, outcome, "");
+    }
+
+    pub(crate) fn path_scope_violation(&self, stage: &str) {
+        bump(&self.path_scope_violations, stage, "");
     }
 
     pub(crate) fn dod(&self, outcome: &str) {
@@ -276,6 +281,7 @@ pub struct MetricsSnapshot {
     pub spec_drafts_finished: Vec<(String, u64)>,
     pub spec_draft_lint_rounds: Vec<(String, u64)>,
     pub config_reloads: Vec<(String, u64)>,
+    pub path_scope_violations: Vec<(String, u64)>,
 }
 
 pub(crate) enum DodVerification {
@@ -409,6 +415,10 @@ impl Engine {
             config_reloads: copy(&self.counters.config_reloads)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            path_scope_violations: copy(&self.counters.path_scope_violations)
+                .into_iter()
+                .map(|(stage, _, n)| (stage, n))
                 .collect(),
         })
     }

@@ -13,13 +13,13 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::Tool;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_ports::{
-    Agents, Blob, ChangeSnapshot, Clock, DocBlob, DocCommit, DocEntry, DocExpect, DocFile,
-    DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments, LaunchProfile, LaunchedSession,
-    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
-    RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm, ScmCapabilities,
-    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Toolchains, WebhookDelivery,
-    WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    Agents, Blob, ChangeSnapshot, ChangedPaths, Clock, DocBlob, DocCommit, DocEntry, DocExpect,
+    DocFile, DocOpened, DocSource, DocTree, DocWrite, EnvRef, Environments, LaunchProfile,
+    LaunchedSession, Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
+    PortResult, PrepareRequest, PreparedEnvironment, PushOutcome, PushRequest, Reattached,
+    RecipeCommand, RecipeCommandOutcome, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, Scm,
+    ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Toolchains,
+    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -195,6 +195,9 @@ struct State {
     secrets_unreadable: bool,
     webhook_secret: Option<Vec<u8>>,
     capabilities: ScmCapabilities,
+    trees: HashMap<String, BTreeMap<String, String>>,
+    agent_edits: VecDeque<Vec<FileEdit>>,
+    scope_checks: Vec<ScopeCheck>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +227,16 @@ fn redacted(secrets: &[SecretVar]) -> Vec<String> {
 pub enum ToolchainScript {
     Missing,
     DownloadFails,
+}
+
+pub type FileEdit = (String, Option<String>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeCheck {
+    pub repo: String,
+    pub base: String,
+    pub head_sha: String,
+    pub fetch: bool,
 }
 
 pub struct FakeWorld {
@@ -296,6 +309,9 @@ impl FakeWorld {
                 secrets_unreadable: false,
                 webhook_secret: None,
                 capabilities: FAKE_CAPABILITIES,
+                trees: HashMap::new(),
+                agent_edits: VecDeque::new(),
+                scope_checks: Vec::new(),
                 next_sha: 1,
                 parents,
                 home: HOME_REPO.to_string(),
@@ -331,6 +347,23 @@ impl FakeWorld {
 
     pub fn script_draft(&self, turns: Vec<DraftTurn>) {
         self.state().draft_turns = turns.into();
+    }
+
+    // Each committing agent turn applies the next edit list; the last list repeats.
+    pub fn script_edits(&self, turns: Vec<Vec<FileEdit>>) {
+        self.state().agent_edits = turns.into();
+    }
+
+    pub fn push_outside(&self, repo: &str, branch: &str, edits: &[FileEdit]) -> String {
+        let mut s = self.state();
+        let parent = s.refs(repo)[branch].clone();
+        let commit = s.commit_edits(&parent, edits);
+        s.refs(repo).insert(branch.to_string(), commit.clone());
+        commit
+    }
+
+    pub fn scope_checks(&self) -> Vec<ScopeCheck> {
+        self.state().scope_checks.clone()
     }
 
     pub fn worktree_file(&self, env: EnvironmentId, path: &str) -> Option<Vec<u8>> {
@@ -734,6 +767,63 @@ impl State {
         false
     }
 
+    fn tree(&self, commit: &str) -> BTreeMap<String, String> {
+        self.trees.get(commit).cloned().unwrap_or_default()
+    }
+
+    fn commit_edits(&mut self, parent: &str, edits: &[FileEdit]) -> String {
+        let mut tree = self.tree(parent);
+        for (path, content) in edits {
+            match content {
+                Some(text) => tree.insert(path.clone(), text.clone()),
+                None => tree.remove(path),
+            };
+        }
+        let commit = self.new_commit(vec![parent.to_string()]);
+        self.trees.insert(commit.clone(), tree);
+        commit
+    }
+
+    fn next_edits(&mut self) -> Option<Vec<FileEdit>> {
+        if self.agent_edits.len() > 1 {
+            self.agent_edits.pop_front()
+        } else {
+            self.agent_edits.front().cloned()
+        }
+    }
+
+    fn merge_base(&self, a: &str, b: &str) -> Option<String> {
+        let mut ancestors = BTreeSet::new();
+        let mut stack = vec![a.to_string()];
+        while let Some(c) = stack.pop() {
+            if ancestors.insert(c.clone()) {
+                stack.extend(self.parents.get(&c).cloned().unwrap_or_default());
+            }
+        }
+        let mut queue = VecDeque::from([b.to_string()]);
+        let mut seen = BTreeSet::new();
+        while let Some(c) = queue.pop_front() {
+            if ancestors.contains(&c) {
+                return Some(c);
+            }
+            if seen.insert(c.clone()) {
+                queue.extend(self.parents.get(&c).cloned().unwrap_or_default());
+            }
+        }
+        None
+    }
+
+    fn diff(&self, from: &str, to: &str) -> Vec<String> {
+        let (a, b) = (self.tree(from), self.tree(to));
+        a.keys()
+            .chain(b.keys())
+            .filter(|p| a.get(*p) != b.get(*p))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     fn commits_ahead(&self, base: &str, head: &str) -> u32 {
         let mut n = 0;
         let mut at = head.to_string();
@@ -774,7 +864,17 @@ impl State {
             };
         }
         let base = self.refs(&pr.repo)[&pr.base_branch].clone();
+        let mut tree = self.tree(&base);
+        let fork = self.merge_base(&base, &head).unwrap_or_default();
+        let theirs = self.tree(&head);
+        for path in self.diff(&fork, &head) {
+            match theirs.get(&path) {
+                Some(text) => tree.insert(path, text.clone()),
+                None => tree.remove(&path),
+            };
+        }
         let merge = self.new_commit(vec![base, head.clone()]);
+        self.trees.insert(merge.clone(), tree);
         if !self.lose_merges {
             self.refs(&pr.repo)
                 .insert(pr.base_branch.clone(), merge.clone());
@@ -858,8 +958,9 @@ impl State {
             let Some(w) = s.worktrees.get(&env).cloned() else {
                 return;
             };
-            if s.commits_ahead(&w.base_sha, &w.head) == 0 {
-                let c = s.new_commit(vec![w.head.clone()]);
+            let edits = s.next_edits();
+            if edits.is_some() || s.commits_ahead(&w.base_sha, &w.head) == 0 {
+                let c = s.commit_edits(&w.head, &edits.unwrap_or_default());
                 if let Some(w) = s.worktrees.get_mut(&env) {
                     w.head = c;
                 }
@@ -998,6 +1099,40 @@ impl Environments for FakeWorld {
             .cloned()
             .unwrap_or_default();
         Ok(s.is_ancestor(commit, &base).then_some(base))
+    }
+
+    async fn changed_paths(
+        &self,
+        repo: &RepoRef,
+        base: &str,
+        head_sha: &str,
+        fetch: bool,
+    ) -> PortResult<ChangedPaths> {
+        let mut s = self.state();
+        s.scope_checks.push(ScopeCheck {
+            repo: repo.full_name.clone(),
+            base: base.to_string(),
+            head_sha: head_sha.to_string(),
+            fetch,
+        });
+        if !s.parents.contains_key(head_sha) {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            ));
+        }
+        let base = match base.strip_prefix("refs/remotes/origin/") {
+            Some(branch) => s.refs(&repo.full_name).get(branch).cloned(),
+            None => Some(base.to_string()),
+        }
+        .ok_or_else(|| PortError::retryable("git_failed", json!({ "op": "merge_base" })))?;
+        let fork = s
+            .merge_base(&base, head_sha)
+            .ok_or_else(|| PortError::retryable("git_failed", json!({ "op": "merge_base" })))?;
+        Ok(ChangedPaths {
+            paths: s.diff(&fork, head_sha),
+            truncated: false,
+        })
     }
 
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()> {
