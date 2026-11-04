@@ -441,6 +441,73 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/actions/reload": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "reload_project",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReloadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectReload"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/file": {
       "get": {
         "tags": [
@@ -3207,6 +3274,8 @@
                 "autonomy",
                 "workflow_preset",
                 "config_commit",
+                "config_sha256",
+                "warnings",
                 "created_at",
                 "updated_at"
               ],
@@ -3217,6 +3286,20 @@
                 },
                 "config_commit": {
                   "type": "string"
+                },
+                "config_error": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProjectConfigError"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "config_sha256": {
+                  "type": "string",
+                  "description": "`sha256:<hex>` of the `saka.toml` content in force."
                 },
                 "created_at": {
                   "type": "string"
@@ -3232,10 +3315,17 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/ProjectRepo"
-                  }
+                  },
+                  "description": "Bindings from `saka.toml`, the default first, then by `name`."
                 },
                 "updated_at": {
                   "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectWarning"
+                  }
                 },
                 "workflow_preset": {
                   "type": "string",
@@ -3807,6 +3897,13 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "repo_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Name of the binding of `repo_id` in the project now; `null` once a reload removed it."
+                },
                 "session": {
                   "oneOf": [
                     {
@@ -4135,6 +4232,8 @@
           "autonomy",
           "workflow_preset",
           "config_commit",
+          "config_sha256",
+          "warnings",
           "created_at",
           "updated_at"
         ],
@@ -4145,6 +4244,20 @@
           },
           "config_commit": {
             "type": "string"
+          },
+          "config_error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectConfigError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config_sha256": {
+            "type": "string",
+            "description": "`sha256:<hex>` of the `saka.toml` content in force."
           },
           "created_at": {
             "type": "string"
@@ -4160,10 +4273,17 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ProjectRepo"
-            }
+            },
+            "description": "Bindings from `saka.toml`, the default first, then by `name`."
           },
           "updated_at": {
             "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectWarning"
+            }
           },
           "workflow_preset": {
             "type": "string",
@@ -4171,6 +4291,46 @@
           },
           "workspace": {
             "$ref": "#/components/schemas/Workspace"
+          }
+        }
+      },
+      "ProjectConfigError": {
+        "type": "object",
+        "description": "The last rejected reload of `saka.toml`; the previous config stays in force while it is set.",
+        "required": [
+          "commit",
+          "code",
+          "params",
+          "observed_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`project_config_invalid | scm_integration_unknown | scm_repo_inaccessible | project_repo_in_use`"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "params": {}
+        }
+      },
+      "ProjectReload": {
+        "type": "object",
+        "description": "Result of re-reading `saka.toml`.",
+        "required": [
+          "project",
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "`changed | unchanged`"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Project"
           }
         }
       },
@@ -4184,12 +4344,26 @@
           "full_name",
           "url",
           "default_branch",
+          "base_branch",
           "is_default",
-          "path_scope"
+          "is_workspace",
+          "path_scope",
+          "effective_path_scope"
         ],
         "properties": {
+          "base_branch": {
+            "type": "string",
+            "description": "Branch this binding's worktrees, recipes, change requests, and merge checks use."
+          },
           "default_branch": {
             "type": "string"
+          },
+          "effective_path_scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`."
           },
           "full_name": {
             "type": "string"
@@ -4199,6 +4373,10 @@
           },
           "is_default": {
             "type": "boolean"
+          },
+          "is_workspace": {
+            "type": "boolean",
+            "description": "The repo is also the project's workspace repo."
           },
           "name": {
             "type": "string"
@@ -4218,6 +4396,23 @@
           },
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "ProjectWarning": {
+        "type": "object",
+        "description": "A warning computed when the project is read; never stored.",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`path_scope_overlap`"
+          },
+          "params": {
+            "description": "For `path_scope_overlap`: `repo`, `repo_id`, `other_project_id`, `other_project`, `other_repo`."
           }
         }
       },
@@ -4291,6 +4486,11 @@
             "type": "string"
           }
         }
+      },
+      "ReloadBody": {
+        "type": "object",
+        "description": "Request body of a reload; no fields.",
+        "additionalProperties": false
       },
       "RequiredReason": {
         "type": "object",
@@ -6049,6 +6249,13 @@
           "repo_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "repo_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the binding of `repo_id` in the project now; `null` once a reload removed it."
           },
           "session": {
             "oneOf": [

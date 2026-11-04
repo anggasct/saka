@@ -89,7 +89,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         R::SpecNotReady { .. }
         | R::ScmIntegrationUnknown { .. }
         | R::ProjectConfigInvalid { .. }
-        | R::MultiRepoUnsupported { .. }
+        | R::ScmRepoInaccessible { .. }
         | R::SecretTooShort
         | R::SecretNameInvalid
         | R::FileUnsupported { .. }
@@ -103,6 +103,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::MergeNotReady { .. }
         | R::PermissionAlreadyAnswered
         | R::ProjectExists { .. }
+        | R::ProjectRepoInUse { .. }
         | R::SpecSlugConflict { .. }
         | R::TaskBranchConflict { .. }
         | R::WorkPacketUnavailable { .. }

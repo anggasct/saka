@@ -14,8 +14,8 @@ use crate::model::{
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, BudgetDimension, DraftFailureCode, DraftLocale, GateOutcome,
-    GateSource, InterruptBy, LintOutcome, MergeMethod, PermissionState, ResumeCause, ResumeReason,
-    SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, Trigger,
+    GateSource, InterruptBy, LintOutcome, MergeMethod, PermissionState, ReloadTrigger, ResumeCause,
+    ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, Trigger,
 };
 
 fn empty_context_hash() -> String {
@@ -53,7 +53,30 @@ pub enum Event {
         project_path: String,
         base_branch: String,
         config_commit: String,
+        config_sha256: String,
         repos: Vec<ProjectRepo>,
+    },
+    #[serde(rename = "workspace.project.config_changed")]
+    ProjectConfigChanged {
+        project_id: ProjectId,
+        name: String,
+        config_commit: String,
+        config_sha256: String,
+        repos: Vec<ProjectRepo>,
+        trigger: ReloadTrigger,
+    },
+    #[serde(rename = "workspace.project.config_rejected")]
+    ProjectConfigRejected {
+        project_id: ProjectId,
+        commit: String,
+        code: String,
+        params: Value,
+        trigger: ReloadTrigger,
+    },
+    #[serde(rename = "workspace.project.config_error_cleared")]
+    ProjectConfigErrorCleared {
+        project_id: ProjectId,
+        commit: String,
     },
     #[serde(rename = "workspace.secret.set")]
     SecretSet { project_id: ProjectId, name: String },
@@ -623,6 +646,9 @@ impl Event {
         match self {
             E::RepoRegistered { repo_id, .. } => Stream::Repo(*repo_id),
             E::ProjectRegistered { project_id, .. }
+            | E::ProjectConfigChanged { project_id, .. }
+            | E::ProjectConfigRejected { project_id, .. }
+            | E::ProjectConfigErrorCleared { project_id, .. }
             | E::SecretSet { project_id, .. }
             | E::SecretRemoved { project_id, .. }
             | E::DocCommitted { project_id, .. } => Stream::Project(*project_id),

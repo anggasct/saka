@@ -84,3 +84,16 @@ saka: spec
 {rows}"
     )
 }
+
+pub fn repo_entry(name: &str, full_name: &str, extra: &str) -> String {
+    format!("[[repo]]\nname = \"{name}\"\nurl = \"https://github.com/{full_name}\"\n{extra}")
+}
+
+pub fn saka_toml(project: &str, repos: &[String]) -> String {
+    let mut text = format!("[project]\nname = \"{project}\"\n");
+    for r in repos {
+        text.push('\n');
+        text.push_str(r);
+    }
+    text
+}

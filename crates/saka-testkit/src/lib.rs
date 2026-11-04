@@ -13,11 +13,15 @@ mod world;
 
 pub use clock::{FakeClock, FakeIds};
 pub use fixtures::{
-    AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec,
+    AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec, repo_entry,
+    saka_toml,
 };
-pub use sim::{Operator, Sim, SimConfig, SimOutcome, Step, draft_config};
+pub use sim::{
+    DOCS_REPO, Layout, Operator, SHOP_REPO, Sim, SimConfig, SimOutcome, Step, WEB_REPO,
+    ZERO_SHA256, draft_config,
+};
 pub use world::{
     AgentOutcome, AgentScript, CiScript, CommandScript, DraftTurn, FAKE_CAPABILITIES,
-    FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, Launch, RecipeRun, SIM_RUNNER_VERSION,
-    Stats, ToolchainScript, TurnUsage, fake_signature, git_blob,
+    FAKE_INTEGRATION, FAKE_SIGNATURE_HEADER, FakeWorld, HOME_REPO, Launch, Prepared, RecipeRun,
+    SIM_RUNNER_VERSION, Stats, ToolchainScript, TurnUsage, fake_signature, git_blob,
 };

@@ -132,6 +132,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/actions/reload": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["reload_project"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/file": {
     parameters: {
       query?: never;
@@ -877,12 +893,17 @@ export interface components {
         /** @description `standard` in this version. */
         autonomy: string;
         config_commit: string;
+        config_error?: components["schemas"]["ProjectConfigError"] | null;
+        /** @description `sha256:<hex>` of the `saka.toml` content in force. */
+        config_sha256: string;
         created_at: string;
         /** Format: uuid */
         id: string;
         name: string;
+        /** @description Bindings from `saka.toml`, the default first, then by `name`. */
         repos: components["schemas"]["ProjectRepo"][];
         updated_at: string;
+        warnings: components["schemas"]["ProjectWarning"][];
         /** @description `full_loop` in this version. */
         workflow_preset: string;
         workspace: components["schemas"]["Workspace"];
@@ -1026,6 +1047,8 @@ export interface components {
         project_id: string;
         /** Format: uuid */
         repo_id: string;
+        /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
+        repo_name?: string | null;
         session?: components["schemas"]["SessionBrief"] | null;
         /** Format: uuid */
         spec_id?: string | null;
@@ -1126,27 +1149,59 @@ export interface components {
       /** @description `standard` in this version. */
       autonomy: string;
       config_commit: string;
+      config_error?: components["schemas"]["ProjectConfigError"] | null;
+      /** @description `sha256:<hex>` of the `saka.toml` content in force. */
+      config_sha256: string;
       created_at: string;
       /** Format: uuid */
       id: string;
       name: string;
+      /** @description Bindings from `saka.toml`, the default first, then by `name`. */
       repos: components["schemas"]["ProjectRepo"][];
       updated_at: string;
+      warnings: components["schemas"]["ProjectWarning"][];
       /** @description `full_loop` in this version. */
       workflow_preset: string;
       workspace: components["schemas"]["Workspace"];
     };
+    /** @description The last rejected reload of `saka.toml`; the previous config stays in force while it is set. */
+    ProjectConfigError: {
+      /** @description `project_config_invalid | scm_integration_unknown | scm_repo_inaccessible | project_repo_in_use` */
+      code: string;
+      commit: string;
+      observed_at: string;
+      params: unknown;
+    };
+    /** @description Result of re-reading `saka.toml`. */
+    ProjectReload: {
+      /** @description `changed | unchanged` */
+      outcome: string;
+      project: components["schemas"]["Project"];
+    };
     ProjectRepo: {
+      /** @description Branch this binding's worktrees, recipes, change requests, and merge checks use. */
+      base_branch: string;
       default_branch: string;
+      /** @description `path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`. */
+      effective_path_scope: string[];
       full_name: string;
       integration_id: string;
       is_default: boolean;
+      /** @description The repo is also the project's workspace repo. */
+      is_workspace: boolean;
       name: string;
       path_scope: string[];
       provider: string;
       /** Format: uuid */
       repo_id: string;
       url: string;
+    };
+    /** @description A warning computed when the project is read; never stored. */
+    ProjectWarning: {
+      /** @description `path_scope_overlap` */
+      code: string;
+      /** @description For `path_scope_overlap`: `repo`, `repo_id`, `other_project_id`, `other_project`, `other_repo`. */
+      params: unknown;
     };
     QuotaWindow: {
       observed_at: string;
@@ -1171,6 +1226,8 @@ export interface components {
       reconciler: string;
       worker: string;
     };
+    /** @description Request body of a reload; no fields. */
+    ReloadBody: Record<string, never>;
     RequiredReason: {
       reason: string;
     };
@@ -1697,6 +1754,8 @@ export interface components {
       project_id: string;
       /** Format: uuid */
       repo_id: string;
+      /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
+      repo_name?: string | null;
       session?: components["schemas"]["SessionBrief"] | null;
       /** Format: uuid */
       spec_id?: string | null;
@@ -2072,6 +2131,50 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  reload_project: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReloadBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProjectReload"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

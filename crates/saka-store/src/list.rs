@@ -3,9 +3,10 @@ use saka_core::ids::{
     PermissionRequestId, ProjectId, RepoId, SessionId, SpecDraftId, SpecId, WorkItemId,
 };
 use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun};
+use saka_core::workspace::RepoTask;
 use uuid::Uuid;
 
-use crate::codec::uuid;
+use crate::codec::{uuid, vocab};
 use crate::error::Result;
 use crate::read::{
     PERMISSION_SELECT, load_project, permission, project_row, repo_row, session, spec_row,
@@ -126,6 +127,75 @@ pub fn repos(conn: &Connection, ids: &[RepoId]) -> Result<Vec<Repo>> {
         "created_at, id",
         &page,
         repo_row,
+    )
+}
+
+pub fn project_ids(conn: &Connection) -> Result<Vec<ProjectId>> {
+    let mut stmt = conn.prepare("SELECT id FROM project ORDER BY created_at, id")?;
+    let mut q = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = q.next()? {
+        out.push(ProjectId(uuid(row, "id")?));
+    }
+    Ok(out)
+}
+
+pub fn projects_bound_to(
+    conn: &Connection,
+    repos: &[RepoId],
+    except_project: ProjectId,
+) -> Result<Vec<Project>> {
+    let mut out = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT project_id FROM project_repo WHERE repo_id = ?1 AND project_id <> ?2",
+    )?;
+    let mut ids = Vec::new();
+    for repo in repos {
+        let mut q = stmt.query([repo.0.to_string(), except_project.0.to_string()])?;
+        while let Some(row) = q.next()? {
+            let id = ProjectId(uuid(row, "project_id")?);
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    for id in ids {
+        if let Some(project) = load_project(conn, id)? {
+            out.push(project);
+        }
+    }
+    Ok(out)
+}
+
+pub fn repo_tasks(
+    conn: &Connection,
+    project: ProjectId,
+    repos: &[RepoId],
+) -> Result<Vec<RepoTask>> {
+    let list: Vec<String> = repos.iter().map(|r| r.0.to_string()).collect();
+    if list.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut q = Query::new();
+    q.eq("project_id", project.0.to_string());
+    q.any_of("repo_id", &list);
+    let page = Page {
+        after: None,
+        limit: 10_000,
+    };
+    q.run(
+        conn,
+        "SELECT id, task_key, state, repo_id FROM work_item",
+        "task_key, id",
+        &page,
+        |r| {
+            Ok(RepoTask {
+                work_item_id: WorkItemId(uuid(r, "id")?),
+                task_key: r.get("task_key")?,
+                state: vocab(r, "state")?,
+                repo_id: RepoId(uuid(r, "repo_id")?),
+            })
+        },
     )
 }
 

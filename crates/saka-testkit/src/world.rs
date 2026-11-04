@@ -119,6 +119,7 @@ struct Worktree {
 
 #[derive(Debug, Clone)]
 pub struct Pr {
+    pub repo: String,
     pub number: u64,
     pub head_branch: String,
     pub base_branch: String,
@@ -159,7 +160,11 @@ struct State {
     refuse_teardowns: bool,
     next_sha: u64,
     parents: HashMap<String, Vec<String>>,
-    remote: BTreeMap<String, String>,
+    home: String,
+    remotes: BTreeMap<String, BTreeMap<String, String>>,
+    prepared: Vec<Prepared>,
+    recipe_reads: Vec<(String, String)>,
+    merge_checks: Vec<(String, String, String)>,
     worktrees: BTreeMap<EnvironmentId, Worktree>,
     prs: Vec<Pr>,
     sessions: BTreeMap<SessionId, FakeSession>,
@@ -246,6 +251,15 @@ pub enum CommandScript {
 }
 
 pub const BASE_BRANCH: &str = "main";
+pub const HOME_REPO: &str = "acme/tasks";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    pub environment_id: EnvironmentId,
+    pub repo: String,
+    pub base_branch: String,
+    pub base_sha: String,
+}
 
 impl FakeWorld {
     pub fn new(clock: Arc<FakeClock>, script: AgentScript, ci: CiScript) -> FakeWorld {
@@ -254,6 +268,7 @@ impl FakeWorld {
         parents.insert(root.clone(), Vec::new());
         let mut remote = BTreeMap::new();
         remote.insert(BASE_BRANCH.to_string(), root);
+        let remotes = BTreeMap::from([(HOME_REPO.to_string(), remote)]);
         FakeWorld {
             clock,
             state: Mutex::new(State {
@@ -283,7 +298,11 @@ impl FakeWorld {
                 capabilities: FAKE_CAPABILITIES,
                 next_sha: 1,
                 parents,
-                remote,
+                home: HOME_REPO.to_string(),
+                remotes,
+                prepared: Vec::new(),
+                recipe_reads: Vec::new(),
+                merge_checks: Vec::new(),
                 worktrees: BTreeMap::new(),
                 prs: Vec::new(),
                 sessions: BTreeMap::new(),
@@ -363,11 +382,47 @@ impl FakeWorld {
     }
 
     pub fn remote_branches(&self) -> BTreeMap<String, String> {
-        self.state().remote.clone()
+        let mut s = self.state();
+        let home = s.home.clone();
+        s.refs(&home).clone()
+    }
+
+    pub fn branches_of(&self, repo: &str) -> BTreeMap<String, String> {
+        self.state().refs(repo).clone()
     }
 
     pub fn base_head(&self) -> String {
-        self.state().remote[BASE_BRANCH].clone()
+        let mut s = self.state();
+        let home = s.home.clone();
+        s.refs(&home)[BASE_BRANCH].clone()
+    }
+
+    pub fn set_home(&self, repo: &str) {
+        let mut s = self.state();
+        let home = s.home.clone();
+        let refs = s.refs(&home).clone();
+        s.home = repo.to_string();
+        s.remotes.insert(repo.to_string(), refs);
+    }
+
+    pub fn create_branch(&self, repo: &str, branch: &str) -> String {
+        let mut s = self.state();
+        let base = s.refs(repo)[BASE_BRANCH].clone();
+        let commit = s.new_commit(vec![base]);
+        s.refs(repo).insert(branch.to_string(), commit.clone());
+        commit
+    }
+
+    pub fn prepared(&self) -> Vec<Prepared> {
+        self.state().prepared.clone()
+    }
+
+    pub fn recipe_reads(&self) -> Vec<(String, String)> {
+        self.state().recipe_reads.clone()
+    }
+
+    pub fn merge_checks(&self) -> Vec<(String, String, String)> {
+        self.state().merge_checks.clone()
     }
 
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
@@ -428,9 +483,10 @@ impl FakeWorld {
 
     pub fn put_doc(&self, path: &str, bytes: &[u8]) -> String {
         let mut s = self.state();
-        let base = s.remote[BASE_BRANCH].clone();
+        let base = s.home_refs()[BASE_BRANCH].clone();
         let commit = s.new_commit(vec![base]);
-        s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
+        s.home_refs()
+            .insert(BASE_BRANCH.to_string(), commit.clone());
         s.docs.insert(path.to_string(), bytes.to_vec());
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
@@ -439,9 +495,10 @@ impl FakeWorld {
 
     pub fn remove_doc(&self, path: &str) -> String {
         let mut s = self.state();
-        let base = s.remote[BASE_BRANCH].clone();
+        let base = s.home_refs()[BASE_BRANCH].clone();
         let commit = s.new_commit(vec![base]);
-        s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
+        s.home_refs()
+            .insert(BASE_BRANCH.to_string(), commit.clone());
         s.docs.remove(path);
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
@@ -525,9 +582,10 @@ impl FakeWorld {
 
     pub fn push_to_base(&self) -> String {
         let mut s = self.state();
-        let base = s.remote.get(BASE_BRANCH).cloned().unwrap_or_default();
+        let base = s.home_refs().get(BASE_BRANCH).cloned().unwrap_or_default();
         let commit = s.new_commit(vec![base]);
-        s.remote.insert(BASE_BRANCH.to_string(), commit.clone());
+        s.home_refs()
+            .insert(BASE_BRANCH.to_string(), commit.clone());
         commit
     }
 
@@ -640,6 +698,21 @@ fn markdown_name(path: &str) -> bool {
 }
 
 impl State {
+    fn refs(&mut self, repo: &str) -> &mut BTreeMap<String, String> {
+        self.remotes
+            .entry(repo.to_string())
+            .or_insert_with(|| BTreeMap::from([(BASE_BRANCH.to_string(), sha(0))]))
+    }
+
+    fn home_refs(&mut self) -> &mut BTreeMap<String, String> {
+        let home = self.home.clone();
+        self.refs(&home)
+    }
+
+    fn is_home(&self, repo: &RepoRef) -> bool {
+        repo.full_name == self.home
+    }
+
     fn new_commit(&mut self, parents: Vec<String>) -> String {
         let id = sha(self.next_sha);
         self.next_sha += 1;
@@ -686,7 +759,7 @@ impl State {
         };
         let pr = self.prs[i].clone();
         let head = self
-            .remote
+            .refs(&pr.repo)
             .get(&pr.head_branch)
             .cloned()
             .unwrap_or_default();
@@ -700,10 +773,11 @@ impl State {
                 reason: "head_changed".into(),
             };
         }
-        let base = self.remote[&pr.base_branch].clone();
+        let base = self.refs(&pr.repo)[&pr.base_branch].clone();
         let merge = self.new_commit(vec![base, head.clone()]);
         if !self.lose_merges {
-            self.remote.insert(pr.base_branch.clone(), merge.clone());
+            self.refs(&pr.repo)
+                .insert(pr.base_branch.clone(), merge.clone());
         }
         let pr = &mut self.prs[i];
         pr.state = ChangeState::Merged;
@@ -862,10 +936,16 @@ impl Environments for FakeWorld {
             });
         }
         let base = s
-            .remote
+            .refs(&request.repo.full_name)
             .get(&request.base_branch)
             .cloned()
             .ok_or_else(|| PortError::permanent("base_branch_missing", json!({})))?;
+        s.prepared.push(Prepared {
+            environment_id: request.environment_id,
+            repo: request.repo.full_name.clone(),
+            base_branch: request.base_branch.clone(),
+            base_sha: base.clone(),
+        });
         s.worktrees.insert(
             request.environment_id,
             Worktree {
@@ -902,12 +982,21 @@ impl Environments for FakeWorld {
 
     async fn contains_commit(
         &self,
-        _repo: &RepoRef,
+        repo: &RepoRef,
         commit: &str,
         base_branch: &str,
     ) -> PortResult<Option<String>> {
-        let s = self.state();
-        let base = s.remote.get(base_branch).cloned().unwrap_or_default();
+        let mut s = self.state();
+        s.merge_checks.push((
+            repo.full_name.clone(),
+            commit.to_string(),
+            base_branch.to_string(),
+        ));
+        let base = s
+            .refs(&repo.full_name)
+            .get(base_branch)
+            .cloned()
+            .unwrap_or_default();
         Ok(s.is_ancestor(commit, &base).then_some(base))
     }
 
@@ -947,8 +1036,11 @@ impl Environments for FakeWorld {
         Ok(())
     }
 
-    async fn read_recipe(&self, _repo: &RepoRef, _commit: &str) -> PortResult<Option<String>> {
-        Ok(self.state().recipe.clone())
+    async fn read_recipe(&self, repo: &RepoRef, commit: &str) -> PortResult<Option<String>> {
+        let mut s = self.state();
+        s.recipe_reads
+            .push((repo.full_name.clone(), commit.to_string()));
+        Ok(s.recipe.clone())
     }
 
     async fn read_repo_file(
@@ -1136,16 +1228,27 @@ fn worktree_relative(path: &str) -> PortResult<String> {
 
 #[async_trait]
 impl DocSource for FakeWorld {
+    async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>> {
+        Ok(self.state().refs(&repo.full_name).get(branch).cloned())
+    }
+
     async fn read_at_tip(
         &self,
-        _repo: &RepoRef,
+        repo: &RepoRef,
         branch: &str,
         path: &str,
     ) -> PortResult<Option<DocFile>> {
-        let s = self.state();
-        let commit = s.remote.get(branch).cloned().ok_or_else(|| {
-            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
-        })?;
+        let mut s = self.state();
+        let commit = s
+            .refs(&repo.full_name)
+            .get(branch)
+            .cloned()
+            .ok_or_else(|| {
+                PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+            })?;
+        if !s.is_home(repo) {
+            return Ok(None);
+        }
         Ok(s.docs.get(path).map(|bytes| DocFile {
             path: path.to_string(),
             commit,
@@ -1155,12 +1258,15 @@ impl DocSource for FakeWorld {
 
     async fn read_at(
         &self,
-        _repo: &RepoRef,
+        repo: &RepoRef,
         commit: &str,
         path: &str,
         max_bytes: u64,
     ) -> PortResult<Blob> {
         let s = self.state();
+        if !s.is_home(repo) {
+            return Ok(Blob::Missing);
+        }
         let docs = s.doc_history.get(commit).unwrap_or(&s.docs);
         Ok(match docs.get(path) {
             None => Blob::Missing,
@@ -1173,15 +1279,19 @@ impl DocSource for FakeWorld {
 
     async fn tree(
         &self,
-        _repo: &RepoRef,
+        repo: &RepoRef,
         branch: &str,
         project_path: &str,
         max_files: usize,
     ) -> PortResult<DocTree> {
-        let s = self.state();
-        let commit = s.remote.get(branch).cloned().ok_or_else(|| {
-            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
-        })?;
+        let mut s = self.state();
+        let commit = s
+            .refs(&repo.full_name)
+            .get(branch)
+            .cloned()
+            .ok_or_else(|| {
+                PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+            })?;
         let mut files: Vec<DocEntry> = s
             .docs
             .iter()
@@ -1230,21 +1340,25 @@ impl DocSource for FakeWorld {
 
     async fn open(
         &self,
-        _repo: &RepoRef,
+        repo: &RepoRef,
         branch: &str,
         path: &str,
         max_bytes: u64,
     ) -> PortResult<DocOpened> {
-        let s = self.state();
+        let mut s = self.state();
         if s.doc_opens_fail {
             return Err(PortError::retryable(
                 "scm_unavailable",
                 json!({ "status": 503 }),
             ));
         }
-        let commit = s.remote.get(branch).cloned().ok_or_else(|| {
-            PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
-        })?;
+        let commit = s
+            .refs(&repo.full_name)
+            .get(branch)
+            .cloned()
+            .ok_or_else(|| {
+                PortError::permanent("base_branch_missing", json!({ "base_branch": branch }))
+            })?;
         let blob = match s.docs.get(path) {
             None => DocBlob::Missing,
             Some(_) if s.doc_links.contains(path) => DocBlob::NotRegular,
@@ -1266,12 +1380,16 @@ impl DocSource for FakeWorld {
         if let Some(outcome) = s.doc_writes.pop_front() {
             return Ok(outcome);
         }
-        let tip = s.remote.get(&request.branch).cloned().ok_or_else(|| {
-            PortError::permanent(
-                "base_branch_missing",
-                json!({ "base_branch": request.branch }),
-            )
-        })?;
+        let tip = s
+            .refs(&request.repo.full_name)
+            .get(&request.branch)
+            .cloned()
+            .ok_or_else(|| {
+                PortError::permanent(
+                    "base_branch_missing",
+                    json!({ "base_branch": request.branch }),
+                )
+            })?;
         let blob = git_blob(&request.bytes);
         let current = s.docs.get(&request.path).map(|b| git_blob(b));
         if current.as_deref() == Some(blob.as_str()) {
@@ -1289,7 +1407,8 @@ impl DocSource for FakeWorld {
             });
         }
         let commit = s.new_commit(vec![tip.clone()]);
-        s.remote.insert(request.branch.clone(), commit.clone());
+        s.refs(&request.repo.full_name)
+            .insert(request.branch.clone(), commit.clone());
         s.docs.insert(request.path.clone(), request.bytes.clone());
         let snapshot = s.docs.clone();
         s.doc_history.insert(commit.clone(), snapshot);
@@ -1353,13 +1472,14 @@ impl Scm for FakeWorld {
             return Err(PortError::retryable("scm_unavailable", json!({})));
         }
         let local = request.local_sha.clone();
-        match s.remote.get(&request.branch).cloned() {
+        let repo = request.repo.full_name.clone();
+        match s.refs(&repo).get(&request.branch).cloned() {
             Some(remote) if remote == local => Ok(PushOutcome::Pushed { sha: local }),
             Some(remote) if Some(&remote) != request.expected_remote_sha.as_ref() => {
                 Ok(PushOutcome::Rejected { remote_sha: remote })
             }
             _ => {
-                s.remote.insert(request.branch.clone(), local.clone());
+                s.refs(&repo).insert(request.branch.clone(), local.clone());
                 s.stats.pushes += 1;
                 Ok(PushOutcome::Pushed { sha: local })
             }
@@ -1368,13 +1488,18 @@ impl Scm for FakeWorld {
 
     async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<OpenedChange> {
         let mut s = self.state();
+        let repo = request.repo.full_name.clone();
         let head = s
-            .remote
+            .refs(&repo)
             .get(&request.head_branch)
             .cloned()
             .ok_or_else(|| PortError::permanent("head_branch_missing", json!({})))?;
         let url = |n: u64| format!("https://scm.test/{}/pull/{n}", request.repo.full_name);
-        if let Some(pr) = s.prs.iter().find(|p| p.head_branch == request.head_branch) {
+        if let Some(pr) = s
+            .prs
+            .iter()
+            .find(|p| p.repo == repo && p.head_branch == request.head_branch)
+        {
             return Ok(OpenedChange {
                 number: pr.number,
                 url: url(pr.number),
@@ -1383,6 +1508,7 @@ impl Scm for FakeWorld {
         }
         let number = s.prs.len() as u64 + 1;
         s.prs.push(Pr {
+            repo,
             number,
             head_branch: request.head_branch.clone(),
             base_branch: request.base_branch.clone(),
@@ -1408,21 +1534,25 @@ impl Scm for FakeWorld {
         Ok(script_checks(&s.commit_ci))
     }
 
-    async fn change_request(&self, _repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot> {
-        let s = self.state();
+    async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot> {
+        let mut s = self.state();
         if s.change_reads_fail {
             return Err(PortError::retryable("scm_unavailable", json!({})));
         }
         let pr = s
             .prs
             .iter()
-            .find(|p| p.number == number)
+            .find(|p| p.number == number && p.repo == repo.full_name)
+            .cloned()
             .ok_or_else(|| PortError::permanent("not_found", json!({ "status": 404 })))?;
-        let head = pr
-            .merged_head
-            .clone()
-            .or_else(|| s.remote.get(&pr.head_branch).cloned())
-            .unwrap_or_default();
+        let head = match pr.merged_head.clone() {
+            Some(h) => h,
+            None => s
+                .refs(&pr.repo)
+                .get(&pr.head_branch)
+                .cloned()
+                .unwrap_or_default(),
+        };
         Ok(ChangeSnapshot {
             state: pr.state,
             head_sha: head,
@@ -1441,9 +1571,9 @@ impl Scm for FakeWorld {
         Ok(s.merge(request.number, Some(&request.head_sha)))
     }
 
-    async fn delete_branch(&self, _repo: &RepoRef, branch: &str) -> PortResult<()> {
+    async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {
         let mut s = self.state();
-        if s.remote.remove(branch).is_some() {
+        if s.refs(&repo.full_name).remove(branch).is_some() {
             s.stats.branches_deleted += 1;
         }
         Ok(())

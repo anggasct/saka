@@ -136,6 +136,11 @@ fn ancestors_and_self(path: &str) -> Vec<String> {
 
 #[async_trait]
 impl DocSource for GitDocs {
+    async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>> {
+        self.repos.fetch(repo).await?;
+        self.repos.tip(repo, branch).await
+    }
+
     async fn read_at_tip(
         &self,
         repo: &RepoRef,

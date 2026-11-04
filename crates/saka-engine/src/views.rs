@@ -1,6 +1,6 @@
 use saka_core::admission::{Waiting, waiting_on};
 use saka_core::ids::{
-    PermissionRequestId, ProjectId, SessionId, SpecId, SpecRevisionId, WorkItemId,
+    PermissionRequestId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::model::{
     AccountQuota, Budget, ContextRef, PermissionRequest, PermissionRule, Project, Repo, Session,
@@ -21,6 +21,49 @@ use crate::{Engine, Result};
 pub struct ProjectView {
     pub project: Project,
     pub repos: Vec<Repo>,
+    pub warnings: Vec<ScopeWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeWarning {
+    pub repo: String,
+    pub repo_id: RepoId,
+    pub other_project_id: ProjectId,
+    pub other_project: String,
+    pub other_repo: String,
+}
+
+pub(crate) fn scope_warnings(project: &Project, others: &[Project]) -> Vec<ScopeWarning> {
+    let mut out = Vec::new();
+    for binding in &project.repos {
+        let mine = project.effective_scope(binding);
+        for other in others.iter().filter(|o| o.id != project.id) {
+            for theirs in other.repos.iter().filter(|r| r.repo_id == binding.repo_id) {
+                if saka_core::scope::overlaps(&mine, &other.effective_scope(theirs)) {
+                    out.push(ScopeWarning {
+                        repo: binding.name.clone(),
+                        repo_id: binding.repo_id,
+                        other_project_id: other.id,
+                        other_project: other.name.clone(),
+                        other_repo: theirs.name.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        (
+            a.repo.as_str(),
+            a.other_project.as_str(),
+            a.other_project_id,
+        )
+            .cmp(&(
+                b.repo.as_str(),
+                b.other_project.as_str(),
+                b.other_project_id,
+            ))
+    });
+    out
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +124,7 @@ pub struct DependencyView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskView {
     pub task: Task,
+    pub repo_name: Option<String>,
     pub waiting_on: Vec<Waiting>,
     pub budget: Option<BudgetView>,
 }
@@ -116,6 +160,7 @@ pub struct PermissionView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskDetail {
     pub task: Task,
+    pub repo_name: Option<String>,
     pub stage_runs: Vec<StageRun>,
     pub waiting_on: Vec<Waiting>,
     pub budget: Option<BudgetView>,
@@ -158,12 +203,39 @@ pub(crate) fn probe(page: &Page) -> Page {
 
 impl Engine {
     pub(crate) fn project_view(&self, project: Project) -> Result<ProjectView> {
+        self.project_view_with(project, &[])
+    }
+
+    pub(crate) fn project_view_with(
+        &self,
+        project: Project,
+        unsaved: &[Repo],
+    ) -> Result<ProjectView> {
         let mut ids = vec![project.workspace_repo_id];
-        ids.extend(project.repos.iter().map(|r| r.repo_id));
-        ids.dedup();
-        let mut repos = self.store.read(|c| list::repos(c, &ids))?;
+        for r in &project.repos {
+            if !ids.contains(&r.repo_id) {
+                ids.push(r.repo_id);
+            }
+        }
+        let bound: Vec<RepoId> = project.repos.iter().map(|r| r.repo_id).collect();
+        let (mut repos, others) = self.store.read(|c| {
+            Ok((
+                list::repos(c, &ids)?,
+                list::projects_bound_to(c, &bound, project.id)?,
+            ))
+        })?;
+        for r in unsaved {
+            if ids.contains(&r.id) && !repos.iter().any(|known| known.id == r.id) {
+                repos.push(r.clone());
+            }
+        }
         repos.sort_by_key(|r| ids.iter().position(|id| *id == r.id));
-        Ok(ProjectView { project, repos })
+        let warnings = scope_warnings(&project, &others);
+        Ok(ProjectView {
+            project,
+            repos,
+            warnings,
+        })
     }
 
     pub fn projects(&self, page: &Page) -> Result<Paged<ProjectView>> {
@@ -508,18 +580,42 @@ impl Engine {
             .read(|c| read::load_tasks(c, TaskSet::Ids(&ids)))?;
         tasks.sort_by_key(|t| ids.iter().position(|id| *id == t.item.id));
         let waiting = self.waiting(&tasks)?;
+        let names = self.repo_names(&tasks)?;
         Ok(Paged {
             items: tasks
                 .into_iter()
                 .zip(waiting)
-                .map(|(task, waiting_on)| TaskView {
+                .zip(names)
+                .map(|((task, waiting_on), repo_name)| TaskView {
                     budget: self.budget_view(&task),
                     task,
+                    repo_name,
                     waiting_on,
                 })
                 .collect(),
             next: paged.next,
         })
+    }
+
+    fn repo_names(&self, tasks: &[Task]) -> Result<Vec<Option<String>>> {
+        let mut projects: Vec<Project> = Vec::new();
+        let mut names = Vec::with_capacity(tasks.len());
+        for t in tasks {
+            let id = t.item.project_id;
+            if !projects.iter().any(|p| p.id == id)
+                && let Some(p) = self.store.read(|c| read::load_project(c, id))?
+            {
+                projects.push(p);
+            }
+            names.push(
+                projects
+                    .iter()
+                    .find(|p| p.id == id)
+                    .and_then(|p| p.binding(t.item.repo_id))
+                    .map(|b| b.name.clone()),
+            );
+        }
+        Ok(names)
     }
 
     pub fn work_item(&self, id: WorkItemId) -> Result<Option<TaskDetail>> {
@@ -534,9 +630,15 @@ impl Engine {
             .into_iter()
             .next()
             .unwrap_or_default();
+        let repo_name = self
+            .repo_names(std::slice::from_ref(&task))?
+            .into_iter()
+            .next()
+            .flatten();
         Ok(Some(TaskDetail {
             budget: self.budget_view(&task),
             task,
+            repo_name,
             stage_runs,
             waiting_on,
         }))

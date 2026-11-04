@@ -17,6 +17,7 @@ pub struct Reply {
 #[derive(Debug)]
 pub enum Produced<'a> {
     Project(&'a ProjectView),
+    Reload(&'a crate::reload::ReloadView),
     Spec(&'a SpecView, bool),
     Task(&'a Task),
     Draft(&'a Draft),

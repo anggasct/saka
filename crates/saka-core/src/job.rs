@@ -54,6 +54,7 @@ job_kinds! {
     ScmPollCommit => "scm.poll_commit", 5;
     DraftLint => "draft.lint", 3;
     DraftCommit => "draft.commit", 5;
+    WorkspaceReloadConfig => "workspace.reload_config", 3;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -90,7 +91,8 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmWebhookPrune
         | JobKind::ScmReportStatus
         | JobKind::DraftLint
-        | JobKind::DraftCommit => None,
+        | JobKind::DraftCommit
+        | JobKind::WorkspaceReloadConfig => None,
     }
 }
 
@@ -161,5 +163,6 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmPollCommit => "scm.poll_commit",
         JobKind::DraftLint => "draft.lint",
         JobKind::DraftCommit => "draft.commit",
+        JobKind::WorkspaceReloadConfig => "workspace.reload_config",
     }
 }

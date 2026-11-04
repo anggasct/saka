@@ -22,6 +22,9 @@ export const project: ProjectItem = {
   autonomy: "standard",
   workflow_preset: "full_loop",
   config_commit: "9f1c".padEnd(40, "0"),
+  config_sha256: `sha256:${"4b8e".padEnd(64, "0")}`,
+  config_error: null,
+  warnings: [],
   created_at: "2026-10-31T10:00:00.000Z",
   updated_at: "2026-10-31T10:00:00.000Z",
 };
@@ -72,6 +75,7 @@ export function task(step: number, extra: Partial<WorkItem>): WorkItem {
     task_key: `tasks-done/s${step}`,
     work: `Work of step ${step}`,
     repo_id: project.workspace.repo_id,
+    repo_name: "app",
     branch: `saka/tasks-done/s${step}`,
     state: "queued",
     stage: null,

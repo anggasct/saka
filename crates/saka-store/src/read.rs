@@ -1137,7 +1137,8 @@ pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>>
         return Ok(None);
     };
     let mut stmt = conn.prepare(
-        "SELECT repo_id, name, is_default, path_scope FROM project_repo WHERE project_id = ?1 ORDER BY is_default DESC, name",
+        "SELECT repo_id, name, is_default, base_branch, path_scope FROM project_repo WHERE project_id = ?1
+         ORDER BY is_default DESC, name",
     )?;
     let mut q = stmt.query([id.0.to_string()])?;
     while let Some(row) = q.next()? {
@@ -1145,6 +1146,7 @@ pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>>
             repo_id: RepoId(uuid(row, "repo_id")?),
             name: row.get("name")?,
             is_default: row.get("is_default")?,
+            base_branch: row.get("base_branch")?,
             path_scope: json(row, "path_scope")?,
         });
     }
@@ -1159,6 +1161,8 @@ pub(crate) fn project_row(row: &Row<'_>) -> Result<Project> {
         project_path: row.get("project_path")?,
         base_branch: row.get("base_branch")?,
         config_commit: row.get("config_commit")?,
+        config_sha256: row.get("config_sha256")?,
+        config_error: opt_json(row, "config_error")?,
         autonomy: vocab(row, "autonomy")?,
         workflow_preset: vocab(row, "workflow_preset")?,
         repos: Vec::new(),

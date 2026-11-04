@@ -605,6 +605,7 @@ async fn run(
             },
             draft: draft_config(cfg),
             architect_model: Some(cfg.architect.model.clone()).filter(|m| !m.is_empty()),
+            config_poll_secs: cfg.workspace.config_poll_secs,
         },
     ));
     match engine.recover() {

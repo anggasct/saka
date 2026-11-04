@@ -28,6 +28,8 @@ pub struct Config {
     #[serde(default)]
     pub scheduler: Scheduler,
     #[serde(default)]
+    pub workspace: Workspace,
+    #[serde(default)]
     pub scm: Vec<ScmEntry>,
     #[serde(default)]
     pub agent: Agent,
@@ -199,6 +201,25 @@ impl Default for Scheduler {
 
 fn two() -> usize {
     2
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Workspace {
+    #[serde(default = "five_minutes")]
+    pub config_poll_secs: u32,
+}
+
+impl Default for Workspace {
+    fn default() -> Workspace {
+        Workspace {
+            config_poll_secs: five_minutes(),
+        }
+    }
+}
+
+fn five_minutes() -> u32 {
+    300
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -550,6 +571,13 @@ impl Config {
             return Err(err(
                 "config_invalid",
                 "scheduler.max_active_tasks must be 1..=16",
+            ));
+        }
+        let poll = self.workspace.config_poll_secs;
+        if poll != 0 && !(30..=86_400).contains(&poll) {
+            return Err(err(
+                "config_invalid",
+                "workspace.config_poll_secs must be 0 or 30..=86400",
             ));
         }
         let mut ids = std::collections::BTreeSet::new();
@@ -907,6 +935,20 @@ mod tests {
     }
 
     #[test]
+    fn the_config_poll_is_off_or_between_thirty_seconds_and_a_day() {
+        assert_eq!(Config::parse("").unwrap().workspace.config_poll_secs, 300);
+        for ok in [0, 30, 86_400] {
+            let text = format!("[workspace]\nconfig_poll_secs = {ok}\n");
+            assert_eq!(Config::parse(&text).unwrap().workspace.config_poll_secs, ok);
+        }
+        for bad in [1, 10, 29, 86_401] {
+            let e = Config::parse(&format!("[workspace]\nconfig_poll_secs = {bad}\n")).unwrap_err();
+            assert_eq!(e.code, "config_invalid");
+            assert!(e.detail.starts_with("workspace.config_poll_secs"), "{bad}");
+        }
+    }
+
+    #[test]
     fn the_port_range_must_fit_every_active_task() {
         let cfg = Config::parse("").unwrap();
         assert_eq!(cfg.env.ports().unwrap(), (41000, 48999));
@@ -980,5 +1022,6 @@ mod tests {
         assert_eq!(cfg.env.ports_per_env, 10);
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
+        assert_eq!(cfg.workspace.config_poll_secs, 300);
     }
 }

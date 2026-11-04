@@ -1755,6 +1755,9 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::WorkItemCreated { .. }
         | E::RepoRegistered { .. }
         | E::ProjectRegistered { .. }
+        | E::ProjectConfigChanged { .. }
+        | E::ProjectConfigRejected { .. }
+        | E::ProjectConfigErrorCleared { .. }
         | E::SecretSet { .. }
         | E::SecretRemoved { .. }
         | E::DocCommitted { .. }

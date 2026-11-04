@@ -118,10 +118,12 @@ impl World {
             project_path: "docs".into(),
             base_branch: "main".into(),
             config_commit: "a".repeat(40),
+            config_sha256: format!("sha256:{}", "0".repeat(64)),
             repos: vec![ProjectRepo {
                 repo_id,
                 name: "app".into(),
                 is_default: true,
+                base_branch: "main".into(),
                 path_scope: vec!["**".into()],
             }],
         };
@@ -1073,9 +1075,9 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     let w = World::new();
     assert_eq!(
         w.store.migration().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(11));
+    assert_eq!(w.store.schema_version().unwrap(), Some(12));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

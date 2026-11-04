@@ -11,10 +11,10 @@ use saka_core::task::LoopConfig;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
-use saka_core::vocab::{SpecOrigin, WorkItemOrigin};
+use saka_core::vocab::{ReloadTrigger, SpecOrigin, WorkItemOrigin};
 use saka_engine::{
-    Engine, EngineConfig, EngineError, EnvConfig, Integration, JobReport, NewProject, NewSpecDraft,
-    Ports, RegisteredSpec,
+    AddProject, Engine, EngineConfig, EngineError, EnvConfig, Integration, JobReport, NewBinding,
+    NewProject, NewRepo, NewSpecDraft, Ports, ProjectView, RegisteredSpec, ReloadView, StoredEvent,
 };
 use saka_ports::Clock;
 use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, list, read};
@@ -26,6 +26,29 @@ use crate::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
 use crate::world::{AgentScript, CiScript, FakeWorld, Stats};
 
 pub const IDLE_TICK_MS: i64 = 5_000;
+pub const DOCS_REPO: &str = "acme/docs";
+pub const SHOP_REPO: &str = "acme/shop";
+pub const WEB_REPO: &str = "acme/web";
+
+#[derive(Debug, Clone, Default)]
+pub struct Layout {
+    pub saka_toml: String,
+    pub branches: Vec<(String, String)>,
+    pub base_branch: Option<String>,
+}
+pub const ZERO_SHA256: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+fn home_repo() -> NewRepo {
+    NewRepo {
+        repo_id: None,
+        integration_id: "github".into(),
+        provider: "github".into(),
+        full_name: crate::world::HOME_REPO.into(),
+        url: format!("https://github.com/{}", crate::world::HOME_REPO),
+        default_branch: "main".into(),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operator {
@@ -55,6 +78,7 @@ pub struct SimConfig {
     pub operator: Operator,
     pub draft: DraftConfig,
     pub architect_model: Option<String>,
+    pub config_poll_secs: u32,
 }
 
 pub fn draft_config() -> DraftConfig {
@@ -114,6 +138,7 @@ impl Default for SimConfig {
             operator: Operator::default(),
             draft: draft_config(),
             architect_model: None,
+            config_poll_secs: 0,
         }
     }
 }
@@ -153,7 +178,7 @@ pub struct Sim {
 }
 
 impl Sim {
-    pub fn new(cfg: SimConfig) -> Sim {
+    fn boot(cfg: SimConfig) -> Sim {
         let clock = Arc::new(FakeClock::new());
         let ids = Arc::new(FakeIds::default());
         let world = Arc::new(FakeWorld::new(
@@ -185,40 +210,107 @@ impl Sim {
             rt,
         };
         sim.start_engine();
+        sim
+    }
+
+    pub fn new(cfg: SimConfig) -> Sim {
+        let mut sim = Sim::boot(cfg);
         let engine = sim.engine();
         let cause = engine.cause("human:operator:local");
         let (project_id, _) = engine
             .register_project(
                 &NewProject {
                     name: "tasks".into(),
-                    integration_id: "github".into(),
-                    provider: "github".into(),
-                    full_name: "acme/tasks".into(),
-                    url: "https://github.com/acme/tasks".into(),
-                    default_branch: "main".into(),
+                    workspace: home_repo(),
                     project_path: "docs".into(),
                     base_branch: "main".into(),
                     config_commit: sim.world.base_head(),
-                    repo_name: "app".into(),
+                    config_sha256: ZERO_SHA256.into(),
+                    bindings: vec![NewBinding {
+                        repo: home_repo(),
+                        name: "app".into(),
+                        is_default: true,
+                        base_branch: "main".into(),
+                        path_scope: vec!["**".into()],
+                    }],
                 },
                 &cause,
             )
             .unwrap();
-        let spec = sim
+        sim.project_id = project_id;
+        sim.register_fixture_spec();
+        sim
+    }
+
+    pub fn multi_repo(cfg: SimConfig, layout: &Layout) -> Sim {
+        let mut sim = Sim::boot(cfg);
+        sim.world.set_home(DOCS_REPO);
+        for (repo, branch) in &layout.branches {
+            sim.world.create_branch(repo, branch);
+        }
+        sim.world
+            .put_doc("docs/saka.toml", layout.saka_toml.as_bytes());
+        let engine = sim.engine();
+        let cause = engine.cause("human:operator:local");
+        let add = AddProject {
+            workspace_url: format!("https://github.com/{DOCS_REPO}"),
+            project_path: "docs".into(),
+            base_branch: layout.base_branch.clone(),
+        };
+        let view = sim
+            .rt
+            .block_on(engine.add_project(&add, &cause, None))
+            .unwrap();
+        sim.project_id = view.project.id;
+        sim.register_fixture_spec();
+        sim
+    }
+
+    fn register_fixture_spec(&mut self) {
+        let engine = self.engine();
+        let cause = engine.cause("human:operator:local");
+        let spec = self
             .rt
             .block_on(engine.register_spec(
-                project_id,
+                self.project_id,
                 TWO_STEP_PATH,
-                &sim.world.base_head(),
+                &self.world.base_head(),
                 TWO_STEP_SPEC.as_bytes(),
                 &cause,
             ))
             .unwrap();
         assert!(spec.lint_ok, "fixture spec has issues: {:?}", spec.issues);
-        sim.project_id = project_id;
-        sim.spec_id = spec.spec_id;
-        sim.revision_id = spec.revision_id;
-        sim
+        self.spec_id = spec.spec_id;
+        self.revision_id = spec.revision_id;
+    }
+
+    pub fn reload(&self) -> Result<ReloadView, EngineError> {
+        let engine = self.engine();
+        let cause = engine.cause("human:operator:local");
+        self.rt.block_on(engine.reload_project_config(
+            self.project_id,
+            ReloadTrigger::Operator,
+            &cause,
+            None,
+        ))
+    }
+
+    pub fn project(&self) -> ProjectView {
+        self.engine().project(self.project_id).unwrap().unwrap()
+    }
+
+    pub fn events_of(&self, kind: &str) -> Vec<StoredEvent> {
+        let engine = self.engine();
+        let mut out = Vec::new();
+        let mut after = 0;
+        loop {
+            let page = engine.events_after(after, 500).unwrap();
+            let Some(last) = page.last() else {
+                return out;
+            };
+            after = last.seq;
+            out.extend(page.into_iter().filter(|e| e.kind == kind));
+        }
     }
 
     fn db(&self) -> PathBuf {
@@ -259,6 +351,7 @@ impl Sim {
             },
             draft: self.cfg.draft.clone(),
             architect_model: self.cfg.architect_model.clone(),
+            config_poll_secs: self.cfg.config_poll_secs,
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

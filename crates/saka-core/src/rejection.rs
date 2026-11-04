@@ -42,11 +42,13 @@ pub enum Rejection {
     #[error("task branch is used by another project")]
     TaskBranchConflict { branches: Vec<String> },
     #[error("no SCM integration serves this host")]
-    ScmIntegrationUnknown { host: String },
+    ScmIntegrationUnknown { host: String, repo: Option<String> },
+    #[error("the SCM app cannot access this repo")]
+    ScmRepoInaccessible { repo: Option<String> },
     #[error("project config is not valid")]
     ProjectConfigInvalid { issues: Value },
-    #[error("project config lists more than one repo")]
-    MultiRepoUnsupported { repos: usize },
+    #[error("a removed repo still has live tasks")]
+    ProjectRepoInUse { repos: Value },
     #[error("spec file not found on the base branch")]
     SpecFileNotFound { path: String, base_branch: String },
     #[error("retry limit reached")]
@@ -97,7 +99,8 @@ impl Rejection {
             Rejection::TaskBranchConflict { .. } => "task_branch_conflict",
             Rejection::ScmIntegrationUnknown { .. } => "scm_integration_unknown",
             Rejection::ProjectConfigInvalid { .. } => "project_config_invalid",
-            Rejection::MultiRepoUnsupported { .. } => "multi_repo_unsupported",
+            Rejection::ScmRepoInaccessible { .. } => "scm_repo_inaccessible",
+            Rejection::ProjectRepoInUse { .. } => "project_repo_in_use",
             Rejection::SpecFileNotFound { .. } => "spec_file_not_found",
             Rejection::WorkPacketUnavailable { .. } => "work_packet_unavailable",
             Rejection::RetryLimitReached { .. } => "retry_limit_reached",
@@ -134,9 +137,12 @@ impl Rejection {
             Rejection::ProjectExists { project_id } => json!({ "project_id": project_id }),
             Rejection::SpecSlugConflict { slug, path } => json!({ "slug": slug, "path": path }),
             Rejection::TaskBranchConflict { branches } => json!({ "branches": branches }),
-            Rejection::ScmIntegrationUnknown { host } => json!({ "host": host }),
+            Rejection::ScmIntegrationUnknown { host, repo } => {
+                json!({ "host": host, "repo": repo })
+            }
+            Rejection::ScmRepoInaccessible { repo } => json!({ "repo": repo }),
             Rejection::ProjectConfigInvalid { issues } => json!({ "issues": issues }),
-            Rejection::MultiRepoUnsupported { repos } => json!({ "repos": repos }),
+            Rejection::ProjectRepoInUse { repos } => json!({ "repos": repos }),
             Rejection::SpecFileNotFound { path, base_branch } => {
                 json!({ "path": path, "base_branch": base_branch })
             }

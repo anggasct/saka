@@ -97,6 +97,9 @@ impl Engine {
         }
         report.decisions += self.reconcile_drafts(&snapshot.quotas, &cause, &mut jobs)?;
         self.push_job(&mut jobs, crate::webhooks::prune_job(now), None, &cause);
+        for (project, job) in self.reload_jobs(now)? {
+            self.push_job(&mut jobs, job, Some(project), &cause);
+        }
         for job in self.monitor_sessions(snapshot.tasks.iter().filter_map(Task::live_session)) {
             let project = project_of(&snapshot.tasks, &job);
             self.push_job(&mut jobs, job, project, &cause);

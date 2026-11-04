@@ -110,6 +110,13 @@ enum ProjectCmd {
         base_branch: Option<String>,
     },
     List,
+    #[command(
+        about = "Re-reads `saka.toml` at the tip of the base branch and applies it; exit 1 if refused"
+    )]
+    Reload {
+        #[arg(help = "Project id or name")]
+        project: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -359,6 +366,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .await
                     }
                     ProjectCmd::List => client.project_list().await,
+                    ProjectCmd::Reload { project } => client.project_reload(&project).await,
                 }
             })
         }

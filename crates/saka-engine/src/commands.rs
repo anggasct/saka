@@ -32,17 +32,44 @@ pub enum SessionCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewProject {
-    pub name: String,
+pub struct NewRepo {
+    pub repo_id: Option<RepoId>,
     pub integration_id: String,
     pub provider: String,
     pub full_name: String,
     pub url: String,
     pub default_branch: String,
+}
+
+impl NewRepo {
+    pub(crate) fn repo_ref(&self) -> RepoRef {
+        RepoRef {
+            repo_id: self.repo_id.unwrap_or(RepoId(uuid::Uuid::nil())),
+            integration_id: self.integration_id.clone(),
+            full_name: self.full_name.clone(),
+            url: self.url.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewBinding {
+    pub repo: NewRepo,
+    pub name: String,
+    pub is_default: bool,
+    pub base_branch: String,
+    pub path_scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProject {
+    pub name: String,
+    pub workspace: NewRepo,
     pub project_path: String,
     pub base_branch: String,
     pub config_commit: String,
-    pub repo_name: String,
+    pub config_sha256: String,
+    pub bindings: Vec<NewBinding>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,77 +102,117 @@ pub(crate) fn reason(value: &str) -> Result<String> {
 
 impl Engine {
     pub fn register_project(&self, p: &NewProject, cause: &Cause) -> Result<(ProjectId, RepoId)> {
-        let view = self.register_project_with(p, None, cause, None)?;
+        let view = self.register_project_with(p, cause, None)?;
         Ok((view.project.id, view.project.workspace_repo_id))
+    }
+
+    pub(crate) fn bind_repos(
+        &self,
+        bindings: &[NewBinding],
+        extra: Option<&NewRepo>,
+        events: &mut Vec<Event>,
+    ) -> Result<(Vec<ProjectRepo>, Option<RepoId>)> {
+        let mut known: Vec<(String, String, RepoId)> = Vec::new();
+        let mut resolve = |r: &NewRepo, events: &mut Vec<Event>| -> Result<RepoId> {
+            if let Some((_, _, id)) = known
+                .iter()
+                .find(|(i, n, _)| *i == r.integration_id && *n == r.full_name)
+            {
+                return Ok(*id);
+            }
+            let existing = self
+                .store
+                .read(|c| read::repo_by_name(c, &r.integration_id, &r.full_name))?;
+            let id = match existing {
+                Some(repo) => repo.id,
+                None => {
+                    let id = r.repo_id.unwrap_or_else(|| RepoId(self.new_id()));
+                    events.push(Event::RepoRegistered {
+                        repo_id: id,
+                        integration_id: r.integration_id.clone(),
+                        provider: r.provider.clone(),
+                        full_name: r.full_name.clone(),
+                        url: r.url.clone(),
+                        default_branch: r.default_branch.clone(),
+                    });
+                    id
+                }
+            };
+            known.push((r.integration_id.clone(), r.full_name.clone(), id));
+            Ok(id)
+        };
+        let extra = extra.map(|r| resolve(r, events)).transpose()?;
+        let mut repos = Vec::with_capacity(bindings.len());
+        for b in bindings {
+            repos.push(ProjectRepo {
+                repo_id: resolve(&b.repo, events)?,
+                name: b.name.clone(),
+                is_default: b.is_default,
+                base_branch: b.base_branch.clone(),
+                path_scope: b.path_scope.clone(),
+            });
+        }
+        if !workspace::bindings_hold(&repos) {
+            return Err(EngineError::Internal(
+                "project config with invalid bindings passed parsing".into(),
+            ));
+        }
+        Ok((repos, extra))
+    }
+
+    pub(crate) fn evolve_workspace(
+        &self,
+        batch: &mut Batch,
+        project: Option<Project>,
+        events: &[Event],
+        project_id: ProjectId,
+        cause: &Cause,
+    ) -> Option<Project> {
+        let now = self.now();
+        let mut project = project;
+        for e in events {
+            if let Some(repo) = workspace::evolve_repo(None, e, now) {
+                batch.repos.push(repo);
+            }
+            project = workspace::evolve_project(project, e, now);
+            self.push_event(batch, e, Some(project_id), cause, now);
+        }
+        if let Some(p) = &project {
+            batch.projects.push(p.clone());
+        }
+        project
     }
 
     pub(crate) fn register_project_with(
         &self,
         p: &NewProject,
-        repo_id: Option<RepoId>,
         cause: &Cause,
         action: Option<&Action<'_>>,
     ) -> Result<ProjectView> {
         let _guard = self.locked()?;
         let now = self.now();
-        let existing = self
-            .store
-            .read(|c| read::repo_by_name(c, &p.integration_id, &p.full_name))?;
-        if let Some(repo) = &existing {
-            self.refuse_existing_project(repo.id, &p.project_path)?;
-        }
-        let mut batch = Batch::new(now);
         let mut events = Vec::new();
-        let mut repos = Vec::new();
-        let repo_id = match existing {
-            Some(repo) => {
-                let id = repo.id;
-                repos.push(repo);
-                id
-            }
-            None => {
-                let repo_id = repo_id.unwrap_or_else(|| RepoId(self.new_id()));
-                events.push(Event::RepoRegistered {
-                    repo_id,
-                    integration_id: p.integration_id.clone(),
-                    provider: p.provider.clone(),
-                    full_name: p.full_name.clone(),
-                    url: p.url.clone(),
-                    default_branch: p.default_branch.clone(),
-                });
-                repo_id
-            }
-        };
+        let (repos, workspace_repo) =
+            self.bind_repos(&p.bindings, Some(&p.workspace), &mut events)?;
+        let workspace_repo_id = workspace_repo
+            .ok_or_else(|| EngineError::Internal("project without a workspace repo".into()))?;
+        self.refuse_existing_project(workspace_repo_id, &p.project_path)?;
         let project_id = ProjectId(self.new_id());
         events.push(Event::ProjectRegistered {
             project_id,
             name: p.name.clone(),
-            workspace_repo_id: repo_id,
+            workspace_repo_id,
             project_path: p.project_path.clone(),
             base_branch: p.base_branch.clone(),
             config_commit: p.config_commit.clone(),
-            repos: vec![ProjectRepo {
-                repo_id,
-                name: p.repo_name.clone(),
-                is_default: true,
-                path_scope: vec!["**".into()],
-            }],
+            config_sha256: p.config_sha256.clone(),
+            repos,
         });
-        let mut project = None;
-        for e in &events {
-            if let Some(repo) = workspace::evolve_repo(None, e, now) {
-                batch.repos.push(repo.clone());
-                repos.push(repo);
-            }
-            if let Some(p) = workspace::evolve_project(None, e, now) {
-                batch.projects.push(p.clone());
-                project = Some(p);
-            }
-            self.push_event(&mut batch, e, Some(project_id), cause, now);
-        }
-        let project =
-            project.ok_or_else(|| EngineError::Internal("project not registered".into()))?;
-        let view = ProjectView { project, repos };
+        let mut batch = Batch::new(now);
+        let project = self
+            .evolve_workspace(&mut batch, None, &events, project_id, cause)
+            .ok_or_else(|| EngineError::Internal("project not registered".into()))?;
+        let view = self.project_view_with(project, &batch.repos)?;
         if let Some(action) = action {
             let reply = (action.respond)(Produced::Project(&view));
             batch.action =

@@ -2,12 +2,11 @@ use saka_core::ids::{ProjectId, RepoId};
 use saka_core::model::Project;
 use saka_core::paths::{self, PathIssue};
 use saka_core::rejection::Rejection;
-use saka_ports::RepoRef;
+use saka_ports::{Blob, RepoRef};
 use saka_store::{list, read};
-use serde_json::Value;
 
 use crate::action::Action;
-use crate::commands::{NewProject, SpecFile};
+use crate::commands::{NewBinding, NewProject, NewRepo, SpecFile};
 use crate::project_config;
 use crate::views::{ProjectView, SpecView};
 use crate::{Cause, Engine, EngineError, Result};
@@ -57,7 +56,7 @@ fn web_host(web_url: &str) -> Option<String> {
     Some(rest.trim_end_matches('/').to_ascii_lowercase())
 }
 
-fn branch_ok(branch: &str) -> bool {
+pub(crate) fn branch_ok(branch: &str) -> bool {
     !branch.is_empty()
         && branch.len() <= 255
         && !branch.starts_with('-')
@@ -93,7 +92,181 @@ fn base_branch_error(e: saka_ports::PortError) -> EngineError {
     }
 }
 
+pub(crate) fn config_invalid(issues: &[project_config::Issue]) -> Rejection {
+    Rejection::ProjectConfigInvalid {
+        issues: project_config::issues_json(issues),
+    }
+}
+
+pub(crate) const MAX_CONFIG_BYTES: u64 = 65_536;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfigContent {
+    Missing,
+    TooLarge,
+    Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfigFile {
+    pub commit: String,
+    pub content: ConfigContent,
+}
+
+impl ConfigFile {
+    pub(crate) fn bytes(self) -> std::result::Result<Vec<u8>, Rejection> {
+        match self.content {
+            ConfigContent::Bytes(b) => Ok(b),
+            ConfigContent::Missing => Err(config_invalid(&[project_config::Issue::file_missing()])),
+            ConfigContent::TooLarge => Err(config_invalid(&[project_config::Issue {
+                code: "toml_invalid",
+                field: None,
+                line: None,
+            }])),
+        }
+    }
+}
+
+pub(crate) struct WorkspaceRepo<'a> {
+    pub repo: &'a RepoRef,
+    pub host: &'a str,
+    pub default_branch: &'a str,
+    pub provider: &'a str,
+    pub base_branch: &'a str,
+}
+
 impl Engine {
+    pub(crate) fn integration_for(&self, host: &str) -> Option<Integration> {
+        self.cfg
+            .integrations
+            .iter()
+            .find(|i| web_host(&i.web_url).as_deref() == Some(host))
+            .cloned()
+    }
+
+    pub(crate) async fn read_config(
+        &self,
+        workspace: &RepoRef,
+        base_branch: &str,
+        project_path: &str,
+    ) -> Result<ConfigFile> {
+        let commit = self
+            .ports
+            .docs
+            .branch_tip(workspace, base_branch)
+            .await?
+            .ok_or_else(|| {
+                saka_ports::PortError::permanent(
+                    "base_branch_missing",
+                    serde_json::json!({ "base_branch": base_branch }),
+                )
+            })?;
+        let path = paths::project_config_path(project_path);
+        let blob = self
+            .ports
+            .docs
+            .read_at(workspace, &commit, &path, MAX_CONFIG_BYTES)
+            .await?;
+        let content = match blob {
+            Blob::Missing => ConfigContent::Missing,
+            Blob::Bytes(b) => ConfigContent::Bytes(b),
+            Blob::TooLarge { .. } => ConfigContent::TooLarge,
+        };
+        Ok(ConfigFile { commit, content })
+    }
+
+    pub(crate) async fn resolve_bindings(
+        &self,
+        config: &project_config::ProjectConfig,
+        workspace: &WorkspaceRepo<'_>,
+    ) -> Result<Vec<NewBinding>> {
+        let mut out = Vec::with_capacity(config.repos.len());
+        for entry in &config.repos {
+            let integration = self.integration_for(&entry.host).ok_or_else(|| {
+                Rejection::ScmIntegrationUnknown {
+                    host: entry.host.clone(),
+                    repo: Some(entry.name.clone()),
+                }
+            })?;
+            let is_workspace = integration.id == workspace.repo.integration_id
+                && entry.same_repo(workspace.host, &workspace.repo.full_name);
+            let repo = if is_workspace {
+                NewRepo {
+                    repo_id: Some(workspace.repo.repo_id),
+                    integration_id: integration.id.clone(),
+                    provider: workspace.provider.to_string(),
+                    full_name: workspace.repo.full_name.clone(),
+                    url: workspace.repo.url.clone(),
+                    default_branch: workspace.default_branch.to_string(),
+                }
+            } else {
+                let info = self
+                    .ports
+                    .scm
+                    .repository(&integration.id, &entry.full_name)
+                    .await
+                    .map_err(|e| {
+                        if e.code == "scm_repo_inaccessible" {
+                            EngineError::Rejected(Rejection::ScmRepoInaccessible {
+                                repo: Some(entry.name.clone()),
+                            })
+                        } else {
+                            EngineError::Port(e)
+                        }
+                    })?;
+                let known = self
+                    .store
+                    .read(|c| read::repo_by_name(c, &integration.id, &info.full_name))?;
+                NewRepo {
+                    repo_id: Some(known.map_or_else(|| RepoId(self.new_id()), |r| r.id)),
+                    integration_id: integration.id.clone(),
+                    provider: integration.provider.clone(),
+                    full_name: info.full_name,
+                    url: info.url,
+                    default_branch: info.default_branch,
+                }
+            };
+            let base_branch = match (&entry.base_branch, is_workspace) {
+                (Some(b), _) => b.clone(),
+                (None, true) => workspace.base_branch.to_string(),
+                (None, false) => repo.default_branch.clone(),
+            };
+            out.push(NewBinding {
+                repo,
+                name: entry.name.clone(),
+                is_default: entry.is_default,
+                base_branch,
+                path_scope: entry.path_scope.clone(),
+            });
+        }
+        let mut missing = Vec::new();
+        for (entry, binding) in config.repos.iter().zip(&out) {
+            let known_tip = binding.repo.repo_id == Some(workspace.repo.repo_id)
+                && binding.base_branch == workspace.base_branch;
+            if known_tip {
+                continue;
+            }
+            let repo = binding.repo.repo_ref();
+            if self
+                .ports
+                .docs
+                .branch_tip(&repo, &binding.base_branch)
+                .await?
+                .is_none()
+            {
+                missing.push(project_config::Issue {
+                    code: "base_branch_not_found",
+                    field: Some(format!("repo[{}].base_branch", entry.index)),
+                    line: entry.base_branch_line.or(Some(entry.line)),
+                });
+            }
+        }
+        if !missing.is_empty() {
+            return Err(config_invalid(&missing).into());
+        }
+        Ok(out)
+    }
+
     pub async fn add_project(
         &self,
         req: &AddProject,
@@ -104,13 +277,12 @@ impl Engine {
             .map_err(|_| invalid("project_path", "invalid"))?;
         let (host, owner, name) = parse_repo_url(&req.workspace_url)
             .ok_or_else(|| invalid("workspace_url", "invalid"))?;
-        let integration = self
-            .cfg
-            .integrations
-            .iter()
-            .find(|i| web_host(&i.web_url).as_deref() == Some(host.as_str()))
-            .cloned()
-            .ok_or_else(|| Rejection::ScmIntegrationUnknown { host: host.clone() })?;
+        let integration =
+            self.integration_for(&host)
+                .ok_or_else(|| Rejection::ScmIntegrationUnknown {
+                    host: host.clone(),
+                    repo: None,
+                })?;
         if let Some(b) = &req.base_branch
             && !branch_ok(b)
         {
@@ -138,66 +310,41 @@ impl Engine {
             full_name: info.full_name.clone(),
             url: info.url.clone(),
         };
-        let config_path = paths::project_config_path(&req.project_path);
         let file = self
-            .ports
-            .docs
-            .read_at_tip(&repo, &base_branch, &config_path)
+            .read_config(&repo, &base_branch, &req.project_path)
             .await
-            .map_err(base_branch_error)?
-            .ok_or_else(|| Rejection::ProjectConfigInvalid {
-                issues: Value::Array(vec![
-                    project_config::Issue {
-                        code: "file_missing",
-                        field: None,
-                        line: None,
-                    }
-                    .to_json(),
-                ]),
+            .map_err(|e| match e {
+                EngineError::Port(p) => base_branch_error(p),
+                other => other,
             })?;
-        let config = project_config::parse(&file.bytes).map_err(|issues| {
-            Rejection::ProjectConfigInvalid {
-                issues: issues.iter().map(project_config::Issue::to_json).collect(),
-            }
-        })?;
-        if config.repos.len() > 1 {
-            return Err(Rejection::MultiRepoUnsupported {
-                repos: config.repos.len(),
-            }
-            .into());
-        }
-        let entry = config.repos.first().cloned().ok_or_else(|| {
-            EngineError::Internal("project config without a repo passed parsing".into())
-        })?;
-        let same_repo = parse_repo_url(&entry.url).is_some_and(|(h, o, n)| {
-            h == host && format!("{o}/{n}").eq_ignore_ascii_case(&info.full_name)
-        });
-        if !same_repo {
-            return Err(Rejection::ProjectConfigInvalid {
-                issues: Value::Array(vec![
-                    project_config::Issue {
-                        code: "field_invalid",
-                        field: Some("repo[0].url".into()),
-                        line: None,
-                    }
-                    .to_json(),
-                ]),
-            }
-            .into());
-        }
+        let commit = file.commit.clone();
+        let bytes = file.bytes()?;
+        let config = project_config::parse(&bytes).map_err(|issues| config_invalid(&issues))?;
+        let workspace = WorkspaceRepo {
+            repo: &repo,
+            host: &host,
+            default_branch: &info.default_branch,
+            provider: &integration.provider,
+            base_branch: &base_branch,
+        };
+        let bindings = self.resolve_bindings(&config, &workspace).await?;
         let new = NewProject {
             name: config.name,
-            integration_id: integration.id.clone(),
-            provider: integration.provider.clone(),
-            full_name: info.full_name.clone(),
-            url: info.url.clone(),
-            default_branch: info.default_branch.clone(),
+            workspace: NewRepo {
+                repo_id: Some(repo_id),
+                integration_id: integration.id.clone(),
+                provider: integration.provider.clone(),
+                full_name: info.full_name.clone(),
+                url: info.url.clone(),
+                default_branch: info.default_branch.clone(),
+            },
             project_path: req.project_path.clone(),
             base_branch,
-            config_commit: file.commit,
-            repo_name: entry.name,
+            config_commit: commit,
+            config_sha256: project_config::sha256(&bytes),
+            bindings,
         };
-        self.register_project_with(&new, Some(repo_id), cause, action)
+        self.register_project_with(&new, cause, action)
     }
 
     pub(crate) fn refuse_existing_project(&self, repo: RepoId, project_path: &str) -> Result<()> {
