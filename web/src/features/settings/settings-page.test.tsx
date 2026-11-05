@@ -230,7 +230,7 @@ describe("Repos and config", () => {
 });
 
 describe("Workflow", () => {
-  it("shows labels and no controls", async () => {
+  it("shows the full loop with its stages and no controls", async () => {
     fakeApi(routes());
     renderApp(SETTINGS);
     const workflow = await screen.findByRole("region", { name: "Workflow" });
@@ -238,14 +238,84 @@ describe("Workflow", () => {
       within(workflow).getByText("Full loop: spec to merged pull request"),
     ).toBeInTheDocument();
     expect(within(workflow).getByText("Standard")).toBeInTheDocument();
+    expect(within(workflow).getByText("Approved specs")).toBeInTheDocument();
     expect(
-      within(workflow).getByText(
-        "Only one value is available in this version.",
-      ),
+      within(workflow).getByText("Development: automatic"),
     ).toBeInTheDocument();
+    expect(within(workflow).getByText("Merge: on command")).toBeInTheDocument();
+    expect(
+      within(workflow).queryByRole("term", { name: "Labels" }),
+    ).not.toBeInTheDocument();
     expect(
       workflow.querySelectorAll("input, select, textarea, button"),
     ).toHaveLength(0);
+  });
+
+  it("shows the entry point and the filters of a review-only project", async () => {
+    const reviewOnly = {
+      ...project,
+      workflow: {
+        preset: "review_only",
+        spec: false,
+        change_request: {
+          trigger: "manual",
+          labels: ["needs-review"],
+          authors: [],
+          branches: ["feature/**"],
+          paths: [],
+          include_forks: false,
+          include_drafts: true,
+          trigger_label: "saka:review",
+        },
+        stages: [{ stage: "review", trigger: "auto" }],
+      },
+    };
+    fakeApi(routes({ [PROJECT]: { body: reviewOnly } }));
+    renderApp(SETTINGS);
+    const workflow = await screen.findByRole("region", { name: "Workflow" });
+    expect(
+      within(workflow).getByText(
+        "Review only: pull requests opened outside Saka get a review",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(workflow).getByText(
+        "Pull requests opened outside Saka (on command)",
+      ),
+    ).toBeInTheDocument();
+    expect(within(workflow).queryByText("Approved specs")).toBeNull();
+    expect(within(workflow).getByText("Review: automatic")).toBeInTheDocument();
+    const filters = within(workflow).getByLabelText(
+      "Filters for outside pull requests",
+    );
+    expect(within(filters).getByText("needs-review")).toBeInTheDocument();
+    expect(within(filters).getByText("feature/**")).toBeInTheDocument();
+    expect(within(filters).getByText("saka:review")).toBeInTheDocument();
+    expect(within(filters).getAllByText("Any")).toHaveLength(2);
+    expect(within(filters).getByText("Skipped")).toBeInTheDocument();
+    expect(within(filters).getByText("Included")).toBeInTheDocument();
+  });
+
+  it("explains a workflow problem in saka.toml with its line", async () => {
+    fakeApi(
+      routes({
+        [RELOAD]: problemBody(422, "project_config_invalid", {
+          issues: [
+            { code: "workflow_spec_without_dev", field: "workflow", line: 9 },
+          ],
+        }),
+      }),
+    );
+    renderApp(SETTINGS);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Reload config" }),
+    );
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "Line 9: The workflow takes specs but has no development stage. (workflow)",
+      ),
+    ).toBeInTheDocument();
   });
 });
 

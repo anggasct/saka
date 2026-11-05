@@ -231,6 +231,7 @@ impl Sim {
                     base_branch: "main".into(),
                     config_commit: sim.world.base_head(),
                     config_sha256: ZERO_SHA256.into(),
+                    workflow: saka_core::workflow::Workflow::default(),
                     bindings: vec![NewBinding {
                         repo: home_repo(),
                         name: "app".into(),

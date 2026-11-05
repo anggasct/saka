@@ -1172,7 +1172,7 @@ pub(crate) fn project_row(row: &Row<'_>) -> Result<Project> {
         config_sha256: row.get("config_sha256")?,
         config_error: opt_json(row, "config_error")?,
         autonomy: vocab(row, "autonomy")?,
-        workflow_preset: vocab(row, "workflow_preset")?,
+        workflow: json(row, "workflow")?,
         repos: Vec::new(),
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,

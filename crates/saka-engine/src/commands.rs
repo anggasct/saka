@@ -11,7 +11,8 @@ use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
-use saka_core::vocab::SpecOrigin;
+use saka_core::vocab::{SpecOrigin, Stage};
+use saka_core::workflow::Workflow;
 use saka_core::workspace;
 use saka_ports::{IdsSource, RepoRef};
 use saka_spec::{LintIssue, PARSER_VERSION, Parsed, content_hash};
@@ -71,6 +72,7 @@ pub struct NewProject {
     pub base_branch: String,
     pub config_commit: String,
     pub config_sha256: String,
+    pub workflow: Workflow,
     pub bindings: Vec<NewBinding>,
 }
 
@@ -208,6 +210,7 @@ impl Engine {
             base_branch: p.base_branch.clone(),
             config_commit: p.config_commit.clone(),
             config_sha256: p.config_sha256.clone(),
+            workflow: p.workflow.clone(),
             repos,
         });
         let mut batch = Batch::new(now);
@@ -496,6 +499,9 @@ impl Engine {
             .store
             .read(|c| read::load_project(c, spec.project_id))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        if !project.workflow.spec {
+            return Err(Rejection::EntryPointDisabled { entry: "spec" }.into());
+        }
         let mut ids = IdsSource(&*self.ports.ids);
         let mut ctx = Ctx { now, ids: &mut ids };
         let approval = spec::Approval {
@@ -731,6 +737,17 @@ impl Engine {
         action: Option<&Action<'_>>,
     ) -> Result<Vec<Event>> {
         let reason = why.map(reason).transpose()?;
+        let task = self
+            .store
+            .read(|c| read::load_task(c, id))?
+            .ok_or(Rejection::NotFound)?;
+        let project = self
+            .store
+            .read(|c| read::load_project(c, task.item.project_id))?
+            .ok_or(Rejection::NotFound)?;
+        if !project.workflow.has_stage(Stage::Merge) {
+            return Err(Rejection::StageNotInWorkflow { stage: "merge" }.into());
+        }
         self.decide(
             id,
             Some(TaskInput::RequestMerge {

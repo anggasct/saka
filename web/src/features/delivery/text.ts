@@ -162,6 +162,7 @@ export function errorText(
     head: sha(params.head_sha),
     outcome: label(t, "gate.outcome", text(params.gate_outcome)),
     stage: label(t, "stage", text(params.stage)),
+    entry: label(t, "workflowEntry", text(params.entry)),
     limit: number(params.limit),
     reason: text(params.reason) || "other",
     integrations: Array.isArray(params.integrations)

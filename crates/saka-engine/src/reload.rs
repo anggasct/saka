@@ -126,6 +126,7 @@ impl Engine {
             name: &config.name,
             commit: &commit,
             sha256: &sha256,
+            workflow: config.workflow.clone(),
             repos: Vec::new(),
             trigger,
         };

@@ -373,6 +373,7 @@ impl Engine {
         let bindings = self.resolve_bindings(&config, &workspace).await?;
         let new = NewProject {
             name: config.name,
+            workflow: config.workflow,
             workspace: NewRepo {
                 repo_id: Some(repo_id),
                 integration_id: integration.id.clone(),

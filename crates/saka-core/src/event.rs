@@ -21,6 +21,7 @@ use crate::vocab::{
     ResumeCause, ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
     TokenInvalidCause, Trigger,
 };
+use crate::workflow::Workflow;
 
 fn empty_context_hash() -> String {
     EMPTY_CONTEXT_HASH.to_string()
@@ -58,6 +59,7 @@ pub enum Event {
         base_branch: String,
         config_commit: String,
         config_sha256: String,
+        workflow: Workflow,
         repos: Vec<ProjectRepo>,
     },
     #[serde(rename = "workspace.project.config_changed")]
@@ -66,6 +68,7 @@ pub enum Event {
         name: String,
         config_commit: String,
         config_sha256: String,
+        workflow: Workflow,
         repos: Vec<ProjectRepo>,
         trigger: ReloadTrigger,
     },
