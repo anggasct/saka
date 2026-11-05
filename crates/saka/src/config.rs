@@ -93,7 +93,7 @@ fn npm_registry_url() -> String {
     "https://registry.npmjs.org".into()
 }
 
-fn url_ok(raw: &str) -> bool {
+pub(crate) fn url_ok(raw: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(raw) else {
         return false;
     };
@@ -621,10 +621,10 @@ impl Config {
                     "scm.ci_appear_timeout_secs must be 60..=3600",
                 ));
             }
-            if !s.web_url.starts_with("https://") || !s.api_url.starts_with("https://") {
+            if !url_ok(&s.web_url) || !url_ok(&s.api_url) {
                 return Err(err(
                     "config_invalid",
-                    "scm.web_url and scm.api_url must be https",
+                    "scm.web_url and scm.api_url must be https, or http on a loopback host",
                 ));
             }
             if s.client_id
@@ -1046,6 +1046,32 @@ mod tests {
                 .code,
             "config_invalid"
         );
+    }
+
+    #[test]
+    fn scm_urls_must_be_https_or_loopback_http() {
+        let scm = |url: &str| {
+            format!(
+                "[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\nweb_url = {url:?}\napi_url = {url:?}\n"
+            )
+        };
+        for good in [
+            "https://ghe.example.com",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+            "http://localhost:1",
+        ] {
+            let cfg = Config::parse(&scm(good)).unwrap();
+            assert_eq!(cfg.scm[0].web_url, good);
+            assert_eq!(cfg.scm[0].api_url, good);
+        }
+        for bad in ["http://github.com", "ftp://x"] {
+            assert_eq!(
+                Config::parse(&scm(bad)).unwrap_err().code,
+                "config_invalid",
+                "{bad}"
+            );
+        }
     }
 
     #[test]

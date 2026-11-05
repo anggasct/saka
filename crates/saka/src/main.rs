@@ -4,6 +4,7 @@ mod config;
 mod doctor;
 mod init;
 mod logging;
+mod scm_app;
 mod serve;
 
 use std::path::PathBuf;
@@ -83,9 +84,7 @@ enum Command {
     #[command(about = "Project secrets for environment recipes (write-only)")]
     #[command(subcommand)]
     Secret(SecretCmd),
-    #[command(
-        about = "Your account at an SCM integration, so agent changes can be authored as you"
-    )]
+    #[command(about = "SCM integrations: create the GitHub App, link your account")]
     #[command(subcommand)]
     Scm(ScmCmd),
 }
@@ -111,6 +110,11 @@ enum AgentCmd {
 
 #[derive(Subcommand)]
 enum ScmCmd {
+    #[command(
+        about = "Creates the GitHub App from a manifest on this host and adds it to the config as [[scm]] (no server needed)",
+        after_help = "Exit codes: 0 created, 1 failed after the listener started, 2 refused before it started, 130 interrupted. On a headless host use --port <n> --no-browser and ssh -L <n>:127.0.0.1:<n>."
+    )]
+    CreateApp(scm_app::CreateAppArgs),
     #[command(
         about = "Links your account with the device flow: prints a code to enter at the provider, then waits"
     )]
@@ -494,11 +498,13 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 }
             })
         }
+        Command::Scm(ScmCmd::CreateApp(args)) => scm_app::run(&args, cli.json),
         Command::Scm(cmd) => {
             let given = match &cmd {
                 ScmCmd::Link { integration, .. }
                 | ScmCmd::Status { integration }
                 | ScmCmd::Unlink { integration } => integration.clone(),
+                ScmCmd::CreateApp(_) => None,
             };
             let integration = integration_of(given)?;
             let client = Client::new(&server(cli.server)?, cli.json);
@@ -507,6 +513,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     ScmCmd::Link { no_wait, .. } => client.scm_link(&integration, !no_wait).await,
                     ScmCmd::Status { .. } => client.scm_status(&integration).await,
                     ScmCmd::Unlink { .. } => client.scm_unlink(&integration).await,
+                    ScmCmd::CreateApp(_) => ExitCode::from(serve::EXIT_REFUSED),
                 }
             })
         }

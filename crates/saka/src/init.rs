@@ -996,12 +996,15 @@ fn print_human(report: &InitReport) {
         Some(check) => {
             let problems = check["problems"].as_array().cloned().unwrap_or_default();
             out(&format!("check  {} problems", problems.len()));
-            for p in problems {
+            for p in &problems {
                 out(&format!(
                     "problem  {} {}",
                     p["code"].as_str().unwrap_or_default(),
                     p["params"]
                 ));
+            }
+            for hint in create_app_hints(&problems) {
+                out(&hint);
             }
         }
     }
@@ -1039,6 +1042,20 @@ fn print_human(report: &InitReport) {
         Outcome::UpToDate => out(&format!("project  {name} {id} up to date")),
         Outcome::PendingPush | Outcome::Skipped | Outcome::Failed => {}
     }
+}
+
+fn create_app_hints(problems: &[Value]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    problems
+        .iter()
+        .filter(|p| p["code"] == "scm_integration_unknown")
+        .filter_map(|p| p["params"]["host"].as_str())
+        .filter(|host| seen.insert(*host))
+        .map(|host| match host {
+            "github.com" => "next  saka scm create-app".to_string(),
+            other => format!("next  saka scm create-app --web-url https://{other}"),
+        })
+        .collect()
 }
 
 fn print_error(e: &InitError, json_out: bool) {
@@ -1186,6 +1203,23 @@ mod tests {
         assert_eq!(
             ask_project_name(&mut p, "shop").unwrap_err().code,
             "prompt_invalid"
+        );
+    }
+
+    #[test]
+    fn each_unknown_scm_host_gets_one_create_app_hint() {
+        let problems = [
+            json!({ "code": "scm_integration_unknown", "params": { "host": "github.com", "repo": null } }),
+            json!({ "code": "scm_integration_unknown", "params": { "host": "ghe.example.com", "repo": null } }),
+            json!({ "code": "project_config_invalid", "params": {} }),
+            json!({ "code": "scm_integration_unknown", "params": { "host": "github.com", "repo": "x" } }),
+        ];
+        assert_eq!(
+            create_app_hints(&problems),
+            [
+                "next  saka scm create-app",
+                "next  saka scm create-app --web-url https://ghe.example.com",
+            ]
         );
     }
 

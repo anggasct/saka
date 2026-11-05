@@ -13,7 +13,9 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+base64.workspace = true
 clap.workspace = true
+getrandom.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
 rustix = { workspace = true, features = ["process", "termios"] }
@@ -27,6 +29,7 @@ saka-ports = { path = "../saka-ports" }
 saka-scm = { path = "../saka-scm" }
 saka-store = { path = "../saka-store" }
 serde.workspace = true
+subtle.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -48,6 +51,7 @@ saka-spec = { path = "../saka-spec" }
 saka-testkit = { path = "../saka-testkit" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+wiremock.workspace = true
 
 [[test]]
 name = "runner"

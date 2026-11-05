@@ -16,17 +16,18 @@ config_poll_secs = 300             # 0 or 30..=86400; how often each project's s
 # [hooks]                          # optional: a listener that only serves POST /hooks/{scm.id}
 # listen = "127.0.0.1:7421"        # must differ from server.listen; put TLS and a public URL in front of it
 
+# `saka scm create-app` appends this block with the files it writes in scm/<id>/ next to this config.
 [[scm]]
 id = "github"                      # ^[a-z0-9-]{1,32}$, unique
 provider = "github"
-api_url = "https://api.github.com"
-web_url = "https://github.com"
+api_url = "https://api.github.com" # https, or http on a loopback host (localhost, 127.0.0.0/8, [::1])
+web_url = "https://github.com"     # same rule; for GitHub Enterprise Server api_url is <web_url>/api/v3
 app_id = 123456
-private_key_file = "~/.config/saka/github-app.pem"   # mode 0600, owned by you (else config_key_file_mode)
+private_key_file = "~/.config/saka/scm/github/private-key.pem"   # mode 0600, owned by you (else config_key_file_mode)
 poll_interval_secs = 15            # 5..=300
 ci_appear_timeout_secs = 600       # 60..=3600
 merge_method = "squash"            # merge | squash | rebase
-# webhook_secret_file = "~/.config/saka/github-webhook.secret"   # the GitHub App webhook secret; 0600, 32..=1024 bytes
+# webhook_secret_file = "~/.config/saka/scm/github/webhook-secret"   # the GitHub App webhook secret; 0600, 32..=1024 bytes
 client_id = "Iv23liAbCdEfGh123456"  # the GitHub App Client ID (not app_id), 1..=64 of [A-Za-z0-9._-]; needed by `saka scm link`
 
 [agent]
