@@ -12,10 +12,10 @@ use crate::ids::{
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
-    ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome,
-    GateSource, InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState,
-    SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
-    WorkItemOrigin, WorkItemState,
+    ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, ExternalCause,
+    GateOutcome, GateSource, InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause,
+    SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool,
+    Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -252,6 +252,28 @@ pub struct WorkItem {
     pub done_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpecLink {
+    pub spec_id: SpecId,
+    pub step_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternalChange {
+    pub title: String,
+    pub author: String,
+    pub from_fork: bool,
+    pub draft: bool,
+    pub spec: Option<SpecLink>,
+    pub cause: ExternalCause,
+    pub actor: Option<String>,
+    pub created_at: Timestamp,
+    #[serde(skip)]
+    pub spec_slug: Option<String>,
+    #[serde(skip)]
+    pub workflow: Workflow,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -551,6 +573,7 @@ pub struct Task {
     pub blocker: Option<Blocker>,
     pub change_request: Option<ChangeRequest>,
     pub docs_change: Option<ChangeRequest>,
+    pub external: Option<ExternalChange>,
     pub environment: Option<Environment>,
     pub session: Option<Session>,
     pub permissions: Vec<PermissionRequest>,
@@ -590,6 +613,7 @@ impl Task {
             blocker: None,
             change_request: None,
             docs_change: None,
+            external: None,
             environment: None,
             session: None,
             permissions: Vec::new(),
@@ -652,6 +676,10 @@ impl Task {
             usage.add(s.usage_at(now));
         }
         usage
+    }
+
+    pub fn is_at_stage(&self, stage: Stage) -> bool {
+        self.item.state == WorkItemState::InStage && self.item.stage == Some(stage)
     }
 
     pub fn is_at(&self, stage: Stage, phase: StagePhase) -> bool {

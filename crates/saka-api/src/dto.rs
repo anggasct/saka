@@ -768,12 +768,14 @@ pub struct WorkItem {
     /// The docs pull request in the workspace repo, for a task in another repo; `null` when none
     /// was opened. Gates and merge readiness never read it.
     pub docs_change_request: Option<DocsChangeRequest>,
+    /// What is known about a pull request opened outside Saka; `null` for a task made from a spec step.
+    pub external: Option<ExternalChange>,
     /// Latest result per gate source for the current change request head, `scm` first.
     pub gates: Vec<Gate>,
     pub blocker: Option<Blocker>,
     pub session: Option<SessionBrief>,
     pub pending_permission_count: u32,
-    /// Subset of `merge`, `retry`, `cancel`.
+    /// Subset of `merge`, `retry`, `cancel`, `review`.
     pub available_actions: Vec<String>,
     /// Use and limits of the running stage run; `null` when no stage run with a session runs.
     pub budget: Option<WorkItemBudget>,
@@ -784,6 +786,48 @@ pub struct WorkItem {
     pub updated_at: String,
     pub admitted_at: Option<String>,
     pub done_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExternalChange {
+    pub title: String,
+    /// The login of the pull request's author.
+    pub author: String,
+    /// The pull request comes from a fork of the repo.
+    pub from_fork: bool,
+    pub draft: bool,
+    /// The spec step the pull request names; `null` means the review has no spec behind it.
+    pub spec: Option<ExternalSpec>,
+    /// `auto | comment | label | operator`: what made Saka take the pull request.
+    pub cause: String,
+    /// The login of who asked for it, or `null` when Saka took it on its own.
+    pub actor: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExternalSpec {
+    pub spec_id: Uuid,
+    pub slug: Option<String>,
+    /// `S1`, `S2`, ...; `null` when the pull request names the spec but no step that exists.
+    pub step_id: Option<String>,
+}
+
+impl From<&saka_core::model::ExternalChange> for ExternalChange {
+    fn from(x: &saka_core::model::ExternalChange) -> ExternalChange {
+        ExternalChange {
+            title: x.title.clone(),
+            author: x.author.clone(),
+            from_fork: x.from_fork,
+            draft: x.draft,
+            spec: x.spec.as_ref().map(|s| ExternalSpec {
+                spec_id: s.spec_id.0,
+                slug: x.spec_slug.clone(),
+                step_id: s.step_id.clone(),
+            }),
+            cause: x.cause.as_str().to_string(),
+            actor: x.actor.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -946,6 +990,7 @@ impl WorkItem {
                 merged_at: opt_time(c.merged_at),
                 skipped: c.skipped_at.is_some(),
             }),
+            external: t.external.as_ref().map(ExternalChange::from),
             gates: gates_at_head(t),
             blocker: t.open_blocker().map(|b| Blocker {
                 id: b.id.0,

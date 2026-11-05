@@ -6,7 +6,7 @@ use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency}
 use crate::react::phase_jobs;
 use crate::task::{LoopConfig, TaskInput};
 use crate::time::Timestamp;
-use crate::vocab::{EnvironmentState, SpecState, WorkItemState};
+use crate::vocab::{EnvironmentState, SpecState, WorkItemOrigin, WorkItemState};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -28,6 +28,9 @@ pub struct Snapshot {
 }
 
 fn holds_port_block(task: &Task) -> bool {
+    if task.item.origin != WorkItemOrigin::SpecStep {
+        return false;
+    }
     let live_env = task.environment.as_ref().is_some_and(|e| {
         matches!(
             e.state,
@@ -103,10 +106,11 @@ pub fn reconcile(
     let active = tasks
         .iter()
         .filter(|t| {
-            matches!(
-                t.item.state,
-                WorkItemState::Admitted | WorkItemState::InStage
-            )
+            t.item.origin == WorkItemOrigin::SpecStep
+                && matches!(
+                    t.item.state,
+                    WorkItemState::Admitted | WorkItemState::InStage
+                )
         })
         .count();
     let waits = waiting(snapshot, cfg, now);

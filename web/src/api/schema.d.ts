@@ -1097,6 +1097,26 @@ export interface components {
        */
       repo_id: string;
     };
+    ExternalChange: {
+      /** @description The login of who asked for it, or `null` when Saka took it on its own. */
+      actor?: string | null;
+      /** @description The login of the pull request's author. */
+      author: string;
+      /** @description `auto | comment | label | operator`: what made Saka take the pull request. */
+      cause: string;
+      draft: boolean;
+      /** @description The pull request comes from a fork of the repo. */
+      from_fork: boolean;
+      spec?: components["schemas"]["ExternalSpec"] | null;
+      title: string;
+    };
+    ExternalSpec: {
+      slug?: string | null;
+      /** Format: uuid */
+      spec_id: string;
+      /** @description `S1`, `S2`, ...; `null` when the pull request names the spec but no step that exists. */
+      step_id?: string | null;
+    };
     Failure: {
       code: string;
       params: unknown;
@@ -1476,7 +1496,7 @@ export interface components {
     Page_WorkItem: {
       items: {
         admitted_at?: string | null;
-        /** @description Subset of `merge`, `retry`, `cancel`. */
+        /** @description Subset of `merge`, `retry`, `cancel`, `review`. */
         available_actions: string[];
         blocker?: components["schemas"]["Blocker"] | null;
         branch: string;
@@ -1486,6 +1506,7 @@ export interface components {
         docs_change_request?: components["schemas"]["DocsChangeRequest"] | null;
         done_at?: string | null;
         environment?: components["schemas"]["WorkItemEnvironment"] | null;
+        external?: components["schemas"]["ExternalChange"] | null;
         /** @description Latest result per gate source for the current change request head, `scm` first. */
         gates: components["schemas"]["Gate"][];
         /** Format: uuid */
@@ -2309,7 +2330,7 @@ export interface components {
         };
     WorkItem: {
       admitted_at?: string | null;
-      /** @description Subset of `merge`, `retry`, `cancel`. */
+      /** @description Subset of `merge`, `retry`, `cancel`, `review`. */
       available_actions: string[];
       blocker?: components["schemas"]["Blocker"] | null;
       branch: string;
@@ -2319,6 +2340,7 @@ export interface components {
       docs_change_request?: components["schemas"]["DocsChangeRequest"] | null;
       done_at?: string | null;
       environment?: components["schemas"]["WorkItemEnvironment"] | null;
+      external?: components["schemas"]["ExternalChange"] | null;
       /** @description Latest result per gate source for the current change request head, `scm` first. */
       gates: components["schemas"]["Gate"][];
       /** Format: uuid */

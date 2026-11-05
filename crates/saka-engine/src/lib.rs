@@ -9,6 +9,7 @@ mod docs;
 mod draft;
 mod hooks;
 mod hooks_run;
+mod intake;
 mod metrics;
 pub mod packet;
 pub mod project_config;
@@ -193,6 +194,7 @@ pub struct Engine {
     boot: Uuid,
     ports_in_flight: Mutex<std::collections::BTreeMap<saka_core::ids::EnvironmentId, u16>>,
     accounts: accounts::Accounts,
+    path_filter: intake::PathFilterCache,
 }
 
 impl Engine {
@@ -208,6 +210,7 @@ impl Engine {
             counters: metrics::Counters::default(),
             ports_in_flight: Mutex::new(std::collections::BTreeMap::new()),
             accounts: accounts::Accounts::default(),
+            path_filter: intake::PathFilterCache::default(),
         }
     }
 

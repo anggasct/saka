@@ -26,8 +26,8 @@ pub use migrate::MigrationReport;
 pub use read::{StoredEvent, TaskSet};
 pub use user_link::{AuthorizationRow, SealedColumns, UserLinkRow};
 pub use write::{
-    ActionRecord, Batch, ContextBlobRow, EventRecord, JobOutcome, NewJob, SecretRow,
-    SpecRevisionRow, WebhookDeliveryRow,
+    ActionRecord, Batch, ChangeCursorRow, ContextBlobRow, EventRecord, JobOutcome, NewJob,
+    SecretRow, SpecRevisionRow, WebhookDeliveryRow,
 };
 
 pub struct Store {

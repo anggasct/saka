@@ -46,6 +46,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     ),
     (19, include_str!("../migrations/0019_project_workflow.sql")),
     (20, include_str!("../migrations/0020_hook_run.sql")),
+    (21, include_str!("../migrations/0021_external_changes.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {

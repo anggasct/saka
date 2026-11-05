@@ -61,6 +61,7 @@ job_kinds! {
     ScmOpenDocsChangeRequest => "scm.open_docs_change_request", 5;
     ScmMergeDocs => "scm.merge_docs", 5;
     HookRun => "hook.run", 3;
+    ScmScanChanges => "scm.scan_changes", 3;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -110,7 +111,8 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::WorkspaceReloadConfig
         | JobKind::ScmUserLinkPoll
         | JobKind::ScmUserLinkRefresh
-        | JobKind::HookRun => None,
+        | JobKind::HookRun
+        | JobKind::ScmScanChanges => None,
     }
 }
 
@@ -188,5 +190,6 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmOpenDocsChangeRequest => "scm.open_cr",
         JobKind::ScmMergeDocs => "scm.merge_docs",
         JobKind::HookRun => "hook",
+        JobKind::ScmScanChanges => "scm.scan",
     }
 }

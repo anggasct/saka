@@ -13,15 +13,15 @@ use crate::ids::{
 use crate::job::JobKind;
 use crate::model::{
     Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, ProjectRepo, RunOwner,
-    ToolchainUse,
+    SpecLink, ToolchainUse,
 };
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, GateOutcome, GateSource,
-    HookActionKind, HookEvent, HookMode, HookRunState, InterruptBy, LintOutcome, MergeMethod,
-    PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, SessionState,
-    SpecOrigin, Stage, StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
+    ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, ExternalCause, GateOutcome,
+    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InterruptBy, LintOutcome,
+    MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason,
+    SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -286,6 +286,34 @@ pub enum Event {
         reason: Option<String>,
         retry_of: Option<Coded>,
         budget: Option<Budget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head_sha: Option<String>,
+    },
+    #[serde(rename = "delivery.stage_run.cancelled")]
+    StageRunCancelled {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        reason: String,
+    },
+    #[serde(rename = "delivery.external_change.accepted")]
+    ExternalChangeAccepted {
+        work_item_id: WorkItemId,
+        project_id: ProjectId,
+        repo_id: RepoId,
+        task_key: String,
+        title: String,
+        branch: String,
+        change_request_id: ChangeRequestId,
+        number: u64,
+        url: String,
+        base_branch: String,
+        head_sha: String,
+        author: String,
+        from_fork: bool,
+        draft: bool,
+        spec: Option<SpecLink>,
+        cause: ExternalCause,
+        actor: Option<String>,
     },
     #[serde(rename = "delivery.stage_run.phase_changed")]
     StagePhaseChanged {
@@ -837,6 +865,8 @@ impl Event {
             | E::WorkItemSuperseded { work_item_id, .. }
             | E::WorkItemAdmitted { work_item_id }
             | E::StageRunCreated { work_item_id, .. }
+            | E::StageRunCancelled { work_item_id, .. }
+            | E::ExternalChangeAccepted { work_item_id, .. }
             | E::StagePhaseChanged { work_item_id, .. }
             | E::StageRunSucceeded { work_item_id, .. }
             | E::GateObserved { work_item_id, .. }

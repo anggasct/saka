@@ -4082,6 +4082,79 @@
           }
         }
       },
+      "ExternalChange": {
+        "type": "object",
+        "required": [
+          "title",
+          "author",
+          "from_fork",
+          "draft",
+          "cause"
+        ],
+        "properties": {
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The login of who asked for it, or `null` when Saka took it on its own."
+          },
+          "author": {
+            "type": "string",
+            "description": "The login of the pull request's author."
+          },
+          "cause": {
+            "type": "string",
+            "description": "`auto | comment | label | operator`: what made Saka take the pull request."
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "from_fork": {
+            "type": "boolean",
+            "description": "The pull request comes from a fork of the repo."
+          },
+          "spec": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalSpec",
+                "description": "The spec step the pull request names; `null` means the review has no spec behind it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "ExternalSpec": {
+        "type": "object",
+        "required": [
+          "spec_id"
+        ],
+        "properties": {
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spec_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`S1`, `S2`, ...; `null` when the pull request names the spec but no step that exists."
+          }
+        }
+      },
       "Failure": {
         "type": "object",
         "required": [
@@ -5450,7 +5523,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "Subset of `merge`, `retry`, `cancel`."
+                  "description": "Subset of `merge`, `retry`, `cancel`, `review`."
                 },
                 "blocker": {
                   "oneOf": [
@@ -5511,6 +5584,17 @@
                     {
                       "$ref": "#/components/schemas/WorkItemEnvironment",
                       "description": "The latest environment of the task; `null` before one was prepared."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "external": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ExternalChange",
+                      "description": "What is known about a pull request opened outside Saka; `null` for a task made from a spec step."
                     },
                     {
                       "type": "null"
@@ -8137,7 +8221,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Subset of `merge`, `retry`, `cancel`."
+            "description": "Subset of `merge`, `retry`, `cancel`, `review`."
           },
           "blocker": {
             "oneOf": [
@@ -8198,6 +8282,17 @@
               {
                 "$ref": "#/components/schemas/WorkItemEnvironment",
                 "description": "The latest environment of the task; `null` before one was prepared."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalChange",
+                "description": "What is known about a pull request opened outside Saka; `null` for a task made from a spec step."
               },
               {
                 "type": "null"

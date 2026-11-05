@@ -50,6 +50,7 @@ vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "aut
 vocab!(WorkflowPreset { FullLoop => "full_loop", ReviewOnly => "review_only", BuildOnly => "build_only", Custom => "custom" });
 vocab!(WorkItemOrigin { SpecStep => "spec_step", ExternalChange => "external_change" });
 vocab!(DocsMode { ReadOnly => "read_only", Writable => "writable" });
+vocab!(ExternalCause { Auto => "auto", Comment => "comment", Label => "label", Operator => "operator" });
 vocab!(WorkItemState {
     Queued => "queued",
     AwaitingStart => "awaiting_start",
@@ -78,6 +79,8 @@ vocab!(
         MergingDocs => "merging_docs",
         Verifying => "verifying",
         TearingDown => "tearing_down",
+        AwaitingTrigger => "awaiting_trigger",
+        AwaitingReview => "awaiting_review",
     }
 );
 vocab!(StageRunState {

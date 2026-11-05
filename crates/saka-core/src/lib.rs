@@ -3,6 +3,7 @@ pub mod authorship;
 pub mod diagnostics;
 pub mod draft;
 pub mod event;
+pub mod external;
 pub mod gate;
 pub mod hook;
 pub mod ids;

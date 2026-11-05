@@ -354,6 +354,9 @@ impl Engine {
         if job.kind == JobKind::HookRun {
             return self.hook_job(job).await;
         }
+        if job.kind == JobKind::ScmScanChanges {
+            return self.scan_job(job).await;
+        }
         if job.kind == JobKind::ScmUserLinkPoll {
             return self.user_link_poll_job(job).await;
         }
@@ -419,6 +422,7 @@ impl Engine {
             JobKind::DraftLint
             | JobKind::DraftCommit
             | JobKind::WorkspaceReloadConfig
+            | JobKind::ScmScanChanges
             | JobKind::ScmUserLinkPoll
             | JobKind::ScmUserLinkRefresh
             | JobKind::HookRun => Ok(Effect::Skipped),
@@ -620,6 +624,16 @@ impl Engine {
             .reload_project_config(project, saka_core::vocab::ReloadTrigger::Poll, &cause, None)
             .await
         {
+            Ok(_) | Err(EngineError::Rejected(_)) => Ok(Effect::Nothing),
+            Err(EngineError::Port(e)) => Err(e),
+            Err(e) => Err(internal(e)),
+        }
+    }
+
+    async fn scan_job(&self, job: &ClaimedJob) -> Execution {
+        let project: saka_core::ids::ProjectId = field(&job.payload, "project_id")?;
+        let repo: RepoId = field(&job.payload, "repo_id")?;
+        match self.scan_changes(project, repo).await {
             Ok(_) | Err(EngineError::Rejected(_)) => Ok(Effect::Nothing),
             Err(EngineError::Port(e)) => Err(e),
             Err(e) => Err(internal(e)),
@@ -1851,6 +1865,9 @@ impl Engine {
         else {
             return Ok(Effect::Skipped);
         };
+        if task.item.origin == WorkItemOrigin::ExternalChange {
+            return self.poll_external(task, change.number).await;
+        }
         let snapshot = self
             .ports
             .scm
@@ -1873,6 +1890,25 @@ impl Engine {
             merge_commit_sha: snapshot.merge_commit_sha,
             merged_at: snapshot.merged_at,
             checks: snapshot.checks,
+        }))
+    }
+
+    async fn poll_external(&self, task: &Task, number: u64) -> Execution {
+        let repo = self.repo_ref(task)?;
+        let summary = self.ports.scm.change_summary(&repo, number).await?;
+        let (merge_commit_sha, merged_at) = if summary.state == ChangeState::Merged {
+            let merged = self.ports.scm.change_request(&repo, number).await?;
+            (merged.merge_commit_sha, merged.merged_at)
+        } else {
+            (None, None)
+        };
+        Ok(Effect::Fact(TaskInput::ChangeObserved {
+            role: ChangeRole::Code,
+            state: summary.state,
+            head_sha: summary.head_sha,
+            merge_commit_sha,
+            merged_at,
+            checks: Vec::new(),
         }))
     }
 

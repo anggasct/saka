@@ -82,7 +82,7 @@ fn change_requests_get_a_role_unique_per_task_and_the_new_phase_and_blocker_are_
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![18, 19, 20]);
+    assert_eq!(store.migration().applied, vec![18, 19, 20, 21]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

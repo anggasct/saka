@@ -567,6 +567,51 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
 }
 
 #[test]
+fn an_outside_pull_request_shows_who_opened_it_and_that_no_spec_stands_behind_it() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str(
+        "\n[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nreview = \"manual\"\n",
+    );
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    let mut api = Api::with(Sim::multi_repo(SimConfig::default(), &layout));
+    let number = api.sim.world.open_external_change(
+        SHOP_REPO,
+        saka_testkit::ChangeSpec::new("Implements tasks-done/s1", "alice", "feature/retries")
+            .body("Closes tasks-done/s1"),
+    );
+    let project = api.sim.project_id.0;
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.world.change_listings() > 0 && !s.all_tasks().is_empty()
+    }));
+    let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
+    let item = &listed.body["items"][0];
+    assert_eq!(item["origin"], "external_change");
+    assert_eq!(item["task_key"], format!("shop#{number}"));
+    assert_eq!(item["work"], "Implements tasks-done/s1");
+    assert_eq!(item["state"], "in_stage");
+    assert_eq!(item["stage"], "review");
+    assert_eq!(item["stage_phase"], "awaiting_trigger");
+    assert_eq!(item["spec_id"], Value::Null);
+    assert_eq!(item["change_request"]["number"], number);
+    assert_eq!(item["available_actions"], json!(["cancel", "review"]));
+    assert_eq!(
+        item["external"],
+        json!({
+            "title": "Implements tasks-done/s1", "author": "alice", "from_fork": false, "draft": false,
+            "spec": { "spec_id": api.sim.spec_id.0, "slug": "tasks-done", "step_id": "S1" },
+            "cause": "auto", "actor": null,
+        })
+    );
+    let id = item["id"].as_str().unwrap();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["external"], item["external"]);
+    assert_eq!(detail.body["stage_runs"], json!([]));
+}
+
+#[test]
 fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     let cfg = SimConfig {
         ci: CiScript::Silent,

@@ -5,12 +5,13 @@ use serde_json::{Value, json};
 use crate::Ctx;
 use crate::authorship::CredentialBlock;
 use crate::event::{Event, Prompt};
+use crate::external;
 use crate::gate::{self, Check, GatePolicy};
 use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, GateResultId, StageRunId};
 use crate::job::{JobKind, exhausted_code};
 use crate::model::{
-    Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, GateResult, Retries, RunOwner,
-    StageRun, Task, Usage, WorkItem,
+    Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, ExternalChange, GateResult, Retries,
+    RunOwner, StageRun, Task, Usage, WorkItem,
 };
 use crate::rejection::Rejection;
 use crate::scope::ScopeViolation;
@@ -20,10 +21,12 @@ use crate::session::{
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
-    EnvironmentState, GateOutcome, GateSource, HookRunState, MergeMethod, ResumeCause,
+    EnvironmentState, ExternalCause, GateOutcome, GateSource, HookRunState, MergeMethod,
+    ResumeCause,
     ResumeTrigger, ScopeStage, SessionState, Stage, StagePhase, StageRunState, Trigger,
     WorkItemOrigin, WorkItemState,
 };
+use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopConfig {
@@ -179,6 +182,11 @@ pub enum TaskInput {
         kind: JobKind,
         error: Coded,
     },
+    ReviewRequested {
+        head_sha: String,
+        cause: ExternalCause,
+        actor: Option<String>,
+    },
 }
 
 pub fn decide(
@@ -187,8 +195,8 @@ pub fn decide(
     cfg: &LoopConfig,
     ctx: &mut Ctx<'_>,
 ) -> Result<Vec<Event>, Rejection> {
-    if task.item.origin != WorkItemOrigin::SpecStep {
-        return Err(Rejection::Unsupported);
+    if task.item.origin == WorkItemOrigin::ExternalChange {
+        return external::decide(task, input, ctx);
     }
     if task.item.state == WorkItemState::Superseded {
         return Err(Rejection::InvalidState {
@@ -386,6 +394,7 @@ pub fn decide(
         I::Resume { trigger } => d.resume(trigger, ctx),
         I::Cancel { reason } => return d.cancel(reason),
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
+        I::ReviewRequested { .. } => return Err(Rejection::Unsupported),
     })
 }
 
@@ -449,6 +458,7 @@ impl Decider<'_> {
             reason,
             retry_of,
             budget: self.cfg.budgets.get(&stage).copied(),
+            head_sha: None,
         }
     }
 
@@ -1856,6 +1866,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
                 StagePhase::MergingDocs | StagePhase::Verifying | StagePhase::TearingDown => {
                     Stage::Sync
                 }
+                StagePhase::AwaitingTrigger | StagePhase::AwaitingReview => Stage::Review,
             };
             // Merging again needs a fresh look at the change and its checks.
             let phase = if phase == StagePhase::Merging {
@@ -1907,6 +1918,80 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             updated_at: now,
         }));
     }
+    if let Event::ExternalChangeAccepted {
+        work_item_id,
+        project_id,
+        repo_id,
+        task_key,
+        title,
+        branch,
+        change_request_id,
+        number,
+        url,
+        base_branch,
+        head_sha,
+        author,
+        from_fork,
+        draft,
+        spec,
+        cause,
+        actor,
+    } = event
+    {
+        let mut t = Task::new(WorkItem {
+            id: *work_item_id,
+            project_id: *project_id,
+            origin: WorkItemOrigin::ExternalChange,
+            spec_id: None,
+            spec_revision_id: None,
+            step_id: None,
+            step_index: None,
+            task_key: task_key.clone(),
+            work: title.clone(),
+            repo_id: *repo_id,
+            branch: branch.clone(),
+            state: WorkItemState::InStage,
+            stage: Some(Stage::Review),
+            stage_phase: Some(StagePhase::AwaitingTrigger),
+            priority: 0,
+            version: 1,
+            admitted_at: None,
+            done_at: None,
+            created_at: now,
+            updated_at: now,
+        });
+        t.change_request = Some(ChangeRequest {
+            id: *change_request_id,
+            work_item_id: *work_item_id,
+            role: ChangeRole::Code,
+            repo_id: *repo_id,
+            number: *number,
+            url: url.clone(),
+            head_branch: branch.clone(),
+            base_branch: base_branch.clone(),
+            head_sha: head_sha.clone(),
+            state: ChangeState::Open,
+            merge_commit_sha: None,
+            merged_at: None,
+            skipped_at: None,
+            last_polled_at: None,
+            created_at: now,
+            updated_at: now,
+        });
+        t.external = Some(ExternalChange {
+            title: title.clone(),
+            author: author.clone(),
+            from_fork: *from_fork,
+            draft: *draft,
+            spec: spec.clone(),
+            cause: *cause,
+            actor: actor.clone(),
+            created_at: now,
+            spec_slug: None,
+            workflow: Workflow::default(),
+        });
+        return Some(t);
+    }
     let mut t = task?;
     if event.work_item_id() != Some(t.item.id) {
         return Some(t);
@@ -1941,6 +2026,16 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         return;
     }
     match event {
+        E::StageRunCancelled { stage_run_id, .. } => {
+            if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id) {
+                run.state = StageRunState::Cancelled;
+                run.ended_at = Some(now);
+                run.updated_at = now;
+            }
+            if t.item.state == WorkItemState::InStage && t.item.stage == Some(Stage::Review) {
+                t.item.stage_phase = Some(StagePhase::AwaitingTrigger);
+            }
+        }
         E::WorkItemRepinned {
             spec_revision_id,
             step_index,
@@ -1974,15 +2069,22 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             entry_phase,
             reason,
             budget,
+            head_sha,
             ..
         } => {
             count_retry(&mut t.retries, *stage, *trigger, reason.as_deref());
             let retired = t.stage_run.as_ref().map(|r| r.id);
-            if let Some(old) = t.stage_run.take() {
+            if let Some(mut old) = t.stage_run.take() {
+                if old.stage == Stage::Review && old.state == StageRunState::Pending {
+                    old.state = StageRunState::Cancelled;
+                    old.ended_at = Some(now);
+                    old.updated_at = now;
+                }
                 t.retired_runs.push(old);
             }
             t.prior_usage = Usage::default();
-            let waiting = *entry_phase == StagePhase::PreparingEnvironment;
+            let queued = *entry_phase == StagePhase::AwaitingReview;
+            let waiting = *entry_phase == StagePhase::PreparingEnvironment || queued;
             t.stage_run = Some(StageRun {
                 id: *stage_run_id,
                 work_item_id: t.item.id,
@@ -1996,7 +2098,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 trigger: *trigger,
                 reason: reason.clone(),
                 entry_phase: *entry_phase,
-                head_sha: None,
+                head_sha: head_sha.clone(),
                 docs_head_sha: None,
                 failure: None,
                 budget: *budget,
@@ -2016,7 +2118,13 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             } else {
                 t.gates.clear();
             }
-            if waiting {
+            if queued {
+                set_place(
+                    &mut t.item,
+                    WorkItemState::InStage,
+                    Some((*stage, *entry_phase)),
+                );
+            } else if waiting {
                 set_place(&mut t.item, WorkItemState::Admitted, None);
             } else {
                 set_place(
@@ -2266,6 +2374,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::WorkItemCreated { .. }
+        | E::ExternalChangeAccepted { .. }
         | E::RepoRegistered { .. }
         | E::ProjectRegistered { .. }
         | E::ProjectConfigChanged { .. }
@@ -2360,6 +2469,9 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
             | WorkItemState::Blocked
     ) {
         actions.push("cancel");
+    }
+    if external::awaiting_request(task) {
+        actions.push("review");
     }
     actions
 }
@@ -2463,6 +2575,7 @@ pub fn watches_change(task: &Task) -> bool {
         .as_ref()
         .is_some_and(|c| c.state == ChangeState::Open);
     open && match task.item.state {
+        WorkItemState::InStage if task.item.origin == WorkItemOrigin::ExternalChange => true,
         WorkItemState::Blocked => true,
         WorkItemState::InStage => {
             task.item.stage == Some(Stage::Dev)
