@@ -270,6 +270,7 @@ pub struct StatusReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebhookSignature {
     HmacSha256,
+    SharedToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

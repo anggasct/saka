@@ -260,3 +260,5 @@ pub fn pr(number: u64, state: &str, merged: bool) -> Value {
         "head": { "ref": "saka/two-step/s1", "sha": HEAD },
     })
 }
+
+pub mod gitlab;
