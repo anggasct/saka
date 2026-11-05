@@ -76,6 +76,59 @@ pub struct ChangeSnapshot {
     pub checks: Vec<Check>,
 }
 
+pub const MAX_OPEN_CHANGES: usize = 200;
+pub const MAX_CHANGE_FILES: usize = 3000;
+pub const MAX_SIGNALS: usize = 100;
+pub const MAX_CHANGE_TEXT_BYTES: usize = 4000;
+
+pub fn unique_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    paths
+        .into_iter()
+        .filter(|p| seen.insert(*p))
+        .map(String::from)
+        .collect()
+}
+
+pub fn clip_text(text: &str) -> String {
+    let cut = (0..=MAX_CHANGE_TEXT_BYTES.min(text.len()))
+        .rev()
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(0);
+    text[..cut].to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeSummary {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub url: String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub head_sha: String,
+    pub author: String,
+    pub labels: Vec<String>,
+    pub draft: bool,
+    pub from_fork: bool,
+    pub state: ChangeState,
+    pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignalKind {
+    Comment { body: String },
+    Label { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeSignal {
+    pub id: String,
+    pub at: Timestamp,
+    pub actor: String,
+    pub kind: SignalKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeRequest {
     pub repo: RepoRef,
@@ -123,6 +176,27 @@ pub trait Scm: Send + Sync {
     async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot>;
 
     async fn commit_checks(&self, repo: &RepoRef, sha: &str) -> PortResult<Vec<Check>>;
+
+    async fn list_open_changes(&self, repo: &RepoRef, max: usize)
+    -> PortResult<Vec<ChangeSummary>>;
+
+    async fn change_summary(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSummary>;
+
+    async fn change_files(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        max: usize,
+    ) -> PortResult<Vec<String>>;
+
+    async fn change_signals(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        since: Timestamp,
+    ) -> PortResult<Vec<ChangeSignal>>;
+
+    async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool>;
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
 
@@ -290,6 +364,7 @@ pub struct ScmCapabilities {
 pub enum WebhookTarget {
     Change { number: u64 },
     Head { sha: String },
+    Intake,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

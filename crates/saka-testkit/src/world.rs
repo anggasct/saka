@@ -16,10 +16,10 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_core::vocab::{HostTool, Tool};
 use saka_ports::{
-    Agents, Blob, ChangeCredential, ChangeOpening, ChangeSnapshot, ChangedPaths, Clock,
-    CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect,
-    DocFile, DocOpened, DocSource, DocTree, DocWrite, DocsRequest, EnvRef, Environments,
-    IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
+    Agents, Blob, ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary,
+    ChangedPaths, Clock, CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob, DocCommit,
+    DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite, DocsRequest, EnvRef,
+    Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
     OpenChangeRequest, OpenedChange, PortError, PortResult, PrepareRequest, PreparedDocs,
     PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand, RecipeCommandOutcome,
     Release, ReleaseIndex, RepoAccess, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, RunnerUnit,
@@ -31,6 +31,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::clock::FakeClock;
+
+mod changes;
+
+use changes::Signals;
+pub use changes::{BOT_AUTHOR, ChangeSpec, PrMeta};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentOutcome {
@@ -111,6 +116,8 @@ pub struct Stats {
     pub steers_to_cli: u32,
     pub reattaches: u32,
     pub mirror_reads: u32,
+    pub change_listings: u32,
+    pub change_file_reads: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +143,7 @@ pub struct Pr {
     pub merge_commit_sha: Option<String>,
     pub merged_head: Option<String>,
     pub opened_with: String,
+    pub meta: PrMeta,
 }
 
 pub const APP_CREDENTIAL: &str = "app";
@@ -183,6 +191,7 @@ struct State {
     merge_checks: Vec<(String, String, String)>,
     worktrees: BTreeMap<EnvironmentId, Worktree>,
     prs: Vec<Pr>,
+    signals: Signals,
     sessions: BTreeMap<SessionId, FakeSession>,
     events: VecDeque<RunnerEvent>,
     stats: Stats,
@@ -386,6 +395,7 @@ impl FakeWorld {
                 merge_checks: Vec::new(),
                 worktrees: BTreeMap::new(),
                 prs: Vec::new(),
+                signals: Signals::default(),
                 sessions: BTreeMap::new(),
                 events: VecDeque::new(),
                 stats: Stats::default(),
@@ -1960,6 +1970,7 @@ impl Scm for FakeWorld {
             merge_commit_sha: None,
             merged_head: None,
             opened_with: credential,
+            meta: PrMeta::by_saka(self.clock.now()),
         });
         s.stats.prs_opened += 1;
         Ok(ChangeOpening::Opened(OpenedChange {
@@ -2009,6 +2020,40 @@ impl Scm for FakeWorld {
                 Vec::new()
             },
         })
+    }
+
+    async fn list_open_changes(
+        &self,
+        repo: &RepoRef,
+        max: usize,
+    ) -> PortResult<Vec<ChangeSummary>> {
+        self.listed(repo, max)
+    }
+
+    async fn change_summary(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSummary> {
+        self.summarized(repo, number)
+    }
+
+    async fn change_files(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        max: usize,
+    ) -> PortResult<Vec<String>> {
+        self.files_changed(repo, number, max)
+    }
+
+    async fn change_signals(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        since: Timestamp,
+    ) -> PortResult<Vec<ChangeSignal>> {
+        self.signals_since(repo, number, since)
+    }
+
+    async fn can_write(&self, _repo: &RepoRef, login: &str) -> PortResult<bool> {
+        self.writes(login)
     }
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
@@ -2110,6 +2155,7 @@ impl Scm for FakeWorld {
                 (None, Some(sha)) => Some(WebhookTarget::Head {
                     sha: sha.to_string(),
                 }),
+                _ if t["intake"].as_bool() == Some(true) => Some(WebhookTarget::Intake),
                 _ => None,
             })
             .collect();

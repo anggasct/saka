@@ -13,7 +13,13 @@ pub const REQUIRED_PERMISSIONS: &[(&str, &str)] = &[
 
 pub const RECOMMENDED_PERMISSIONS: &[(&str, &str)] = &[("statuses", "write")];
 
-pub const REQUIRED_EVENTS: &[&str] = &["pull_request", "check_run", "check_suite", "status"];
+pub const REQUIRED_EVENTS: &[&str] = &[
+    "pull_request",
+    "issue_comment",
+    "check_run",
+    "check_suite",
+    "status",
+];
 
 pub const APP: AppRequirements = AppRequirements {
     permissions: REQUIRED_PERMISSIONS,
@@ -103,7 +109,13 @@ mod tests {
     fn manifest_events_are_the_required_events_sorted() {
         assert_eq!(
             manifest_events(),
-            ["check_run", "check_suite", "pull_request", "status"]
+            [
+                "check_run",
+                "check_suite",
+                "issue_comment",
+                "pull_request",
+                "status"
+            ]
         );
     }
 
@@ -168,7 +180,7 @@ mod tests {
         let have = vec!["pull_request".to_string(), "check_run".to_string()];
         assert_eq!(
             missing_events(&have, &manifest_events()),
-            ["check_suite", "status"]
+            ["check_suite", "issue_comment", "status"]
         );
     }
 }

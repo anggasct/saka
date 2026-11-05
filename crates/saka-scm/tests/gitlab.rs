@@ -791,3 +791,57 @@ async fn user_accounts_and_diagnosis_are_declared_unsupported() {
     let err = w.gl.parse_webhook("gitlab", &[], b"{}").unwrap_err();
     assert_eq!(err.code, "webhook_not_configured");
 }
+
+#[tokio::test]
+async fn intake_reads_map_errors_like_the_rest_and_a_failed_lookup_is_not_a_denial() {
+    let w = GitLabWorld::new().await;
+    serve(
+        &w,
+        "GET",
+        "/projects/acme%2Fapp/merge_requests",
+        502,
+        json!({}),
+    )
+    .await;
+    serve(
+        &w,
+        "GET",
+        "/projects/acme%2Fapp/merge_requests/5",
+        404,
+        json!({ "message": "404 Not found" }),
+    )
+    .await;
+    serve(&w, "GET", "/users", 500, json!({})).await;
+
+    let down = w.gl.list_open_changes(&w.repo, 200).await.unwrap_err();
+    assert_eq!(code(&down), ("scm_unavailable", true));
+    let missing = w.gl.change_summary(&w.repo, 5).await.unwrap_err();
+    assert_eq!(code(&missing), ("scm_repo_inaccessible", false));
+    let busy = w.gl.can_write(&w.repo, "alice").await.unwrap_err();
+    assert!(busy.retryable);
+    for err in [&down, &missing, &busy] {
+        assert!(!format!("{err:?}").contains(TOKEN), "{err:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_member_below_developer_cannot_write_and_a_missing_membership_cannot_either() {
+    let w = GitLabWorld::new().await;
+    serve(
+        &w,
+        "GET",
+        "/users",
+        200,
+        json!([{ "id": 7, "username": "alice" }]),
+    )
+    .await;
+    serve(
+        &w,
+        "GET",
+        "/projects/acme%2Fapp/members/all/7",
+        404,
+        json!({ "message": "404 Not found" }),
+    )
+    .await;
+    assert!(!w.gl.can_write(&w.repo, "alice").await.unwrap());
+}

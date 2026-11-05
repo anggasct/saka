@@ -17,6 +17,7 @@ use crate::github::app::unavailable;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGES: usize = 20;
+const PAGE_ITEMS: usize = 100;
 const PAGE_SIZE: &str = "100";
 const MAX_PROJECT_SEGMENTS: usize = 21;
 
@@ -193,11 +194,21 @@ impl GitLabClient {
     }
 
     pub(crate) async fn pages(&self, full_name: &str, first: Url) -> PortResult<Vec<Value>> {
+        self.pages_up_to(full_name, first, MAX_PAGES * PAGE_ITEMS)
+            .await
+    }
+
+    pub(crate) async fn pages_up_to(
+        &self,
+        full_name: &str,
+        first: Url,
+        max_items: usize,
+    ) -> PortResult<Vec<Value>> {
         let mut all = Vec::new();
         let mut url = first;
         url.query_pairs_mut().append_pair("per_page", PAGE_SIZE);
         let mut page = 1_u32;
-        for _ in 0..MAX_PAGES {
+        for _ in 0..max_items.div_ceil(PAGE_ITEMS).max(1) {
             let mut current = url.clone();
             if page > 1 {
                 current
@@ -209,6 +220,10 @@ impl GitLabClient {
                 return Err(self.unexpected("list", &reply));
             }
             all.extend(reply.body.as_array().cloned().unwrap_or_default());
+            if all.len() >= max_items {
+                all.truncate(max_items);
+                break;
+            }
             let next = reply
                 .headers
                 .get("x-next-page")

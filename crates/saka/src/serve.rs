@@ -22,10 +22,10 @@ use saka_env::{
     ReposConfig, SystemdSupervisor, ToolchainConfig, ToolchainInstaller, runtime_dir,
 };
 use saka_ports::{
-    ChangeOpening, ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote,
-    IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
-    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
-    StatusReport, TokenRefresh, UnitLimits, WebhookDelivery,
+    ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, Clock, DeviceCode, DevicePoll,
+    GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest,
+    PortError, PortResult, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm,
+    ScmCapabilities, StatusReport, TokenRefresh, UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -120,6 +120,43 @@ impl Scm for ScmRouter {
         self.get(&repo.integration_id)?
             .commit_checks(repo, sha)
             .await
+    }
+    async fn list_open_changes(
+        &self,
+        repo: &RepoRef,
+        max: usize,
+    ) -> PortResult<Vec<ChangeSummary>> {
+        self.get(&repo.integration_id)?
+            .list_open_changes(repo, max)
+            .await
+    }
+    async fn change_summary(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSummary> {
+        self.get(&repo.integration_id)?
+            .change_summary(repo, number)
+            .await
+    }
+    async fn change_files(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        max: usize,
+    ) -> PortResult<Vec<String>> {
+        self.get(&repo.integration_id)?
+            .change_files(repo, number, max)
+            .await
+    }
+    async fn change_signals(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        since: saka_core::time::Timestamp,
+    ) -> PortResult<Vec<ChangeSignal>> {
+        self.get(&repo.integration_id)?
+            .change_signals(repo, number, since)
+            .await
+    }
+    async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool> {
+        self.get(&repo.integration_id)?.can_write(repo, login).await
     }
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         self.get(&request.repo.integration_id)?.merge(request).await

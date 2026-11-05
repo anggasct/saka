@@ -80,6 +80,10 @@ fn targets(kind: &str, payload: &Value) -> Vec<WebhookTarget> {
             let attrs = &payload["object_attributes"];
             found.extend(change(&attrs["iid"]));
             found.extend(head(&attrs["last_commit"]["id"]));
+            found.insert(WebhookTarget::Intake);
+        }
+        "note" if payload["object_attributes"]["noteable_type"] == "MergeRequest" => {
+            found.insert(WebhookTarget::Intake);
         }
         "pipeline" => {
             found.extend(head(&payload["object_attributes"]["sha"]));
@@ -161,7 +165,8 @@ mod tests {
             mr.targets,
             vec![
                 WebhookTarget::Change { number: 12 },
-                WebhookTarget::Head { sha: HEAD.into() }
+                WebhookTarget::Head { sha: HEAD.into() },
+                WebhookTarget::Intake
             ]
         );
         assert_eq!(mr.action.as_deref(), Some("update"));
@@ -195,6 +200,14 @@ mod tests {
         assert_eq!(job.targets, vec![WebhookTarget::Head { sha: HEAD.into() }]);
         assert_eq!(job.action.as_deref(), Some("failed"));
 
+        let on_mr = parsed(&json!({
+            "object_kind": "note", "object_attributes": { "noteable_type": "MergeRequest" },
+        }));
+        assert_eq!(on_mr.targets, vec![WebhookTarget::Intake]);
+        let on_issue = parsed(&json!({
+            "object_kind": "note", "object_attributes": { "noteable_type": "Issue" },
+        }));
+        assert!(on_issue.targets.is_empty());
         for kind in ["push", "note", "issue"] {
             assert!(parsed(&json!({ "object_kind": kind })).targets.is_empty());
         }

@@ -1,6 +1,7 @@
 pub mod app;
 pub mod ci;
 mod diagnose;
+mod intake;
 pub mod manifest;
 pub mod requirements;
 pub mod user;
@@ -12,12 +13,13 @@ use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
 use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
 use saka_core::secret::SecretText;
+use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
 use saka_ports::{
-    ChangeCredential, ChangeOpening, ChangeSnapshot, DeviceCode, DevicePoll, IdentityLookup,
-    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
-    StatusReport, TokenRefresh, WebhookDelivery, WebhookSignature,
+    ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
+    DevicePoll, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange,
+    PortError, PortResult, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm,
+    ScmCapabilities, StatusReport, TokenRefresh, WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -325,6 +327,40 @@ impl Scm for GitHub {
         sha: &str,
     ) -> PortResult<Vec<saka_core::gate::Check>> {
         self.checks(&repo.full_name, sha).await
+    }
+
+    async fn list_open_changes(
+        &self,
+        repo: &RepoRef,
+        max: usize,
+    ) -> PortResult<Vec<ChangeSummary>> {
+        self.open_changes(repo, max).await
+    }
+
+    async fn change_summary(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSummary> {
+        self.summary_of(repo, number).await
+    }
+
+    async fn change_files(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        max: usize,
+    ) -> PortResult<Vec<String>> {
+        self.files_of(repo, number, max).await
+    }
+
+    async fn change_signals(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        since: Timestamp,
+    ) -> PortResult<Vec<ChangeSignal>> {
+        self.signals_of(repo, number, since).await
+    }
+
+    async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool> {
+        self.writer(repo, login).await
     }
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
