@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{deps, hygiene, metadata, supply_chain, wasm};
+use crate::{deps, hygiene, metadata, supply_chain, supply_chain_web, wasm};
 
 const PURE_CLIPPY_CONFIGS: &[&str] = &[
     "crates/saka-core/clippy.toml",
@@ -84,6 +84,7 @@ pub fn run() -> Result<()> {
         pnpm(&root, &["install", "--frozen-lockfile"])?;
         pnpm(&root, &["api:check"])
     })?;
+    step("supply chain (web)", || supply_chain_web::web(&root, false))?;
     step("pnpm lint", || pnpm(&root, &["lint"]))?;
     step("pnpm typecheck", || pnpm(&root, &["typecheck"]))?;
     step("pnpm test", || pnpm(&root, &["test"]))?;
