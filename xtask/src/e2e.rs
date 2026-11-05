@@ -763,7 +763,8 @@ fn build_saka(root: &Path) -> Result<PathBuf> {
     if !status.success() {
         bail!("cargo build -p saka exited with {status}");
     }
-    Ok(root.join("target/debug/saka"))
+    let target = metadata::target_directory(&metadata::load()?)?;
+    Ok(target.join("debug/saka"))
 }
 
 pub fn run() -> Result<()> {
