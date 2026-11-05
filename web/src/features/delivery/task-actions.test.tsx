@@ -4,7 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import { fakeApi, page } from "@/test/fake-api";
 import type { Recorded, Route, Routes } from "@/test/fake-api";
-import { detail, project, PROJECT_ID, spec, task } from "@/test/fixtures";
+import {
+  detail,
+  outsideTask,
+  project,
+  PROJECT_ID,
+  spec,
+  task,
+} from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 
 import type { WorkItemDetail } from "./queries";
@@ -415,5 +422,73 @@ describe("task actions", () => {
     expect(posts(requests, "cancel").map((r) => r.body)).toEqual([
       { reason: "wrong spec" },
     ]);
+  });
+});
+
+describe("review request", () => {
+  const waiting = detail(outsideTask);
+  const REVIEW = `/api/v1/work-items/${waiting.id}`;
+
+  it("asks for a review of the shown head with one key and closes", async () => {
+    const { requests } = fakeApi({
+      [REVIEW]: { body: waiting },
+      [`/api/v1/projects/${PROJECT_ID}`]: { body: project },
+      "/api/v1/work-items": { body: page([waiting]) },
+      "/api/v1/sessions": { body: page([]) },
+      "/api/v1/permission-requests": { body: page([]) },
+      [`${REVIEW}/actions/review`]: { status: 202, body: waiting },
+    });
+    renderWithProviders(<TaskPage workItemId={waiting.id} />);
+    expect(
+      await screen.findByRole("heading", { name: "app#7" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No spec")).toBeInTheDocument();
+    const header = screen.getByRole("banner");
+    await userEvent.click(
+      within(header).getByRole("button", { name: "Review" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("PR #7")).toBeInTheDocument();
+    expect(within(dialog).getByText("c0ffee000000")).toBeInTheDocument();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Ask for a review" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    const sent = requests.filter(
+      (r) => r.method === "POST" && r.path === `${REVIEW}/actions/review`,
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(sent[0]?.body).toEqual({});
+  });
+
+  it("says a head already has a review and keeps the dialog open", async () => {
+    fakeApi({
+      [REVIEW]: { body: waiting },
+      [`/api/v1/projects/${PROJECT_ID}`]: { body: project },
+      "/api/v1/work-items": { body: page([waiting]) },
+      "/api/v1/sessions": { body: page([]) },
+      "/api/v1/permission-requests": { body: page([]) },
+      [`${REVIEW}/actions/review`]: problem(409, "review_already_requested", {
+        head_sha: "c0ffee".padEnd(40, "0"),
+      }),
+    });
+    renderWithProviders(<TaskPage workItemId={waiting.id} />);
+    const header = await screen.findByRole("banner");
+    await userEvent.click(
+      within(header).getByRole("button", { name: "Review" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Ask for a review" }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "A review is already requested at c0ffee000000.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

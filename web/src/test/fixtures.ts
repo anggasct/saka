@@ -133,6 +133,40 @@ export const blockedTask = task(1, {
 
 export const queuedTask = task(2, {});
 
+export const outsideTask = task(4, {
+  origin: "external_change",
+  spec_id: null,
+  spec_revision_id: null,
+  step_id: null,
+  step_index: null,
+  task_key: "app#7",
+  work: "Add retries to the poller",
+  branch: "feature/retries",
+  state: "in_stage",
+  stage: "review",
+  stage_phase: "awaiting_trigger",
+  change_request: {
+    id: "0193f0c4-1b2a-7c3d-9e8f-001122334477",
+    number: 7,
+    url: "https://github.com/acme/tasks/pull/7",
+    state: "open",
+    head_sha: "c0ffee".padEnd(40, "0"),
+    base_branch: "main",
+    merge_commit_sha: null,
+    merged_at: null,
+  },
+  external: {
+    title: "Add retries to the poller",
+    author: "alice",
+    from_fork: true,
+    draft: false,
+    spec: null,
+    cause: "auto",
+    actor: null,
+  },
+  available_actions: ["cancel", "review"],
+});
+
 export const supersededTask = task(3, {
   state: "superseded",
   available_actions: [],

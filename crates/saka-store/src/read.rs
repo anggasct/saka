@@ -1401,11 +1401,15 @@ pub fn tracked_changes(conn: &Connection, repo: RepoId) -> Result<Vec<TrackedCha
     Ok(out)
 }
 
-pub fn spec_step_branches(conn: &Connection, repo: RepoId) -> Result<Vec<String>> {
-    let mut stmt =
-        conn.prepare("SELECT branch FROM work_item WHERE repo_id = ?1 AND origin = 'spec_step'")?;
-    let rows = stmt.query_map([repo.0.to_string()], |r| r.get::<_, String>(0))?;
-    Ok(rows.collect::<std::result::Result<_, _>>()?)
+pub fn spec_step_branches(conn: &Connection, repo: RepoId) -> Result<Vec<(String, WorkItemId)>> {
+    let mut stmt = conn
+        .prepare("SELECT branch, id FROM work_item WHERE repo_id = ?1 AND origin = 'spec_step'")?;
+    let mut rows = stmt.query([repo.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push((row.get("branch")?, WorkItemId(uuid(row, "id")?)));
+    }
+    Ok(out)
 }
 
 pub fn change_cursors(

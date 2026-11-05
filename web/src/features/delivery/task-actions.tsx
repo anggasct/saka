@@ -7,7 +7,13 @@ import { ActionDialog } from "./action-dialog";
 import { useFormat } from "./format";
 import { codeOf } from "./page-error";
 import type { WorkItem } from "./queries";
-import { cancelTask, mergeTask, retryTask, runPrimaryAction } from "./queries";
+import {
+  cancelTask,
+  mergeTask,
+  requestReview,
+  retryTask,
+  runPrimaryAction,
+} from "./queries";
 import { blockerText, label, record, sha } from "./text";
 
 const RELOAD_ON = ["version_stale", "invalid_state", "blocker_not_open"];
@@ -162,6 +168,33 @@ export function CancelDialog({
   );
 }
 
+function ReviewDialog({ task }: { task: WorkItem }) {
+  const t = useT();
+  const after = useAfterAction();
+  const change = task.change_request;
+  return (
+    <ActionDialog
+      trigger={t("task.review.trigger")}
+      triggerVariant="default"
+      title={t("task.review.title")}
+      description={t("task.review.description")}
+      submit={t("task.review.submit")}
+      onSubmit={(_, key) => after(() => requestReview(task.id, key))}
+    >
+      {change && (
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+          <dt className="font-medium">{t("task.change.title")}</dt>
+          <dd>{t("task.change", { number: change.number })}</dd>
+          <dt className="font-medium">{t("task.head")}</dt>
+          <dd>
+            <code>{sha(change.head_sha)}</code>
+          </dd>
+        </dl>
+      )}
+    </ActionDialog>
+  );
+}
+
 export function TaskActions({ task }: { task: WorkItem }) {
   const primary = task.blocker?.primary_action.kind;
   const actions = task.available_actions.filter((a) => a !== primary);
@@ -170,6 +203,7 @@ export function TaskActions({ task }: { task: WorkItem }) {
   }
   return (
     <div className="flex flex-wrap gap-2">
+      {actions.includes("review") && <ReviewDialog task={task} />}
       {actions.includes("merge") && <MergeDialog task={task} />}
       {actions.includes("retry") && <RetryDialog task={task} />}
       {actions.includes("cancel") && <CancelDialog task={task} />}

@@ -324,6 +324,21 @@ export async function cancelTask(
   );
 }
 
+export async function requestReview(
+  workItemId: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/review", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: {},
+    }),
+  );
+}
+
 export async function answerPermission(
   permissionRequestId: string,
   answer: { decision: Decision; message: string | null; remember: boolean },

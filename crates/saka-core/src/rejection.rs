@@ -98,6 +98,10 @@ pub enum Rejection {
     UserTokenRepoInaccessible { repos: Value },
     #[error("a review was already requested at this head")]
     ReviewAlreadyRequested { head_sha: String },
+    #[error("the change request does not exist")]
+    ChangeRequestNotFound { repo: String, number: u64 },
+    #[error("the change request belongs to a task made from a spec step")]
+    ChangeRequestOwned { work_item_id: String },
     #[error("the change request already has a task")]
     ChangeRequestTracked { work_item_id: String },
     #[error("the change request is no longer open")]
@@ -170,6 +174,8 @@ impl Rejection {
             Rejection::ReviewAlreadyRequested { .. } => "review_already_requested",
             Rejection::ChangeRequestNotOpen { .. } => "change_request_not_open",
             Rejection::ChangeRequestTracked { .. } => "change_request_tracked",
+            Rejection::ChangeRequestNotFound { .. } => "change_request_not_found",
+            Rejection::ChangeRequestOwned { .. } => "change_request_owned",
             Rejection::EntryPointDisabled { .. } => "entry_point_disabled",
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
@@ -247,7 +253,11 @@ impl Rejection {
             Rejection::ChangeRequestNotOpen { number, state } => {
                 json!({ "number": number, "state": state })
             }
-            Rejection::ChangeRequestTracked { work_item_id } => {
+            Rejection::ChangeRequestNotFound { repo, number } => {
+                json!({ "repo": repo, "number": number })
+            }
+            Rejection::ChangeRequestOwned { work_item_id }
+            | Rejection::ChangeRequestTracked { work_item_id } => {
                 json!({ "work_item_id": work_item_id })
             }
             Rejection::EntryPointDisabled { entry } => json!({ "entry": entry }),

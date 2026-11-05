@@ -1007,6 +1007,82 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/external-changes": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "take_external_change",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/file": {
       "get": {
         "tags": [
@@ -3226,6 +3302,73 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/actions/review": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "review",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items/{work_item_id}/work-packet": {
       "get": {
         "tags": [
@@ -4191,6 +4334,29 @@
             "type": "string"
           }
         }
+      },
+      "ExternalChangeRequest": {
+        "type": "object",
+        "description": "Request body that takes a pull request opened outside Saka and asks for its review.",
+        "required": [
+          "number"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The pull request number, 1 or more.",
+            "minimum": 0
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the repo binding in the project; `null` means the default repo."
+          }
+        },
+        "additionalProperties": false
       },
       "ExternalSpec": {
         "type": "object",
@@ -6488,6 +6654,11 @@
             "description": "1 to 500 characters."
           }
         },
+        "additionalProperties": false
+      },
+      "ReviewBody": {
+        "type": "object",
+        "description": "Request body of a review request; no fields.",
         "additionalProperties": false
       },
       "Revision": {

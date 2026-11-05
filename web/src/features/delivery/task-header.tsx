@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
 
+import { ExternalBadges } from "./external-group";
 import { permissionAnchor } from "./permission-card";
 import type { ProjectItem, SpecItem, WorkItem } from "./queries";
 import { isRetired, placeText, stateTone } from "./task-state";
@@ -37,12 +38,15 @@ export function TaskHeader({
         {t("task.back")}
       </Link>
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-semibold">
-          {t("task.step", { step: task.step_id ?? task.task_key })}
+        <h1 className="text-2xl font-semibold break-all">
+          {task.external
+            ? task.task_key
+            : t("task.step", { step: task.step_id ?? task.task_key })}
         </h1>
         <Badge tone={stateTone(task.state)}>
           {label(t, "task.state", task.state)}
         </Badge>
+        <ExternalBadges task={task} />
         {task.pending_permission_count > 0 &&
           (firstPermission === undefined ? (
             <Badge tone="attention">{waiting}</Badge>
@@ -78,6 +82,12 @@ export function TaskHeader({
         <dd className="break-all">
           <code>{task.branch}</code>
         </dd>
+        {task.external && (
+          <>
+            <dt className="font-medium">{t("external.author")}</dt>
+            <dd className="break-words">{task.external.author}</dd>
+          </>
+        )}
         {spec !== undefined && (
           <>
             <dt className="font-medium">{t("task.spec")}</dt>

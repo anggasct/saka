@@ -179,6 +179,7 @@ struct Extra<'a> {
 #[derive(Debug, Clone, Copy)]
 enum Shows {
     Task,
+    Taken(bool),
     Draft,
     Permission(saka_core::ids::PermissionRequestId),
     Session(saka_core::ids::SessionId),
@@ -297,6 +298,7 @@ impl Engine {
         if let Some((action, shows)) = extra.action {
             let reply = match shows {
                 Shows::Task | Shows::Draft => (action.respond)(Produced::Task(&after)),
+                Shows::Taken(created) => (action.respond)(Produced::Taken(&after, created)),
                 Shows::Permission(pid) => {
                     let request = after
                         .permissions

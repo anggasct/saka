@@ -1195,6 +1195,126 @@ pub async fn primary_action(
 }
 
 #[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/review", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::ReviewBody,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"), (status = 502, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn review(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let item = WorkItemId(tri!(path_id(&id)));
+    let _: dto::ReviewBody = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let detail = tri!(engine.work_item(item));
+    let project = detail.as_ref().map(|d| d.task.item.project_id);
+    let repo_name = detail.and_then(|d| d.repo_name);
+    let respond = |p: Produced<'_>| match p {
+        Produced::Task(t) => reply(
+            StatusCode::ACCEPTED,
+            &dto::WorkItem::from_task(t, repo_name.as_deref(), &[], None),
+        ),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "work_item.review",
+        target_type: "work_item",
+        target_id: Some(item.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .request_review_with(item, &cause, Some(&action))
+                .await
+                .map(|_| project)
+                .map_err(|e| (e, project))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/external-changes", tag = "delivery",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::ExternalChangeRequest,
+    responses(
+        (status = 201, body = dto::WorkItem),
+        (status = 200, body = dto::WorkItem),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn take_external_change(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let req: dto::ExternalChangeRequest = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let known = tri!(engine.project(project)).is_some();
+    let respond = |p: Produced<'_>| match p {
+        Produced::Taken(t, created) => {
+            let repo = t.item.task_key.rsplit_once('#').map(|(name, _)| name);
+            reply(
+                if created {
+                    StatusCode::CREATED
+                } else {
+                    StatusCode::OK
+                },
+                &dto::WorkItem::from_task(t, repo, &[], None),
+            )
+        }
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "external_change.take",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .take_change_with(
+                    project,
+                    req.repo.as_deref(),
+                    req.number,
+                    &cause,
+                    Some(&action),
+                )
+                .await
+                .map(|_| Some(project))
+                .map_err(|e| (e, known.then_some(project)))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
     get, path = "/api/v1/permission-requests", tag = "runtime", params(dto::PermissionQuery),
     responses((status = 200, body = dto::Page<dto::PermissionRequest>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
 )]

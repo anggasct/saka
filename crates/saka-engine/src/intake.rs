@@ -16,7 +16,8 @@ use saka_ports::{
 use saka_store::{Batch, ChangeCursorRow, read};
 use serde_json::json;
 
-use crate::{Cause, Engine, EngineError, Extra, Mode, Result};
+use crate::action::{Action, Produced};
+use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
 
 pub const SCAN_ACTOR: &str = "system:scan";
 const PATH_FILTER_CACHE_MAX: usize = 2_000;
@@ -62,6 +63,8 @@ pub(crate) struct Taking<'a> {
     pub spec: Option<SpecLink>,
     pub cause: ExternalCause,
     pub actor: Option<String>,
+    pub by: Option<&'a Cause>,
+    pub action: Option<&'a Action<'a>>,
 }
 
 struct Requested {
@@ -166,7 +169,9 @@ impl Engine {
                     skip("skipped_tracked");
                     continue;
                 }
-                None if !change.from_fork && branches.contains(&change.head_branch) => {
+                None if !change.from_fork
+                    && branches.iter().any(|(b, _)| *b == change.head_branch) =>
+                {
                     skip("skipped_owned");
                     continue;
                 }
@@ -221,6 +226,8 @@ impl Engine {
                         spec: link,
                         cause: cause_of,
                         actor: actor.clone(),
+                        by: None,
+                        action: None,
                     };
                     match self.accept_external(&project, &repo, change, taking) {
                         Ok(_) => {
@@ -426,6 +433,8 @@ impl Engine {
             spec,
             cause: cause_of,
             actor,
+            by,
+            action,
         } = taking;
         let _guard = self.locked()?;
         let now = self.now();
@@ -456,7 +465,7 @@ impl Engine {
         let mut ids = IdsSource(&*self.ports.ids);
         let mut ctx = Ctx { now, ids: &mut ids };
         let events = external::accept(&project.workflow, incoming, cause_of, actor, &mut ctx)?;
-        let cause = self.cause(SCAN_ACTOR);
+        let cause = by.cloned().unwrap_or_else(|| self.cause(SCAN_ACTOR));
         let mut batch = Batch::new(now);
         let mut current: Option<Task> = None;
         for e in &events {
@@ -474,7 +483,6 @@ impl Engine {
         let mut created =
             current.ok_or_else(|| EngineError::Internal("accepted change made no task".into()))?;
         batch.tasks.push(created.clone());
-        self.commit(&batch)?;
         let slug = created.external.as_ref().and_then(|x| {
             let link = x.spec.as_ref()?;
             self.store
@@ -486,7 +494,188 @@ impl Engine {
             x.workflow = project.workflow.clone();
             x.spec_slug = slug.clone();
         });
+        if let Some(action) = action {
+            let reply = (action.respond)(Produced::Taken(&created, true));
+            batch.action = Some(action.record(
+                self,
+                &cause,
+                Some(project.id),
+                Some(created.item.id.0),
+                reply,
+            ));
+        }
+        self.commit(&batch)?;
         Ok(created)
+    }
+
+    pub async fn request_review_with(
+        &self,
+        id: saka_core::ids::WorkItemId,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<saka_core::event::Event>> {
+        let task = self.load_task(id)?;
+        let (Some(change), true) = (
+            task.change_request.as_ref(),
+            task.item.origin == WorkItemOrigin::ExternalChange,
+        ) else {
+            return Err(Rejection::Unsupported.into());
+        };
+        if !task.is_at_stage(Stage::Review) {
+            return Err(Rejection::InvalidState {
+                state: task.item.state.as_str().to_string(),
+            }
+            .into());
+        }
+        let repo = self.repo_ref_stored(task.item.repo_id)?;
+        let summary = self.ports.scm.change_summary(&repo, change.number).await?;
+        if summary.state != saka_core::vocab::ChangeState::Open {
+            return Err(Rejection::ChangeRequestNotOpen {
+                number: change.number,
+                state: summary.state.as_str(),
+            }
+            .into());
+        }
+        let events = self.decide(
+            id,
+            Some(TaskInput::ReviewRequested {
+                head_sha: summary.head_sha,
+                cause: ExternalCause::Operator,
+                actor: None,
+            }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )?;
+        self.counters
+            .review_request(ExternalCause::Operator.as_str());
+        Ok(events)
+    }
+
+    pub async fn take_change_with(
+        &self,
+        project_id: ProjectId,
+        repo_name: Option<&str>,
+        number: u64,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<(Task, bool)> {
+        if number == 0 {
+            return Err(EngineError::Invalid {
+                field: "number",
+                code: "range".into(),
+            });
+        }
+        let project = self
+            .store
+            .read(|c| read::load_project(c, project_id))?
+            .ok_or(Rejection::NotFound)?;
+        if project.workflow.change_request.is_none() {
+            return Err(Rejection::EntryPointDisabled {
+                entry: "change_request",
+            }
+            .into());
+        }
+        if !project.workflow.has_stage(Stage::Review) {
+            return Err(Rejection::StageNotInWorkflow { stage: "review" }.into());
+        }
+        let binding = match repo_name {
+            None => project.repos.iter().find(|r| r.is_default),
+            Some(name) => project.repos.iter().find(|r| r.name == name),
+        }
+        .cloned()
+        .ok_or_else(|| EngineError::Invalid {
+            field: "repo",
+            code: "unknown".into(),
+        })?;
+        let repo = self.repo_ref_stored(binding.repo_id)?;
+        let summary = match self.ports.scm.change_summary(&repo, number).await {
+            Ok(summary) => summary,
+            Err(e) if e.code == "scm_repo_inaccessible" => {
+                return Err(Rejection::ChangeRequestNotFound {
+                    repo: binding.name,
+                    number,
+                }
+                .into());
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if summary.state != saka_core::vocab::ChangeState::Open {
+            return Err(Rejection::ChangeRequestNotOpen {
+                number,
+                state: summary.state.as_str(),
+            }
+            .into());
+        }
+        let (tracked, branches, specs) = self.store.read(|c| {
+            Ok((
+                read::tracked_changes(c, binding.repo_id)?,
+                read::spec_step_branches(c, binding.repo_id)?,
+                read::project_specs(c, project_id)?,
+            ))
+        })?;
+        match tracked.iter().find(|t| t.number == number) {
+            Some(t) if t.origin == WorkItemOrigin::SpecStep => {
+                return Err(Rejection::ChangeRequestOwned {
+                    work_item_id: t.work_item_id.0.to_string(),
+                }
+                .into());
+            }
+            Some(t) if t.state.is_terminal() => {
+                return Err(Rejection::ChangeRequestTracked {
+                    work_item_id: t.work_item_id.0.to_string(),
+                }
+                .into());
+            }
+            Some(t) => {
+                let events = self.decide(
+                    t.work_item_id,
+                    Some(TaskInput::ReviewRequested {
+                        head_sha: summary.head_sha.clone(),
+                        cause: ExternalCause::Operator,
+                        actor: None,
+                    }),
+                    Mode::Command,
+                    cause,
+                    Extra {
+                        action: action.map(|a| (a, Shows::Taken(false))),
+                        ..Extra::default()
+                    },
+                )?;
+                if !events.is_empty() {
+                    self.counters
+                        .review_request(ExternalCause::Operator.as_str());
+                }
+                return Ok((self.load_task(t.work_item_id)?, false));
+            }
+            None => {}
+        }
+        if let Some((_, owner)) = branches
+            .iter()
+            .find(|(b, _)| *b == summary.head_branch && !summary.from_fork)
+        {
+            return Err(Rejection::ChangeRequestOwned {
+                work_item_id: owner.0.to_string(),
+            }
+            .into());
+        }
+        let link = self.spec_link(&summary, &specs)?;
+        let taking = Taking {
+            repo_name: &binding.name,
+            spec: link,
+            cause: ExternalCause::Operator,
+            actor: None,
+            by: Some(cause),
+            action,
+        };
+        let created = self.accept_external(&project, &repo, &summary, taking)?;
+        self.counters.intake_change("accepted");
+        self.counters
+            .review_request(ExternalCause::Operator.as_str());
+        Ok((created, true))
     }
 
     pub(crate) fn schedule_scans(
