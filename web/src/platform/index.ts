@@ -20,6 +20,7 @@ export type Platform = {
   rootElement: () => HTMLElement | null;
   preferences: Preferences;
   setDocumentLanguage: (locale: string) => void;
+  copyText: (text: string) => Promise<boolean>;
   observeVisible: (element: Element, onVisible: () => void) => () => void;
 };
 

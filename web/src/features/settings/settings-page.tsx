@@ -7,6 +7,7 @@ import { useT } from "@/i18n/use-t";
 import { Card } from "@/ui/card";
 import { Skeleton } from "@/ui/skeleton";
 
+import { AuthorshipSection } from "./authorship-section";
 import { ConfigSection } from "./config-section";
 import { ReposSection } from "./repos-section";
 import { SecretsSection } from "./secrets-section";
@@ -28,6 +29,7 @@ export function SettingsPage({ projectId }: { projectId: string }) {
           <ConfigSection project={project.data} />
           <WorkflowSection project={project.data} />
           <SecretsSection projectId={project.data.id} />
+          <AuthorshipSection projectId={project.data.id} />
         </>
       ) : missing ? (
         <Card role="alert" className="space-y-3 p-4">
