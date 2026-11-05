@@ -25,6 +25,14 @@ export const webPlatform: Platform = {
   setDocumentLanguage: (locale) => {
     document.documentElement.lang = locale;
   },
+  copyText: async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  },
   observeVisible: (element, onVisible) => {
     if (typeof IntersectionObserver === "undefined") {
       return () => undefined;

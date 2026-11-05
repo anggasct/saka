@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { AUTHORSHIP, botAuthorship, LINK } from "@/test/authorship-fixtures";
 import { fakeApi, page } from "@/test/fake-api";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID, spec } from "@/test/fixtures";
@@ -26,6 +27,8 @@ function routes(extra: Routes = {}): Routes {
     [PROJECTS]: { body: page([project]) },
     [PROJECT]: { body: project },
     [SECRETS]: { body: { items: [] } },
+    [AUTHORSHIP]: { body: botAuthorship },
+    [LINK]: problemBody(404, "user_link_not_found"),
     ...extra,
   };
 }

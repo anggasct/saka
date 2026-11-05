@@ -171,6 +171,9 @@ export function errorText(
           )
           .join(", ")
       : "",
+    projects: Array.isArray(params.projects)
+      ? params.projects.map((p) => text(record(p).name)).join(", ")
+      : "",
     cause: text(params.cause) || "other",
     status: text(params.status),
     repos: Array.isArray(params.repos)

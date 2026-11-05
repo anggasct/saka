@@ -1,4 +1,4 @@
-import { errorText, record, text } from "@/features/delivery/text";
+import { errorText, label, record, text } from "@/features/delivery/text";
 import type { T } from "@/features/delivery/text";
 import { CATALOGS } from "@/i18n/messages";
 import type { MessageKey } from "@/i18n/messages";
@@ -88,16 +88,41 @@ export function configErrorText(
   return t(key, problemValues(params));
 }
 
+function detailed(t: T, params: Record<string, unknown>) {
+  const integrations = params.integrations;
+  const repos = params.repos;
+  return {
+    ...params,
+    integrations: Array.isArray(integrations)
+      ? integrations.map((raw) => {
+          if (typeof raw === "string") {
+            return raw;
+          }
+          const item = record(raw);
+          const state = text(item.state);
+          const id = text(item.integration_id);
+          return state === ""
+            ? id
+            : `${id} (${label(t, "settings.linkState", state)})`;
+        })
+      : integrations,
+    repos: Array.isArray(repos)
+      ? repos.map((raw) => {
+          const item = record(raw);
+          const status = text(item.status);
+          const name = text(item.full_name);
+          return { full_name: status === "" ? name : `${name} (${status})` };
+        })
+      : repos,
+  };
+}
+
 export function settingsErrorText(
   t: T,
   code: string,
   params: Record<string, unknown> = {},
 ): string {
-  const key = `error.${code}`;
-  if (known(key) && key !== "error.validation_failed") {
-    return t(key, problemValues(params));
-  }
-  return errorText(t, code, params);
+  return errorText(t, code, detailed(t, params));
 }
 
 export function warningText(
@@ -123,4 +148,11 @@ export function configPath(projectPath: string): string {
 
 export function shortSha(hash: string): string {
   return hash.replace(/^sha256:/, "").slice(0, 12);
+}
+
+const SOON_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function expiresSoon(iso: string, now: number): boolean {
+  return Date.parse(iso) - now < SOON_DAYS * DAY_MS;
 }

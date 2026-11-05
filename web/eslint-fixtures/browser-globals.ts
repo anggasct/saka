@@ -9,3 +9,5 @@ export const all = [
   Notification,
   IntersectionObserver,
 ];
+
+export const copy = navigator.clipboard.writeText("code");
