@@ -250,9 +250,6 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
     if mode == HookMode::Gate && on != HookEvent::Merged {
         return Err(issue("hook_gate_event_invalid", name, Some("mode")));
     }
-    if mode == HookMode::Gate {
-        return Err(issue("hook_mode_unsupported", name, Some("mode")));
-    }
     let kind: HookActionKind = raw
         .action
         .parse()
@@ -684,6 +681,42 @@ pub fn rerun(
     ))
 }
 
+pub fn skipped(run: &HookRun, ids: &mut dyn IdSource) -> [Event; 2] {
+    let id = HookRunId::new(ids);
+    [
+        Event::HookRunQueued {
+            hook_run_id: id,
+            project_id: run.project_id,
+            hook: run.hook.clone(),
+            action: run.action,
+            mode: run.mode,
+            trigger: run.trigger,
+            work_item_id: run.work_item_id,
+            spec_id: run.spec_id,
+            repo_id: run.repo_id,
+            sha: run.sha.clone(),
+            context: run.context.clone(),
+            source_event_id: run.source_event_id,
+            rerun_of: Some(run.id),
+        },
+        Event::HookRunFinished {
+            hook_run_id: id,
+            outcome: HookRunState::Succeeded,
+            attempts: 0,
+            duration_ms: 0,
+            result: json!({
+                "exit_code": null,
+                "timed_out": false,
+                "http_status": null,
+                "log": null,
+                "output_tail": null,
+                "skipped": "hook_removed",
+            }),
+            error: None,
+        },
+    ]
+}
+
 pub fn finished(
     run: &HookRun,
     outcome: HookRunState,
@@ -826,7 +859,7 @@ mod tests {
         assert_eq!(code(bad), "hook_gate_event_invalid");
         let mut bad = raw("notify");
         bad.mode = Some("gate".into());
-        assert_eq!(code(bad), "hook_mode_unsupported");
+        assert_eq!(code(bad), "ok");
         assert_eq!(code(raw("teleport")), "hook_action_invalid");
         assert_eq!(code(raw("run_host")), "hook_field_invalid");
         let mut bad = raw("notify");

@@ -104,6 +104,8 @@ pub enum Rejection {
     HookRunPending,
     #[error("hook is not configured")]
     HookNotConfigured { hook: String },
+    #[error("hook run holds a task")]
+    HookRunGated { work_item_id: String },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -159,6 +161,7 @@ impl Rejection {
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
             Rejection::HookRunPending => "hook_run_pending",
             Rejection::HookNotConfigured { .. } => "hook_not_configured",
+            Rejection::HookRunGated { .. } => "hook_run_gated",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -207,6 +210,7 @@ impl Rejection {
             }
             Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
             Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
+            Rejection::HookRunGated { work_item_id } => json!({ "work_item_id": work_item_id }),
             Rejection::FilePathConflict { path } => json!({ "path": path }),
             Rejection::FilePushRejected { branch } => json!({ "branch": branch }),
             Rejection::FileUnsupported { reason } => reason.params(),

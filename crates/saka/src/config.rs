@@ -1283,11 +1283,12 @@ mod tests {
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
         let hooks = cfg.hooks_parsed().unwrap();
-        assert_eq!(hooks.len(), 4);
+        assert_eq!(hooks.len(), 5);
         assert_eq!(hooks[0].name, "announce-merge");
         assert_eq!(hooks[1].filter.codes.len(), 2);
         assert_eq!(hooks[2].action.kind().as_str(), "run");
         assert_eq!(hooks[3].action.kind().as_str(), "run_host");
+        assert_eq!(hooks[4].mode.as_str(), "gate");
         assert_eq!(
             cfg.scm[0].client_id.as_deref(),
             Some("Iv23liAbCdEfGh123456")
@@ -1310,7 +1311,7 @@ mod tests {
             ("timeout_secs = 99\n", "hook_timeout_invalid"),
             ("command = \"ls\"\n", "hook_field_invalid"),
             ("codes = [\"ci_red\"]\n", "hook_filter_invalid"),
-            ("mode = \"gate\"\n", "hook_mode_unsupported"),
+            ("mode = \"gate\"\ncodes = [\"x\"]\n", "hook_filter_invalid"),
         ] {
             let e = Config::parse(&hook(extra)).unwrap_err();
             assert_eq!(e.code, "config_hook_invalid", "{extra}");
