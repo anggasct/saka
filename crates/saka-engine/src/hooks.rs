@@ -40,7 +40,7 @@ pub(crate) fn empty_result() -> Value {
     })
 }
 
-fn failed(code: &str, params: Value, result: Value, duration_ms: i64) -> HookReport {
+pub(crate) fn failed(code: &str, params: Value, result: Value, duration_ms: i64) -> HookReport {
     HookReport {
         outcome: HookRunState::Failed,
         duration_ms,
@@ -293,14 +293,19 @@ impl Engine {
             Some((hook, HookAction::Notify { channel })) => {
                 self.hook_notify(&run, hook, channel).await?
             }
-            Some((_, HookAction::Run { .. } | HookAction::RunHost { .. })) => failed(
-                "hook_action_unsupported",
-                json!({ "action": run.action }),
-                empty_result(),
-                0,
-            ),
+            Some((hook, HookAction::Run { command, secrets })) => {
+                self.hook_in_environment(&run, hook, command, secrets)
+                    .await?
+            }
+            Some((hook, HookAction::RunHost { command, cwd })) => {
+                self.hook_on_host(&run, hook, command, cwd.as_deref())
+                    .await?
+            }
         };
-        let duration_ms = self.now().since(started);
+        let duration_ms = match report.duration_ms {
+            0 => self.now().since(started),
+            known => known,
+        };
         Ok(Effect::Hook(HookReport {
             duration_ms,
             ..report

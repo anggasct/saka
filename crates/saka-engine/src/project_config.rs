@@ -584,6 +584,20 @@ url = "https://github.com/acme/web"
     }
 
     #[test]
+    fn a_hook_in_the_project_file_is_refused_so_the_repo_can_never_define_one() {
+        let text = format!(
+            "[project]\nname = \"shop\"\n{}\n[[hook]]\nname = \"x\"\naction = \"run_host\"\ncommand = \"id\"\n",
+            repo_block("api", "default = true\n"),
+        );
+        let found = codes(&text);
+        assert!(
+            found.iter().any(|(code, field, _)| *code == "field_unknown"
+                && field.as_deref().is_some_and(|f| f.starts_with("hook"))),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn every_problem_is_reported_at_once_in_line_order() {
         let text = format!(
             "[project]\nname = \"\"\nowner = \"me\"\n{}{}",

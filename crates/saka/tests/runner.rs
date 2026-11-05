@@ -107,6 +107,10 @@ fn main() -> ExitCode {
             systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env,
         ),
         (
+            "systemd_runs_a_host_hook_with_only_the_allowlisted_env_and_keeps_its_output",
+            systemd_runs_a_host_hook_with_only_the_allowlisted_env_and_keeps_its_output,
+        ),
+        (
             "systemd_probe_finds_the_user_manager",
             systemd_probe_finds_the_user_manager,
         ),
@@ -1004,6 +1008,55 @@ fn systemd_probe_finds_the_user_manager() {
             SystemdSupervisor.probe().await.unwrap(),
             saka_core::diagnostics::SupervisorProbe::Available
         );
+    });
+}
+
+fn systemd_runs_a_host_hook_with_only_the_allowlisted_env_and_keeps_its_output() {
+    if std::env::var("SAKA_TEST_SYSTEMD").as_deref() != Ok("1") {
+        println!("  (skipped: set SAKA_TEST_SYSTEMD=1, or run `cargo xtask test-systemd`)");
+        return;
+    }
+    block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = saka_env::HostRunner {
+            supervisor: Arc::new(SystemdSupervisor),
+            limits: UnitLimits {
+                memory_max: "1G".into(),
+                cpu_quota: "50%".into(),
+                tasks_max: 64,
+            },
+            path: vec!["/usr/bin".into(), "/bin".into()],
+            scratch_root: dir.path().join("hooks"),
+            logs_dir: dir.path().join("logs"),
+        };
+        let command = saka_ports::HostCommand {
+            name: format!("hook-test-{}", std::process::id()),
+            command: "env; exit 4".into(),
+            cwd: None,
+            env: BTreeMap::from([
+                ("SAKA_EVENT".to_string(), "merged".to_string()),
+                ("DEPLOY_TOKEN".to_string(), "must-not-pass".to_string()),
+            ]),
+            scratch_key: "project-1/deploy".into(),
+            timeout_ms: 30_000,
+        };
+        let out = saka_ports::HostCommands::run(&runner, &command)
+            .await
+            .unwrap();
+        assert_eq!((out.exit_code, out.timed_out), (Some(4), false));
+        let log = std::fs::read_to_string(&out.log_path).unwrap();
+        assert!(log.contains("SAKA_EVENT=merged"), "{log}");
+        assert!(
+            !log.contains("must-not-pass") && !log.contains("DEPLOY_TOKEN"),
+            "{log}"
+        );
+        let mut names: Vec<&str> = log
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+            .filter(|k| !matches!(*k, "PWD" | "SHLVL" | "_" | "OLDPWD"))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["HOME", "LANG", "PATH", "SAKA_EVENT"], "{log}");
     });
 }
 

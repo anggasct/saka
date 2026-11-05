@@ -29,7 +29,10 @@ pub use env::{
 pub use git::{
     Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,
 };
-pub use hook::{Notification, Notifier, WebhookPost, WebhookReceipt, Webhooks};
+pub use hook::{
+    HostCommand, HostCommands, HostOutcome, Notification, Notifier, WebhookPost, WebhookReceipt,
+    Webhooks,
+};
 pub use scm::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, IdentityLookup, MAX_CHANGE_FILES, MAX_CHANGE_TEXT_BYTES, MAX_OPEN_CHANGES,

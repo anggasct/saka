@@ -37,3 +37,27 @@ pub struct Notification {
 pub trait Notifier: Send + Sync {
     async fn send(&self, notification: &Notification) -> PortResult<()>;
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostCommand {
+    pub name: String,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+    pub scratch_key: String,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostOutcome {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub duration_ms: u64,
+    pub log_path: String,
+    pub output_tail: String,
+}
+
+#[async_trait]
+pub trait HostCommands: Send + Sync {
+    async fn run(&self, command: &HostCommand) -> PortResult<HostOutcome>;
+}

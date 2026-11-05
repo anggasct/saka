@@ -604,7 +604,11 @@ impl Config {
             return Config::parse("");
         };
         match std::fs::read_to_string(&path) {
-            Ok(text) => Config::parse(&text),
+            Ok(text) => {
+                let cfg = Config::parse(&text)?;
+                cfg.check_hook_file(&path)?;
+                Ok(cfg)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Config::parse(""),
             Err(e) => Err(err("config_unreadable", format!("{}: {e}", path.display()))),
         }
@@ -625,13 +629,34 @@ impl Config {
     }
 
     pub fn hooks_parsed(&self) -> Result<Vec<saka_core::hook::Hook>, ConfigError> {
-        saka_core::hook::parse_all(&self.hook).map_err(|issue| {
+        let mut hooks = saka_core::hook::parse_all(&self.hook).map_err(|issue| {
             let field = issue.field.map(|f| format!(".{f}")).unwrap_or_default();
             err(
                 "config_hook_invalid",
                 format!("{}: hook {:?}{field}", issue.code, issue.hook),
             )
-        })
+        })?;
+        for hook in &mut hooks {
+            if let saka_core::hook::HookAction::RunHost { cwd: Some(cwd), .. } = &mut hook.action {
+                *cwd = expand(cwd).to_string_lossy().into_owned();
+            }
+        }
+        Ok(hooks)
+    }
+
+    fn check_hook_file(&self, path: &std::path::Path) -> Result<(), ConfigError> {
+        use std::os::unix::fs::MetadataExt;
+        let runs_host = self.hook.iter().any(|h| h.action == "run_host");
+        if !runs_host {
+            return Ok(());
+        }
+        let refused = || err("config_hook_file_writable", path.display().to_string());
+        let meta = std::fs::metadata(path).map_err(|_| refused())?;
+        let mine = meta.uid() == rustix::process::getuid().as_raw();
+        if meta.mode() & 0o022 != 0 || !mine {
+            return Err(refused());
+        }
+        Ok(())
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -1258,9 +1283,11 @@ mod tests {
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
         let hooks = cfg.hooks_parsed().unwrap();
-        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks.len(), 4);
         assert_eq!(hooks[0].name, "announce-merge");
         assert_eq!(hooks[1].filter.codes.len(), 2);
+        assert_eq!(hooks[2].action.kind().as_str(), "run");
+        assert_eq!(hooks[3].action.kind().as_str(), "run_host");
         assert_eq!(
             cfg.scm[0].client_id.as_deref(),
             Some("Iv23liAbCdEfGh123456")
@@ -1293,6 +1320,43 @@ mod tests {
         assert!(e.detail.starts_with("hook_name_duplicate"), "{}", e.detail);
         let e = Config::parse(&hook("nope = 1\n")).unwrap_err();
         assert_eq!(e.code, "config_unknown_field");
+    }
+
+    #[test]
+    fn host_hooks_need_a_config_file_nobody_else_can_write_and_expand_their_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let text = "[[hook]]\nname = \"host\"\nproject = \"tasks\"\non = \"merged\"\naction = \"run_host\"\ncommand = \"./x\"\ncwd = \"~/deploy\"\n";
+        let cfg = Config::parse(text).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        for (mode, ok) in [
+            (0o600, true),
+            (0o644, true),
+            (0o664, false),
+            (0o666, false),
+            (0o602, false),
+        ] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            let checked = cfg.check_hook_file(&path);
+            assert_eq!(checked.is_ok(), ok, "{mode:o}");
+            if !ok {
+                assert_eq!(checked.unwrap_err().code, "config_hook_file_writable");
+            }
+        }
+        let plain = Config::parse("[[hook]]\nname = \"t\"\nproject = \"tasks\"\non = \"merged\"\naction = \"notify\"\nchannel = \"ops\"\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(
+            plain.check_hook_file(&path).is_ok(),
+            "only run_host needs the check"
+        );
+
+        let hooks = cfg.hooks_parsed().unwrap();
+        let saka_core::hook::HookAction::RunHost { cwd, .. } = &hooks[0].action else {
+            panic!("not a host hook");
+        };
+        let cwd = cwd.as_deref().unwrap();
+        assert!(cwd.ends_with("/deploy") && !cwd.starts_with('~'), "{cwd}");
     }
 
     #[test]

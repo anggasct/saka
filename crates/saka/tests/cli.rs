@@ -1886,3 +1886,21 @@ fn hook_commands_list_hooks_show_runs_and_run_one_again() {
     );
     assert_eq!(code(&unknown), 1);
 }
+
+#[test]
+fn serve_refuses_a_host_hook_when_other_users_can_write_the_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "{}[[hook]]\nname = \"host\"\nproject = \"tasks\"\non = \"merged\"\naction = \"run_host\"\ncommand = \"./deploy.sh\"\n",
+            own_listen()
+        ),
+    );
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("config_hook_file_writable"), "{stderr}");
+}

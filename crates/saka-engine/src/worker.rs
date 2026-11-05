@@ -125,7 +125,7 @@ pub(crate) enum Refusal {
 
 impl Refusal {
     // Outside environment preparation a refusal has no blocker of its own; the job fails with it.
-    fn into_error(self) -> PortError {
+    pub(crate) fn into_error(self) -> PortError {
         match self {
             Refusal::Block(code, params) => PortError::permanent(code.as_str(), params),
             Refusal::Fail(e) => e,
@@ -630,7 +630,7 @@ impl Engine {
         self.repo_ref_of(task.item.repo_id)
     }
 
-    fn repo_ref_of(&self, repo_id: RepoId) -> std::result::Result<RepoRef, PortError> {
+    pub(crate) fn repo_ref_of(&self, repo_id: RepoId) -> std::result::Result<RepoRef, PortError> {
         let repo = self
             .store
             .read(|c| read::load_repo(c, repo_id))
@@ -919,7 +919,7 @@ impl Engine {
         Ok(Effect::Fact(TaskInput::EnvironmentFailed { code, params }))
     }
 
-    async fn install_toolchains(
+    pub(crate) async fn install_toolchains(
         &self,
         repo: &RepoRef,
         base_sha: &str,

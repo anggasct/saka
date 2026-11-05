@@ -836,6 +836,17 @@ async fn run(
             releases,
             webhooks: outbound,
             notifier: Arc::new(saka_notify::UnconfiguredNotifier),
+            host: Arc::new(saka_env::HostRunner {
+                supervisor: Arc::new(SystemdSupervisor),
+                limits: UnitLimits {
+                    memory_max: cfg.env.limits.memory_max.clone(),
+                    cpu_quota: cfg.env.limits.cpu_quota.clone(),
+                    tasks_max: cfg.env.limits.tasks_max,
+                },
+                path: config::paths_of(&cfg.agent.path),
+                scratch_root: data_dir.join("hooks"),
+                logs_dir: data_dir.join("logs").join("hooks"),
+            }),
         },
         EngineConfig {
             loop_cfg: LoopConfig {

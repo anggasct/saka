@@ -3,7 +3,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use saka_ports::{
-    Notification, Notifier, PortError, PortResult, WebhookPost, WebhookReceipt, Webhooks,
+    HostCommand, HostCommands, HostOutcome, Notification, Notifier, PortError, PortResult,
+    WebhookPost, WebhookReceipt, Webhooks,
 };
 use serde_json::json;
 
@@ -24,8 +25,18 @@ pub struct WebhookRecord {
     pub timeout_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostScript {
+    Exit(i32),
+    Timeout,
+    Crash,
+}
+
 #[derive(Debug, Default)]
 struct State {
+    host_script: VecDeque<HostScript>,
+    host_calls: Vec<HostCommand>,
+    host_output: String,
     webhook_script: VecDeque<WebhookScript>,
     webhooks: Vec<WebhookRecord>,
     notify_script: VecDeque<PortError>,
@@ -50,6 +61,18 @@ impl FakeHooks {
 
     pub fn webhooks(&self) -> Vec<WebhookRecord> {
         self.state().webhooks.clone()
+    }
+
+    pub fn script_host(&self, script: HostScript) {
+        self.state().host_script.push_back(script);
+    }
+
+    pub fn host_output(&self, text: &str) {
+        self.state().host_output = text.to_string();
+    }
+
+    pub fn host_calls(&self) -> Vec<HostCommand> {
+        self.state().host_calls.clone()
     }
 
     pub fn script_notify(&self, error: PortError) {
@@ -101,5 +124,30 @@ impl Notifier for FakeHooks {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+}
+
+#[async_trait]
+impl HostCommands for FakeHooks {
+    async fn run(&self, command: &HostCommand) -> PortResult<HostOutcome> {
+        let mut state = self.state();
+        let script = state.host_script.pop_front().unwrap_or(HostScript::Exit(0));
+        if script == HostScript::Crash {
+            return Err(PortError::retryable(
+                "supervisor_run_failed",
+                json!({ "detail": "simulated crash" }),
+            ));
+        }
+        state.host_calls.push(command.clone());
+        Ok(HostOutcome {
+            exit_code: match script {
+                HostScript::Exit(code) => Some(code),
+                _ => None,
+            },
+            timed_out: script == HostScript::Timeout,
+            duration_ms: 7,
+            log_path: format!("/sim/logs/hooks/{}.log", command.name),
+            output_tail: state.host_output.clone(),
+        })
     }
 }

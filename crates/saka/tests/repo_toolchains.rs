@@ -235,6 +235,7 @@ impl World {
                 releases: Arc::new(releases),
                 webhooks: Arc::new(saka_testkit::FakeHooks::default()),
                 notifier: Arc::new(saka_testkit::FakeHooks::default()),
+                host: Arc::new(saka_testkit::FakeHooks::default()),
             },
             EngineConfig {
                 loop_cfg: sim.loop_cfg,
