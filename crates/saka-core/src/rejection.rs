@@ -112,6 +112,12 @@ pub enum Rejection {
     StageNotInWorkflow { stage: &'static str },
     #[error("blocker is not open")]
     BlockerNotOpen { blocker_id: String },
+    #[error("the primary action is not the one that was shown")]
+    BlockerActionChanged {
+        blocker_id: String,
+        expected: &'static str,
+        actual: &'static str,
+    },
     #[error("the primary action needs input")]
     ActionNeedsInput { action: &'static str },
     #[error("hook run is still pending")]
@@ -179,6 +185,7 @@ impl Rejection {
             Rejection::EntryPointDisabled { .. } => "entry_point_disabled",
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
+            Rejection::BlockerActionChanged { .. } => "blocker_action_changed",
             Rejection::ActionNeedsInput { .. } => "action_needs_input",
             Rejection::HookRunPending => "hook_run_pending",
             Rejection::HookNotConfigured { .. } => "hook_not_configured",
@@ -231,6 +238,11 @@ impl Rejection {
             }
             Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
             Rejection::BlockerNotOpen { blocker_id } => json!({ "blocker_id": blocker_id }),
+            Rejection::BlockerActionChanged {
+                blocker_id,
+                expected,
+                actual,
+            } => json!({ "blocker_id": blocker_id, "expected": expected, "actual": actual }),
             Rejection::ActionNeedsInput { action } => json!({ "action": action }),
             Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
             Rejection::HookRunGated { work_item_id } => json!({ "work_item_id": work_item_id }),

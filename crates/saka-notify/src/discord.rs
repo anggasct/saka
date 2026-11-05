@@ -6,7 +6,7 @@ use saka_ports::{Clock, PortError, PortResult};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::api::{body_of, client, status_error, transport_error};
+use crate::api::{BODY_MAX_BYTES, body_of, client, status_error, transport_error};
 
 const NONCE_BYTES: usize = 12;
 
@@ -72,7 +72,7 @@ impl Discord {
         if (200..300).contains(&status) {
             return Ok(());
         }
-        let body = body_of(response).await;
+        let body = body_of(response, BODY_MAX_BYTES).await;
         Err(status_error(status, body.as_ref(), self.clock.as_ref()))
     }
 }

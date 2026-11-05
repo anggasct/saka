@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod chat;
 pub mod docs;
 pub mod env;
 pub mod git;
@@ -17,6 +18,7 @@ pub use agent::{
     Agents, LaunchProfile, LaunchedSession, Link, Reattached, RunnerEvent, RunnerEventKind,
     SessionLaunch, SessionRef,
 };
+pub use chat::{ChatAction, ChatActionKind, ChatActions, ChatOutcome};
 pub use docs::{
     DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite,
 };

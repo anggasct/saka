@@ -1675,6 +1675,8 @@ export interface components {
       params: unknown;
     };
     PrimaryActionBody: {
+      /** @description The kind of the primary action the caller was shown (`primary_action.kind`). When it differs from the current one, nothing runs and the answer is `409 blocker_action_changed`. */
+      action?: string | null;
       /**
        * Format: uuid
        * @description The blocker the operator saw; a blocker that is no longer the open one of the task is refused.

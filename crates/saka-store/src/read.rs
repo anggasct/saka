@@ -409,6 +409,15 @@ pub fn load_task(conn: &Connection, id: WorkItemId) -> Result<Option<Task>> {
     Ok(load_tasks(conn, TaskSet::Ids(&[id]))?.into_iter().next())
 }
 
+pub fn blocker_work_item(conn: &Connection, id: BlockerId) -> Result<Option<WorkItemId>> {
+    one(
+        conn,
+        "SELECT work_item_id FROM blocker WHERE id = ?1",
+        &[&id.0.to_string()],
+        |r| Ok(WorkItemId(uuid(r, "work_item_id")?)),
+    )
+}
+
 pub fn session_owner(conn: &Connection, session: SessionId) -> Result<Option<RunOwner>> {
     one(
         conn,

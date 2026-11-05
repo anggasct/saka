@@ -105,6 +105,7 @@
   "error.change_request_tracked": "Pull request ini sudah punya task yang selesai.",
   "error.retry_limit_reached": "Stage {stage} sudah memakai {limit, number} retry manualnya.",
   "error.blocker_not_open": "Blocker ini sudah tidak terbuka; task sudah berjalan lagi.",
+  "error.blocker_action_changed": "Aksi ini sudah berubah sejak ditampilkan; buka task untuk melihat yang terbaru.",
   "error.action_needs_input": "Aksi ini butuh masukan, jadi tidak bisa dijalankan dari sini.",
   "error.permission_already_answered": "Sudah dijawab.",
   "error.idempotency_key_reused": "Request ini sudah pernah dikirim dengan isi yang berbeda.",
