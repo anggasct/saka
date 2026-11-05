@@ -228,12 +228,16 @@ fn five_minutes() -> u32 {
 pub struct ScmEntry {
     pub id: String,
     pub provider: String,
-    #[serde(default = "github_api")]
+    #[serde(default)]
     pub api_url: String,
-    #[serde(default = "github_web")]
+    #[serde(default)]
     pub web_url: String,
-    pub app_id: u64,
-    pub private_key_file: String,
+    #[serde(default)]
+    pub app_id: Option<u64>,
+    #[serde(default)]
+    pub private_key_file: Option<String>,
+    #[serde(default)]
+    pub token_file: Option<String>,
     #[serde(default = "fifteen")]
     pub poll_interval_secs: u64,
     #[serde(default = "six_hundred")]
@@ -246,11 +250,63 @@ pub struct ScmEntry {
     pub client_id: Option<String>,
 }
 
-fn github_api() -> String {
-    "https://api.github.com".into()
-}
-fn github_web() -> String {
-    "https://github.com".into()
+impl ScmEntry {
+    fn resolve_urls(&mut self) {
+        let gitlab = self.provider == "gitlab";
+        if self.web_url.is_empty() {
+            self.web_url = if gitlab {
+                "https://gitlab.com"
+            } else {
+                "https://github.com"
+            }
+            .into();
+        }
+        if self.api_url.is_empty() {
+            self.api_url = if gitlab {
+                format!("{}/api/v4", self.web_url.trim_end_matches('/'))
+            } else {
+                "https://api.github.com".into()
+            };
+        }
+    }
+
+    fn check_provider_fields(&self) -> Result<(), ConfigError> {
+        let provider = self.provider.as_str();
+        let fields = [
+            ("app_id", self.app_id.is_some(), provider == "github"),
+            (
+                "private_key_file",
+                self.private_key_file.is_some(),
+                provider == "github",
+            ),
+            (
+                "token_file",
+                self.token_file.is_some(),
+                provider == "gitlab",
+            ),
+        ];
+        for (name, present, used) in fields {
+            if used && !present {
+                return Err(err(
+                    "config_invalid",
+                    format!("scm.{name} is required for provider {provider}"),
+                ));
+            }
+            if present && !used {
+                return Err(err(
+                    "config_invalid",
+                    format!("scm.{name} is not used by provider {provider}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn private_files(&self) -> impl Iterator<Item = &str> {
+        [self.private_key_file.as_deref(), self.token_file.as_deref()]
+            .into_iter()
+            .flatten()
+    }
 }
 fn fifteen() -> u64 {
     15
@@ -553,7 +609,7 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Config, ConfigError> {
-        let cfg: Config = toml::from_str(text).map_err(|e| {
+        let mut cfg: Config = toml::from_str(text).map_err(|e| {
             let message = e.message().to_string();
             if message.starts_with("unknown field") {
                 err("config_unknown_field", message)
@@ -561,6 +617,7 @@ impl Config {
                 err("config_invalid", message)
             }
         })?;
+        cfg.scm.iter_mut().for_each(ScmEntry::resolve_urls);
         cfg.validate()?;
         Ok(cfg)
     }
@@ -603,12 +660,13 @@ impl Config {
                     format!("scm.id {:?} is invalid or repeated", s.id),
                 ));
             }
-            if s.provider != "github" {
+            if !matches!(s.provider.as_str(), "github" | "gitlab") {
                 return Err(err(
                     "config_invalid",
                     format!("scm.provider {:?} is not supported", s.provider),
                 ));
             }
+            s.check_provider_fields()?;
             if !(5..=300).contains(&s.poll_interval_secs) {
                 return Err(err(
                     "config_invalid",
@@ -850,8 +908,8 @@ impl Config {
     }
 
     pub fn check_key_files(&self) -> Result<(), ConfigError> {
-        for s in &self.scm {
-            check_private_file(&expand(&s.private_key_file))?;
+        for file in self.scm.iter().flat_map(ScmEntry::private_files) {
+            check_private_file(&expand(file))?;
         }
         Ok(())
     }
@@ -1075,10 +1133,111 @@ mod tests {
     }
 
     #[test]
+    fn a_gitlab_entry_needs_only_a_token_file_and_derives_its_urls() {
+        let gitlab = |extra: &str| {
+            Config::parse(&format!(
+                "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\ntoken_file = \"/t\"\n{extra}"
+            ))
+        };
+        let cfg = gitlab("").unwrap();
+        let s = &cfg.scm[0];
+        assert_eq!(s.web_url, "https://gitlab.com");
+        assert_eq!(s.api_url, "https://gitlab.com/api/v4");
+        assert_eq!(s.token_file.as_deref(), Some("/t"));
+        assert_eq!((s.app_id, s.private_key_file.as_deref()), (None, None));
+        assert_eq!(s.merge_method, MergeMethod::Squash);
+
+        let own = gitlab("web_url = \"https://git.example.com/gitlab/\"\n").unwrap();
+        assert_eq!(own.scm[0].api_url, "https://git.example.com/gitlab/api/v4");
+        let set = gitlab(
+            "web_url = \"https://git.example.com\"\napi_url = \"https://api.example.com/v4\"\n",
+        )
+        .unwrap();
+        assert_eq!(set.scm[0].api_url, "https://api.example.com/v4");
+        assert_eq!(
+            gitlab("web_url = \"http://gitlab.example\"\n")
+                .unwrap_err()
+                .code,
+            "config_invalid"
+        );
+        assert!(gitlab("web_url = \"http://127.0.0.1:8929\"\n").is_ok());
+    }
+
+    #[test]
+    fn each_provider_requires_its_own_credential_fields_and_refuses_the_others() {
+        let parse = |body: &str| Config::parse(&format!("[[scm]]\nid = \"x\"\n{body}"));
+        let cases = [
+            ("provider = \"gitlab\"\n", "scm.token_file is required"),
+            (
+                "provider = \"gitlab\"\ntoken_file = \"/t\"\napp_id = 1\n",
+                "scm.app_id is not used",
+            ),
+            (
+                "provider = \"gitlab\"\ntoken_file = \"/t\"\nprivate_key_file = \"/k\"\n",
+                "scm.private_key_file is not used",
+            ),
+            (
+                "provider = \"github\"\nprivate_key_file = \"/k\"\n",
+                "scm.app_id is required",
+            ),
+            (
+                "provider = \"github\"\napp_id = 1\n",
+                "scm.private_key_file is required",
+            ),
+            (
+                "provider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\ntoken_file = \"/t\"\n",
+                "scm.token_file is not used",
+            ),
+            ("provider = \"bitbucket\"\n", "is not supported"),
+        ];
+        for (body, expected) in cases {
+            let e = parse(body).unwrap_err();
+            assert_eq!(e.code, "config_invalid", "{body}");
+            assert!(e.detail.contains(expected), "{body}: {}", e.detail);
+        }
+        let both = "[[scm]]\nid = \"a\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\n\n[[scm]]\nid = \"b\"\nprovider = \"gitlab\"\ntoken_file = \"/t\"\n";
+        let cfg = Config::parse(both).unwrap();
+        assert_eq!(cfg.scm[0].api_url, "https://api.github.com");
+        assert_eq!(cfg.scm[1].api_url, "https://gitlab.com/api/v4");
+    }
+
+    #[test]
+    fn the_token_file_is_checked_like_a_private_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let token = dir.path().join("token");
+        let cfg = Config::parse(&format!(
+            "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\ntoken_file = {:?}\n",
+            token.display().to_string()
+        ))
+        .unwrap();
+        assert_eq!(
+            cfg.check_key_files().unwrap_err().code,
+            "config_key_file_unreadable"
+        );
+        std::fs::write(&token, "glpat-x").unwrap();
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            cfg.check_key_files().unwrap_err().code,
+            "config_key_file_mode"
+        );
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        cfg.check_key_files().unwrap();
+    }
+
+    #[test]
     fn the_example_config_parses_with_every_field_set() {
         let cfg = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
-        assert_eq!(cfg.scm.len(), 1);
-        assert_eq!(cfg.scm[0].app_id, 123456);
+        assert_eq!(cfg.scm.len(), 2);
+        assert_eq!(cfg.scm[0].app_id, Some(123456));
+        let gitlab = &cfg.scm[1];
+        assert_eq!(gitlab.provider, "gitlab");
+        assert_eq!(
+            gitlab.token_file.as_deref(),
+            Some("~/.config/saka/scm/gitlab/token")
+        );
+        assert_eq!(gitlab.api_url, "https://git.example.com/api/v4");
+        assert_eq!(gitlab.merge_method, MergeMethod::Merge);
         assert_eq!(cfg.agent.limits.cpu_quota, "200%");
         assert_eq!(cfg.permission.rule.len(), 3);
         assert_eq!(cfg.env.ports_per_env, 10);

@@ -24,16 +24,16 @@ use saka_env::{
 use saka_ports::{
     ChangeOpening, ChangeSnapshot, Clock, DeviceCode, DevicePoll, GitAccess, GitRemote,
     IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
-    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Scm, ScmCapabilities, StatusReport,
-    TokenRefresh, UnitLimits, WebhookDelivery,
+    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm, ScmCapabilities,
+    StatusReport, TokenRefresh, UnitLimits, WebhookDelivery,
 };
-use saka_scm::{GitHub, GitHubApp, GitHubConfig};
+use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
 use serde_json::json;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::config::{self, Config, ConfigError};
+use crate::config::{self, Config, ConfigError, ScmEntry};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const WORKERS: usize = 4;
@@ -60,10 +60,10 @@ fn unknown_integration(id: &str) -> PortError {
     PortError::permanent("scm_integration_unknown", json!({ "integration_id": id }))
 }
 
-struct ScmRouter(HashMap<String, Arc<GitHub>>);
+struct ScmRouter(HashMap<String, Arc<dyn Scm>>);
 
 impl ScmRouter {
-    fn get(&self, id: &str) -> PortResult<&Arc<GitHub>> {
+    fn get(&self, id: &str) -> PortResult<&Arc<dyn Scm>> {
         self.0.get(id).ok_or_else(|| unknown_integration(id))
     }
 }
@@ -213,7 +213,7 @@ impl Scm for ScmRouter {
     }
 }
 
-struct AccessRouter(HashMap<String, Arc<GitHubApp>>);
+struct AccessRouter(HashMap<String, Arc<dyn GitAccess>>);
 
 #[async_trait]
 impl GitAccess for AccessRouter {
@@ -227,6 +227,85 @@ impl GitAccess for AccessRouter {
         if let Some(app) = self.0.get(&repo.integration_id) {
             app.refused(repo).await;
         }
+    }
+}
+
+enum ScmClient {
+    GitHub(Arc<GitHubApp>),
+    GitLab(Arc<GitLabClient>),
+}
+
+impl ScmClient {
+    fn access(&self) -> Arc<dyn GitAccess> {
+        match self {
+            ScmClient::GitHub(app) => app.clone(),
+            ScmClient::GitLab(client) => client.clone(),
+        }
+    }
+
+    fn scm(self, repos: Arc<dyn Repos>, secret: Option<Vec<u8>>) -> Arc<dyn Scm> {
+        match self {
+            ScmClient::GitHub(app) => {
+                let github = GitHub::new(app, repos);
+                Arc::new(match secret {
+                    Some(secret) => github.with_webhook_secret(secret),
+                    None => github,
+                })
+            }
+            ScmClient::GitLab(client) => {
+                let gitlab = GitLab::new(client, repos);
+                Arc::new(match secret {
+                    Some(secret) => gitlab.with_webhook_secret(secret),
+                    None => gitlab,
+                })
+            }
+        }
+    }
+}
+
+fn scm_client(s: &ScmEntry, clock: Arc<dyn Clock>) -> PortResult<ScmClient> {
+    let missing =
+        |field: &str| PortError::permanent("scm_config_invalid", json!({ "field": field }));
+    let user_agent = format!("saka/{VERSION}");
+    match s.provider.as_str() {
+        "github" => {
+            let app_id = s.app_id.ok_or_else(|| missing("app_id"))?;
+            let key = s
+                .private_key_file
+                .as_deref()
+                .ok_or_else(|| missing("private_key_file"))?;
+            let app = GitHubApp::new(
+                GitHubConfig {
+                    integration_id: s.id.clone(),
+                    api_url: s.api_url.clone(),
+                    web_url: s.web_url.clone(),
+                    app_id,
+                    private_key_file: config::expand(key),
+                    user_agent,
+                    client_id: s.client_id.clone(),
+                },
+                clock,
+            )?;
+            Ok(ScmClient::GitHub(Arc::new(app)))
+        }
+        "gitlab" => {
+            let token = s
+                .token_file
+                .as_deref()
+                .ok_or_else(|| missing("token_file"))?;
+            let client = GitLabClient::new(
+                GitLabConfig {
+                    integration_id: s.id.clone(),
+                    api_url: s.api_url.clone(),
+                    web_url: s.web_url.clone(),
+                    token_file: config::expand(token),
+                    user_agent,
+                },
+                clock,
+            )?;
+            Ok(ScmClient::GitLab(Arc::new(client)))
+        }
+        _ => Err(missing("provider")),
     }
 }
 
@@ -603,22 +682,11 @@ async fn run(
         }
     };
 
-    let mut apps = HashMap::new();
+    let mut clients = HashMap::new();
     let mut integrations = Vec::new();
     for s in &cfg.scm {
-        let app = match GitHubApp::new(
-            GitHubConfig {
-                integration_id: s.id.clone(),
-                api_url: s.api_url.clone(),
-                web_url: s.web_url.clone(),
-                app_id: s.app_id,
-                private_key_file: config::expand(&s.private_key_file),
-                user_agent: format!("saka/{VERSION}"),
-                client_id: s.client_id.clone(),
-            },
-            clock.clone(),
-        ) {
-            Ok(a) => Arc::new(a),
+        let client = match scm_client(s, clock.clone()) {
+            Ok(c) => c,
             Err(e) => {
                 tracing::error!(code = %e.code, "scm integration refused");
                 let _ = stop.send(true);
@@ -626,7 +694,7 @@ async fn run(
                 return ExitCode::from(EXIT_REFUSED);
             }
         };
-        apps.insert(s.id.clone(), app);
+        clients.insert(s.id.clone(), client);
         integrations.push(Integration {
             id: s.id.clone(),
             provider: s.provider.clone(),
@@ -660,17 +728,19 @@ async fn run(
                 path: config::paths_of(&cfg.agent.path),
             },
         },
-        Arc::new(AccessRouter(apps.clone())),
+        Arc::new(AccessRouter(
+            clients
+                .iter()
+                .map(|(id, client)| (id.clone(), client.access()))
+                .collect(),
+        )),
     ));
     let scm = ScmRouter(
-        apps.iter()
-            .map(|(id, app)| {
-                let github = GitHub::new(app.clone(), repos.clone());
-                let github = match webhooks.secrets.remove(id) {
-                    Some(secret) => github.with_webhook_secret(secret),
-                    None => github,
-                };
-                (id.clone(), Arc::new(github))
+        clients
+            .into_iter()
+            .map(|(id, client)| {
+                let secret = webhooks.secrets.remove(&id);
+                (id, client.scm(repos.clone(), secret))
             })
             .collect(),
     );
@@ -779,6 +849,34 @@ mod capability_tests {
             "[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"/k\"\n{extra}"
         ))
         .unwrap()
+    }
+
+    fn gitlab(extra: &str) -> Config {
+        Config::parse(&format!(
+            "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\ntoken_file = \"/t\"\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn gitlab_takes_merge_and_squash_with_a_webhook_but_no_rebase_and_no_user_accounts() {
+        let caps = || Some(saka_scm::GITLAB_CAPABILITIES);
+        for ok in [
+            "",
+            "merge_method = \"merge\"\n",
+            "merge_method = \"squash\"\nwebhook_secret_file = \"/s\"\n",
+        ] {
+            assert_eq!(capability_refusal(&gitlab(ok), |_| caps()), None, "{ok}");
+        }
+        assert_eq!(
+            capability_refusal(&gitlab("merge_method = \"rebase\"\n"), |_| caps()),
+            Some(("config_merge_method_unsupported", "gitlab".to_string()))
+        );
+        assert_eq!(
+            capability_refusal(&gitlab("client_id = \"Iv23liAbCdEfGh123456\"\n"), |_| caps(
+            )),
+            Some(("config_user_authorship_unsupported", "gitlab".to_string()))
+        );
     }
 
     #[test]

@@ -867,12 +867,25 @@ fn serve_refuses_webhook_settings_it_cannot_use_safely() {
 }
 
 fn http_post(port: u16, path: &str, body: &str) -> Option<(u16, String)> {
+    http_post_with(port, path, &[], body)
+}
+
+fn http_post_with(
+    port: u16,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> Option<(u16, String)> {
     use std::io::Write;
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let extra: String = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
     write!(
         s,
-        "POST {path} HTTP/1.1\r\nHost: hooks.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: hooks.example\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
     .ok()?;
@@ -952,6 +965,132 @@ fn serve_opens_a_webhook_listener_that_only_serves_hooks() {
     assert!(
         !stderr.contains(secret_value),
         "the secret reached the logs"
+    );
+}
+
+fn gitlab_config(dir: &Path, extra: &str) -> std::path::PathBuf {
+    write_config(
+        dir,
+        &format!(
+            "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\ntoken_file = \"{}\"\n{extra}",
+            dir.join("gitlab.token").display()
+        ),
+    )
+}
+
+#[test]
+fn serve_refuses_a_gitlab_integration_it_cannot_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = dir.path().join("gitlab.token");
+    let cases = [
+        (None, "", "config_key_file_unreadable"),
+        (Some(0o644), "", "config_key_file_mode"),
+        (
+            Some(0o600),
+            "merge_method = \"rebase\"\n",
+            "config_merge_method_unsupported",
+        ),
+        (
+            Some(0o600),
+            "client_id = \"Iv23liAbCdEfGh123456\"\n",
+            "config_user_authorship_unsupported",
+        ),
+    ];
+    for (mode, extra, expected) in cases {
+        if let Some(mode) = mode {
+            private_file(&token, b"glpat-not-a-real-token\n", mode);
+        }
+        let config = gitlab_config(dir.path(), extra);
+        let out = run_saka(&config, &["serve"]);
+        assert_eq!(code(&out), 2, "{expected}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(expected), "{expected}: {stderr}");
+        assert!(!stderr.contains("glpat-not-a-real-token"), "{stderr}");
+    }
+    let config = write_config(
+        dir.path(),
+        "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\napp_id = 1\n",
+    );
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("config_invalid"));
+}
+
+#[test]
+fn serve_routes_webhooks_to_a_gitlab_integration_next_to_a_github_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, hooks) = (free_port(), free_port());
+    let key = dir.path().join("app.pem");
+    private_file(&key, b"not a real key", 0o600);
+    let token = dir.path().join("gitlab.token");
+    private_file(&token, b"glpat-not-a-real-token\n", 0o600);
+    let hook_secret = "a-gitlab-secret-token-that-is-long-enough";
+    let gitlab_secret = dir.path().join("gitlab.secret");
+    private_file(&gitlab_secret, hook_secret.as_bytes(), 0o600);
+    let github_secret = dir.path().join("github.secret");
+    private_file(&github_secret, &[b'k'; 40], 0o600);
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "listen = \"127.0.0.1:{api}\"\n\n[hooks]\nlisten = \"127.0.0.1:{hooks}\"\n\n[[scm]]\nid = \"github\"\nprovider = \"github\"\napp_id = 1\nprivate_key_file = \"{}\"\nwebhook_secret_file = \"{}\"\n\n[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\nweb_url = \"https://git.example.com\"\ntoken_file = \"{}\"\nmerge_method = \"merge\"\nwebhook_secret_file = \"{}\"\n",
+            key.display(),
+            github_secret.display(),
+            token.display(),
+            gitlab_secret.display(),
+        ),
+    );
+    let mut child = Command::new(SAKA)
+        .arg("serve")
+        .env("SAKA_CONFIG", &config)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline && http_get(api, "/readyz").map(|r| r.0) != Some(200) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        http_get(api, "/readyz").map(|r| r.0),
+        Some(200),
+        "never ready"
+    );
+    let body = r#"{"object_kind":"pipeline","object_attributes":{"sha":"1111111111111111111111111111111111111111","status":"success"},"project":{"path_with_namespace":"acme/app"}}"#;
+    let post = |id: &str, token: Option<&str>| {
+        let mut headers = vec![("Idempotency-Key", "3f9a1c-delivery")];
+        if let Some(t) = token {
+            headers.push(("X-Gitlab-Token", t));
+        }
+        http_post_with(hooks, &format!("/hooks/{id}"), &headers, body).unwrap()
+    };
+    let wrong = post("gitlab", Some("another-secret-token-0123456789abcdef"));
+    assert_eq!(wrong.0, 401, "{}", wrong.1);
+    assert!(wrong.1.contains("webhook_signature_invalid"), "{}", wrong.1);
+    assert_eq!(post("gitlab", None).0, 401);
+    let accepted = post("gitlab", Some(hook_secret));
+    assert_eq!(accepted.0, 202, "{}", accepted.1);
+    assert_eq!(post("github", Some(hook_secret)).0, 401);
+
+    let pid = child.id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(child.wait().unwrap().success());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(!stderr.contains(hook_secret), "the secret reached the logs");
+    assert!(
+        !stderr.contains("glpat-not-a-real-token"),
+        "the token reached the logs"
     );
 }
 
