@@ -256,6 +256,21 @@ impl ProjectReload {
 #[serde(deny_unknown_fields)]
 pub struct ReloadBody {}
 
+/// Request body of a review request; no fields.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewBody {}
+
+/// Request body that takes a pull request opened outside Saka and asks for its review.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalChangeRequest {
+    /// The name of the repo binding in the project; `null` means the default repo.
+    pub repo: Option<String>,
+    /// The pull request number, 1 or more.
+    pub number: u64,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Revision {
     pub id: Uuid,

@@ -260,6 +260,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/external-changes": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["take_external_change"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/file": {
     parameters: {
       query?: never;
@@ -804,6 +820,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/review": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["review"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/work-packet": {
     parameters: {
       query?: never;
@@ -1126,6 +1158,16 @@ export interface components {
       from_fork: boolean;
       spec?: components["schemas"]["ExternalSpec"] | null;
       title: string;
+    };
+    /** @description Request body that takes a pull request opened outside Saka and asks for its review. */
+    ExternalChangeRequest: {
+      /**
+       * Format: int64
+       * @description The pull request number, 1 or more.
+       */
+      number: number;
+      /** @description The name of the repo binding in the project; `null` means the default repo. */
+      repo?: string | null;
     };
     ExternalSpec: {
       slug?: string | null;
@@ -1784,6 +1826,8 @@ export interface components {
       /** @description 1 to 500 characters. */
       reason: string;
     };
+    /** @description Request body of a review request; no fields. */
+    ReviewBody: Record<string, never>;
     Revision: {
       content_hash: string;
       /** @description Context documents pinned with this revision, in work packet order (`link` first, then `always`). */
@@ -3157,6 +3201,58 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  take_external_change: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ExternalChangeRequest"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
       };
       "4XX": {
         headers: {
@@ -4565,6 +4661,50 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  review: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReviewBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
       "4XX": {

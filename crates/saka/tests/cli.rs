@@ -1904,3 +1904,49 @@ fn serve_refuses_a_host_hook_when_other_users_can_write_the_config() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("config_hook_file_writable"), "{stderr}");
 }
+
+#[test]
+fn review_takes_a_pull_request_and_exits_with_the_documented_codes() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str("\n[workflow]\npreset = \"review_only\"\n\n[workflow.change_request]\ntrigger = \"manual\"\n");
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    let sim = Sim::multi_repo(SimConfig::default(), &layout);
+    let number = sim.world.open_external_change(
+        SHOP_REPO,
+        saka_testkit::ChangeSpec::new("Add retries", "alice", "feature/retries"),
+    );
+    let server = serve(&sim);
+
+    let taken = saka(&server, &["review", &number.to_string()]);
+    assert_eq!(
+        code(&taken),
+        0,
+        "{}",
+        String::from_utf8_lossy(&taken.stderr)
+    );
+    assert_eq!(
+        stdout(&taken).trim(),
+        format!("review requested shop#{number} awaiting_review")
+    );
+
+    let again = saka(&server, &["review", &number.to_string(), "--repo", "shop"]);
+    assert_eq!(code(&again), 4, "an already requested head is a refusal");
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("review_already_requested"),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+
+    let missing = saka(&server, &["review", "999"]);
+    assert_eq!(code(&missing), 1);
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("change_request_not_found"));
+
+    let named = saka(
+        &server,
+        &["--json", "review", &number.to_string(), "--project", "shop"],
+    );
+    assert_eq!(code(&named), 4);
+}

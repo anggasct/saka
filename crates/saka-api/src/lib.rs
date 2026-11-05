@@ -31,7 +31,7 @@ pub use state::{ApiConfig, AppState};
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
         routes::spec_template,
         routes::list_files, routes::get_file, routes::put_file,
-        routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::merge, routes::retry, routes::cancel, routes::primary_action,
+        routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::merge, routes::retry, routes::cancel, routes::primary_action, routes::review, routes::take_external_change,
         routes::list_permissions, routes::answer_permission, routes::get_session,
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
         routes::list_permission_rules, routes::revoke_rule, routes::list_agent_accounts,
@@ -148,6 +148,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/work-items/{work_item_id}/actions/cancel",
             post(routes::cancel),
+        )
+        .route(
+            "/api/v1/work-items/{work_item_id}/actions/review",
+            post(routes::review),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/external-changes",
+            post(routes::take_external_change),
         )
         .route("/api/v1/permission-requests", get(routes::list_permissions))
         .route(

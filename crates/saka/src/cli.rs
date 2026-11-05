@@ -866,6 +866,49 @@ impl Client {
         }
     }
 
+    pub async fn review(&self, number: u64, project: Option<&str>, repo: Option<&str>) -> ExitCode {
+        let id = match project {
+            Some(project) => self.project_id(project).await,
+            None => self.only_project_id().await,
+        };
+        let id = match id {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let body = json!({ "repo": repo, "number": number });
+        match self
+            .post(
+                &format!("/api/v1/projects/{id}/external-changes"),
+                &body,
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                format!(
+                    "review requested {} {}",
+                    text(&b["task_key"]),
+                    text(&b["stage_phase"])
+                )
+            }),
+            Err(code) => code,
+        }
+    }
+
+    async fn only_project_id(&self) -> Result<String, ExitCode> {
+        let a = self.get("/api/v1/projects?limit=2").await?;
+        if !a.ok() {
+            return Err(fail(&a));
+        }
+        match a.body["items"].as_array().map(Vec::as_slice) {
+            Some([only]) => Ok(text(&only["id"])),
+            _ => {
+                err("error: project_required pass --project <id or name>");
+                Err(ExitCode::from(2))
+            }
+        }
+    }
+
     pub async fn task_action(&self, id: &str, action: &str, reason: &str) -> ExitCode {
         match self
             .post(

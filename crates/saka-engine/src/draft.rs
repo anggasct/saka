@@ -398,7 +398,9 @@ impl Engine {
                         .ok_or_else(|| EngineError::Internal("session not in the draft".into()))?;
                     (action.respond)(Produced::Session(session))
                 }
-                Shows::Task | Shows::Draft => (action.respond)(Produced::Draft(&after)),
+                Shows::Task | Shows::Taken(_) | Shows::Draft => {
+                    (action.respond)(Produced::Draft(&after))
+                }
             };
             batch.action = Some(action.record(self, cause, project, Some(id.0), reply));
         }

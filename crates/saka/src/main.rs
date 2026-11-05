@@ -75,6 +75,21 @@ enum Command {
     #[command(about = "Tasks")]
     #[command(subcommand)]
     Task(TaskCmd),
+    #[command(
+        about = "Takes a pull request opened outside Saka and asks for its review at the current head",
+        after_help = "Exit codes: 0 requested, 1 failed, 4 refused (already requested, not open, not allowed by the workflow, or a task of a spec step)."
+    )]
+    Review {
+        #[arg(help = "The pull request number")]
+        number: u64,
+        #[arg(help = "Project id or name (default: the only project)", long)]
+        project: Option<String>,
+        #[arg(
+            help = "Name of the repo binding in the project (default: its default repo)",
+            long
+        )]
+        repo: Option<String>,
+    },
     #[command(about = "Spec drafts the architect writes from an idea")]
     #[command(subcommand)]
     Draft(DraftCmd),
@@ -686,6 +701,14 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         Command::Spec(SpecCmd::Template { locale }) => {
             let client = Client::new(&server(cli.server)?, cli.json);
             current_thread()?.block_on(client.spec_template(&locale))
+        }
+        Command::Review {
+            number,
+            project,
+            repo,
+        } => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(client.review(number, project.as_deref(), repo.as_deref()))
         }
         Command::Task(cmd) => {
             let client = Client::new(&server(cli.server)?, cli.json);

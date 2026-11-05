@@ -6,6 +6,7 @@ import { Skeleton } from "@/ui/skeleton";
 
 import type { ProjectItem, SpecItem } from "./queries";
 import { useWorkItems } from "./queries";
+import { ExternalGroup } from "./external-group";
 import { SpecGroup } from "./spec-group";
 
 export function ProjectSection({
@@ -18,6 +19,9 @@ export function ProjectSection({
   const t = useT();
   const workItems = useWorkItems(project.id);
   const headingId = `project-${project.id}`;
+  const outside = (workItems.data ?? []).filter(
+    (w) => w.origin === "external_change",
+  );
   return (
     <Card aria-labelledby={headingId}>
       <header className="p-4">
@@ -39,24 +43,30 @@ export function ProjectSection({
           {t("project.settings")}
         </Link>
       </header>
-      {specs.length === 0 ? (
-        <p className="border-t border-border p-4 text-sm text-muted-foreground">
-          {t("delivery.noSpecs")}
-        </p>
-      ) : workItems.isPending ? (
+      {workItems.isPending && specs.length > 0 ? (
         <div className="space-y-2 border-t border-border p-4">
           <Skeleton className="h-6" />
           <Skeleton className="h-6" />
         </div>
       ) : (
-        specs.map((spec) => (
-          <SpecGroup
-            key={spec.id}
-            spec={spec}
-            tasks={(workItems.data ?? []).filter((w) => w.spec_id === spec.id)}
-            projectTasks={workItems.data ?? []}
-          />
-        ))
+        <>
+          {specs.map((spec) => (
+            <SpecGroup
+              key={spec.id}
+              spec={spec}
+              tasks={(workItems.data ?? []).filter(
+                (w) => w.spec_id === spec.id,
+              )}
+              projectTasks={workItems.data ?? []}
+            />
+          ))}
+          <ExternalGroup projectId={project.id} tasks={outside} />
+          {specs.length === 0 && outside.length === 0 && (
+            <p className="border-t border-border p-4 text-sm text-muted-foreground">
+              {t("delivery.noSpecs")}
+            </p>
+          )}
+        </>
       )}
     </Card>
   );

@@ -611,6 +611,235 @@ fn an_outside_pull_request_shows_who_opened_it_and_that_no_spec_stands_behind_it
     assert_eq!(detail.body["stage_runs"], json!([]));
 }
 
+fn outside_api(workflow: &str) -> Api {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push('\n');
+    text.push_str(workflow);
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    Api::with(Sim::multi_repo(SimConfig::default(), &layout))
+}
+
+fn wait_for_outside_task(api: &mut Api) {
+    assert!(api.sim.run_until(STEPS, |s| !s.all_tasks().is_empty()));
+}
+
+#[test]
+fn an_operator_takes_a_pull_request_by_number_and_every_refusal_has_its_code() {
+    let mut api = outside_api(
+        "[workflow]\npreset = \"review_only\"\n\n[workflow.change_request]\ntrigger = \"manual\"\n",
+    );
+    let project = api.sim.project_id.0;
+    let take = format!("/api/v1/projects/{project}/external-changes");
+    let fork = api.sim.world.open_external_change(
+        SHOP_REPO,
+        saka_testkit::ChangeSpec::new("From a fork", "mallory", "patch-1")
+            .fork()
+            .draft(),
+    );
+
+    let r = api.post_with(
+        &take,
+        Some("take-1"),
+        &[],
+        &json!({ "repo": null, "number": fork }),
+    );
+    assert_eq!(
+        (r.status, &r.body["state"]),
+        (StatusCode::CREATED, &json!("in_stage"))
+    );
+    assert_eq!(r.body["stage_phase"], "awaiting_review");
+    assert_eq!(r.body["external"]["cause"], "operator");
+    assert_eq!(r.body["external"]["actor"], Value::Null);
+    assert_eq!(r.body["external"]["from_fork"], true);
+    assert_eq!(r.body["available_actions"], json!(["cancel"]));
+    let replay = api.post_with(
+        &take,
+        Some("take-1"),
+        &[],
+        &json!({ "repo": null, "number": fork }),
+    );
+    assert_eq!(
+        (replay.status, &replay.headers["idempotent-replayed"]),
+        (
+            StatusCode::CREATED,
+            &json!("true").as_str().unwrap().parse().unwrap()
+        )
+    );
+    assert_eq!(replay.body, r.body);
+    let id = r.body["id"].as_str().unwrap().to_string();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["stage_runs"][0]["reason"], "operator");
+    assert_eq!(detail.body["stage_runs"][0]["state"], "pending");
+
+    problem(
+        &api.post(&take, &[], json!({ "repo": "shop", "number": fork })),
+        StatusCode::CONFLICT,
+        "review_already_requested",
+    );
+    problem(
+        &api.post(&take, &[], json!({ "repo": null, "number": 999 })),
+        StatusCode::NOT_FOUND,
+        "change_request_not_found",
+    );
+    let shut = api.sim.world.open_external_change(
+        SHOP_REPO,
+        saka_testkit::ChangeSpec::new("Shut", "alice", "shut"),
+    );
+    api.sim.world.close_outside(shut);
+    let r = api.post(&take, &[], json!({ "repo": null, "number": shut }));
+    problem(&r, StatusCode::CONFLICT, "change_request_not_open");
+    assert_eq!(r.body["params"]["state"], "closed");
+    problem(
+        &api.post(&take, &[], json!({ "repo": null, "number": 0 })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post(&take, &[], json!({ "repo": "nope", "number": fork })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post(
+            &take,
+            &[],
+            json!({ "repo": null, "number": fork, "extra": 1 }),
+        ),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    api.post(
+        &format!("/api/v1/work-items/{id}/actions/cancel"),
+        &[],
+        json!({ "reason": "not needed" }),
+    );
+    problem(
+        &api.post(&take, &[], json!({ "repo": null, "number": fork })),
+        StatusCode::CONFLICT,
+        "change_request_tracked",
+    );
+}
+
+#[test]
+fn the_review_action_asks_once_per_head_and_again_after_a_push() {
+    let mut api = outside_api(
+        "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nreview = \"manual\"\n",
+    );
+    let number = api
+        .sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    wait_for_outside_task(&mut api);
+    let id = api.sim.all_tasks()[0].item.id.0;
+    let review = format!("/api/v1/work-items/{id}/actions/review");
+    let shown = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(shown.body["available_actions"], json!(["cancel", "review"]));
+
+    let r = api.post(&review, &[], json!({}));
+    assert_eq!(
+        (r.status, &r.body["stage_phase"]),
+        (StatusCode::ACCEPTED, &json!("awaiting_review"))
+    );
+    assert_eq!(r.body["available_actions"], json!(["cancel"]));
+    let again = api.post(&review, &[], json!({}));
+    problem(&again, StatusCode::CONFLICT, "review_already_requested");
+    assert_eq!(
+        again.body["params"]["head_sha"],
+        r.body["change_request"]["head_sha"]
+    );
+    problem(
+        &api.post(&review, &[], json!({ "extra": true })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+
+    let moved = api.sim.world.push_to_change(SHOP_REPO, number);
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.all_tasks()[0].is_at(Stage::Review, StagePhase::AwaitingTrigger)
+    }));
+    let r = api.post(&review, &[], json!({}));
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["change_request"]["head_sha"], moved);
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["stage_runs"].as_array().unwrap().len(), 2);
+
+    api.sim.world.merge_outside(number);
+    assert!(api.sim.run_until(STEPS, |s| s.all_tasks().is_empty()));
+    problem(
+        &api.post(&review, &[], json!({})),
+        StatusCode::CONFLICT,
+        "invalid_state",
+    );
+}
+
+#[test]
+fn taking_an_existing_waiting_task_answers_ok_and_a_spec_task_is_not_an_outside_change() {
+    let mut api = outside_api(
+        "[workflow]\npreset = \"custom\"\nspec = true\n\n[workflow.change_request]\n\n[workflow.stages]\ndev = \"auto\"\nreview = \"manual\"\nmerge = \"manual\"\n",
+    );
+    let project = api.sim.project_id.0;
+    let take = format!("/api/v1/projects/{project}/external-changes");
+    let number = api
+        .sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    wait_for_outside_task(&mut api);
+    let r = api.post(&take, &[], json!({ "repo": null, "number": number }));
+    assert_eq!(
+        (r.status, &r.body["stage_phase"]),
+        (StatusCode::OK, &json!("awaiting_review"))
+    );
+
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| s.world.prs().len() >= 2));
+    let own = s_own_number(&api);
+    problem(
+        &api.post(&take, &[], json!({ "repo": null, "number": own })),
+        StatusCode::CONFLICT,
+        "change_request_owned",
+    );
+    let step = api.sim.task(1).item.id.0;
+    problem(
+        &api.post(
+            &format!("/api/v1/work-items/{step}/actions/review"),
+            &[],
+            json!({}),
+        ),
+        StatusCode::CONFLICT,
+        "unsupported_in_this_version",
+    );
+}
+
+fn s_own_number(api: &Api) -> u64 {
+    api.sim
+        .world
+        .prs()
+        .iter()
+        .find(|p| p.meta.author == saka_testkit::BOT_AUTHOR)
+        .map(|p| p.number)
+        .unwrap()
+}
+
+#[test]
+fn a_project_without_the_entry_refuses_to_take_a_pull_request() {
+    let mut api = outside_api("");
+    let project = api.sim.project_id.0;
+    let number = api
+        .sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    let r = api.post(
+        &format!("/api/v1/projects/{project}/external-changes"),
+        &[],
+        json!({ "repo": null, "number": number }),
+    );
+    problem(&r, StatusCode::CONFLICT, "entry_point_disabled");
+    assert_eq!(r.body["params"], json!({ "entry": "change_request" }));
+}
+
 #[test]
 fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     let cfg = SimConfig {

@@ -110,6 +110,39 @@ const tasks = [
     },
   }),
   task(2, { state: "in_stage", stage: "dev", stage_phase: "running_session" }),
+  task(4, {
+    origin: "external_change",
+    spec_id: null,
+    spec_revision_id: null,
+    step_id: null,
+    step_index: null,
+    task_key: "app#7",
+    work: "Add retries to the poller",
+    branch: "feature/retries",
+    state: "in_stage",
+    stage: "review",
+    stage_phase: "awaiting_trigger",
+    change_request: {
+      id: "o",
+      number: 7,
+      url: "https://github.com/acme/tasks/pull/7",
+      state: "open",
+      head_sha: "c0ffee".padEnd(40, "0"),
+      base_branch: "main",
+      merge_commit_sha: null,
+      merged_at: null,
+    },
+    external: {
+      title: "Add retries to the poller",
+      author: "alice",
+      from_fork: true,
+      draft: false,
+      spec: null,
+      cause: "auto",
+      actor: null,
+    },
+    available_actions: ["cancel", "review"],
+  }),
 ];
 
 const page_ = (items: unknown[]) => ({ items, next_cursor: null });
@@ -204,6 +237,28 @@ for (const width of [375, 1280]) {
     const blocker = page.getByRole("region", { name: "Blocker" });
     await expect(blocker).toBeVisible();
     await expect(blocker.getByRole("button", { name: "Retry" })).toBeVisible();
+    await noOverflow(page);
+    const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    expect(results.violations).toEqual([]);
+  });
+}
+
+for (const width of [375, 1280]) {
+  test(`a change from outside shows no spec and can be reviewed at ${width} px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page, false);
+    await page.goto("/delivery");
+    const group = page.getByRole("region", { name: "Changes from outside" });
+    await expect(group.getByText("No spec")).toBeVisible();
+    await noOverflow(page);
+    await group.getByRole("link", { name: "app#7" }).click();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "app#7" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
     await noOverflow(page);
     const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
     expect(results.violations).toEqual([]);

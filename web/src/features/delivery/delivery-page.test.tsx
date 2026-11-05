@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { fakeApi, page, pending } from "@/test/fake-api";
 import {
   blockedTask,
+  outsideTask,
   project,
   PROJECT_ID,
   queuedTask,
@@ -221,5 +222,78 @@ describe("DeliveryPage", () => {
     for (const r of rows) {
       expect(r).toHaveClass("text-muted-foreground");
     }
+  });
+});
+
+describe("Changes from outside", () => {
+  it("lists them under their own heading, marks the ones with no spec, and works without any spec", async () => {
+    const reviewOnly = {
+      ...project,
+      workflow: {
+        preset: "review_only",
+        spec: false,
+        change_request: {
+          trigger: "auto",
+          labels: [],
+          authors: [],
+          branches: [],
+          paths: [],
+          include_forks: false,
+          include_drafts: false,
+          trigger_label: "saka:review",
+        },
+        stages: [{ stage: "review", trigger: "auto" }],
+      },
+    };
+    fakeApi({
+      [PROJECTS]: { body: page([reviewOnly]) },
+      [SPECS]: { body: page([]) },
+      [WORK_ITEMS]: { body: page([outsideTask]) },
+      [PERMISSIONS]: { body: page([]) },
+    });
+    renderWithProviders(<DeliveryPage />);
+    const group = await screen.findByRole("region", {
+      name: "Changes from outside",
+    });
+    const link = within(group).getByRole("link", { name: "app#7" });
+    expect(link).toHaveAttribute("href", `/delivery/tasks/${outsideTask.id}`);
+    expect(
+      within(group).getByText("Add retries to the poller"),
+    ).toBeInTheDocument();
+    expect(within(group).getByText("by alice")).toBeInTheDocument();
+    expect(within(group).getByText("No spec")).toBeInTheDocument();
+    expect(within(group).getByText("Fork")).toBeInTheDocument();
+    expect(
+      within(group).getByText(/waiting for a review command/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No specs approved/)).not.toBeInTheDocument();
+  });
+
+  it("names the spec a change is linked to instead of marking it", async () => {
+    const linked = {
+      ...outsideTask,
+      external: {
+        ...outsideTask.external,
+        author: "alice",
+        title: outsideTask.work,
+        from_fork: false,
+        draft: false,
+        cause: "auto",
+        actor: null,
+        spec: { spec_id: SPEC_ID, slug: "tasks-done", step_id: "S2" },
+      },
+    };
+    fakeApi({
+      [PROJECTS]: { body: page([project]) },
+      [SPECS]: { body: page([spec]) },
+      [WORK_ITEMS]: { body: page([linked]) },
+      [PERMISSIONS]: { body: page([]) },
+    });
+    renderWithProviders(<DeliveryPage />);
+    const group = await screen.findByRole("region", {
+      name: "Changes from outside",
+    });
+    expect(within(group).getByText("Spec tasks-done")).toBeInTheDocument();
+    expect(within(group).queryByText("No spec")).not.toBeInTheDocument();
   });
 });

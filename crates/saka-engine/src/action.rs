@@ -21,6 +21,7 @@ pub enum Produced<'a> {
     ConfigCheck(&'a crate::config_check::ConfigCheckView),
     Spec(&'a SpecView, bool),
     Task(&'a Task),
+    Taken(&'a Task, bool),
     Draft(&'a Draft),
     Permission(&'a PermissionView),
     Session(&'a Session),
