@@ -4,6 +4,7 @@ mod config;
 mod doctor;
 mod init;
 mod logging;
+mod notify_cmd;
 mod scm_app;
 mod serve;
 
@@ -105,6 +106,21 @@ enum Command {
     #[command(about = "Hooks of a project: what is configured, what ran, and run it again")]
     #[command(subcommand)]
     Hook(HookCmd),
+    #[command(about = "Chat notification channels from the operator config")]
+    #[command(subcommand)]
+    Notify(NotifyCmd),
+}
+
+#[derive(Subcommand)]
+enum NotifyCmd {
+    #[command(
+        about = "Sends a test message to a channel, to check the token and chat (runs here, not through the server)",
+        after_help = "Exit codes: 0 sent, 1 the channel refused or could not be reached, 2 config refused or no such channel."
+    )]
+    Test {
+        #[arg(help = "The channel name from [[notify.channel]]")]
+        channel: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -547,6 +563,9 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     SecretCmd::Rm { project, name } => client.secret_rm(&project, &name).await,
                 }
             })
+        }
+        Command::Notify(NotifyCmd::Test { channel }) => {
+            notify_cmd::test(&load_config()?, &channel, cli.json)
         }
         Command::Hook(cmd) => {
             let client = Client::new(&server(cli.server)?, cli.json);

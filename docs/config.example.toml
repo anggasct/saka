@@ -119,6 +119,20 @@ effect = "allow"
 tools = ["Bash"]
 commands = ["go test *", "go vet *", "go build *", "gofmt *", "npm test*", "npm run *", "git status*", "git diff*", "git add *", "git commit *", "git log*", "ls *", "cat *"]
 
+# Chat notifications. A `notify` hook sends its message through one of these channels; the hook
+# decides which events, projects and filters (see the hooks below). Saka never creates a bot or an
+# account: you make the bot, put its token in a file, and name your chat.
+[notify]
+public_url = "https://saka.example.com"   # optional; links to the task are added only when set. https (http on a loopback host), no credentials, query or fragment
+language = "en"                    # en | id
+
+[[notify.channel]]
+name = "ops"                       # ^[a-z0-9-]{1,32}$, unique; at most 8 channels
+kind = "telegram"                  # telegram | discord
+token_file = "~/.config/saka/notify/ops.token"   # the bot token; mode 0600, owned by you (else config_key_file_mode)
+chat = "-1001234567890"            # telegram: the chat id (an integer, negative for groups); discord: the channel id (digits)
+# api_url = "https://api.telegram.org"   # optional; default per kind (discord: https://discord.com/api/v10)
+
 # Hooks run something when an event happens in a project's loop (the [hooks] table above is the
 # inbound webhook listener; these are outbound). Hooks live only here, never in saka.toml or the repo.
 # `on` is change_opened | merged | task_done | spec_shipped | blocked. A run is recorded for every
@@ -140,7 +154,7 @@ name = "tell-ops"
 project = "tasks"
 on = "blocked"
 action = "notify"
-channel = "ops"                    # a channel name; delivered by the notifier once one is set up
+channel = "ops"                    # a [[notify.channel]] name; start is refused if there is none
 codes = ["ci_red", "dod_failed"]   # optional, only with on = "blocked"
 
 # `run` executes the command in a throwaway environment checked out at the commit of the event

@@ -1,5 +1,12 @@
+mod api;
+mod chat;
+mod discord;
+mod render;
+mod telegram;
 mod webhook;
 
+pub use chat::{ChannelKind, ChannelSpec, ChatConfig, ChatNotifier};
+pub use render::{Lang, TEXT_MAX_CHARS, render};
 pub use webhook::{HttpWebhooks, signature};
 
 use async_trait::async_trait;
