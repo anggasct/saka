@@ -26,6 +26,7 @@ saka-docs = { path = "../saka-docs" }
 saka-engine = { path = "../saka-engine" }
 saka-env = { path = "../saka-env" }
 saka-ports = { path = "../saka-ports" }
+saka-notify = { path = "../saka-notify" }
 saka-scm = { path = "../saka-scm" }
 saka-store = { path = "../saka-store" }
 serde.workspace = true

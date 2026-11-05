@@ -83,6 +83,7 @@ pub struct SimConfig {
     pub architect_model: Option<String>,
     pub config_poll_secs: u32,
     pub diagnostics: DiagnosticLimits,
+    pub hooks: Vec<saka_core::hook::Hook>,
 }
 
 pub fn draft_config() -> DraftConfig {
@@ -144,6 +145,7 @@ impl Default for SimConfig {
             architect_model: None,
             config_poll_secs: 0,
             diagnostics: DiagnosticLimits::default(),
+            hooks: Vec::new(),
         }
     }
 }
@@ -170,6 +172,7 @@ pub struct SimOutcome {
 
 pub struct Sim {
     pub world: Arc<FakeWorld>,
+    pub hooks: Arc<crate::hooks::FakeHooks>,
     pub clock: Arc<FakeClock>,
     pub ids: Arc<FakeIds>,
     pub cfg: SimConfig,
@@ -203,6 +206,7 @@ impl Sim {
             .unwrap();
         let mut sim = Sim {
             world,
+            hooks: Arc::new(crate::hooks::FakeHooks::default()),
             clock,
             ids,
             cfg,
@@ -341,6 +345,8 @@ impl Sim {
             secrets: self.world.clone(),
             supervisor: self.world.clone(),
             releases: self.world.clone(),
+            webhooks: self.hooks.clone(),
+            notifier: self.hooks.clone(),
         };
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),
@@ -368,6 +374,7 @@ impl Sim {
             architect_model: self.cfg.architect_model.clone(),
             config_poll_secs: self.cfg.config_poll_secs,
             diagnostics: self.cfg.diagnostics,
+            hooks: self.cfg.hooks.clone(),
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

@@ -79,6 +79,7 @@ pub enum Effect {
     Nothing,
     Skipped,
     Later(Job),
+    Hook(crate::hooks::HookReport),
 }
 
 pub type Execution = std::result::Result<Effect, PortError>;
@@ -350,6 +351,9 @@ impl Engine {
         if job.kind == JobKind::WorkspaceReloadConfig {
             return self.reload_job(job).await;
         }
+        if job.kind == JobKind::HookRun {
+            return self.hook_job(job).await;
+        }
         if job.kind == JobKind::ScmUserLinkPoll {
             return self.user_link_poll_job(job).await;
         }
@@ -416,7 +420,8 @@ impl Engine {
             | JobKind::DraftCommit
             | JobKind::WorkspaceReloadConfig
             | JobKind::ScmUserLinkPoll
-            | JobKind::ScmUserLinkRefresh => Ok(Effect::Skipped),
+            | JobKind::ScmUserLinkRefresh
+            | JobKind::HookRun => Ok(Effect::Skipped),
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;
@@ -432,6 +437,9 @@ impl Engine {
     }
 
     pub fn complete_job(&self, job: &ClaimedJob, execution: Execution) -> Result<JobReport> {
+        if job.kind == JobKind::HookRun {
+            return self.complete_hook_job(job, execution);
+        }
         let owner = self.cfg.worker_id.clone();
         let draft = saka_core::job::spec_draft_of(&job.payload);
         let actor = match job.kind {
@@ -462,7 +470,7 @@ impl Engine {
                 done(events),
                 JobResult::Succeeded,
             ),
-            Ok(Effect::Nothing) => (None, done(vec![]), JobResult::Succeeded),
+            Ok(Effect::Nothing | Effect::Hook(_)) => (None, done(vec![]), JobResult::Succeeded),
             Ok(Effect::Skipped) => (None, done(vec![]), JobResult::Skipped),
             Ok(Effect::Later(next)) => (
                 None,

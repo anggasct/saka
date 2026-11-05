@@ -431,6 +431,75 @@ impl Client {
         }
     }
 
+    pub async fn hook_list(&self, project: &str) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self.get(&format!("/api/v1/projects/{id}/hooks")).await {
+            Ok(a) => self.finish(&a, |body| {
+                lines(body, |h| {
+                    format!(
+                        "{}  on {}  {}  {}",
+                        text(&h["name"]),
+                        text(&h["on"]),
+                        text(&h["mode"]),
+                        text(&h["action"])
+                    )
+                })
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn hook_runs(
+        &self,
+        project: &str,
+        hook: Option<&str>,
+        state: Option<&str>,
+        limit: u32,
+    ) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let mut path = format!("/api/v1/hook-runs?project_id={id}&limit={limit}");
+        for (key, value) in [("hook", hook), ("state", state)] {
+            if let Some(value) = value {
+                path.push_str(&format!("&{key}={value}"));
+            }
+        }
+        match self.get(&path).await {
+            Ok(a) => self.finish(&a, |body| {
+                lines(body, |r| {
+                    format!(
+                        "{}  {}  {}  {}  {}",
+                        text(&r["id"]),
+                        text(&r["hook"]),
+                        text(&r["trigger"]),
+                        text(&r["state"]),
+                        text(&r["queued_at"])
+                    )
+                })
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn hook_rerun(&self, id: &str, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/hook-runs/{id}/actions/rerun"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
+    }
+
     pub async fn secret_rm(&self, project: &str, name: &str) -> ExitCode {
         let id = match self.project_id(project).await {
             Ok(id) => id,

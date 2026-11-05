@@ -118,3 +118,27 @@ id = "safe-commands"
 effect = "allow"
 tools = ["Bash"]
 commands = ["go test *", "go vet *", "go build *", "gofmt *", "npm test*", "npm run *", "git status*", "git diff*", "git add *", "git commit *", "git log*", "ls *", "cat *"]
+
+# Hooks run something when an event happens in a project's loop (the [hooks] table above is the
+# inbound webhook listener; these are outbound). Hooks live only here, never in saka.toml or the repo.
+# `on` is change_opened | merged | task_done | spec_shipped | blocked. A run is recorded for every
+# match and kept as history; a failed run can be re-run from the API, the CLI, or Settings.
+
+[[hook]]
+name = "announce-merge"            # ^[a-z0-9-]{1,32}$, unique per project
+project = "tasks"                  # a project name, or its id
+on = "merged"
+action = "webhook"                 # webhook | notify (run and run_host arrive with the next hook step)
+url = "https://ci.example.com/saka"   # https, or http on a loopback host; no credentials in the URL
+secret = "HOOK_SIGNING_KEY"        # a project secret (`saka secret set`) that signs the body with HMAC-SHA256
+repos = ["app"]                    # optional: repo binding names; empty = all
+branches = ["main", "release/*"]   # optional: base branch of the change; globs
+timeout_secs = 10                  # 1..=30
+
+[[hook]]
+name = "tell-ops"
+project = "tasks"
+on = "blocked"
+action = "notify"
+channel = "ops"                    # a channel name; delivered by the notifier once one is set up
+codes = ["ci_red", "dod_failed"]   # optional, only with on = "blocked"

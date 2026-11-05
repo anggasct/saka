@@ -802,6 +802,24 @@ async fn run(
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    let hooks_cfg = match cfg.hooks_parsed() {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(code = e.code, detail = %e.detail, "hook config refused");
+            let _ = stop.send(true);
+            let _ = http.await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
+    let outbound = match saka_notify::HttpWebhooks::new(format!("saka/{VERSION}")) {
+        Ok(w) => Arc::new(w),
+        Err(e) => {
+            tracing::error!(code = %e.code, "outbound webhooks refused");
+            let _ = stop.send(true);
+            let _ = http.await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let agents = ClaudeAgents::new(agents_config(cfg), Arc::new(SystemdSupervisor), events_tx);
     let engine = Arc::new(Engine::new(
         store,
@@ -816,6 +834,8 @@ async fn run(
             secrets,
             supervisor: Arc::new(SystemdSupervisor),
             releases,
+            webhooks: outbound,
+            notifier: Arc::new(saka_notify::UnconfiguredNotifier),
         },
         EngineConfig {
             loop_cfg: LoopConfig {
@@ -833,6 +853,7 @@ async fn run(
             architect_model: Some(cfg.architect.model.clone()).filter(|m| !m.is_empty()),
             config_poll_secs: cfg.workspace.config_poll_secs,
             diagnostics: DiagnosticLimits::default(),
+            hooks: hooks_cfg,
         },
     ));
     match engine.recover() {

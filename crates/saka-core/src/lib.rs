@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod draft;
 pub mod event;
 pub mod gate;
+pub mod hook;
 pub mod ids;
 pub mod job;
 pub mod model;

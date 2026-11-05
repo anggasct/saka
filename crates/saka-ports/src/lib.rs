@@ -2,6 +2,7 @@ pub mod agent;
 pub mod docs;
 pub mod env;
 pub mod git;
+pub mod hook;
 pub mod scm;
 pub mod secret;
 pub mod supervisor;
@@ -28,6 +29,7 @@ pub use env::{
 pub use git::{
     Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,
 };
+pub use hook::{Notification, Notifier, WebhookPost, WebhookReceipt, Webhooks};
 pub use scm::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, IdentityLookup, MAX_CHANGE_FILES, MAX_CHANGE_TEXT_BYTES, MAX_OPEN_CHANGES,
