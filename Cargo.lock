@@ -2306,7 +2306,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.23.1",
  "clap",
+ "getrandom 0.4.3",
  "jiff",
  "reqwest",
  "rusqlite",
@@ -2324,6 +2326,7 @@ dependencies = [
  "saka-testkit",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror",
  "tokio",
@@ -2332,6 +2335,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
  "zeroize",
 ]
 

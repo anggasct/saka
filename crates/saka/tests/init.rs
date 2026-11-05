@@ -12,6 +12,10 @@ use saka_api::{ApiConfig, AppState};
 use saka_testkit::{DOCS_REPO, Layout, SHOP_REPO, Sim, SimConfig, WEB_REPO, repo_entry, saka_toml};
 use serde_json::{Value, json};
 
+mod support;
+
+use support::{nullable, schema_errors};
+
 const SAKA: &str = env!("CARGO_BIN_EXE_saka");
 const DEAD_SERVER: &str = "http://127.0.0.1:9";
 
@@ -228,64 +232,6 @@ fn stderr(o: &Output) -> String {
 
 fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
-}
-
-fn schema_errors(schema: &Value, value: &Value, at: &str, errors: &mut Vec<String>) {
-    if let Some(any) = schema["anyOf"].as_array() {
-        let ok = any.iter().any(|s| {
-            let mut e = Vec::new();
-            schema_errors(s, value, at, &mut e);
-            e.is_empty()
-        });
-        if !ok {
-            errors.push(format!("{at}: no alternative matches {value}"));
-        }
-        return;
-    }
-    if let Some(kind) = schema["type"].as_str() {
-        let ok = match kind {
-            "object" => value.is_object(),
-            "array" => value.is_array(),
-            "string" => value.is_string(),
-            "integer" => value.is_i64() || value.is_u64(),
-            "boolean" => value.is_boolean(),
-            "null" => value.is_null(),
-            _ => false,
-        };
-        if !ok {
-            errors.push(format!("{at}: want {kind}, got {value}"));
-            return;
-        }
-    }
-    if let Some(allowed) = schema["enum"].as_array()
-        && !allowed.contains(value)
-    {
-        errors.push(format!("{at}: {value} not in {allowed:?}"));
-    }
-    if let Some(required) = schema["required"].as_array() {
-        for key in required {
-            let key = key.as_str().unwrap();
-            if value.get(key).is_none() {
-                errors.push(format!("{at}: missing {key}"));
-            }
-        }
-    }
-    if let Some(props) = schema["properties"].as_object() {
-        for (key, sub) in props {
-            if let Some(v) = value.get(key) {
-                schema_errors(sub, v, &format!("{at}.{key}"), errors);
-            }
-        }
-    }
-    if let Some(items) = schema.get("items") {
-        for (i, v) in value.as_array().into_iter().flatten().enumerate() {
-            schema_errors(items, v, &format!("{at}[{i}]"), errors);
-        }
-    }
-}
-
-fn nullable(kind: &str) -> Value {
-    json!({ "anyOf": [{ "type": kind }, { "type": "null" }] })
 }
 
 fn init_report_schema() -> Value {
@@ -512,6 +458,16 @@ fn config_problems_exit_three_and_list_every_problem() {
         ),
         "{out}"
     );
+    assert_eq!(
+        out.matches("next  saka scm create-app --web-url https://gitlab.example\n")
+            .count(),
+        1,
+        "{out}"
+    );
+    let json = env.init(&repo.path, &server, &["--yes", "--json"]);
+    let report: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert!(report.get("next").is_none(), "{report}");
+    assert!(!stdout(&json).contains("create-app"));
 }
 
 #[test]
