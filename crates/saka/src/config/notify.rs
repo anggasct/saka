@@ -133,18 +133,15 @@ impl Notify {
             if c.api_url.as_deref().is_some_and(|u| !url_ok(u)) {
                 return Err(invalid("notify_field_invalid", &c.name, Some("api_url")));
             }
-            c.validate_actions(kind)?;
+            c.validate_actions()?;
         }
         Ok(())
     }
 }
 
 impl NotifyChannel {
-    fn validate_actions(&self, kind: ChannelKind) -> Result<(), ConfigError> {
+    fn validate_actions(&self) -> Result<(), ConfigError> {
         let name = self.name.as_str();
-        if self.actions && kind != ChannelKind::Telegram {
-            return Err(invalid("notify_actions_unsupported", name, Some("actions")));
-        }
         if self.actions && self.allowed_users.is_empty() {
             return Err(invalid(
                 "notify_allowed_users_required",
@@ -314,18 +311,16 @@ mod tests {
     }
 
     #[test]
-    fn actions_need_a_telegram_channel_and_a_list_of_users_who_may_press_the_buttons() {
+    fn actions_need_a_list_of_users_who_may_press_the_buttons_on_either_platform() {
         let on = |extra: &str| channel(&format!("actions = true\n{extra}"));
         let cfg = Config::parse(&on("allowed_users = [\"4242\", \"77\"]\n")).unwrap();
         assert!(cfg.notify.channel[0].actions);
+        let discord = on("allowed_users = [\"998877665544332211\"]\n")
+            .replace("telegram", "discord")
+            .replace("-100", "100");
+        assert!(Config::parse(&discord).unwrap().notify.channel[0].actions);
         for (text, code) in [
             (on(""), "notify_allowed_users_required"),
-            (
-                on("allowed_users = [\"1\"]\n")
-                    .replace("telegram", "discord")
-                    .replace("-100", "100"),
-                "notify_actions_unsupported",
-            ),
             (
                 on("allowed_users = [\"x1\"]\n"),
                 "notify_field_invalid: channel \"ops\".allowed_users",

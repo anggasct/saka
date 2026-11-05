@@ -190,7 +190,7 @@ fn a_button_in_a_telegram_message_retries_the_blocked_task_once_and_only_for_the
     let (stop, stopped) = watch::channel(false);
     let handler: Arc<dyn ChatActions> = sim.engine();
     let _guard = rt.enter();
-    let pollers = chat.spawn_pollers(&handler, &stopped);
+    let pollers = chat.spawn_listeners(&handler, &stopped);
     assert_eq!(pollers.len(), 1);
 
     wait("the three presses to be answered", || {
@@ -218,5 +218,115 @@ fn a_button_in_a_telegram_message_retries_the_blocked_task_once_and_only_for_the
     stop.send(true).unwrap();
     for poller in pollers {
         rt.block_on(poller).unwrap();
+    }
+}
+
+fn fake_gateway(rt: &tokio::runtime::Runtime, interaction: Value) -> String {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = rt
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    rt.spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = json!({ "op": 10, "d": { "heartbeat_interval": 60_000 } });
+        ws.send(Message::text(hello.to_string())).await.unwrap();
+        while let Some(Ok(Message::Text(text))) = ws.next().await {
+            let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+            if frame["op"] == 2 {
+                let ready = json!({ "op": 0, "t": "READY", "s": 1, "d": { "session_id": "s", "resume_gateway_url": "ws://unused" } });
+                ws.send(Message::text(ready.to_string())).await.unwrap();
+                ws.send(Message::text(interaction.to_string())).await.unwrap();
+            }
+        }
+    });
+    url
+}
+
+#[test]
+fn a_button_in_a_discord_message_retries_the_blocked_task_for_the_listed_user() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = rt.block_on(MockServer::start());
+    let mut sim = blocked_sim();
+    let blocker = sim.task(1).open_blocker().cloned().unwrap();
+    let press = |kind: &str| {
+        json!({
+            "op": 0, "t": "INTERACTION_CREATE", "s": 2,
+            "d": {
+                "id": format!("i-{kind}"), "token": "t", "type": 3, "channel_id": "998877",
+                "member": { "user": { "id": "555" } },
+                "data": { "custom_id": format!("{kind}:{}", blocker.id.0.simple()) },
+                "message": { "content": "Blocked" }
+            }
+        })
+    };
+    let url = fake_gateway(&rt, press("r"));
+    rt.block_on(async {
+        Mock::given(method("GET"))
+            .and(path("/gateway/bot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "url": url })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/interactions/i-r/t/callback"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+    });
+    let clock: Arc<dyn Clock> = Arc::new(Fixed);
+    let chat = ChatNotifier::new(
+        ChatConfig {
+            language: Lang::En,
+            public_url: None,
+            channels: vec![ChannelSpec {
+                name: "chat".into(),
+                kind: ChannelKind::Discord,
+                chat: "998877".into(),
+                api_url: server.uri(),
+                token: SecretText::new(TOKEN.into()),
+                allowed_users: Some(vec!["555".into()]),
+            }],
+            user_agent: "saka/test".into(),
+            poll: PollTiming::default(),
+        },
+        &clock,
+    )
+    .unwrap();
+    let (stop, stopped) = watch::channel(false);
+    let handler: Arc<dyn ChatActions> = sim.engine();
+    let _guard = rt.enter();
+    let listeners = chat.spawn_listeners(&handler, &stopped);
+
+    wait("the press to be answered", || {
+        rt.block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .any(|r| r.url.path() == "/interactions/i-r/t/callback")
+    });
+    let answered = rt.block_on(server.received_requests()).unwrap();
+    let callback = answered
+        .iter()
+        .find(|r| r.url.path() == "/interactions/i-r/t/callback")
+        .unwrap();
+    let body: Value = serde_json::from_slice(&callback.body).unwrap();
+    assert_eq!(body["data"]["content"], "Blocked\n\nRetry started.");
+    let resolved = sim.events_of("delivery.blocker.resolved");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].actor, "operator:discord:555");
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+
+    stop.send(true).unwrap();
+    for listener in listeners {
+        rt.block_on(listener).unwrap();
     }
 }
