@@ -326,6 +326,28 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_intake_changes_total",
+        "counter",
+        "Pull requests seen by intake scans, by outcome.",
+    );
+    for (outcome, n) in &m.intake_changes {
+        t.sample("saka_intake_changes_total", &[("outcome", outcome)], n);
+    }
+    t.family(
+        "saka_review_requests_total",
+        "counter",
+        "Review requests created, by what asked for them.",
+    );
+    for (cause, n) in &m.review_requests {
+        t.sample("saka_review_requests_total", &[("cause", cause)], n);
+    }
+    histogram(
+        &mut t,
+        "saka_intake_scan_seconds",
+        "Time one intake scan of a repo takes.",
+        &m.intake_scan_seconds,
+    );
+    t.family(
         "saka_gate_runs_total",
         "counter",
         "Gate runs by source and outcome.",

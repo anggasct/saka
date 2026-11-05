@@ -6,9 +6,9 @@ use saka_core::ids::{
     RepoId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
-    AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, GateResult, PermissionRequest,
-    PermissionRule, Project, ProjectRepo, Repo, RevisionView, RunOwner, Session, Spec,
-    SpecDependency, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
+    AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, ExternalChange, GateResult,
+    PermissionRequest, PermissionRule, Project, ProjectRepo, Repo, RevisionView, RunOwner, Session,
+    Spec, SpecDependency, SpecLink, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeRole, SessionState, Stage, Trigger};
@@ -256,6 +256,20 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             };
         }
     }
+    for (id, external) in rows_of(
+        conn,
+        "SELECT e.*, p.workflow, s.slug AS spec_slug FROM external_change e JOIN project p ON p.id = e.project_id
+           LEFT JOIN spec s ON s.id = e.spec_id",
+        "e.work_item_id",
+        selection,
+        "e.created_at, e.work_item_id",
+        b,
+        external_change,
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.external = Some(external);
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     for g in rows(
         conn,
@@ -460,6 +474,26 @@ pub(crate) fn stage_run(row: &Row<'_>) -> Result<StageRun> {
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,
     })
+}
+
+fn external_change(row: &Row<'_>) -> Result<(WorkItemId, ExternalChange)> {
+    let spec_id = opt_uuid(row, "spec_id")?.map(SpecId);
+    let step_id: Option<String> = row.get("step_id")?;
+    Ok((
+        WorkItemId(uuid(row, "work_item_id")?),
+        ExternalChange {
+            title: row.get("title")?,
+            author: row.get("author")?,
+            from_fork: row.get("from_fork")?,
+            draft: row.get("draft")?,
+            spec: spec_id.map(|spec_id| SpecLink { spec_id, step_id }),
+            cause: vocab(row, "cause")?,
+            actor: row.get("actor")?,
+            created_at: ts(row, "created_at")?,
+            spec_slug: row.get("spec_slug")?,
+            workflow: json(row, "workflow")?,
+        },
+    ))
 }
 
 fn gate(row: &Row<'_>) -> Result<GateResult> {
@@ -1320,7 +1354,7 @@ pub fn hook_candidates(conn: &Connection, repo: RepoId) -> Result<Vec<HookCandid
         "SELECT cr.id, cr.work_item_id, cr.project_id, cr.repo_id, cr.number, cr.head_sha
          FROM change_request cr JOIN work_item w ON w.id = cr.work_item_id
          WHERE cr.repo_id = ?1 AND cr.state = 'open'
-           AND ((w.state = 'in_stage' AND (w.stage = 'dev'
+           AND ((w.state = 'in_stage' AND (w.stage = 'dev' OR w.origin = 'external_change'
                   OR (w.stage = 'merge' AND w.stage_phase IN ('awaiting_ci', 'awaiting_merge'))))
                 OR w.state = 'blocked')
          ORDER BY cr.number",
@@ -1335,6 +1369,61 @@ pub fn hook_candidates(conn: &Connection, repo: RepoId) -> Result<Vec<HookCandid
             repo_id: RepoId(uuid(row, "repo_id")?),
             number: u64_col(row, "number")?,
             head_sha: row.get("head_sha")?,
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedChange {
+    pub number: u64,
+    pub work_item_id: WorkItemId,
+    pub origin: saka_core::vocab::WorkItemOrigin,
+    pub state: saka_core::vocab::WorkItemState,
+}
+
+pub fn tracked_changes(conn: &Connection, repo: RepoId) -> Result<Vec<TrackedChange>> {
+    let mut stmt = conn.prepare(
+        "SELECT cr.number, w.id, w.origin, w.state FROM change_request cr
+         JOIN work_item w ON w.id = cr.work_item_id
+         WHERE cr.repo_id = ?1 AND cr.role = 'code' ORDER BY cr.number",
+    )?;
+    let mut rows = stmt.query([repo.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(TrackedChange {
+            number: u64_col(row, "number")?,
+            work_item_id: WorkItemId(uuid(row, "id")?),
+            origin: vocab(row, "origin")?,
+            state: vocab(row, "state")?,
+        });
+    }
+    Ok(out)
+}
+
+pub fn spec_step_branches(conn: &Connection, repo: RepoId) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT branch FROM work_item WHERE repo_id = ?1 AND origin = 'spec_step'")?;
+    let rows = stmt.query_map([repo.0.to_string()], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
+pub fn change_cursors(
+    conn: &Connection,
+    repo: RepoId,
+) -> Result<Vec<crate::write::ChangeCursorRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT number, updated_at, through, seen_ids FROM change_signal_cursor WHERE repo_id = ?1",
+    )?;
+    let mut rows = stmt.query([repo.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(crate::write::ChangeCursorRow {
+            repo_id: repo,
+            number: u64_col(row, "number")?,
+            updated_at: ts(row, "updated_at")?,
+            through: ts(row, "through")?,
+            seen_ids: json(row, "seen_ids")?,
         });
     }
     Ok(out)

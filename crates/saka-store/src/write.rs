@@ -1,5 +1,5 @@
 use rusqlite::{Transaction, params};
-use saka_core::ids::{ProjectId, SpecDraftAttemptId, SpecId, WorkItemId};
+use saka_core::ids::{ProjectId, RepoId, SpecDraftAttemptId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, Draft, Environment, GateResult, LintRound,
@@ -120,6 +120,15 @@ pub enum JobOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeCursorRow {
+    pub repo_id: RepoId,
+    pub number: u64,
+    pub updated_at: Timestamp,
+    pub through: Timestamp,
+    pub seen_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Batch {
     pub now: Timestamp,
@@ -148,6 +157,8 @@ pub struct Batch {
     pub removed_secrets: Vec<(ProjectId, String)>,
     pub webhook_deliveries: Vec<WebhookDeliveryRow>,
     pub prune_webhook_deliveries_before: Option<Timestamp>,
+    pub change_cursors: Vec<ChangeCursorRow>,
+    pub open_changes_seen: Vec<(RepoId, Vec<u64>)>,
     pub user_link_authorizations: Vec<crate::user_link::AuthorizationRow>,
     pub user_links: Vec<crate::user_link::UserLinkRow>,
     pub removed_user_links: Vec<saka_core::ids::UserLinkId>,
@@ -277,6 +288,28 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
         tx.execute(
             "DELETE FROM webhook_delivery WHERE received_at < ?1",
             [before.0],
+        )?;
+    }
+    for c in &b.change_cursors {
+        tx.execute(
+            "INSERT INTO change_signal_cursor (repo_id, number, updated_at, through, seen_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (repo_id, number) DO UPDATE SET updated_at = excluded.updated_at,
+               through = excluded.through, seen_ids = excluded.seen_ids",
+            params![
+                c.repo_id.0.to_string(),
+                i64_of(c.number)?,
+                c.updated_at.0,
+                c.through.0,
+                to_json(&c.seen_ids)?,
+            ],
+        )?;
+    }
+    for (repo_id, numbers) in &b.open_changes_seen {
+        tx.execute(
+            "DELETE FROM change_signal_cursor WHERE repo_id = ?1
+               AND number NOT IN (SELECT value FROM json_each(?2))",
+            params![repo_id.0.to_string(), to_json(numbers)?],
         )?;
     }
     for blob in &b.context_blobs {
@@ -619,6 +652,27 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
             i.updated_at.0,
         ],
     )?;
+    if let Some(x) = &t.external {
+        tx.execute(
+            "INSERT INTO external_change (work_item_id, project_id, title, author, from_fork, draft, spec_id,
+               step_id, cause, actor, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT (work_item_id) DO NOTHING",
+            params![
+                i.id.to_string(),
+                i.project_id.to_string(),
+                x.title,
+                x.author,
+                x.from_fork,
+                x.draft,
+                x.spec.as_ref().map(|s| s.spec_id.to_string()),
+                x.spec.as_ref().and_then(|s| s.step_id.clone()),
+                x.cause.as_str(),
+                x.actor,
+                x.created_at.0,
+            ],
+        )?;
+    }
     for run in t.retired_runs.iter().chain(t.stage_run.iter()) {
         stage_run(tx, t, run)?;
     }

@@ -122,6 +122,9 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserTokenInvalid { .. }
         | R::UserTokenInUse
         | R::EntryPointDisabled { .. }
+        | R::ReviewAlreadyRequested { .. }
+        | R::ChangeRequestTracked { .. }
+        | R::ChangeRequestNotOpen { .. }
         | R::StageNotInWorkflow { .. }
         | R::HookRunPending
         | R::HookNotConfigured { .. }

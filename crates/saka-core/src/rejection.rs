@@ -96,6 +96,12 @@ pub enum Rejection {
     UserTokenRejected { status: u16 },
     #[error("the user token cannot read every repo of the project")]
     UserTokenRepoInaccessible { repos: Value },
+    #[error("a review was already requested at this head")]
+    ReviewAlreadyRequested { head_sha: String },
+    #[error("the change request already has a task")]
+    ChangeRequestTracked { work_item_id: String },
+    #[error("the change request is no longer open")]
+    ChangeRequestNotOpen { number: u64, state: &'static str },
     #[error("the project workflow has no {entry} entry point")]
     EntryPointDisabled { entry: &'static str },
     #[error("the project workflow has no {stage} stage")]
@@ -157,6 +163,9 @@ impl Rejection {
             Rejection::UserTokenNotFineGrained => "user_token_not_fine_grained",
             Rejection::UserTokenRejected { .. } => "user_token_rejected",
             Rejection::UserTokenRepoInaccessible { .. } => "user_token_repo_inaccessible",
+            Rejection::ReviewAlreadyRequested { .. } => "review_already_requested",
+            Rejection::ChangeRequestNotOpen { .. } => "change_request_not_open",
+            Rejection::ChangeRequestTracked { .. } => "change_request_tracked",
             Rejection::EntryPointDisabled { .. } => "entry_point_disabled",
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
             Rejection::HookRunPending => "hook_run_pending",
@@ -226,6 +235,13 @@ impl Rejection {
             }
             Rejection::UserTokenRejected { status } => json!({ "status": status }),
             Rejection::UserTokenRepoInaccessible { repos } => json!({ "repos": repos }),
+            Rejection::ReviewAlreadyRequested { head_sha } => json!({ "head_sha": head_sha }),
+            Rejection::ChangeRequestNotOpen { number, state } => {
+                json!({ "number": number, "state": state })
+            }
+            Rejection::ChangeRequestTracked { work_item_id } => {
+                json!({ "work_item_id": work_item_id })
+            }
             Rejection::EntryPointDisabled { entry } => json!({ "entry": entry }),
             Rejection::StageNotInWorkflow { stage } => json!({ "stage": stage }),
             Rejection::Invalid { field, code } => {

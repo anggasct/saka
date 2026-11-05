@@ -37,6 +37,9 @@ pub struct Counters {
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
     diagnostic_checks: Mutex<BTreeMap<(String, String), u64>>,
+    intake_changes: Mutex<BTreeMap<(String, String), u64>>,
+    review_requests: Mutex<BTreeMap<(String, String), u64>>,
+    intake_scan_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
 }
@@ -158,6 +161,18 @@ impl Counters {
 
     pub(crate) fn dod(&self, outcome: &str) {
         bump(&self.dod, outcome, "");
+    }
+
+    pub(crate) fn intake_change(&self, outcome: &str) {
+        bump(&self.intake_changes, outcome, "");
+    }
+
+    pub(crate) fn review_request(&self, cause: &str) {
+        bump(&self.review_requests, cause, "");
+    }
+
+    pub(crate) fn intake_scan(&self, seconds: f64) {
+        observe(&self.intake_scan_seconds, &ADVANCE_SECONDS_BUCKETS, seconds);
     }
 
     pub(crate) fn step_advance(&self, seconds: f64) {
@@ -338,6 +353,9 @@ pub struct MetricsSnapshot {
     pub user_link_refreshes: Vec<(String, String, u64)>,
     pub change_requests_opened: Vec<(String, u64)>,
     pub diagnostic_checks: Vec<(String, String, u64)>,
+    pub intake_changes: Vec<(String, u64)>,
+    pub review_requests: Vec<(String, u64)>,
+    pub intake_scan_seconds: SecondsHistogram,
 }
 
 pub(crate) enum DodVerification {
@@ -517,6 +535,15 @@ impl Engine {
                 .into_iter()
                 .map(|(credential, _, n)| (credential, n))
                 .collect(),
+            intake_changes: copy(&self.counters.intake_changes)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            review_requests: copy(&self.counters.review_requests)
+                .into_iter()
+                .map(|(cause, _, n)| (cause, n))
+                .collect(),
+            intake_scan_seconds: snapshot_of(&self.counters.intake_scan_seconds),
         })
     }
 
