@@ -148,3 +148,80 @@ async fn a_private_key_readable_by_others_is_refused() {
     std::fs::set_permissions(Path::new(&key), std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(w.app.jwt().is_ok());
 }
+
+#[tokio::test]
+async fn intake_reads_follow_the_same_error_rules_and_never_leak_the_token() {
+    let w = World::new().await;
+    w.mount_tokens().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("x-ratelimit-remaining", "0")
+                .insert_header("x-ratelimit-reset", "1767229200")
+                .set_body_json(json!({ "message": "API rate limit exceeded" })),
+        )
+        .mount(&w.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/9/files"))
+        .respond_with(ResponseTemplate::new(502))
+        .mount(&w.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/5"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&w.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/collaborators/ghost/permission"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&w.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/collaborators/busy/permission"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&w.server)
+        .await;
+
+    let limited = w.gh.list_open_changes(&w.repo, 200).await.unwrap_err();
+    assert_eq!(limited.code, "scm_unavailable");
+    assert!(limited.retryable);
+    assert_eq!(limited.retry_at, Some(Timestamp(1_767_229_200_000)));
+
+    let down = w.gh.change_files(&w.repo, 9, 3000).await.unwrap_err();
+    assert_eq!(
+        (down.code.as_str(), down.retryable),
+        ("scm_unavailable", true)
+    );
+
+    let missing = w.gh.change_summary(&w.repo, 5).await.unwrap_err();
+    assert_eq!(
+        (missing.code.as_str(), missing.retryable),
+        ("scm_repo_inaccessible", false)
+    );
+
+    assert!(!w.gh.can_write(&w.repo, "ghost").await.unwrap());
+    let busy = w.gh.can_write(&w.repo, "busy").await.unwrap_err();
+    assert!(busy.retryable, "a failed permission read is not a denial");
+    for err in [&limited, &down, &missing, &busy] {
+        assert!(!format!("{err:?}").contains("ghs_"), "{err:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_changed_file_that_was_renamed_lists_both_paths_once() {
+    let w = World::new().await;
+    w.mount_tokens().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/pulls/4/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "filename": "new/name.rs", "previous_filename": "old/name.rs", "status": "renamed" },
+            { "filename": "new/name.rs" },
+            { "filename": "docs/readme.md" },
+        ])))
+        .mount(&w.server)
+        .await;
+    let files = w.gh.change_files(&w.repo, 4, 3000).await.unwrap();
+    assert_eq!(files, ["new/name.rs", "old/name.rs", "docs/readme.md"]);
+}

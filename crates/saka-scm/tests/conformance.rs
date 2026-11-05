@@ -14,12 +14,12 @@ use saka_core::vocab::{
 };
 use saka_ports::{
     ChangeCredential, ChangeOpening, MergeOutcome, MergeRequest, OpenChangeRequest, RepoRef, Scm,
-    ScmCapabilities, WebhookTarget,
+    ScmCapabilities, SignalKind, WebhookTarget,
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
 use support::gitlab::{self, GitLabWorld, TOKEN};
-use support::{HEAD, MERGED, World, pr};
+use support::{HEAD, MERGED, NOW_MS, World, pr};
 use wiremock::matchers::{body_json, body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -45,6 +45,37 @@ enum Signing {
     Missing,
 }
 
+struct Listed {
+    number: u64,
+    title: &'static str,
+    author: &'static str,
+    labels: &'static [&'static str],
+    draft: bool,
+    fork: bool,
+    branch: &'static str,
+    updated: i64,
+}
+
+struct Commented {
+    id: u64,
+    actor: &'static str,
+    body: &'static str,
+    at: i64,
+}
+
+struct Labeled {
+    id: u64,
+    actor: &'static str,
+    label: &'static str,
+    at: i64,
+}
+
+enum Access {
+    Write,
+    ReadOnly,
+    Stranger,
+}
+
 struct Check {
     id: u64,
     name: &'static str,
@@ -66,6 +97,10 @@ trait Harness: Sync {
     }
     async fn checks_at(&self, sha: &str, checks: &[Check], pending_status: &str);
     async fn merge_answers(&self, number: u64, answer: MergeAnswer);
+    async fn open_changes(&self, changes: &[Listed]);
+    async fn change_files(&self, number: u64, files: &[&str]);
+    async fn signals(&self, number: u64, comments: &[Commented], labels: &[Labeled]);
+    async fn write_access(&self, login: &str, access: Access);
     async fn branch_missing(&self);
     async fn status_accepted(&self, state: &str, description: &str);
     fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>);
@@ -240,6 +275,101 @@ impl Harness for GitHubHarness {
             })))
             .respond_with(ResponseTemplate::new(status).set_body_json(body))
             .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn open_changes(&self, changes: &[Listed]) {
+        let body: Vec<Value> = changes
+            .iter()
+            .map(|c| {
+                let labels: Vec<Value> = c.labels.iter().map(|l| json!({ "name": l })).collect();
+                json!({
+                    "number": c.number, "title": c.title, "body": "details",
+                    "html_url": format!("https://github.example/acme/app/pull/{}", c.number),
+                    "state": "open", "draft": c.draft, "labels": labels,
+                    "updated_at": support::rfc3339(c.updated),
+                    "user": { "login": c.author },
+                    "head": { "ref": c.branch, "sha": HEAD,
+                              "repo": { "full_name": if c.fork { "mallory/app" } else { "acme/app" } } },
+                    "base": { "ref": "main", "repo": { "full_name": "acme/app" } },
+                })
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/app/pulls"))
+            .and(query_param("state", "open"))
+            .and(query_param("sort", "updated"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change_files(&self, number: u64, files: &[&str]) {
+        let body: Vec<Value> = files.iter().map(|f| json!({ "filename": f })).collect();
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/repos/acme/app/pulls/{number}/files").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn signals(&self, number: u64, comments: &[Commented], labels: &[Labeled]) {
+        let comments: Vec<Value> = comments
+            .iter()
+            .map(|c| {
+                json!({ "id": c.id, "body": c.body, "created_at": support::rfc3339(c.at),
+                             "user": { "login": c.actor } })
+            })
+            .collect();
+        let mut events: Vec<Value> = labels
+            .iter()
+            .map(|l| {
+                json!({ "id": l.id, "event": "labeled", "created_at": support::rfc3339(l.at),
+                             "actor": { "login": l.actor }, "label": { "name": l.label } })
+            })
+            .collect();
+        events.push(
+            json!({ "id": 99, "event": "unlabeled", "created_at": support::rfc3339(NOW_MS),
+                            "actor": { "login": "zed" }, "label": { "name": "saka:review" } }),
+        );
+        events.push(
+            json!({ "id": 98, "event": "assigned", "created_at": support::rfc3339(NOW_MS),
+                            "actor": { "login": "zed" } }),
+        );
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/repos/acme/app/issues/{number}/comments").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(comments))
+            .mount(&self.w.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/repos/acme/app/issues/{number}/events").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(events))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn write_access(&self, login: &str, access: Access) {
+        let answer = match access {
+            Access::Write => ResponseTemplate::new(200)
+                .set_body_json(json!({ "permission": "write", "role_name": "maintain" })),
+            Access::ReadOnly => ResponseTemplate::new(200)
+                .set_body_json(json!({ "permission": "read", "role_name": "triage" })),
+            Access::Stranger => {
+                ResponseTemplate::new(404).set_body_json(json!({ "message": "Not Found" }))
+            }
+        };
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/repos/acme/app/collaborators/{login}/permission").as_str(),
+            ))
+            .respond_with(answer)
             .mount(&self.w.server)
             .await;
     }
@@ -456,6 +586,112 @@ impl Harness for GitLabHarness {
             })))
             .respond_with(ResponseTemplate::new(status).set_body_json(body))
             .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn open_changes(&self, changes: &[Listed]) {
+        let body: Vec<Value> = changes
+            .iter()
+            .map(|c| {
+                json!({
+                    "iid": c.number, "title": c.title, "description": "details",
+                    "web_url": format!("https://gitlab.example/acme/app/-/merge_requests/{}", c.number),
+                    "state": "opened", "draft": c.draft, "labels": c.labels,
+                    "updated_at": support::rfc3339(c.updated),
+                    "author": { "username": c.author },
+                    "source_branch": c.branch, "target_branch": "main", "sha": HEAD,
+                    "source_project_id": if c.fork { 10 } else { 9 }, "target_project_id": 9,
+                })
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("order_by", "updated_at"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change_files(&self, number: u64, files: &[&str]) {
+        let body: Vec<Value> = files
+            .iter()
+            .map(|f| json!({ "new_path": f, "old_path": f }))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/diffs").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn signals(&self, number: u64, comments: &[Commented], labels: &[Labeled]) {
+        let mut notes: Vec<Value> = comments
+            .iter()
+            .map(|c| json!({ "id": c.id, "body": c.body, "system": false,
+                             "created_at": support::rfc3339(c.at), "author": { "username": c.actor } }))
+            .collect();
+        notes.push(json!({ "id": 98, "body": "assigned to zed", "system": true,
+                           "created_at": support::rfc3339(NOW_MS), "author": { "username": "zed" } }));
+        let mut events: Vec<Value> = labels
+            .iter()
+            .map(|l| {
+                json!({ "id": l.id, "action": "add", "created_at": support::rfc3339(l.at),
+                             "user": { "username": l.actor }, "label": { "name": l.label } })
+            })
+            .collect();
+        events.push(
+            json!({ "id": 99, "action": "remove", "created_at": support::rfc3339(NOW_MS),
+                            "user": { "username": "zed" }, "label": { "name": "saka:review" } }),
+        );
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/notes").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(notes))
+            .mount(&self.w.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/resource_label_events")
+                    .as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(events))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn write_access(&self, login: &str, access: Access) {
+        let id = if matches!(access, Access::Write) {
+            5
+        } else {
+            6
+        };
+        let users = match access {
+            Access::Stranger => json!([]),
+            _ => json!([{ "id": id, "username": login }]),
+        };
+        Mock::given(method("GET"))
+            .and(path("/users"))
+            .and(query_param("username", login))
+            .respond_with(ResponseTemplate::new(200).set_body_json(users))
+            .mount(&self.w.server)
+            .await;
+        let level = match access {
+            Access::Write => 30,
+            _ => 20,
+        };
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/members/all/{id}").as_str(),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "id": id, "access_level": level })),
+            )
             .mount(&self.w.server)
             .await;
     }
@@ -797,6 +1033,176 @@ async fn commit_status_is_reported_for_a_head(h: &dyn Harness) {
     assert_eq!(bad.code, "git_argument_invalid");
 }
 
+const T1: i64 = support::NOW_MS - 3_600_000;
+const T2: i64 = support::NOW_MS - 1_800_000;
+const T3: i64 = support::NOW_MS - 600_000;
+
+async fn changes_are_listed_and_summarized(h: &dyn Harness) {
+    h.open_changes(&[
+        Listed {
+            number: 7,
+            title: "Add retries",
+            author: "alice",
+            labels: &["needs-review", "docs"],
+            draft: false,
+            fork: false,
+            branch: "feature/retries",
+            updated: T3,
+        },
+        Listed {
+            number: 8,
+            title: "Fix typo",
+            author: "mallory",
+            labels: &[],
+            draft: true,
+            fork: true,
+            branch: "patch-1",
+            updated: T2,
+        },
+    ])
+    .await;
+    let listed = h.scm().list_open_changes(&h.repo(), 200).await.unwrap();
+    let seen: Vec<_> = listed
+        .iter()
+        .map(|c| (c.number, c.draft, c.from_fork, c.author.as_str()))
+        .collect();
+    assert_eq!(
+        seen,
+        [(7, false, false, "alice"), (8, true, true, "mallory")]
+    );
+    let first = &listed[0];
+    assert_eq!(first.title, "Add retries");
+    assert_eq!(first.body, "details");
+    assert_eq!(first.labels, ["needs-review", "docs"]);
+    assert_eq!(
+        (first.head_branch.as_str(), first.base_branch.as_str()),
+        ("feature/retries", "main")
+    );
+    assert_eq!(
+        (first.head_sha.as_str(), first.state),
+        (HEAD, ChangeState::Open)
+    );
+    assert_eq!(first.updated_at, saka_core::time::Timestamp(T3));
+    assert!(first.url.ends_with("7"), "{}", first.url);
+
+    let capped = h.scm().list_open_changes(&h.repo(), 1).await.unwrap();
+    assert_eq!(capped.len(), 1, "the cap is honored");
+}
+
+async fn a_change_is_summarized_in_every_state(h: &dyn Harness) {
+    for (number, state, expected) in [
+        (7, Change::Open, ChangeState::Open),
+        (8, Change::Merged, ChangeState::Merged),
+        (9, Change::Closed, ChangeState::Closed),
+    ] {
+        h.change(number, state).await;
+        let summary = h.scm().change_summary(&h.repo(), number).await.unwrap();
+        assert_eq!(
+            (summary.number, summary.head_sha.as_str(), summary.state),
+            (number, HEAD, expected)
+        );
+    }
+    h.missing_repository("acme/gone").await;
+    let missing = h
+        .scm()
+        .change_summary(
+            &RepoRef {
+                full_name: "acme/gone".into(),
+                ..h.repo()
+            },
+            1,
+        )
+        .await
+        .unwrap_err();
+    assert!(!missing.retryable);
+}
+
+async fn a_change_lists_the_files_it_touches(h: &dyn Harness) {
+    h.change_files(7, &["services/api/lib.rs", "README.md"])
+        .await;
+    let files = h.scm().change_files(&h.repo(), 7, 3000).await.unwrap();
+    assert_eq!(files, ["services/api/lib.rs", "README.md"]);
+    let capped = h.scm().change_files(&h.repo(), 7, 1).await.unwrap();
+    assert_eq!(capped, ["services/api/lib.rs"]);
+}
+
+async fn signals_carry_their_actor(h: &dyn Harness) {
+    h.signals(
+        7,
+        &[
+            Commented {
+                id: 1,
+                actor: "bob",
+                body: "/saka review",
+                at: T1,
+            },
+            Commented {
+                id: 2,
+                actor: "carol",
+                body: "looks good",
+                at: T3,
+            },
+        ],
+        &[Labeled {
+            id: 3,
+            actor: "dave",
+            label: "saka:review",
+            at: T2,
+        }],
+    )
+    .await;
+    let all = h
+        .scm()
+        .change_signals(&h.repo(), 7, saka_core::time::Timestamp(T1))
+        .await
+        .unwrap();
+    let seen: Vec<(&str, &str, i64)> = all
+        .iter()
+        .map(|s| (s.id.as_str(), s.actor.as_str(), s.at.0))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("comment:1", "bob", T1),
+            ("label:3", "dave", T2),
+            ("comment:2", "carol", T3)
+        ],
+        "oldest first; system notes and label removals are no signals"
+    );
+    assert_eq!(
+        all[0].kind,
+        SignalKind::Comment {
+            body: "/saka review".into()
+        }
+    );
+    assert_eq!(
+        all[1].kind,
+        SignalKind::Label {
+            name: "saka:review".into()
+        }
+    );
+    let later = h
+        .scm()
+        .change_signals(&h.repo(), 7, saka_core::time::Timestamp(T2))
+        .await
+        .unwrap();
+    assert_eq!(
+        later.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["label:3", "comment:2"]
+    );
+}
+
+async fn write_access_is_checked(h: &dyn Harness) {
+    h.write_access("maintainer", Access::Write).await;
+    h.write_access("reporter", Access::ReadOnly).await;
+    h.write_access("stranger", Access::Stranger).await;
+    let can =
+        |login: &'static str| async move { h.scm().can_write(&h.repo(), login).await.unwrap() };
+    assert!(can("maintainer").await);
+    assert!(!can("reporter").await);
+    assert!(!can("stranger").await);
+}
+
 async fn capabilities_match_the_declared_matrix(h: &dyn Harness) {
     assert_eq!(h.scm().capabilities(h.integration()), Some(h.declared()));
 }
@@ -832,6 +1238,11 @@ conformance!(github_conformance, GitHubHarness:
     webhook_with_a_bad_or_missing_signature_is_refused,
     webhook_signature_compare_ignores_hex_case,
     commit_status_is_reported_for_a_head,
+    changes_are_listed_and_summarized,
+    a_change_is_summarized_in_every_state,
+    a_change_lists_the_files_it_touches,
+    signals_carry_their_actor,
+    write_access_is_checked,
     capabilities_match_the_declared_matrix,
 );
 
@@ -851,5 +1262,10 @@ conformance!(gitlab_conformance, GitLabHarness:
     webhook_with_a_bad_or_missing_signature_is_refused,
     webhook_signature_compare_ignores_hex_case,
     commit_status_is_reported_for_a_head,
+    changes_are_listed_and_summarized,
+    a_change_is_summarized_in_every_state,
+    a_change_lists_the_files_it_touches,
+    signals_carry_their_actor,
+    write_access_is_checked,
     capabilities_match_the_declared_matrix,
 );

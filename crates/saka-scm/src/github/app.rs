@@ -21,6 +21,7 @@ const TOKEN_MARGIN_MS: i64 = 5 * 60 * 1000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGES: usize = 20;
+const PAGE_ITEMS: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct GitHubConfig {
@@ -357,9 +358,20 @@ impl GitHubApp {
         first: Url,
         items: Option<&str>,
     ) -> PortResult<Vec<Value>> {
+        self.pages_up_to(full_name, first, items, MAX_PAGES * PAGE_ITEMS)
+            .await
+    }
+
+    pub async fn pages_up_to(
+        &self,
+        full_name: &str,
+        first: Url,
+        items: Option<&str>,
+        max_items: usize,
+    ) -> PortResult<Vec<Value>> {
         let mut all = Vec::new();
         let mut url = Some(first);
-        for _ in 0..MAX_PAGES {
+        for _ in 0..max_items.div_ceil(PAGE_ITEMS).max(1) {
             let Some(current) = url.take() else { break };
             let reply = self.call(full_name, Method::GET, current, None).await?;
             if !reply.status.is_success() {
@@ -370,6 +382,10 @@ impl GitHubApp {
                 None => reply.body.as_array().cloned(),
             };
             all.extend(list.unwrap_or_default());
+            if all.len() >= max_items {
+                all.truncate(max_items);
+                break;
+            }
             url = next_link(&reply.headers)
                 .and_then(|n| Url::parse(&n).ok())
                 .filter(|n| {

@@ -268,7 +268,7 @@ fn created(pem: &str) -> Value {
         "webhook_secret": WEBHOOK_SECRET,
         "pem": pem,
         "permissions": { "checks": "read", "contents": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
-        "events": ["check_run", "check_suite", "pull_request", "status"],
+        "events": ["check_run", "check_suite", "issue_comment", "pull_request", "status"],
     })
 }
 
@@ -821,7 +821,7 @@ async fn narrower_grants_and_a_missing_webhook_secret_are_warnings() {
     let pem = openssl_pem();
     let mut body = created(&pem);
     body["permissions"]["statuses"] = json!("read");
-    body["events"] = json!(["check_run", "check_suite", "pull_request"]);
+    body["events"] = json!(["check_run", "check_suite", "issue_comment", "pull_request"]);
     body["webhook_secret"] = Value::Null;
     conversion(&env, ResponseTemplate::new(201).set_body_json(body)).await;
     let flow = env.spawn(&[

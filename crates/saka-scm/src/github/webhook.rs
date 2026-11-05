@@ -90,6 +90,10 @@ fn targets(event: &str, payload: &Value) -> Vec<WebhookTarget> {
             {
                 found.insert(WebhookTarget::Change { number });
             }
+            found.insert(WebhookTarget::Intake);
+        }
+        "issue_comment" if !payload["issue"]["pull_request"].is_null() => {
+            found.insert(WebhookTarget::Intake);
         }
         "check_run" | "check_suite" => {
             let object = &payload[event];
@@ -169,7 +173,10 @@ mod tests {
             "pull_request",
             &json!({ "action": "synchronize", "pull_request": { "number": 12 }, "repository": repo }),
         );
-        assert_eq!(pr.targets, vec![WebhookTarget::Change { number: 12 }]);
+        assert_eq!(
+            pr.targets,
+            vec![WebhookTarget::Change { number: 12 }, WebhookTarget::Intake]
+        );
         assert_eq!(pr.action.as_deref(), Some("synchronize"));
         assert_eq!(pr.repo_full_name.as_deref(), Some("acme/app"));
 
@@ -195,6 +202,19 @@ mod tests {
         assert_eq!(
             status.targets,
             vec![WebhookTarget::Head { sha: HEAD.into() }]
+        );
+        let on_pr = parsed(
+            "issue_comment",
+            &json!({ "action": "created", "issue": { "number": 5, "pull_request": { "url": "x" } }, "repository": repo }),
+        );
+        assert_eq!(on_pr.targets, vec![WebhookTarget::Intake]);
+        let on_issue = parsed(
+            "issue_comment",
+            &json!({ "action": "created", "issue": { "number": 6 }, "repository": repo }),
+        );
+        assert!(
+            on_issue.targets.is_empty(),
+            "a comment on a plain issue is no signal"
         );
         for event in ["ping", "push", "issues"] {
             assert!(
