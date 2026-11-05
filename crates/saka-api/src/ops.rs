@@ -274,6 +274,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_chat_actions_total",
+        "counter",
+        "Button presses from a chat, by platform and outcome.",
+    );
+    for (platform, outcome, n) in &m.chat_actions {
+        t.sample(
+            "saka_chat_actions_total",
+            &[("platform", platform), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
         "saka_path_scope_violations_total",
         "counter",
         "Task diffs found outside their allowed paths, by the stage that checked them.",

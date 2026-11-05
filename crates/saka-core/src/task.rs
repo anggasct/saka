@@ -180,6 +180,7 @@ pub enum TaskInput {
     },
     ResolveBlocker {
         blocker_id: BlockerId,
+        expected: Option<BlockerAction>,
         reason: String,
     },
     JobExhausted {
@@ -397,8 +398,12 @@ pub fn decide(
         I::AutoRetry => d.auto_retry(ctx),
         I::Resume { trigger } => d.resume(trigger, ctx),
         I::Cancel { reason } => return d.cancel(reason),
-        I::ResolveBlocker { blocker_id, reason } => {
-            return d.resolve_blocker(blocker_id, reason, ctx);
+        I::ResolveBlocker {
+            blocker_id,
+            expected,
+            reason,
+        } => {
+            return d.resolve_blocker(blocker_id, expected, reason, ctx);
         }
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
         I::ReviewRequested { .. } => return Err(Rejection::Unsupported),
@@ -1745,6 +1750,7 @@ impl Decider<'_> {
     fn resolve_blocker(
         &self,
         blocker_id: BlockerId,
+        expected: Option<BlockerAction>,
         reason: String,
         ctx: &mut Ctx<'_>,
     ) -> Result<Vec<Event>, Rejection> {
@@ -1757,7 +1763,17 @@ impl Decider<'_> {
                 blocker_id: blocker_id.0.to_string(),
             });
         }
-        match primary_action(self.task).map(|a| a.kind) {
+        let designated = primary_action(self.task).map(|a| a.kind);
+        if let Some((expected, actual)) = expected.zip(designated)
+            && expected != actual
+        {
+            return Err(Rejection::BlockerActionChanged {
+                blocker_id: blocker_id.0.to_string(),
+                expected: expected.as_str(),
+                actual: actual.as_str(),
+            });
+        }
+        match designated {
             Some(BlockerAction::Retry) => self.retry(reason, ctx),
             Some(BlockerAction::Cancel) => self.cancel(reason),
             Some(other) => Err(Rejection::ActionNeedsInput {

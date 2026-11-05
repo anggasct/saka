@@ -15,7 +15,9 @@ use saka_core::ids::{
 };
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{AuthorshipMode, CheckId, DraftLocale, ReloadTrigger, ReportMode};
+use saka_core::vocab::{
+    AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode,
+};
 use saka_engine::{
     AddProject, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, NewSpecDraft,
     PermissionFilter, Precondition, Produced, Reply, RunOf, SessionCommand, SessionView,
@@ -1036,6 +1038,7 @@ async fn task_action(
     let item = WorkItemId(tri!(path_id(&id)));
     let engine = tri!(s.engine().cloned());
     let mut blocker = None;
+    let mut expected = None;
     let (version, reason) = match which {
         TaskAction::Merge => {
             let tag = tri!(if_match(&headers));
@@ -1055,6 +1058,13 @@ async fn task_action(
         TaskAction::Primary => {
             let req: dto::PrimaryActionBody = tri!(body(&raw));
             blocker = Some(BlockerId(req.blocker_id));
+            expected = match req.action.as_deref().map(str::parse::<BlockerAction>) {
+                None => None,
+                Some(Ok(kind)) => Some(kind),
+                Some(Err(_)) => {
+                    return ApiError::validation("action", "invalid").into_response();
+                }
+            };
             (None, Some(req.reason))
         }
     };
@@ -1114,6 +1124,7 @@ async fn task_action(
                     Some(blocker_id) => engine.resolve_blocker_with(
                         item,
                         blocker_id,
+                        expected,
                         reason.as_deref().unwrap_or_default(),
                         &cause,
                         Some(&action),

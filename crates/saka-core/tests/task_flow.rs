@@ -23,9 +23,9 @@ use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
-    InterruptBy, MergeMethod, PermissionState, SessionState, SpecState, Stage, StagePhase,
-    StageRunState, Trigger, WorkItemState,
+    BlockerAction, BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus,
+    EnvironmentState, InterruptBy, MergeMethod, PermissionState, SessionState, SpecState, Stage,
+    StagePhase, StageRunState, Trigger, WorkItemState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -1648,6 +1648,7 @@ fn every_blocker_code_has_one_primary_action_that_runs_or_asks_for_input() {
             1,
             TaskInput::ResolveBlocker {
                 blocker_id: blocker,
+                expected: None,
                 reason: "from test".into(),
             },
         );
@@ -1726,6 +1727,7 @@ fn a_stale_blocker_id_is_refused_without_events() {
         1,
         TaskInput::ResolveBlocker {
             blocker_id: old,
+            expected: None,
             reason: "first tap".into(),
         },
     );
@@ -1734,6 +1736,7 @@ fn a_stale_blocker_id_is_refused_without_events() {
             1,
             TaskInput::ResolveBlocker {
                 blocker_id: old,
+                expected: None,
                 reason: "second tap".into(),
             },
         ),
@@ -1752,6 +1755,7 @@ fn a_stale_blocker_id_is_refused_without_events() {
         1,
         TaskInput::ResolveBlocker {
             blocker_id: old,
+            expected: None,
             reason: "old message".into(),
         },
     );
@@ -1763,6 +1767,38 @@ fn a_stale_blocker_id_is_refused_without_events() {
 }
 
 #[test]
+fn a_button_for_another_action_than_the_designated_one_does_nothing() {
+    let mut w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    let blocker = w.task(1).open_blocker().unwrap().id;
+    let wrong = w.try_decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id: blocker,
+            expected: Some(BlockerAction::Cancel),
+            reason: "stale button".into(),
+        },
+    );
+    assert_eq!(
+        wrong,
+        Err(Rejection::BlockerActionChanged {
+            blocker_id: blocker.0.to_string(),
+            expected: "cancel",
+            actual: "retry",
+        })
+    );
+    assert!(w.task(1).open_blocker().is_some());
+    w.decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id: blocker,
+            expected: Some(BlockerAction::Retry),
+            reason: "right button".into(),
+        },
+    );
+    assert!(w.task(1).open_blocker().is_none());
+}
+
+#[test]
 fn the_primary_cancel_cancels_the_task() {
     let mut w = blocked_with(BlockerCode::ChangeClosed, json!({ "number": 3 }));
     let id = w.task(1).open_blocker().unwrap().id;
@@ -1770,6 +1806,7 @@ fn the_primary_cancel_cancels_the_task() {
         1,
         TaskInput::ResolveBlocker {
             blocker_id: id,
+            expected: None,
             reason: "closed upstream".into(),
         },
     );

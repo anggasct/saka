@@ -16,7 +16,12 @@ import {
 } from "./queries";
 import { blockerText, label, record, sha } from "./text";
 
-const RELOAD_ON = ["version_stale", "invalid_state", "blocker_not_open"];
+const RELOAD_ON = [
+  "version_stale",
+  "invalid_state",
+  "blocker_not_open",
+  "blocker_action_changed",
+];
 
 function useAfterAction() {
   const queryClient = useQueryClient();

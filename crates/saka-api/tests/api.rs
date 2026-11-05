@@ -4692,6 +4692,46 @@ fn the_primary_action_becomes_cancel_after_three_retries_and_cancels_through_the
 }
 
 #[test]
+fn the_primary_action_runs_only_the_kind_the_caller_was_shown() {
+    let mut api = blocked_ci_api();
+    let id = api.sim.task(1).item.id.0;
+    let path = format!("/api/v1/work-items/{id}/actions/primary");
+    assert!(api.sim.run_until(STEPS, blocked));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    let blocker = detail.body["blocker"]["id"].clone();
+    let seq = api.last_seq();
+
+    let changed = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": blocker, "action": "cancel", "reason": "stale button" }),
+    );
+    problem(&changed, StatusCode::CONFLICT, "blocker_action_changed");
+    assert_eq!(
+        changed.body["params"],
+        json!({ "blocker_id": blocker, "expected": "cancel", "actual": "retry" })
+    );
+    assert_eq!(api.last_seq(), seq);
+    problem(
+        &api.post(
+            &path,
+            &[],
+            json!({ "blocker_id": blocker, "action": "explode", "reason": "x" }),
+        ),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    assert_eq!(api.last_seq(), seq);
+    let shown = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": blocker, "action": "retry", "reason": "fresh button" }),
+    );
+    assert_eq!(shown.status, StatusCode::ACCEPTED, "{}", shown.body);
+    assert_eq!(shown.body["blocker"], Value::Null);
+}
+
+#[test]
 fn the_primary_action_refuses_what_it_cannot_run_without_writing_anything() {
     let mut api = blocked_ci_api();
     let id = api.sim.task(1).item.id.0;

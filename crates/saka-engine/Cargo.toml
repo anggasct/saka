@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 saka-core = { path = "../saka-core" }
 saka-ports = { path = "../saka-ports" }
 saka-spec = { path = "../saka-spec" }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_notify::{
-    ChannelKind, ChannelSpec, ChatConfig, ChatNotifier, Lang, TEXT_MAX_CHARS, render,
+    ChannelKind, ChannelSpec, ChatConfig, ChatNotifier, Lang, PollTiming, TEXT_MAX_CHARS, render,
 };
 use saka_ports::{Clock, Notification, Notifier};
 use serde_json::{Value, json};
@@ -75,8 +75,10 @@ fn notifier_at(kind: ChannelKind, api_url: &str, public_url: Option<&str>) -> Ch
                 chat: chat.into(),
                 api_url: api_url.into(),
                 token: SecretText::new(TOKEN.into()),
+                allowed_users: None,
             }],
             user_agent: "saka/test".into(),
+            poll: PollTiming::default(),
         },
         &clock,
     )

@@ -1303,6 +1303,8 @@ mod tests {
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
         assert_eq!(cfg.notify.channel[0].name, "ops");
+        assert!(cfg.notify.channel[0].actions);
+        assert_eq!(cfg.notify.channel[0].allowed_users, ["123456789"]);
         assert_eq!(
             cfg.notify.public_url.as_deref(),
             Some("https://saka.example.com")

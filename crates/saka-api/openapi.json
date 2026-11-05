@@ -6172,6 +6172,13 @@
           "reason"
         ],
         "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kind of the primary action the caller was shown (`primary_action.kind`). When it differs from the current one, nothing runs and the answer is `409 blocker_action_changed`."
+          },
           "blocker_id": {
             "type": "string",
             "format": "uuid",

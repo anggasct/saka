@@ -105,6 +105,7 @@
   "error.change_request_tracked": "This pull request already had a task that is finished.",
   "error.retry_limit_reached": "Stage {stage} already used its {limit, number} manual retries.",
   "error.blocker_not_open": "This blocker is no longer open; the task has moved on.",
+  "error.blocker_action_changed": "This action changed since it was shown; open the task to see the current one.",
   "error.action_needs_input": "This action needs input, so it cannot run from here.",
   "error.permission_already_answered": "Already answered.",
   "error.idempotency_key_reused": "This request was already sent with different content.",

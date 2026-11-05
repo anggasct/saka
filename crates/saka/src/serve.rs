@@ -824,11 +824,16 @@ async fn run(
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    let mut chat_notifier = None;
     let notifier: Arc<dyn saka_ports::Notifier> = if cfg.notify.channel.is_empty() {
         Arc::new(saka_notify::UnconfiguredNotifier)
     } else {
         match cfg.chat_notifier(&format!("saka/{VERSION}"), &clock) {
-            Ok(n) => Arc::new(n),
+            Ok(n) => {
+                let n = Arc::new(n);
+                chat_notifier = Some(n.clone());
+                n
+            }
             Err(e) => {
                 tracing::error!(code = e.code, detail = %e.detail, "notify config refused");
                 let _ = stop.send(true);
@@ -899,6 +904,10 @@ async fn run(
             }
         })
     };
+    let chat_pollers = chat_notifier.map_or_else(Vec::new, |chat| {
+        let actions: Arc<dyn saka_ports::ChatActions> = engine.clone();
+        chat.spawn_pollers(&actions, &stopped)
+    });
     let running = tokio::spawn(engine.clone().run(WORKERS, stopped));
     shutdown_signal().await;
     tracing::info!("shutting down");
@@ -907,6 +916,9 @@ async fn run(
     let _ = http.await;
     if let Some(hooks) = hooks_http {
         let _ = hooks.await;
+    }
+    for poller in chat_pollers {
+        let _ = tokio::time::timeout(Duration::from_secs(5), poller).await;
     }
     forwarder.abort();
     ExitCode::SUCCESS

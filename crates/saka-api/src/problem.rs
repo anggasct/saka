@@ -118,6 +118,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FilePushRejected { .. }
         | R::RetryLimitReached { .. }
         | R::BlockerNotOpen { .. }
+        | R::BlockerActionChanged { .. }
         | R::SpecDraftTargetTaken { .. }
         | R::DeviceFlowUnconfigured { .. }
         | R::UserAuthorshipUnsupported { .. }

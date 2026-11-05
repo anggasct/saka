@@ -11,7 +11,7 @@ use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
-use saka_core::vocab::{SpecOrigin, Stage};
+use saka_core::vocab::{BlockerAction, SpecOrigin, Stage};
 use saka_core::workflow::Workflow;
 use saka_core::workspace;
 use saka_ports::{IdsSource, RepoRef};
@@ -722,6 +722,7 @@ impl Engine {
         &self,
         id: WorkItemId,
         blocker_id: BlockerId,
+        expected: Option<BlockerAction>,
         why: &str,
         cause: &Cause,
         action: Option<&Action<'_>>,
@@ -729,7 +730,11 @@ impl Engine {
         let reason = reason(why)?;
         self.decide(
             id,
-            Some(TaskInput::ResolveBlocker { blocker_id, reason }),
+            Some(TaskInput::ResolveBlocker {
+                blocker_id,
+                expected,
+                reason,
+            }),
             Mode::Command,
             cause,
             Extra {

@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use saka_core::secret::SecretText;
-use saka_notify::{ChannelKind, ChannelSpec, ChatConfig, Lang};
+use saka_notify::{ChannelKind, ChannelSpec, ChatConfig, Lang, PollTiming};
 use saka_ports::Clock;
 use serde::Deserialize;
 
 use super::{Config, ConfigError, check_private_file, err, expand, id_ok, url_ok};
 
 pub const MAX_CHANNELS: usize = 8;
+pub const MAX_ALLOWED_USERS: usize = 8;
 const PUBLIC_URL_MAX: usize = 200;
 const TOKEN_MAX_BYTES: usize = 256;
 const CHAT_ID_MAX_DIGITS: usize = 20;
@@ -46,6 +47,10 @@ pub struct NotifyChannel {
     pub chat: String,
     #[serde(default)]
     pub api_url: Option<String>,
+    #[serde(default)]
+    pub actions: bool,
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 fn invalid(code: &str, name: &str, field: Option<&str>) -> ConfigError {
@@ -128,6 +133,34 @@ impl Notify {
             if c.api_url.as_deref().is_some_and(|u| !url_ok(u)) {
                 return Err(invalid("notify_field_invalid", &c.name, Some("api_url")));
             }
+            c.validate_actions(kind)?;
+        }
+        Ok(())
+    }
+}
+
+impl NotifyChannel {
+    fn validate_actions(&self, kind: ChannelKind) -> Result<(), ConfigError> {
+        let name = self.name.as_str();
+        if self.actions && kind != ChannelKind::Telegram {
+            return Err(invalid("notify_actions_unsupported", name, Some("actions")));
+        }
+        if self.actions && self.allowed_users.is_empty() {
+            return Err(invalid(
+                "notify_allowed_users_required",
+                name,
+                Some("allowed_users"),
+            ));
+        }
+        let unique: std::collections::BTreeSet<&str> =
+            self.allowed_users.iter().map(String::as_str).collect();
+        let listed_without_actions = !self.actions && !self.allowed_users.is_empty();
+        if listed_without_actions
+            || self.allowed_users.len() > MAX_ALLOWED_USERS
+            || unique.len() != self.allowed_users.len()
+            || !self.allowed_users.iter().all(|u| digits_ok(u))
+        {
+            return Err(invalid("notify_field_invalid", name, Some("allowed_users")));
         }
         Ok(())
     }
@@ -174,6 +207,7 @@ impl Config {
                     .clone()
                     .unwrap_or_else(|| kind.default_api_url().to_string()),
                 token: read_token(c)?,
+                allowed_users: c.actions.then(|| c.allowed_users.clone()),
             });
         }
         Ok(ChatConfig {
@@ -181,6 +215,7 @@ impl Config {
             public_url: self.notify.public_url.clone(),
             channels,
             user_agent: user_agent.to_string(),
+            poll: PollTiming::default(),
         })
     }
 
@@ -279,6 +314,44 @@ mod tests {
     }
 
     #[test]
+    fn actions_need_a_telegram_channel_and_a_list_of_users_who_may_press_the_buttons() {
+        let on = |extra: &str| channel(&format!("actions = true\n{extra}"));
+        let cfg = Config::parse(&on("allowed_users = [\"4242\", \"77\"]\n")).unwrap();
+        assert!(cfg.notify.channel[0].actions);
+        for (text, code) in [
+            (on(""), "notify_allowed_users_required"),
+            (
+                on("allowed_users = [\"1\"]\n")
+                    .replace("telegram", "discord")
+                    .replace("-100", "100"),
+                "notify_actions_unsupported",
+            ),
+            (
+                on("allowed_users = [\"x1\"]\n"),
+                "notify_field_invalid: channel \"ops\".allowed_users",
+            ),
+            (
+                on("allowed_users = [\"-5\"]\n"),
+                "notify_field_invalid: channel \"ops\".allowed_users",
+            ),
+            (
+                on("allowed_users = [\"1\", \"1\"]\n"),
+                "notify_field_invalid: channel \"ops\".allowed_users",
+            ),
+            (
+                on("allowed_users = [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\"]\n"),
+                "notify_field_invalid: channel \"ops\".allowed_users",
+            ),
+            (
+                channel("allowed_users = [\"1\"]\n"),
+                "notify_field_invalid: channel \"ops\".allowed_users",
+            ),
+        ] {
+            assert!(refused(&text).starts_with(code), "{text}");
+        }
+    }
+
+    #[test]
     fn the_public_url_and_language_are_checked() {
         for url in [
             "http://saka.example.com",
@@ -343,6 +416,16 @@ mod tests {
         let chat = cfg.chat_config("saka/test").unwrap();
         assert_eq!(chat.channels[0].token.expose(), "123:token");
         assert_eq!(chat.channels[0].api_url, "https://api.telegram.org");
+        assert_eq!(chat.channels[0].allowed_users, None);
+        let with_actions = Config::parse(
+            &channel("actions = true\nallowed_users = [\"42\"]\n")
+                .replace("/t", &file.display().to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            with_actions.chat_config("saka/test").unwrap().channels[0].allowed_users,
+            Some(vec!["42".to_string()])
+        );
         for bad in ["", "two words", "a\u{7}b", &"x".repeat(300)] {
             std::fs::write(&file, bad).unwrap();
             assert_eq!(

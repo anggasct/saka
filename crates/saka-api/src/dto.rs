@@ -2032,6 +2032,9 @@ pub struct RequiredReason {
 pub struct PrimaryActionBody {
     /// The blocker the operator saw; a blocker that is no longer the open one of the task is refused.
     pub blocker_id: Uuid,
+    /// The kind of the primary action the caller was shown (`primary_action.kind`). When it differs from the current one, nothing runs and the answer is `409 blocker_action_changed`.
+    #[serde(default)]
+    pub action: Option<String>,
     pub reason: String,
 }
 

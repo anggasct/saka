@@ -1,6 +1,7 @@
 mod accounts;
 mod action;
 mod authorship;
+mod chat;
 mod commands;
 mod config_check;
 mod context;

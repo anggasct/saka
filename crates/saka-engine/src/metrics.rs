@@ -38,6 +38,7 @@ pub struct Counters {
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
     diagnostic_checks: Mutex<BTreeMap<(String, String), u64>>,
     intake_changes: Mutex<BTreeMap<(String, String), u64>>,
+    chat_actions: Mutex<BTreeMap<(String, String), u64>>,
     review_requests: Mutex<BTreeMap<(String, String), u64>>,
     intake_scan_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
@@ -161,6 +162,10 @@ impl Counters {
 
     pub(crate) fn dod(&self, outcome: &str) {
         bump(&self.dod, outcome, "");
+    }
+
+    pub(crate) fn chat_action(&self, platform: &str, outcome: &str) {
+        bump(&self.chat_actions, platform, outcome);
     }
 
     pub(crate) fn intake_change(&self, outcome: &str) {
@@ -354,6 +359,7 @@ pub struct MetricsSnapshot {
     pub change_requests_opened: Vec<(String, u64)>,
     pub diagnostic_checks: Vec<(String, String, u64)>,
     pub intake_changes: Vec<(String, u64)>,
+    pub chat_actions: Vec<(String, String, u64)>,
     pub review_requests: Vec<(String, u64)>,
     pub intake_scan_seconds: SecondsHistogram,
 }
@@ -535,6 +541,7 @@ impl Engine {
                 .into_iter()
                 .map(|(credential, _, n)| (credential, n))
                 .collect(),
+            chat_actions: copy(&self.counters.chat_actions),
             intake_changes: copy(&self.counters.intake_changes)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
