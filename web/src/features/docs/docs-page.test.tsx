@@ -620,6 +620,7 @@ describe("specs in the editor", () => {
               params: {},
               opened_at: "2026-10-31T10:06:00.000Z",
               stage: "dev",
+              primary_action: { kind: "retry", params: {} },
             },
           }
         : t,

@@ -31,7 +31,7 @@ pub use state::{ApiConfig, AppState};
         routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
         routes::spec_template,
         routes::list_files, routes::get_file, routes::put_file,
-        routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::merge, routes::retry, routes::cancel,
+        routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::merge, routes::retry, routes::cancel, routes::primary_action,
         routes::list_permissions, routes::answer_permission, routes::get_session,
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
         routes::list_permission_rules, routes::revoke_rule, routes::list_agent_accounts,
@@ -140,6 +140,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/work-items/{work_item_id}/actions/retry",
             post(routes::retry),
+        )
+        .route(
+            "/api/v1/work-items/{work_item_id}/actions/primary",
+            post(routes::primary_action),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/cancel",

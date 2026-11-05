@@ -834,7 +834,7 @@ fn guards_errors_meta_and_pagination_follow_the_conventions() {
             "server_version": "0.1.0-test",
             "api_version": "1",
             "min_client_api_version": "1",
-            "capabilities": ["projects", "spec_approve", "work_item_merge", "work_item_retry", "work_item_cancel", "permission_answer", "events_sse", "spec_draft"],
+            "capabilities": ["projects", "spec_approve", "work_item_merge", "work_item_retry", "work_item_cancel", "permission_answer", "events_sse", "spec_draft", "work_item_primary_action"],
         })
     );
 
@@ -4350,4 +4350,208 @@ fn a_merged_docs_pr_shows_on_the_task_and_is_counted_in_the_metrics() {
         metrics.contains("saka_docs_changes_total{outcome=\"skipped\"} 0"),
         "{metrics}"
     );
+}
+
+fn blocked_ci_api() -> Api {
+    let mut cfg = SimConfig {
+        ci: CiScript::Fail(vec!["test".into()]),
+        ..SimConfig::default()
+    };
+    cfg.operator.retry = vec![];
+    let api = Api::new(cfg);
+    let (spec, revision) = (api.sim.spec_id, api.sim.revision_id);
+    api.sim.approve_spec(spec, revision).unwrap();
+    api
+}
+
+fn blocked(s: &Sim) -> bool {
+    s.task(1).item.state == WorkItemState::Blocked
+}
+
+#[test]
+fn a_blocked_task_shows_its_primary_action_and_the_primary_action_retries_it() {
+    let mut api = blocked_ci_api();
+    let id = api.sim.task(1).item.id.0;
+    let path = format!("/api/v1/work-items/{id}/actions/primary");
+    assert!(api.sim.run_until(STEPS, blocked));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["blocker"]["code"], "ci_red");
+    assert_eq!(
+        detail.body["blocker"]["primary_action"],
+        json!({ "kind": "retry", "params": {} })
+    );
+    let listed = api.get("/api/v1/work-items");
+    let first = listed.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == detail.body["id"])
+        .unwrap();
+    assert_eq!(first["blocker"]["primary_action"]["kind"], "retry");
+    let blocker = detail.body["blocker"]["id"].as_str().unwrap().to_string();
+
+    let r = api.post_with(
+        &path,
+        Some("tap-1"),
+        &[],
+        &json!({ "blocker_id": blocker, "reason": "fix it" }),
+    );
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["state"], "in_stage");
+    assert_eq!(r.body["blocker"], Value::Null);
+    let seq = api.last_seq();
+    let replay = api.post_with(
+        &path,
+        Some("tap-1"),
+        &[],
+        &json!({ "blocker_id": blocker, "reason": "fix it" }),
+    );
+    assert_eq!(replay.status, StatusCode::ACCEPTED);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(api.last_seq(), seq);
+
+    let stale = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": blocker, "reason": "again" }),
+    );
+    problem(&stale, StatusCode::CONFLICT, "blocker_not_open");
+    assert_eq!(stale.body["params"], json!({ "blocker_id": blocker }));
+    assert_eq!(api.last_seq(), seq);
+    let runs: i64 = api
+        .sim
+        .engine()
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM blocker WHERE resolution = 'retried'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(runs, 1);
+}
+
+#[test]
+fn the_primary_action_becomes_cancel_after_three_retries_and_cancels_through_the_endpoint() {
+    let mut api = blocked_ci_api();
+    let id = api.sim.task(1).item.id.0;
+    let path = format!("/api/v1/work-items/{id}/actions/primary");
+    for n in 1..=3 {
+        assert!(api.sim.run_until(STEPS, blocked), "block {n}");
+        let detail = api.get(&format!("/api/v1/work-items/{id}"));
+        assert_eq!(detail.body["blocker"]["primary_action"]["kind"], "retry");
+        let blocker = detail.body["blocker"]["id"].clone();
+        let r = api.post(&path, &[], json!({ "blocker_id": blocker, "reason": "go" }));
+        assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    }
+    assert!(api.sim.run_until(STEPS, blocked));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["blocker"]["primary_action"],
+        json!({ "kind": "cancel", "params": {} })
+    );
+    let blocker = detail.body["blocker"]["id"].clone();
+    let r = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": blocker, "reason": "give up" }),
+    );
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["state"], "cancelled");
+}
+
+#[test]
+fn the_primary_action_refuses_what_it_cannot_run_without_writing_anything() {
+    let mut api = blocked_ci_api();
+    let id = api.sim.task(1).item.id.0;
+    let path = format!("/api/v1/work-items/{id}/actions/primary");
+    let before = api.last_seq();
+    let early = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": uuid::Uuid::now_v7(), "reason": "too early" }),
+    );
+    problem(&early, StatusCode::CONFLICT, "blocker_not_open");
+    assert!(api.sim.run_until(STEPS, blocked));
+    let before = before.max(api.last_seq());
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    let blocker = detail.body["blocker"]["id"].clone();
+
+    let other = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": uuid::Uuid::now_v7(), "reason": "wrong one" }),
+    );
+    problem(&other, StatusCode::CONFLICT, "blocker_not_open");
+    problem(
+        &api.post(&path, &[], json!({ "blocker_id": blocker })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post(&path, &[], json!({ "blocker_id": blocker, "reason": "" })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post(
+            &path,
+            &[],
+            json!({ "blocker_id": blocker, "reason": "x", "extra": 1 }),
+        ),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post_with(
+            &path,
+            None,
+            &[],
+            &json!({ "blocker_id": blocker, "reason": "x" }),
+        ),
+        StatusCode::BAD_REQUEST,
+        "idempotency_key_required",
+    );
+    problem(
+        &api.post(
+            &format!(
+                "/api/v1/work-items/{}/actions/primary",
+                uuid::Uuid::now_v7()
+            ),
+            &[],
+            json!({ "blocker_id": blocker, "reason": "x" }),
+        ),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    assert_eq!(api.last_seq(), before);
+}
+
+#[test]
+fn a_primary_action_that_needs_input_names_itself_and_is_not_run() {
+    let mut api = Api::new(SimConfig::default());
+    api.sim.world.set_recipe(Some(
+        "[secrets]\nNPM_TOKEN = {}\nTEST_API_KEY = { to = [\"setup\", \"session\"] }\n",
+    ));
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, blocked));
+    let id = api.sim.task(1).item.id.0;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["blocker"]["code"], "secret_missing");
+    let action = &detail.body["blocker"]["primary_action"];
+    assert_eq!(action["kind"], "set_secret");
+    assert_eq!(action["params"]["names"].as_array().unwrap().len(), 2);
+    assert_eq!(detail.body["available_actions"], json!(["retry", "cancel"]));
+
+    let before = api.last_seq();
+    let r = api.post(
+        &format!("/api/v1/work-items/{id}/actions/primary"),
+        &[],
+        json!({ "blocker_id": detail.body["blocker"]["id"], "reason": "try" }),
+    );
+    problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "action_needs_input");
+    assert_eq!(r.body["params"], json!({ "action": "set_secret" }));
+    assert_eq!(api.last_seq(), before);
 }

@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use saka_core::diagnostics::{self, CheckResult, Report, Subject};
 use saka_core::ids::{
-    HookRunId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId, SpecId,
-    SpecRevisionId, WorkItemId,
+    BlockerId, HookRunId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId,
+    SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
@@ -1019,6 +1019,7 @@ enum TaskAction {
     Merge,
     Retry,
     Cancel,
+    Primary,
 }
 
 #[allow(clippy::too_many_arguments, reason = "the request parts of one action")]
@@ -1034,6 +1035,7 @@ async fn task_action(
     let key = tri!(require_key(&headers));
     let item = WorkItemId(tri!(path_id(&id)));
     let engine = tri!(s.engine().cloned());
+    let mut blocker = None;
     let (version, reason) = match which {
         TaskAction::Merge => {
             let tag = tri!(if_match(&headers));
@@ -1048,6 +1050,11 @@ async fn task_action(
         }
         TaskAction::Retry | TaskAction::Cancel => {
             let req: dto::RequiredReason = tri!(body(&raw));
+            (None, Some(req.reason))
+        }
+        TaskAction::Primary => {
+            let req: dto::PrimaryActionBody = tri!(body(&raw));
+            blocker = Some(BlockerId(req.blocker_id));
             (None, Some(req.reason))
         }
     };
@@ -1065,6 +1072,7 @@ async fn task_action(
         TaskAction::Merge => "work_item.merge",
         TaskAction::Retry => "work_item.retry",
         TaskAction::Cancel => "work_item.cancel",
+        TaskAction::Primary => "work_item.primary_action",
     };
     let m = Mutation {
         name,
@@ -1102,6 +1110,18 @@ async fn task_action(
                     &cause,
                     Some(&action),
                 ),
+                TaskAction::Primary => match blocker {
+                    Some(blocker_id) => engine.resolve_blocker_with(
+                        item,
+                        blocker_id,
+                        reason.as_deref().unwrap_or_default(),
+                        &cause,
+                        Some(&action),
+                    ),
+                    None => Err(EngineError::Rejected(
+                        saka_core::rejection::Rejection::NotFound,
+                    )),
+                },
             };
             result.map(|_| project).map_err(|e| (e, project))
         },
@@ -1156,6 +1176,22 @@ pub async fn cancel(
     raw: Bytes,
 ) -> Response {
     task_action(s, id, method, uri, headers, raw, TaskAction::Cancel).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/primary", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::PrimaryActionBody,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn primary_action(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::Primary).await
 }
 
 #[utoipa::path(

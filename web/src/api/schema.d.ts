@@ -772,6 +772,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/primary": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["primary_action"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/retry": {
     parameters: {
       query?: never;
@@ -916,6 +932,7 @@ export interface components {
       id: string;
       opened_at: string;
       params: unknown;
+      primary_action: components["schemas"]["PrimaryAction"];
       stage?: string | null;
     };
     ChangeRequest: {
@@ -1605,6 +1622,23 @@ export interface components {
        * @description First port of the block.
        */
       start: number;
+    };
+    PrimaryAction: {
+      /**
+       * @description `retry | cancel | set_secret | link_account | set_user_token | edit_spec`. Only `retry` and
+       *     `cancel` run through `actions/primary`; the others need input the client collects.
+       */
+      kind: string;
+      /** @description `set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`. */
+      params: unknown;
+    };
+    PrimaryActionBody: {
+      /**
+       * Format: uuid
+       * @description The blocker the operator saw; a blocker that is no longer the open one of the task is refused.
+       */
+      blocker_id: string;
+      reason: string;
     };
     /** @description RFC 9457 problem details. */
     Problem: {
@@ -4450,6 +4484,42 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["OptionalReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  primary_action: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PrimaryActionBody"];
       };
     };
     responses: {

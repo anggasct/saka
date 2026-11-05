@@ -1624,3 +1624,154 @@ fn an_exhausted_teardown_of_a_cancelled_task_only_marks_the_environment() {
         .collect();
     assert_eq!(keys, vec![format!("env.teardown:{env}:{hour}")]);
 }
+
+fn blocked_with(code: BlockerCode, params: serde_json::Value) -> World {
+    let mut w = World::new();
+    w.approve();
+    w.decide(1, TaskInput::Admit);
+    w.decide(1, TaskInput::EnvironmentFailed { code, params });
+    w
+}
+
+fn primary(w: &World) -> (saka_core::vocab::BlockerAction, serde_json::Value) {
+    let a = saka_core::blocker::primary_action(w.task(1)).unwrap();
+    (a.kind, a.params)
+}
+
+#[test]
+fn every_blocker_code_has_one_primary_action_that_runs_or_asks_for_input() {
+    for code in BlockerCode::ALL {
+        let mut w = blocked_with(*code, json!({ "names": ["A"], "integration_id": "gh" }));
+        let (kind, _) = primary(&w);
+        let blocker = w.task(1).open_blocker().unwrap().id;
+        let result = w.try_decide(
+            1,
+            TaskInput::ResolveBlocker {
+                blocker_id: blocker,
+                reason: "from test".into(),
+            },
+        );
+        if kind.runs_directly() {
+            assert!(result.is_ok(), "{code}: {result:?}");
+            assert!(w.task(1).open_blocker().is_none(), "{code}");
+        } else {
+            assert_eq!(
+                result,
+                Err(Rejection::ActionNeedsInput {
+                    action: kind.as_str()
+                }),
+                "{code}"
+            );
+            assert!(w.task(1).open_blocker().is_some(), "{code}");
+        }
+    }
+}
+
+#[test]
+fn the_primary_action_follows_the_code_and_carries_what_the_client_needs() {
+    use saka_core::vocab::BlockerAction as A;
+    let w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    assert_eq!(primary(&w), (A::Retry, json!({})));
+    let w = blocked_with(BlockerCode::SecretMissing, json!({ "names": ["A", "B"] }));
+    assert_eq!(primary(&w), (A::SetSecret, json!({ "names": ["A", "B"] })));
+    let w = blocked_with(BlockerCode::SecretUnreadable, json!({ "name": "A" }));
+    assert_eq!(primary(&w), (A::SetSecret, json!({ "names": ["A"] })));
+    let w = blocked_with(
+        BlockerCode::UserLinkRequired,
+        json!({ "integration_id": "gh", "cause": "missing", "phase": "running_session" }),
+    );
+    assert_eq!(
+        primary(&w),
+        (A::LinkAccount, json!({ "integration_id": "gh" }))
+    );
+    let w = blocked_with(BlockerCode::UserTokenInvalid, json!({ "cause": "expired" }));
+    assert_eq!(primary(&w), (A::SetUserToken, json!({})));
+    let w = blocked_with(BlockerCode::SpecUnclear, json!({}));
+    assert_eq!(primary(&w), (A::EditSpec, json!({})));
+    let w = blocked_with(BlockerCode::ChangeClosed, json!({ "number": 3 }));
+    assert_eq!(primary(&w), (A::Cancel, json!({})));
+    let w = blocked_with(BlockerCode::VerdictFailed, json!({}));
+    assert_eq!(primary(&w).0, A::Cancel, "no retry path exists yet");
+}
+
+#[test]
+fn the_primary_action_falls_back_to_cancel_after_three_manual_retries() {
+    use saka_core::vocab::BlockerAction as A;
+    let mut w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    for round in 0..3 {
+        assert_eq!(primary(&w).0, A::Retry, "round {round}");
+        w.decide(
+            1,
+            TaskInput::Retry {
+                reason: "again".into(),
+            },
+        );
+        w.decide(
+            1,
+            TaskInput::EnvironmentFailed {
+                code: BlockerCode::EnvSetupFailed,
+                params: json!({}),
+            },
+        );
+    }
+    assert_eq!(primary(&w).0, A::Cancel);
+    assert!(!task::available_actions(w.task(1)).contains(&"retry"));
+}
+
+#[test]
+fn a_stale_blocker_id_is_refused_without_events() {
+    let mut w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    let old = w.task(1).open_blocker().unwrap().id;
+    w.decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id: old,
+            reason: "first tap".into(),
+        },
+    );
+    assert_eq!(
+        w.try_decide(
+            1,
+            TaskInput::ResolveBlocker {
+                blocker_id: old,
+                reason: "second tap".into(),
+            },
+        ),
+        Err(Rejection::BlockerNotOpen {
+            blocker_id: old.0.to_string()
+        })
+    );
+    w.decide(
+        1,
+        TaskInput::EnvironmentFailed {
+            code: BlockerCode::EnvSetupFailed,
+            params: json!({}),
+        },
+    );
+    let err = w.try_decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id: old,
+            reason: "old message".into(),
+        },
+    );
+    assert!(
+        matches!(err, Err(Rejection::BlockerNotOpen { .. })),
+        "{err:?}"
+    );
+    assert!(w.task(1).open_blocker().is_some());
+}
+
+#[test]
+fn the_primary_cancel_cancels_the_task() {
+    let mut w = blocked_with(BlockerCode::ChangeClosed, json!({ "number": 3 }));
+    let id = w.task(1).open_blocker().unwrap().id;
+    w.decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id: id,
+            reason: "closed upstream".into(),
+        },
+    );
+    assert_eq!(w.task(1).item.state, WorkItemState::Cancelled);
+}

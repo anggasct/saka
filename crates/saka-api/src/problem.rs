@@ -96,6 +96,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserTokenNotFineGrained
         | R::UserTokenRejected { .. }
         | R::UserTokenRepoInaccessible { .. }
+        | R::ActionNeedsInput { .. }
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
@@ -113,6 +114,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FilePathConflict { .. }
         | R::FilePushRejected { .. }
         | R::RetryLimitReached { .. }
+        | R::BlockerNotOpen { .. }
         | R::SpecDraftTargetTaken { .. }
         | R::DeviceFlowUnconfigured { .. }
         | R::UserAuthorshipUnsupported { .. }

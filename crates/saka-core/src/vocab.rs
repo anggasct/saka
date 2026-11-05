@@ -126,6 +126,14 @@ vocab!(
         DocsMergeFailed => "docs_merge_failed",
     }
 );
+vocab!(BlockerAction {
+    Retry => "retry",
+    Cancel => "cancel",
+    SetSecret => "set_secret",
+    LinkAccount => "link_account",
+    SetUserToken => "set_user_token",
+    EditSpec => "edit_spec",
+});
 vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
 vocab!(ChangeRole { Code => "code", Docs => "docs" });
 vocab!(ScopeViolationReason { OutsideScope => "outside_scope", TooManyPaths => "too_many_paths" });

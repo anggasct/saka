@@ -1,4 +1,5 @@
 use saka_core::admission::Waiting;
+use saka_core::blocker::primary_action;
 use saka_core::gate::Check;
 use saka_core::model::{
     Environment as CoreEnvironment, LintRound, PermissionRule as CoreRule, RunOwner as CoreOwner,
@@ -638,6 +639,16 @@ pub struct Blocker {
     pub params: Value,
     pub opened_at: String,
     pub stage: Option<String>,
+    pub primary_action: PrimaryAction,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PrimaryAction {
+    /// `retry | cancel | set_secret | link_account | set_user_token | edit_spec`. Only `retry` and
+    /// `cancel` run through `actions/primary`; the others need input the client collects.
+    pub kind: String,
+    /// `set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`.
+    pub params: Value,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -992,13 +1003,20 @@ impl WorkItem {
             }),
             external: t.external.as_ref().map(ExternalChange::from),
             gates: gates_at_head(t),
-            blocker: t.open_blocker().map(|b| Blocker {
-                id: b.id.0,
-                code: b.code.as_str().to_string(),
-                params: b.params.clone(),
-                opened_at: time(b.opened_at),
-                stage: t.stage_run.as_ref().map(|r| r.stage.as_str().to_string()),
-            }),
+            blocker: t
+                .open_blocker()
+                .zip(primary_action(t))
+                .map(|(b, action)| Blocker {
+                    id: b.id.0,
+                    code: b.code.as_str().to_string(),
+                    params: b.params.clone(),
+                    opened_at: time(b.opened_at),
+                    stage: t.stage_run.as_ref().map(|r| r.stage.as_str().to_string()),
+                    primary_action: PrimaryAction {
+                        kind: action.kind.as_str().to_string(),
+                        params: action.params,
+                    },
+                }),
             session: t.session.as_ref().map(|s| SessionBrief {
                 id: s.id.0,
                 state: s.state.as_str().to_string(),
@@ -1738,6 +1756,7 @@ pub const CAPABILITIES: &[&str] = &[
     "permission_answer",
     "events_sse",
     "spec_draft",
+    "work_item_primary_action",
 ];
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1990,6 +2009,14 @@ pub struct OptionalReason {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequiredReason {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrimaryActionBody {
+    /// The blocker the operator saw; a blocker that is no longer the open one of the task is refused.
+    pub blocker_id: Uuid,
     pub reason: String,
 }
 

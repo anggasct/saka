@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use saka_core::Ctx;
 use saka_core::event::Event;
 use saka_core::ids::{
-    PermissionRequestId, PermissionRuleId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId,
-    WorkItemId,
+    BlockerId, PermissionRequestId, PermissionRuleId, ProjectId, RepoId, SessionId, SpecId,
+    SpecRevisionId, WorkItemId,
 };
 use saka_core::model::{PermissionRule, Project, ProjectRepo, RunOwner};
 use saka_core::rejection::Rejection;
@@ -709,6 +709,27 @@ impl Engine {
         self.decide(
             id,
             Some(TaskInput::Cancel { reason }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+
+    pub fn resolve_blocker_with(
+        &self,
+        id: WorkItemId,
+        blocker_id: BlockerId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let reason = reason(why)?;
+        self.decide(
+            id,
+            Some(TaskInput::ResolveBlocker { blocker_id, reason }),
             Mode::Command,
             cause,
             Extra {
