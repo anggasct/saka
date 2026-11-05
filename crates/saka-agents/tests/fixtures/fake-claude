@@ -2,11 +2,14 @@
 # Stands in for the agent CLI: answers `--version`, `auth status --json`, and `auth login`
 # as the files next to it say, and records every call's argv and environment there.
 here=$(dirname "$0")
+# Callers may run several calls at once; the lock keeps each record's lines together.
+until mkdir "$here/calls.lock" 2>/dev/null; do sleep 0.01; done
 {
   printf 'argv %s\n' "$*"
   tr '\000' '\n' < /proc/$$/environ | sed 's/^/env /'
   printf 'end\n'
 } >> "$here/calls"
+rmdir "$here/calls.lock"
 case "$1 $2" in
   "--version "*)
     echo "2.1.7 (Claude Code)"
