@@ -1,0 +1,6 @@
+{
+  "name": "web-signatures-fixture",
+  "private": true,
+  "packageManager": "pnpm@12.16.1",
+  "dependencies": { "left-pad": "1.3.0" }
+}

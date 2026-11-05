@@ -14,6 +14,9 @@ pub fn run(offline: bool) -> Result<()> {
     let root = metadata::workspace_root()?;
     let meta = metadata::load()?;
     step("supply chain (Rust)", || rust(&root, &meta, offline))?;
+    step("supply chain (web)", || {
+        crate::supply_chain_web::web(&root, offline)
+    })?;
     println!("supply-chain: ok");
     Ok(())
 }
@@ -331,9 +334,9 @@ fn run_output(cmd: &mut Command, what: &str) -> Result<Output> {
 }
 
 #[derive(Debug)]
-struct Finding {
-    code: String,
-    subjects: Vec<String>,
+pub(crate) struct Finding {
+    pub(crate) code: String,
+    pub(crate) subjects: Vec<String>,
 }
 
 fn deny_findings(stderr: &str) -> Vec<Finding> {
@@ -381,7 +384,7 @@ fn shear_findings(stdout: &str) -> Result<Vec<Finding>> {
         .collect())
 }
 
-fn expect_rejected(
+pub(crate) fn expect_rejected(
     fixture: &str,
     accepted: bool,
     findings: &[Finding],

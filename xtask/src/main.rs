@@ -5,6 +5,7 @@ mod e2e;
 mod hygiene;
 mod metadata;
 mod supply_chain;
+mod supply_chain_web;
 mod systemd;
 mod tools;
 mod wasm;

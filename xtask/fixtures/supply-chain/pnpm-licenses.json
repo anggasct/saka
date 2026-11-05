@@ -1,0 +1,73 @@
+{
+  "MIT": [
+    {
+      "name": "left-pad",
+      "versions": ["1.3.0"],
+      "paths": ["/work/web/node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad"],
+      "license": "MIT",
+      "author": "Azer Koculu",
+      "description": "String left pad"
+    },
+    {
+      "name": "dual",
+      "versions": ["1.0.0", "2.0.0"],
+      "paths": [
+        "/work/web/node_modules/.pnpm/dual@1.0.0/node_modules/dual",
+        "/work/web/node_modules/.pnpm/dual@2.0.0/node_modules/dual"
+      ],
+      "license": "MIT",
+      "author": "Fixture Author",
+      "description": "Two versions with the same licence"
+    }
+  ],
+  "GPL-3.0-only": [
+    {
+      "name": "copyleft-pkg",
+      "versions": ["3.1.0"],
+      "paths": ["/work/web/node_modules/.pnpm/copyleft-pkg@3.1.0/node_modules/copyleft-pkg"],
+      "license": "GPL-3.0-only",
+      "author": "Fixture Author",
+      "description": "Strong copyleft"
+    }
+  ],
+  "(MIT OR GPL-3.0-only)": [
+    {
+      "name": "either-pkg",
+      "versions": ["2.0.0"],
+      "paths": ["/work/web/node_modules/.pnpm/either-pkg@2.0.0/node_modules/either-pkg"],
+      "license": "(MIT OR GPL-3.0-only)",
+      "author": "Fixture Author",
+      "description": "Consumer may pick MIT"
+    }
+  ],
+  "MIT AND GPL-3.0-only": [
+    {
+      "name": "both-pkg",
+      "versions": ["4.2.0"],
+      "paths": ["/work/web/node_modules/.pnpm/both-pkg@4.2.0/node_modules/both-pkg"],
+      "license": "MIT AND GPL-3.0-only",
+      "author": "Fixture Author",
+      "description": "Both licences apply"
+    }
+  ],
+  "Public Domain": [
+    {
+      "name": "free-pkg",
+      "versions": ["0.9.0"],
+      "paths": ["/work/web/node_modules/.pnpm/free-pkg@0.9.0/node_modules/free-pkg"],
+      "license": "Public Domain",
+      "author": "Fixture Author",
+      "description": "Not an SPDX identifier"
+    }
+  ],
+  "": [
+    {
+      "name": "blank-pkg",
+      "versions": ["0.1.0"],
+      "paths": ["/work/web/node_modules/.pnpm/blank-pkg@0.1.0/node_modules/blank-pkg"],
+      "license": "",
+      "author": "Fixture Author",
+      "description": "No licence declared"
+    }
+  ]
+}
