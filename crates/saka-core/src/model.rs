@@ -562,6 +562,16 @@ pub struct Task {
     pub usage_records: Vec<UsageRecord>,
     pub quota_observations: Vec<AccountQuota>,
     pub added_rules: Vec<PermissionRule>,
+    pub hook_gates: Vec<HookGate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookGate {
+    pub run_id: crate::ids::HookRunId,
+    pub hook: String,
+    pub action: crate::vocab::HookActionKind,
+    pub state: crate::vocab::HookRunState,
+    pub error: Option<Coded>,
 }
 
 impl Task {
@@ -591,6 +601,7 @@ impl Task {
             usage_records: Vec::new(),
             quota_observations: Vec::new(),
             added_rules: Vec::new(),
+            hook_gates: Vec::new(),
         }
     }
 

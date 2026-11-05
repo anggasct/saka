@@ -287,6 +287,34 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             t.gates.insert(at, g);
         }
     }
+    for g in rows(
+        conn,
+        "SELECT * FROM (SELECT * FROM hook_run WHERE mode = 'gate')",
+        selection,
+        "queued_at, id",
+        b,
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "work_item_id")?),
+                saka_core::model::HookGate {
+                    run_id: saka_core::ids::HookRunId(uuid(row, "id")?),
+                    hook: row.get("hook")?,
+                    action: vocab(row, "action")?,
+                    state: vocab(row, "state")?,
+                    error: opt_json(row, "error")?,
+                },
+            ))
+        },
+    )? {
+        let (work_item, gate) = g;
+        if let Some(t) = tasks
+            .get_mut(&work_item)
+            .filter(|t| t.stage_run.as_ref().is_some_and(|r| r.stage == Stage::Sync))
+        {
+            t.hook_gates.retain(|x| x.hook != gate.hook);
+            t.hook_gates.push(gate);
+        }
+    }
     for e in rows(
         conn,
         ENVIRONMENT_SELECT,

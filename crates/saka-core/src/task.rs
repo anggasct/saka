@@ -20,8 +20,9 @@ use crate::session::{
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
-    EnvironmentState, GateOutcome, GateSource, MergeMethod, ResumeCause, ResumeTrigger, ScopeStage,
-    SessionState, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    EnvironmentState, GateOutcome, GateSource, HookRunState, MergeMethod, ResumeCause,
+    ResumeTrigger, ScopeStage, SessionState, Stage, StagePhase, StageRunState, Trigger,
+    WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -746,7 +747,7 @@ impl Decider<'_> {
             }
             return self.settle_gate(head, false, None, None, ctx);
         }
-        vec![]
+        self.settle_hook_gates(ctx)
     }
 
     fn gate_policy(&self) -> GatePolicy {
@@ -1558,8 +1559,47 @@ impl Decider<'_> {
         events
     }
 
+    fn gates_pass(&self) -> bool {
+        self.task
+            .hook_gates
+            .iter()
+            .all(|g| g.state == HookRunState::Succeeded)
+    }
+
+    fn settle_hook_gates(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let gates = &self.task.hook_gates;
+        if !self.task.is_at(Stage::Sync, StagePhase::TearingDown)
+            || gates.iter().any(|g| g.state == HookRunState::Pending)
+        {
+            return vec![];
+        }
+        if let Some(failed) = gates.iter().find(|g| g.state == HookRunState::Failed) {
+            return self.block(
+                BlockerCode::HookFailed,
+                json!({
+                    "hook": failed.hook,
+                    "hook_run_id": failed.run_id,
+                    "action": failed.action,
+                    "error": failed.error,
+                }),
+                ctx,
+            );
+        }
+        let torn_down = self.task.environment.as_ref().is_none_or(|e| {
+            matches!(
+                e.state,
+                EnvironmentState::TornDown | EnvironmentState::TeardownFailed
+            )
+        });
+        if torn_down {
+            self.finish_sync()
+        } else {
+            vec![]
+        }
+    }
+
     fn finish_sync(&self) -> Vec<Event> {
-        if !self.task.is_at(Stage::Sync, StagePhase::TearingDown) {
+        if !self.task.is_at(Stage::Sync, StagePhase::TearingDown) || !self.gates_pass() {
             return vec![];
         }
         let (Some(run), Some(sha)) = (
@@ -1802,6 +1842,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         B::PushRejected => (Stage::Dev, StagePhase::Pushing),
         B::MergeConflict => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
+        B::HookFailed => (Stage::Sync, StagePhase::TearingDown),
         B::ScmUnavailable => {
             let phase: StagePhase = params.get("phase").and_then(Value::as_str)?.parse().ok()?;
             let stage = match phase {

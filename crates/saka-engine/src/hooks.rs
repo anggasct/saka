@@ -5,7 +5,7 @@ use saka_core::job::{Job, JobKind};
 use saka_core::model::{Coded, Spec, Task};
 use saka_core::secret::SecretScope;
 use saka_core::time::Timestamp;
-use saka_core::vocab::HookRunState;
+use saka_core::vocab::{BlockerCode, HookMode, HookRunState, Stage, StagePhase};
 use saka_ports::{
     IdsSource, Notification, PortError, PortResult, Sealed, WebhookPost, WebhookReceipt,
 };
@@ -62,6 +62,16 @@ impl Engine {
         cause: &Cause,
         now: Timestamp,
     ) -> Result<()> {
+        if let Event::StageRunCreated {
+            stage: Stage::Sync,
+            entry_phase: StagePhase::TearingDown,
+            retry_of: Some(retried),
+            ..
+        } = event
+            && retried.code == BlockerCode::HookFailed.as_str()
+        {
+            self.rerun_failed_gates(batch, task, cause, now)?;
+        }
         if self.cfg.hooks.is_empty() {
             return Ok(());
         }
@@ -74,6 +84,51 @@ impl Engine {
             return Ok(());
         };
         self.queue_hooks(batch, &ctx, event_id, cause, now);
+        Ok(())
+    }
+
+    fn rerun_failed_gates(
+        &self,
+        batch: &mut Batch,
+        task: &Task,
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<()> {
+        let Some(project) = self
+            .store
+            .read(|c| read::load_project(c, task.item.project_id))?
+        else {
+            return Ok(());
+        };
+        for gate in task
+            .hook_gates
+            .iter()
+            .filter(|g| g.state == HookRunState::Failed)
+        {
+            let Some(run) = self
+                .store
+                .read(|c| saka_store::hook_run::load(c, gate.run_id))?
+            else {
+                continue;
+            };
+            let current = self.cfg.hooks.iter().find(|h| {
+                h.name == run.hook
+                    && h.mode == run.mode
+                    && h.project.selects(project.id, &project.name)
+            });
+            let mut ids = IdsSource(&*self.ports.ids);
+            match current.map(|h| hook::rerun(&run, Some(h), &mut ids)) {
+                Some(Ok(event)) => self.queue_hook_event(batch, event, cause, now),
+                _ => {
+                    let mut row = None;
+                    for event in hook::skipped(&run, &mut ids) {
+                        row = hook::evolve(row, &event, now);
+                        self.push_event(batch, &event, Some(run.project_id), cause, now);
+                    }
+                    batch.hook_runs.extend(row);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -246,6 +301,22 @@ impl Engine {
             .hooks
             .iter()
             .find(|h| h.name == run.hook && h.project.selects(project.id, &project.name));
+        if run.mode == HookMode::Gate
+            && run.state != HookRunState::Pending
+            && let Some(work_item_id) = run.work_item_id
+        {
+            let holding = self
+                .store
+                .read(|c| read::load_task(c, work_item_id))?
+                .is_some_and(|t| !t.item.state.is_terminal());
+            if holding {
+                return Err(EngineError::Rejected(
+                    saka_core::rejection::Rejection::HookRunGated {
+                        work_item_id: work_item_id.to_string(),
+                    },
+                ));
+            }
+        }
         let mut ids = IdsSource(&*self.ports.ids);
         let event = hook::rerun(&run, current, &mut ids)?;
         let mut batch = Batch::new(now);

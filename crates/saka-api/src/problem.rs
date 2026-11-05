@@ -125,6 +125,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::StageNotInWorkflow { .. }
         | R::HookRunPending
         | R::HookNotConfigured { .. }
+        | R::HookRunGated { .. }
         | R::UserTokenMultiIntegration { .. } => StatusCode::CONFLICT,
     }
 }

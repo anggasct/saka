@@ -169,3 +169,17 @@ on = "task_done"
 action = "run_host"
 command = "/usr/local/bin/refresh-dashboard"
 cwd = "~/dashboards"               # optional; default is a private scratch directory
+
+# A `gate` hook (only with on = "merged") holds the task in the sync stage: it is done only after
+# every gate hook of its merge succeeded. A failed gate blocks the task with hook_failed, and retrying
+# the task runs the failed gates again. `after` (the default) never holds the task.
+
+[[hook]]
+name = "staging-smoke-test"
+project = "tasks"
+on = "merged"
+mode = "gate"
+action = "run"
+command = "./scripts/smoke.sh staging"
+repos = ["app"]
+branches = ["main"]
