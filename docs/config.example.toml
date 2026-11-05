@@ -1,5 +1,6 @@
 # Saka operator config: $XDG_CONFIG_HOME/saka/config.toml, or the file named by SAKA_CONFIG.
-# Every field is optional except an [[scm]] entry's id, provider, app_id, and private_key_file.
+# Every field is optional except an [[scm]] entry's id and provider, and its credential:
+# app_id and private_key_file for github, token_file for gitlab.
 # Unknown fields are an error (config_unknown_field).
 
 [server]
@@ -29,6 +30,21 @@ ci_appear_timeout_secs = 600       # 60..=3600
 merge_method = "squash"            # merge | squash | rebase
 # webhook_secret_file = "~/.config/saka/scm/github/webhook-secret"   # the GitHub App webhook secret; 0600, 32..=1024 bytes
 client_id = "Iv23liAbCdEfGh123456"  # the GitHub App Client ID (not app_id), 1..=64 of [A-Za-z0-9._-]; needed by `saka scm link`
+
+# GitLab (gitlab.com or self-managed): one project or group access token with the api and write_repository scopes,
+# role Developer or higher, in a 0600 file. The file is read on every request, so replacing it rotates the token.
+# Delete the entry you do not use.
+[[scm]]
+id = "gitlab"                      # ^[a-z0-9-]{1,32}$, unique
+provider = "gitlab"
+web_url = "https://git.example.com" # default https://gitlab.com; https, or http on a loopback host
+# api_url = "https://git.example.com/api/v4"   # default <web_url>/api/v4
+token_file = "~/.config/saka/scm/gitlab/token"   # mode 0600, owned by you (else config_key_file_mode)
+poll_interval_secs = 15            # 5..=300
+ci_appear_timeout_secs = 600       # 60..=3600
+merge_method = "merge"             # merge | squash; rebase is refused (config_merge_method_unsupported)
+# webhook_secret_file = "~/.config/saka/scm/gitlab/webhook-secret"   # the webhook Secret token; 0600, 32..=1024 bytes
+# client_id is not supported for gitlab (config_user_authorship_unsupported)
 
 [agent]
 cli = "claude"
