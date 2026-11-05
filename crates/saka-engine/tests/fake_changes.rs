@@ -2,7 +2,8 @@
 
 use saka_core::time::Timestamp;
 use saka_core::vocab::ChangeState;
-use saka_ports::{Clock, RepoRef, Scm, SignalKind};
+use saka_core::vocab::ReviewEvent;
+use saka_ports::{Clock, RepoRef, ReviewPost, Scm, SignalKind};
 use saka_testkit::{BOT_AUTHOR, ChangeSpec, HOME_REPO, Sim, SimConfig};
 
 fn repo() -> RepoRef {
@@ -153,4 +154,41 @@ fn a_change_opened_by_saka_is_listed_under_the_bot_author() {
         .block_on(sim.world.list_open_changes(&repo(), 200))
         .unwrap();
     assert_eq!(listed[0].author, BOT_AUTHOR);
+}
+
+#[test]
+fn the_fake_records_a_review_for_a_known_change_and_refuses_an_unknown_one() {
+    let sim = sim();
+    let n = sim
+        .world
+        .open_external_change(HOME_REPO, ChangeSpec::new("A", "alice", "a"));
+    let post = |number: u64, event: ReviewEvent| ReviewPost {
+        repo: repo(),
+        number,
+        head_sha: "a".repeat(40),
+        event,
+        body: "ok".into(),
+    };
+    let posted = sim
+        .block_on(sim.world.post_review(&post(n, ReviewEvent::Approve)))
+        .unwrap();
+    assert!(posted.url.is_some());
+    let missing = sim
+        .block_on(sim.world.post_review(&post(n + 9, ReviewEvent::Comment)))
+        .unwrap_err();
+    assert_eq!(missing.code, "review_refused");
+    assert_eq!(sim.world.reviews().len(), 1);
+    sim.world.fail_reviews(1);
+    assert!(
+        sim.block_on(sim.world.post_review(&post(n, ReviewEvent::Comment)))
+            .unwrap_err()
+            .retryable
+    );
+    sim.world.refuse_reviews();
+    assert_eq!(
+        sim.block_on(sim.world.post_review(&post(n, ReviewEvent::Comment)))
+            .unwrap_err()
+            .code,
+        "review_refused"
+    );
 }

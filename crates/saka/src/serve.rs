@@ -24,8 +24,9 @@ use saka_env::{
 use saka_ports::{
     ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, Clock, DeviceCode, DevicePoll,
     GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest,
-    PortError, PortResult, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm,
-    ScmCapabilities, StatusReport, TokenRefresh, UnitLimits, WebhookDelivery,
+    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
+    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh, UnitLimits,
+    WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -157,6 +158,9 @@ impl Scm for ScmRouter {
     }
     async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool> {
         self.get(&repo.integration_id)?.can_write(repo, login).await
+    }
+    async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview> {
+        self.get(&post.repo.integration_id)?.post_review(post).await
     }
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         self.get(&request.repo.integration_id)?.merge(request).await
@@ -910,6 +914,7 @@ mod capability_tests {
         delete_branch_after_merge: false,
         commit_status: false,
         user_authorship: false,
+        change_head_ref: "refs/pull/{number}/head",
         diagnostics: None,
     };
 

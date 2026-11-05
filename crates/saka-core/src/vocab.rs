@@ -92,6 +92,7 @@ vocab!(StageRunState {
     Cancelled => "cancelled",
 });
 vocab!(Trigger { Auto => "auto", Manual => "manual" });
+vocab!(ReviewEvent { Approve => "approve", RequestChanges => "request_changes", Comment => "comment" });
 vocab!(ReloadTrigger { Poll => "poll", Operator => "operator" });
 vocab!(ReloadOutcome { Changed => "changed", Unchanged => "unchanged" });
 vocab!(

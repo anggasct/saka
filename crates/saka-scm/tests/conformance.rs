@@ -10,11 +10,11 @@ use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
 use saka_core::gate::outcome;
 use saka_core::vocab::{
-    ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod,
+    ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod, ReviewEvent,
 };
 use saka_ports::{
-    ChangeCredential, ChangeOpening, MergeOutcome, MergeRequest, OpenChangeRequest, RepoRef, Scm,
-    ScmCapabilities, SignalKind, WebhookTarget,
+    ChangeCredential, ChangeOpening, MergeOutcome, MergeRequest, OpenChangeRequest, RepoRef,
+    ReviewPost, Scm, ScmCapabilities, SignalKind, WebhookTarget,
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -102,6 +102,8 @@ trait Harness: Sync {
     async fn signals(&self, number: u64, comments: &[Commented], labels: &[Labeled]);
     async fn write_access(&self, login: &str, access: Access);
     async fn branch_missing(&self);
+    async fn review_accepted(&self, number: u64, event: ReviewEvent, body: &str);
+    async fn review_refused(&self, number: u64, status: u16);
     async fn status_accepted(&self, state: &str, description: &str);
     fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>);
 }
@@ -154,6 +156,7 @@ impl Harness for GitHubHarness {
             delete_branch_after_merge: true,
             commit_status: true,
             user_authorship: true,
+            change_head_ref: "refs/pull/{number}/head",
             diagnostics: Some(saka_scm::github::requirements::APP),
         }
     }
@@ -374,6 +377,39 @@ impl Harness for GitHubHarness {
             .await;
     }
 
+    async fn review_accepted(&self, number: u64, event: ReviewEvent, body: &str) {
+        let wire = match event {
+            ReviewEvent::Approve => "APPROVE",
+            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+            ReviewEvent::Comment => "COMMENT",
+        };
+        Mock::given(method("POST"))
+            .and(path(format!("/repos/acme/app/pulls/{number}/reviews").as_str()))
+            .and(body_json(
+                json!({ "commit_id": HEAD, "body": body, "event": wire }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": 1,
+                "html_url": format!("https://github.example/acme/app/pull/{number}#pullrequestreview-1"),
+            })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn review_refused(&self, number: u64, status: u16) {
+        Mock::given(method("POST"))
+            .and(path(
+                format!("/repos/acme/app/pulls/{number}/reviews").as_str(),
+            ))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(json!({ "message": "refused" })),
+            )
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
     async fn status_accepted(&self, state: &str, description: &str) {
         Mock::given(method("POST"))
             .and(path(format!("/repos/acme/app/statuses/{HEAD}").as_str()))
@@ -477,6 +513,7 @@ impl Harness for GitLabHarness {
             delete_branch_after_merge: true,
             commit_status: true,
             user_authorship: false,
+            change_head_ref: "refs/merge-requests/{number}/head",
             diagnostics: None,
         }
     }
@@ -692,6 +729,50 @@ impl Harness for GitLabHarness {
                 ResponseTemplate::new(200)
                     .set_body_json(json!({ "id": id, "access_level": level })),
             )
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn review_accepted(&self, number: u64, event: ReviewEvent, body: &str) {
+        let base = format!("/projects/acme%2Fapp/merge_requests/{number}");
+        Mock::given(method("POST"))
+            .and(path(format!("{base}/notes").as_str()))
+            .and(body_json(json!({ "body": body })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 9 })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+        match event {
+            ReviewEvent::Approve => {
+                Mock::given(method("POST"))
+                    .and(path(format!("{base}/approve").as_str()))
+                    .and(body_json(json!({ "sha": HEAD })))
+                    .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+                    .expect(1)
+                    .mount(&self.w.server)
+                    .await;
+            }
+            ReviewEvent::RequestChanges => {
+                Mock::given(method("POST"))
+                    .and(path(format!("{base}/unapprove").as_str()))
+                    .respond_with(ResponseTemplate::new(404).set_body_json(json!({})))
+                    .expect(1)
+                    .mount(&self.w.server)
+                    .await;
+            }
+            ReviewEvent::Comment => {}
+        }
+    }
+
+    async fn review_refused(&self, number: u64, status: u16) {
+        Mock::given(method("POST"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/notes").as_str(),
+            ))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(json!({ "message": "refused" })),
+            )
+            .expect(1)
             .mount(&self.w.server)
             .await;
     }
@@ -1033,6 +1114,54 @@ async fn commit_status_is_reported_for_a_head(h: &dyn Harness) {
     assert_eq!(bad.code, "git_argument_invalid");
 }
 
+async fn a_review_is_posted_at_the_head(h: &dyn Harness) {
+    for (number, event) in [
+        (7, ReviewEvent::Approve),
+        (8, ReviewEvent::RequestChanges),
+        (9, ReviewEvent::Comment),
+    ] {
+        let body = format!("Saka review @{number}");
+        h.review_accepted(number, event, &body).await;
+        let post = ReviewPost {
+            repo: h.repo(),
+            number,
+            head_sha: HEAD.into(),
+            event,
+            body,
+        };
+        h.scm().post_review(&post).await.unwrap();
+    }
+    let bad = ReviewPost {
+        repo: h.repo(),
+        number: 7,
+        head_sha: "HEAD".into(),
+        event: ReviewEvent::Comment,
+        body: "x".into(),
+    };
+    let refused = h.scm().post_review(&bad).await.unwrap_err();
+    assert_eq!(refused.code, "git_argument_invalid");
+}
+
+async fn a_refused_review_is_permanent(h: &dyn Harness) {
+    for (number, status) in [(10, 404), (11, 403), (12, 422)] {
+        if status == 422 && h.declared().provider == "gitlab" {
+            continue;
+        }
+        h.review_refused(number, status).await;
+        let post = ReviewPost {
+            repo: h.repo(),
+            number,
+            head_sha: HEAD.into(),
+            event: ReviewEvent::Approve,
+            body: "no".into(),
+        };
+        let err = h.scm().post_review(&post).await.unwrap_err();
+        assert_eq!(err.code, "review_refused", "status {status}");
+        assert!(!err.retryable);
+        assert_eq!(err.params["status"], status);
+    }
+}
+
 const T1: i64 = support::NOW_MS - 3_600_000;
 const T2: i64 = support::NOW_MS - 1_800_000;
 const T3: i64 = support::NOW_MS - 600_000;
@@ -1243,6 +1372,8 @@ conformance!(github_conformance, GitHubHarness:
     a_change_lists_the_files_it_touches,
     signals_carry_their_actor,
     write_access_is_checked,
+    a_review_is_posted_at_the_head,
+    a_refused_review_is_permanent,
     capabilities_match_the_declared_matrix,
 );
 
@@ -1267,5 +1398,7 @@ conformance!(gitlab_conformance, GitLabHarness:
     a_change_lists_the_files_it_touches,
     signals_carry_their_actor,
     write_access_is_checked,
+    a_review_is_posted_at_the_head,
+    a_refused_review_is_permanent,
     capabilities_match_the_declared_matrix,
 );

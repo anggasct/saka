@@ -14,12 +14,13 @@ use reqwest::{Method, StatusCode};
 use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
+use saka_core::vocab::{ChangeState, CheckKind, MergeMethod, ReviewEvent};
 use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange,
-    PortError, PortResult, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm,
-    ScmCapabilities, StatusReport, TokenRefresh, WebhookDelivery, WebhookSignature,
+    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
+    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh, WebhookDelivery,
+    WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -36,6 +37,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     user_authorship: true,
+    change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(requirements::APP),
 };
 
@@ -423,6 +425,37 @@ impl Scm for GitHub {
             // Already gone.
             StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => Ok(()),
             _ => Err(self.app.unexpected("delete_branch", &reply)),
+        }
+    }
+
+    async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview> {
+        post.check()?;
+        let event = match post.event {
+            ReviewEvent::Approve => "APPROVE",
+            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+            ReviewEvent::Comment => "COMMENT",
+        };
+        let body = json!({ "commit_id": post.head_sha, "body": post.body, "event": event });
+        let number = post.number.to_string();
+        let reply = self
+            .repo_call(
+                &post.repo.full_name,
+                Method::POST,
+                &["pulls", &number, "reviews"],
+                Some(&body),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(PostedReview {
+                url: reply.body["html_url"].as_str().map(String::from),
+            }),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => {
+                Err(PortError::permanent(
+                    "review_refused",
+                    json!({ "status": reply.status.as_u16() }),
+                ))
+            }
+            _ => Err(self.app.unexpected("post_review", &reply)),
         }
     }
 

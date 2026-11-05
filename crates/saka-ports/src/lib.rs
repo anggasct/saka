@@ -36,10 +36,10 @@ pub use hook::{
 pub use scm::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, IdentityLookup, MAX_CHANGE_FILES, MAX_CHANGE_TEXT_BYTES, MAX_OPEN_CHANGES,
-    MAX_SIGNALS, MAX_WEBHOOK_TARGETS, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange,
-    PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Scm, ScmCapabilities, SignalKind,
-    StatusReport, StatusState, TokenRefresh, UserTokens, WebhookDelivery, WebhookSignature,
-    WebhookTarget, clip_text, unique_paths,
+    MAX_REVIEW_BODY_CHARS, MAX_SIGNALS, MAX_WEBHOOK_TARGETS, MergeOutcome, MergeRequest,
+    OpenChangeRequest, OpenedChange, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo,
+    RepoRef, ReviewPost, Scm, ScmCapabilities, SignalKind, StatusReport, StatusState, TokenRefresh,
+    UserTokens, WebhookDelivery, WebhookSignature, WebhookTarget, clip_text, unique_paths,
 };
 pub use secret::{Sealed, SecretStore};
 pub use supervisor::{
