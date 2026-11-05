@@ -10,7 +10,7 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    Blob, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, DOCS_MAX_BYTES,
+    Blob, ChangeDiff, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, DOCS_MAX_BYTES,
     DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, GitAccess, GitRemote, PortError,
     PortResult, PrepareRequest, PreparedDocs, PreparedEnvironment, PushCommit, PushOutcome,
     PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor, TreeEntry,
@@ -350,6 +350,50 @@ impl GitRepos {
         self.with_remote(repo, "fetch", Fetch).await
     }
 
+    async fn has_commit(&self, bare: &Path, sha: &str) -> PortResult<bool> {
+        let object = format!("{sha}^{{commit}}");
+        let out = self
+            .cfg
+            .git
+            .local(bare, &["cat-file", "-e", &object])
+            .await?;
+        Ok(out.ok())
+    }
+
+    // A fork head is not under refs/heads, so the host's change ref is fetched by name.
+    async fn ensure_change_head(
+        &self,
+        repo: &RepoRef,
+        bare: &Path,
+        head_sha: &str,
+        head_ref: Option<&str>,
+    ) -> PortResult<()> {
+        sha_arg(head_sha, "head_sha")?;
+        if self.has_commit(bare, head_sha).await? {
+            return Ok(());
+        }
+        if let Some(head_ref) = head_ref {
+            arg(head_ref, "head_ref")?;
+            if !head_ref.starts_with("refs/") || head_ref.contains(['\n', ' ', ':', '\\']) {
+                return Err(PortError::permanent(
+                    "git_argument_invalid",
+                    json!({ "field": "head_ref" }),
+                ));
+            }
+            let refspec = format!("+{head_ref}:refs/saka/changes/{head_sha}");
+            self.with_remote(repo, "fetch_change", FetchRef { refspec: &refspec })
+                .await?;
+        }
+        if self.has_commit(bare, head_sha).await? {
+            Ok(())
+        } else {
+            Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            ))
+        }
+    }
+
     async fn tip_locked(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>> {
         arg(branch, "branch")?;
         let bare = self.mirror_path(repo.repo_id);
@@ -517,6 +561,31 @@ impl AsyncStep<()> for Fetch {
             .cfg
             .git
             .remote(bare, &["fetch", "--prune", "--quiet", "origin"], remote)
+            .await?;
+        Ok(if out.ok() {
+            Step::Done(())
+        } else {
+            Step::Failed(out)
+        })
+    }
+}
+
+struct FetchRef<'a> {
+    refspec: &'a str,
+}
+
+#[async_trait]
+impl AsyncStep<()> for FetchRef<'_> {
+    async fn run(
+        &mut self,
+        repos: &GitRepos,
+        bare: &Path,
+        remote: &GitRemote,
+    ) -> PortResult<Step<()>> {
+        let out = repos
+            .cfg
+            .git
+            .remote(bare, &["fetch", "--quiet", "origin", self.refspec], remote)
             .await?;
         Ok(if out.ok() {
             Step::Done(())
@@ -991,16 +1060,23 @@ impl Environments for GitRepos {
             return Ok(prepared(base.trim().to_string()));
         }
         self.fetch_locked(&request.repo).await?;
-        let base = self
-            .tip_locked(&request.repo, &request.base_branch)
-            .await?
-            .ok_or_else(|| {
-                PortError::permanent(
-                    "base_branch_missing",
-                    json!({ "base_branch": request.base_branch }),
-                )
-            })?;
         let bare = self.mirror_path(request.repo.repo_id);
+        let base = match &request.checkout {
+            Checkout::Change { head_sha, head_ref } => {
+                self.ensure_change_head(&request.repo, &bare, head_sha, head_ref.as_deref())
+                    .await?;
+                head_sha.clone()
+            }
+            _ => self
+                .tip_locked(&request.repo, &request.base_branch)
+                .await?
+                .ok_or_else(|| {
+                    PortError::permanent(
+                        "base_branch_missing",
+                        json!({ "base_branch": request.base_branch }),
+                    )
+                })?,
+        };
         let branch_ref = request.checkout.branch().map(|b| format!("refs/heads/{b}"));
         for (path, branch) in self.worktrees(&bare).await? {
             let stale = path == worktree || (branch.is_some() && branch == branch_ref);
@@ -1024,7 +1100,9 @@ impl Environments for GitRepos {
                 &wt,
                 &base,
             ],
-            Checkout::Detached => vec!["worktree", "add", "--quiet", "--detach", &wt, &base],
+            Checkout::Detached | Checkout::Change { .. } => {
+                vec!["worktree", "add", "--quiet", "--detach", &wt, &base]
+            }
         };
         self.git_ok(&bare, &add, "worktree_add").await?;
         // Written last: an environment without it is unfinished and is made again.
@@ -1335,6 +1413,96 @@ impl Environments for GitRepos {
         let truncated = paths.len() > saka_core::scope::MAX_CHANGED_PATHS;
         paths.truncate(saka_core::scope::MAX_CHANGED_PATHS);
         Ok(ChangedPaths { paths, truncated })
+    }
+
+    async fn change_diff(
+        &self,
+        repo: &RepoRef,
+        base_branch: &str,
+        head_sha: &str,
+        max_bytes: usize,
+    ) -> PortResult<ChangeDiff> {
+        sha_arg(head_sha, "head_sha")?;
+        arg(base_branch, "base_branch")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        let bare = self.mirror_path(repo.repo_id);
+        if !self.has_commit(&bare, head_sha).await? {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            ));
+        }
+        let base = format!("refs/remotes/origin/{base_branch}");
+        let merge_base = self
+            .git_ok(&bare, &["merge-base", &base, head_sha], "merge_base")
+            .await?
+            .text();
+        let names = self
+            .git_ok(
+                &bare,
+                &[
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-renames",
+                    &merge_base,
+                    head_sha,
+                ],
+                "diff",
+            )
+            .await?;
+        let files: Vec<String> = names
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .take(saka_core::scope::MAX_CHANGED_PATHS)
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
+        let out = self
+            .cfg
+            .git
+            .local_capped(
+                &bare,
+                &[
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-color",
+                    "--no-renames",
+                    "-U3",
+                    &merge_base,
+                    head_sha,
+                ],
+                max_bytes,
+            )
+            .await?;
+        if !out.ok() {
+            return Err(failed("diff", &out));
+        }
+        let truncated = out.stdout.len() > max_bytes;
+        let mut text =
+            String::from_utf8_lossy(&out.stdout[..out.stdout.len().min(max_bytes)]).into_owned();
+        let mut omitted_files = 0;
+        if truncated {
+            // Drop a half-written trailing line and count the files whose header did not fit.
+            if let Some(end) = text.rfind('\n') {
+                text.truncate(end + 1);
+            }
+            let shown = text
+                .lines()
+                .filter(|l| l.starts_with("diff --git "))
+                .count();
+            omitted_files = files.len().saturating_sub(shown);
+        }
+        Ok(ChangeDiff {
+            text,
+            files,
+            truncated,
+            omitted_files,
+        })
     }
 
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()> {

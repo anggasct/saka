@@ -13,15 +13,27 @@ use crate::scm::RepoRef;
 pub enum Checkout {
     Branch(String),
     Detached,
+    Change {
+        head_sha: String,
+        head_ref: Option<String>,
+    },
 }
 
 impl Checkout {
     pub fn branch(&self) -> Option<&str> {
         match self {
             Checkout::Branch(branch) => Some(branch),
-            Checkout::Detached => None,
+            Checkout::Detached | Checkout::Change { .. } => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeDiff {
+    pub text: String,
+    pub files: Vec<String>,
+    pub truncated: bool,
+    pub omitted_files: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +220,14 @@ pub trait Environments: Send + Sync {
         head_sha: &str,
         fetch: bool,
     ) -> PortResult<ChangedPaths>;
+
+    async fn change_diff(
+        &self,
+        repo: &RepoRef,
+        base_branch: &str,
+        head_sha: &str,
+        max_bytes: usize,
+    ) -> PortResult<ChangeDiff>;
 
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()>;
 

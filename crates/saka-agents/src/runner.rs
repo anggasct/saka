@@ -18,6 +18,7 @@ use crate::launch::LaunchSpec;
 use crate::protocol::{self, LogEvent, Malformed, RunnerFrame, ServerFrame};
 use crate::redact::Redactor;
 use crate::secrets::SessionSecrets;
+use saka_ports::MAX_RESULT_TEXT_BYTES;
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_VERSION_MISMATCH: i32 = 3;
@@ -325,6 +326,9 @@ impl Runner {
                 let cut = claude::cut(text, max);
                 data[key] = Value::String(cut);
             }
+        }
+        if let Some(text) = data.get("result_text").and_then(Value::as_str) {
+            data["result_text"] = Value::String(claude::cut_bytes(text, MAX_RESULT_TEXT_BYTES));
         }
         match self.log.append(kind, data) {
             Ok(event) => self.send(&RunnerFrame::Event(event)).await,

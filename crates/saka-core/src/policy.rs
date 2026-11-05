@@ -48,6 +48,7 @@ pub enum DecisionSource {
     Rule(String),
     Project(String),
     Architect(String),
+    Reviewer(String),
     Default,
 }
 
@@ -58,6 +59,7 @@ impl DecisionSource {
             DecisionSource::Rule(id) => Some(format!("policy:{id}")),
             DecisionSource::Project(id) => Some(format!("policy:project:{id}")),
             DecisionSource::Architect(name) => Some(format!("policy:architect:{name}")),
+            DecisionSource::Reviewer(name) => Some(format!("policy:reviewer:{name}")),
             DecisionSource::Default => None,
         }
     }
@@ -249,6 +251,39 @@ pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Deci
         message: Some(format!(
             "Architect sessions can read the repository and write only {target}."
         )),
+    }
+}
+
+pub const REVIEWER_READ: &str = "read";
+pub const REVIEWER_DENY: &str = "deny";
+
+#[must_use]
+pub fn reviewer(request: &ToolRequest, operator: &Policy) -> Decision {
+    if let Some(name) = builtin_deny(request) {
+        return Decision {
+            effect: Effect::Deny,
+            source: DecisionSource::Builtin(name.to_string()),
+            message: None,
+        };
+    }
+    if let Some(rule) = operator.first(Effect::Deny, request) {
+        return rule;
+    }
+    let reads = ARCHITECT_READ_TOOLS.contains(&request.tool.as_str());
+    let inside = request.path.as_ref().is_none_or(|p| p.inside_worktree);
+    let (effect, name, message) = if reads && inside {
+        (Effect::Allow, REVIEWER_READ, None)
+    } else {
+        (
+            Effect::Deny,
+            REVIEWER_DENY,
+            Some("Reviewer sessions can only read files in the checkout.".to_string()),
+        )
+    };
+    Decision {
+        effect,
+        source: DecisionSource::Reviewer(name.to_string()),
+        message,
     }
 }
 
@@ -811,6 +846,166 @@ mod architect_tests {
         fn operator_allow_rules_and_project_rules_never_widen_the_architect(req in request()) {
             let d = architect(&req, TARGET, &operator());
             let bare = architect(&req, TARGET, &Policy::compile(&[]).unwrap());
+            if d.effect == Effect::Allow {
+                prop_assert_eq!(bare.effect, Effect::Allow);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reviewer_tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    fn at(tool: &str, path: Option<(&str, bool, bool)>, command: Option<&str>) -> ToolRequest {
+        ToolRequest {
+            tool: tool.into(),
+            command: command.map(String::from),
+            path: path.map(|(path, inside, symlink)| RequestPath {
+                path: path.into(),
+                inside_worktree: inside,
+                through_symlink: symlink,
+            }),
+        }
+    }
+
+    fn operator() -> Policy {
+        Policy::compile(&[
+            RuleSpec {
+                id: "allow-everything".into(),
+                effect: Effect::Allow,
+                tools: ["Bash", "Write", "Edit", "WebFetch", "Task", "Read"]
+                    .map(String::from)
+                    .to_vec(),
+                paths: vec![],
+                commands: vec![],
+            },
+            RuleSpec {
+                id: "no-secrets".into(),
+                effect: Effect::Deny,
+                tools: vec!["Read".into()],
+                paths: vec!["**/.env".into()],
+                commands: vec![],
+            },
+        ])
+        .unwrap()
+    }
+
+    fn source(d: &Decision) -> Option<String> {
+        d.source.answer_source()
+    }
+
+    #[test]
+    fn read_tools_inside_the_checkout_are_allowed() {
+        for tool in ARCHITECT_READ_TOOLS {
+            let d = reviewer(
+                &at(tool, Some(("src/lib.rs", true, false)), None),
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Allow, "{tool}");
+            assert_eq!(source(&d).as_deref(), Some("policy:reviewer:read"));
+        }
+        let bare = reviewer(&at("Grep", None, None), &operator());
+        assert_eq!(bare.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn everything_that_changes_or_reaches_out_is_denied() {
+        for tool in [
+            "Bash",
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task",
+            "Skill",
+        ] {
+            let d = reviewer(
+                &at(tool, Some(("src/lib.rs", true, false)), Some("ls")),
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Deny, "{tool}");
+            assert_eq!(source(&d).as_deref(), Some("policy:reviewer:deny"));
+        }
+    }
+
+    #[test]
+    fn paths_outside_the_checkout_are_denied_even_through_a_symlink() {
+        for symlink in [false, true] {
+            let d = reviewer(
+                &at("Read", Some(("/etc/passwd", false, symlink)), None),
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Deny);
+            assert_eq!(
+                source(&d).as_deref(),
+                Some("policy:builtin:path_outside_worktree")
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_deny_rule_still_applies_to_reads() {
+        let d = reviewer(&at("Read", Some((".env", true, false)), None), &operator());
+        assert_eq!(d.effect, Effect::Deny);
+        assert_eq!(source(&d).as_deref(), Some("policy:no-secrets"));
+    }
+
+    fn request() -> impl Strategy<Value = ToolRequest> {
+        let tools = prop::sample::select(vec![
+            "Read",
+            "Glob",
+            "Grep",
+            "LS",
+            "TodoWrite",
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "Bash",
+            "WebFetch",
+            "WebSearch",
+            "Task",
+            "NotebookEdit",
+            "Other",
+        ]);
+        (
+            tools,
+            prop::option::of(("[a-zA-Z./]{1,24}", any::<bool>(), any::<bool>())),
+            prop::option::of(prop::sample::select(vec!["ls", "git push", "cat x"])),
+        )
+            .prop_map(|(tool, path, command)| ToolRequest {
+                tool: tool.into(),
+                command: command.map(String::from),
+                path: path.map(|(path, inside, symlink)| RequestPath {
+                    path,
+                    inside_worktree: inside,
+                    through_symlink: symlink,
+                }),
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn the_reviewer_never_asks_and_only_reads_inside_the_checkout(req in request()) {
+            let d = reviewer(&req, &operator());
+            prop_assert_ne!(d.effect, Effect::Ask);
+            prop_assert!(d.source.answer_source().is_some());
+            if d.effect == Effect::Allow {
+                prop_assert!(ARCHITECT_READ_TOOLS.contains(&req.tool.as_str()));
+                prop_assert!(req.path.as_ref().is_none_or(|p| p.inside_worktree));
+            }
+        }
+
+        #[test]
+        fn operator_allow_rules_never_widen_the_reviewer(req in request()) {
+            let d = reviewer(&req, &operator());
+            let bare = reviewer(&req, &Policy::compile(&[]).unwrap());
             if d.effect == Effect::Allow {
                 prop_assert_eq!(bare.effect, Effect::Allow);
             }

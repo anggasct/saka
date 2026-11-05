@@ -103,6 +103,12 @@ impl Engine {
                 })
             }
             Prompt::Steer { text } => Ok(text.clone()),
+            Prompt::VerdictFormat { reason } => {
+                Ok(crate::review_packet::verdict_format_text(reason))
+            }
+            Prompt::ReviewPacket => Err(EngineError::Internal(
+                "the review packet is built where the session is started".into(),
+            )),
             Prompt::DraftPacket | Prompt::DraftLint { .. } | Prompt::DraftMissing { .. } => Err(
                 EngineError::Internal("a task session has no draft prompt".into()),
             ),

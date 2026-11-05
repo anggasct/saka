@@ -15,16 +15,16 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub use agent::{
-    Agents, LaunchProfile, LaunchedSession, Link, Reattached, RunnerEvent, RunnerEventKind,
-    SessionLaunch, SessionRef,
+    Agents, LaunchProfile, LaunchedSession, Link, MAX_RESULT_TEXT_BYTES, Reattached, RunnerEvent,
+    RunnerEventKind, SessionLaunch, SessionRef,
 };
 pub use chat::{ChatAction, ChatActionKind, ChatActions, ChatOutcome};
 pub use docs::{
     DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite,
 };
 pub use env::{
-    ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest, EnvRef, Environments,
-    ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest, PreparedDocs,
+    ChangeDiff, ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest, EnvRef,
+    Environments, ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest, PreparedDocs,
     PreparedEnvironment, RecipeCommand, RecipeCommandOutcome, RecipePhase, Release, ReleaseIndex,
     WorktreeFile, WorktreeState, output_tail,
 };

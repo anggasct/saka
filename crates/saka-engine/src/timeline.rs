@@ -247,6 +247,7 @@ mod tests {
                     input_tokens: None,
                     output_tokens: None,
                     result_summary: Some("x".repeat(900)),
+                    result_text: None,
                 },
                 None
             )

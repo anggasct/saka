@@ -571,6 +571,7 @@ fn a_resumed_cli_empty_first_result_is_dropped() {
             .collect();
         assert_eq!(ended.len(), 1, "{ended:?}");
         assert_eq!(ended[0].data["result_summary"], "done");
+        assert_eq!(ended[0].data["result_text"], "done");
     });
 }
 

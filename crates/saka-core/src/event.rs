@@ -715,6 +715,10 @@ pub enum Prompt {
     Steer {
         text: String,
     },
+    ReviewPacket,
+    VerdictFormat {
+        reason: String,
+    },
     DraftPacket,
     DraftLint {
         round: u32,

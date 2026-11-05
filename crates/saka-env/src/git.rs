@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use saka_ports::{GitRemote, PortError};
 use serde_json::json;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -96,6 +96,71 @@ impl Git {
             .await
     }
 
+    fn command(&self, dir: &Path, args: &[&str]) -> Command {
+        let mut cmd = Command::new(&self.program);
+        cmd.arg("-C")
+            .arg(dir)
+            .args(args)
+            .env_clear()
+            .env("PATH", &self.path)
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "")
+            .env("SSH_ASKPASS", "");
+        cmd
+    }
+
+    // Reads at most `cap` bytes of stdout and kills git after that, so a huge diff stays bounded.
+    pub async fn local_capped(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        cap: usize,
+    ) -> Result<GitOutput, PortError> {
+        let op = args.first().copied().unwrap_or("git");
+        let unavailable = |e: std::io::Error| {
+            PortError::retryable(
+                "git_unavailable",
+                json!({ "op": op, "error": e.to_string() }),
+            )
+        };
+        let mut cmd = self.command(dir, args);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let read = async {
+            let mut child = cmd.spawn()?;
+            let mut stdout = Vec::new();
+            if let Some(pipe) = child.stdout.take() {
+                pipe.take(cap as u64 + 1).read_to_end(&mut stdout).await?;
+            }
+            let code = if stdout.len() > cap {
+                child.kill().await?;
+                Some(0)
+            } else {
+                child.wait().await?.code()
+            };
+            Ok::<_, std::io::Error>(GitOutput {
+                code,
+                stdout,
+                stderr: String::new(),
+            })
+        };
+        tokio::time::timeout(LOCAL_TIMEOUT, read)
+            .await
+            .map_err(|_| {
+                PortError::retryable(
+                    "git_timeout",
+                    json!({ "op": op, "secs": LOCAL_TIMEOUT.as_secs() }),
+                )
+            })?
+            .map_err(unavailable)
+    }
+
     async fn run(
         &self,
         dir: &Path,
@@ -111,20 +176,8 @@ impl Git {
                 json!({ "op": op, "name": name }),
             ));
         }
-        let mut cmd = Command::new(&self.program);
-        cmd.arg("-C")
-            .arg(dir)
-            .args(args)
-            .env_clear()
-            .env("PATH", &self.path)
-            .env("LANG", "C")
-            .env("LC_ALL", "C")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", "")
-            .env("SSH_ASKPASS", "")
-            .envs(extra.env.iter().copied())
+        let mut cmd = self.command(dir, args);
+        cmd.envs(extra.env.iter().copied())
             .stdin(if extra.input.is_some() {
                 Stdio::piped()
             } else {

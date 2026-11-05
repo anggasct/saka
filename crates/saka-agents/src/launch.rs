@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 pub const HEARTBEAT_MS: u64 = 10_000;
 pub const ARCHITECT_TOOLS: &str = "Read,Glob,Grep,LS,TodoWrite,Write,Edit,MultiEdit";
+pub const REVIEWER_TOOLS: &str = "Read,Glob,Grep,LS,TodoWrite";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaunchOptions<'a> {
@@ -15,6 +16,7 @@ pub struct LaunchOptions<'a> {
     pub resume: Option<&'a str>,
     pub author: &'a GitIdentity,
     pub add_dirs: &'a [PathBuf],
+    pub isolated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,7 +135,16 @@ pub fn memory_scope(dir: &Path) -> Result<String, UnsupportedPath> {
     }
 }
 
-fn session_settings(worktree: &Path) -> Result<String, UnsupportedPath> {
+fn session_settings(worktree: &Path, isolated: bool) -> Result<String, UnsupportedPath> {
+    if isolated {
+        // The checkout is untrusted: its hooks must not run and its CLAUDE.md must not be read.
+        return Ok(serde_json::json!({
+            "attribution": { "commit": "", "pr": "" },
+            "disableAllHooks": true,
+            "claudeMdExcludes": ["**"],
+        })
+        .to_string());
+    }
     Ok(serde_json::json!({
         // Claude Code's default commit trailer carries `<email>`, which no allow rule can match.
         "attribution": { "commit": "", "pr": "" },
@@ -163,13 +174,13 @@ pub fn claude(
         "--permission-prompt-tool",
         "stdio",
         "--setting-sources",
-        "project",
+        if options.isolated { "" } else { "project" },
         "--strict-mcp-config",
         "--settings",
     ]
     .map(String::from)
     .to_vec();
-    args.push(session_settings(&paths.worktree)?);
+    args.push(session_settings(&paths.worktree, options.isolated)?);
     for dir in options.add_dirs {
         args.extend(["--add-dir".to_string(), s(dir)]);
     }
@@ -277,6 +288,7 @@ mod tests {
                 resume: None,
                 author: &saka(),
                 add_dirs: &[],
+                isolated: false,
             },
         )
         .unwrap();
@@ -332,6 +344,7 @@ mod tests {
                     resume: None,
                     author: &author,
                     add_dirs,
+                    isolated: false,
                 },
             )
             .unwrap()
@@ -368,6 +381,7 @@ mod tests {
                 resume: None,
                 author: &octo(),
                 add_dirs: &[],
+                isolated: false,
             },
         )
         .unwrap();
@@ -407,6 +421,7 @@ mod tests {
                 resume: Some("cli-abc"),
                 author: &saka(),
                 add_dirs: &[],
+                isolated: false,
             },
         )
         .unwrap();
@@ -433,6 +448,7 @@ mod tests {
                     resume: None,
                     author: &octo(),
                     add_dirs: &[],
+                    isolated: false,
                 },
             )
             .unwrap();
@@ -530,6 +546,7 @@ mod tests {
                     resume: None,
                     author: &saka(),
                     add_dirs: &[],
+                    isolated: false,
                 },
             ),
             Err(UnsupportedPath(PathBuf::from("/data/[envs]/e-1/worktree")))

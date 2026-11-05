@@ -174,6 +174,7 @@ pub fn to_runner_event(session_id: SessionId, event: LogEvent) -> Option<RunnerE
             input_tokens: get(d, "input_tokens"),
             output_tokens: get(d, "output_tokens"),
             result_summary: get(d, "result_summary"),
+            result_text: get(d, "result_text"),
         },
         "cli_exited" => RunnerEventKind::CliExited {
             code: get(d, "code"),

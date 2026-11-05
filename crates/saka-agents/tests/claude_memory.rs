@@ -65,6 +65,10 @@ impl Fixture {
     }
 
     fn spec(&self) -> LaunchSpec {
+        self.spec_with(false)
+    }
+
+    fn spec_with(&self, isolated: bool) -> LaunchSpec {
         let settings = ClaudeSettings {
             command: "claude".into(),
             account: "default".into(),
@@ -94,6 +98,7 @@ impl Fixture {
             resume: None,
             author: &saka(),
             add_dirs: &[],
+            isolated,
         };
         launch::claude(&settings, &program, "conformance", &paths, vec![], &options).unwrap()
     }
@@ -221,4 +226,43 @@ fn a_session_loads_memory_only_from_its_worktree() {
     for marker in [PARENT, PARENT_DOT, ACCOUNT] {
         assert!(!scoped.contains(marker), "{marker} reached the session");
     }
+}
+
+#[test]
+fn a_reviewer_session_runs_no_repository_hook_and_reads_no_repository_memory() {
+    if std::env::var("SAKA_TEST_CLAUDE").as_deref() != Ok("1") {
+        println!("skipped: set SAKA_TEST_CLAUDE=1, or run `cargo xtask test-claude-memory`");
+        return;
+    }
+    let fx = Fixture::new();
+    let worktree = fx.root.join("worktree");
+    let marker = fx.root.join("hook-ran");
+    let hook = serde_json::json!([{ "hooks": [{
+        "type": "command",
+        "command": format!("touch {}", marker.display()),
+    }] }]);
+    std::fs::create_dir_all(worktree.join(".claude")).unwrap();
+    std::fs::write(
+        worktree.join(".claude").join("settings.json"),
+        serde_json::json!({ "hooks": { "SessionStart": hook, "UserPromptSubmit": hook } })
+            .to_string(),
+    )
+    .unwrap();
+
+    let control = first_request(&fx.spec_with(false));
+    assert!(
+        marker.exists() && control.contains(WORKTREE),
+        "the control launch must run the repository hook and read its memory, or this fixture proves nothing"
+    );
+    std::fs::remove_file(&marker).unwrap();
+
+    let reviewer = first_request(&fx.spec_with(true));
+    assert!(
+        !marker.exists(),
+        "a repository hook ran in a reviewer session"
+    );
+    assert!(
+        !reviewer.contains(WORKTREE),
+        "repository memory reached a reviewer session"
+    );
 }
