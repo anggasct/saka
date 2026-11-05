@@ -91,7 +91,7 @@ struct Claims {
 pub const JSON_MEDIA_TYPE: &str = "application/vnd.github+json";
 pub const RAW_MEDIA_TYPE: &str = "application/vnd.github.raw";
 
-pub(super) fn unavailable(status: Option<u16>, detail: &str) -> PortError {
+pub(crate) fn unavailable(status: Option<u16>, detail: &str) -> PortError {
     PortError::retryable(
         "scm_unavailable",
         json!({ "status": status, "detail": detail }),

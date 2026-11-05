@@ -18,8 +18,9 @@ use saka_ports::{
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
+use support::gitlab::{self, GitLabWorld, TOKEN};
 use support::{HEAD, MERGED, World, pr};
-use wiremock::matchers::{body_json, body_partial_json, method, path, query_param};
+use wiremock::matchers::{body_json, body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 const SECRET: &[u8] = b"conformance-secret-0123456789abcdef";
@@ -293,6 +294,224 @@ impl Harness for GitHubHarness {
     }
 }
 
+struct GitLabHarness {
+    w: GitLabWorld,
+}
+
+impl GitLabHarness {
+    async fn new() -> GitLabHarness {
+        let mut w = GitLabWorld::new().await;
+        w.gl = saka_scm::GitLab::new(w.client.clone(), std::sync::Arc::new(support::NoRepos))
+            .with_webhook_secret(SECRET.to_vec());
+        GitLabHarness { w }
+    }
+
+    fn state_of(&self, state: Change) -> &'static str {
+        match state {
+            Change::Open => "opened",
+            Change::Merged => "merged",
+            Change::Closed => "closed",
+        }
+    }
+}
+
+fn job_status(done: Option<&str>) -> &'static str {
+    match done {
+        Some("success") => "success",
+        Some(_) => "failed",
+        None => "running",
+    }
+}
+
+#[async_trait]
+impl Harness for GitLabHarness {
+    fn scm(&self) -> &dyn Scm {
+        &self.w.gl
+    }
+
+    fn repo(&self) -> RepoRef {
+        self.w.repo.clone()
+    }
+
+    fn integration(&self) -> &str {
+        "gitlab"
+    }
+
+    fn declared(&self) -> ScmCapabilities {
+        ScmCapabilities {
+            provider: "gitlab",
+            merge_methods: &[MergeMethod::Merge, MergeMethod::Squash],
+            webhook_signature: Some(saka_ports::WebhookSignature::SharedToken),
+            check_kinds: &[CheckKind::CheckRun, CheckKind::CommitStatus],
+            draft_change_requests: true,
+            delete_branch_after_merge: true,
+            commit_status: true,
+            user_authorship: false,
+            diagnostics: None,
+        }
+    }
+
+    async fn repository(&self, default_branch: &str) {
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp"))
+            .and(header("private-token", TOKEN))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "path_with_namespace": "acme/app", "web_url": "https://gitlab.example/acme/app",
+                "default_branch": default_branch,
+            })))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn missing_repository(&self, full_name: &str) {
+        let encoded = full_name.replace('/', "%2F");
+        Mock::given(method("GET"))
+            .and(path(format!("/projects/{encoded}").as_str()))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({ "message": "404 Project Not Found" })),
+            )
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change_already_open(&self, number: u64) {
+        Mock::given(method("POST"))
+            .and(path("/projects/acme%2Fapp/merge_requests"))
+            .and(body_partial_json(
+                json!({ "source_branch": BRANCH, "target_branch": "main" }),
+            ))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "message": [format!("Another open merge request already exists for this source branch: !{number}")],
+            })))
+            .mount(&self.w.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp/merge_requests"))
+            .and(query_param("source_branch", BRANCH))
+            .and(query_param("state", "opened"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([gitlab::mr(number, "opened")])),
+            )
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change(&self, number: u64, state: Change) {
+        let body = gitlab::mr(number, self.state_of(state));
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn checks_at(&self, sha: &str, checks: &[Check], pending_status: &str) {
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp/pipelines"))
+            .and(query_param("sha", sha))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 100 }])))
+            .mount(&self.w.server)
+            .await;
+        let jobs: Vec<Value> = checks
+            .iter()
+            .map(|c| json!({ "id": c.id, "name": c.name, "status": job_status(c.done) }))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp/pipelines/100/jobs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jobs))
+            .mount(&self.w.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/projects/acme%2Fapp/repository/commits/{sha}/statuses").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "id": 900, "name": pending_status, "status": "running", "target_url": "https://ci.example/1" },
+            ])))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn merge_answers(&self, number: u64, answer: MergeAnswer) {
+        let title = format!("Add the first step (#{number})");
+        let (status, body) = match answer {
+            MergeAnswer::Merged => (200, gitlab::mr(number, "merged")),
+            MergeAnswer::HeadChanged => (
+                409,
+                json!({ "message": "SHA does not match HEAD of source branch" }),
+            ),
+            MergeAnswer::NotMergeable => {
+                self.change(number, Change::Open).await;
+                (405, json!({ "message": "405 Method Not Allowed" }))
+            }
+        };
+        Mock::given(method("PUT"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/merge").as_str(),
+            ))
+            .and(body_json(json!({
+                "sha": HEAD, "squash": true, "should_remove_source_branch": false,
+                "merge_commit_message": title, "squash_commit_message": title,
+            })))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn status_accepted(&self, state: &str, description: &str) {
+        let state = if state == "failure" { "failed" } else { state };
+        Mock::given(method("POST"))
+            .and(path(
+                format!("/projects/acme%2Fapp/statuses/{HEAD}").as_str(),
+            ))
+            .and(body_json(json!({
+                "state": state, "name": "saka/verify", "description": description,
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 1 })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn branch_missing(&self) {
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/projects/acme%2Fapp/repository/branches/saka%2Ftwo-step%2Fs1",
+            ))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({ "message": "404 Branch Not Found" })),
+            )
+            .mount(&self.w.server)
+            .await;
+    }
+
+    fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>) {
+        let body = serde_json::to_vec(&json!({
+            "object_kind": "pipeline",
+            "object_attributes": { "sha": HEAD, "status": "success" },
+            "merge_request": numbers.first().map(|iid| json!({ "iid": iid })),
+            "project": { "path_with_namespace": "acme/app" },
+        }))
+        .unwrap();
+        let mut headers = vec![
+            ("X-Gitlab-Event".to_string(), "Pipeline Hook".to_string()),
+            ("Idempotency-Key".to_string(), "9f1c-delivery".to_string()),
+        ];
+        let token = match signing {
+            Signing::Valid | Signing::UpperHex => Some(String::from_utf8(SECRET.to_vec()).unwrap()),
+            Signing::Wrong => Some("another-secret-0123456789abcdef0123".to_string()),
+            Signing::Missing => None,
+        };
+        if let Some(t) = token {
+            headers.push(("X-Gitlab-Token".to_string(), t));
+        }
+        (headers, body)
+    }
+}
+
 fn merge_request(h: &dyn Harness, number: u64) -> MergeRequest {
     MergeRequest {
         repo: h.repo(),
@@ -545,6 +764,9 @@ async fn webhook_with_a_bad_or_missing_signature_is_refused(h: &dyn Harness) {
 }
 
 async fn webhook_signature_compare_ignores_hex_case(h: &dyn Harness) {
+    if h.declared().webhook_signature != Some(saka_ports::WebhookSignature::HmacSha256) {
+        return;
+    }
     let (headers, body) = h.ci_webhook(&[7], Signing::UpperHex);
     assert!(
         h.scm()
@@ -580,8 +802,8 @@ async fn capabilities_match_the_declared_matrix(h: &dyn Harness) {
 }
 
 macro_rules! conformance {
-    ($harness:ident: $($case:ident),* $(,)?) => {
-        mod github_conformance {
+    ($module:ident, $harness:ident: $($case:ident),* $(,)?) => {
+        mod $module {
             use super::*;
             $(
                 #[tokio::test]
@@ -594,7 +816,26 @@ macro_rules! conformance {
     };
 }
 
-conformance!(GitHubHarness:
+conformance!(github_conformance, GitHubHarness:
+    repository_info_reads_the_default_branch,
+    open_change_request_is_idempotent_for_the_same_branch,
+    change_request_snapshot_normalizes_checks_and_statuses,
+    latest_rerun_of_a_check_wins,
+    checks_are_read_for_a_commit,
+    merged_change_reports_its_merge_commit,
+    merge_reports_its_outcomes,
+    merge_at_a_stale_head_is_head_changed,
+    merge_of_an_unmergeable_change_is_not_mergeable,
+    delete_of_a_missing_branch_succeeds,
+    unknown_repository_is_inaccessible,
+    webhook_with_a_valid_signature_parses_its_targets,
+    webhook_with_a_bad_or_missing_signature_is_refused,
+    webhook_signature_compare_ignores_hex_case,
+    commit_status_is_reported_for_a_head,
+    capabilities_match_the_declared_matrix,
+);
+
+conformance!(gitlab_conformance, GitLabHarness:
     repository_info_reads_the_default_branch,
     open_change_request_is_idempotent_for_the_same_branch,
     change_request_snapshot_normalizes_checks_and_statuses,
