@@ -132,9 +132,9 @@ kind = "telegram"                  # telegram | discord
 token_file = "~/.config/saka/notify/ops.token"   # the bot token; mode 0600, owned by you (else config_key_file_mode)
 chat = "-1001234567890"            # telegram: the chat id (an integer, negative for groups); discord: the channel id (digits)
 # api_url = "https://api.telegram.org"   # optional; default per kind (discord: https://discord.com/api/v10)
-actions = true                     # telegram only: put a Retry or Cancel button on a blocked-task message and listen for the press
+actions = true                     # put a Retry or Cancel button on a blocked-task message and listen for the press
 allowed_users = ["123456789"]      # required with actions: the chat user ids (digits, at most 8) allowed to press; nobody else can act
-                                   # Saka long-polls Telegram from this host: no inbound port is opened
+                                   # Saka long-polls Telegram (or holds a Discord Gateway connection) from this host: no inbound port is opened
 
 # Hooks run something when an event happens in a project's loop (the [hooks] table above is the
 # inbound webhook listener; these are outbound). Hooks live only here, never in saka.toml or the repo.

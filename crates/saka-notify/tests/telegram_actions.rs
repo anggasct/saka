@@ -188,7 +188,7 @@ fn start(server: &MockServer, handler: &Arc<Recorder>) -> Running {
     let chat = notifier(server, Some(vec![OPERATOR.to_string()]));
     let (stop, rx) = watch::channel(false);
     let dynamic: Arc<dyn ChatActions> = handler.clone();
-    let tasks = chat.spawn_pollers(&dynamic, &rx);
+    let tasks = chat.spawn_listeners(&dynamic, &rx);
     assert_eq!(tasks.len(), 1);
     Running { stop, tasks }
 }
@@ -334,7 +334,7 @@ async fn a_rejected_token_stops_the_poller_without_hammering_the_platform() {
     let chat = notifier(&server, Some(vec![OPERATOR.to_string()]));
     let (_stop, rx) = watch::channel(false);
     let dynamic: Arc<dyn ChatActions> = handler.clone();
-    let tasks = chat.spawn_pollers(&dynamic, &rx);
+    let tasks = chat.spawn_listeners(&dynamic, &rx);
     for task in tasks {
         tokio::time::timeout(Duration::from_secs(2), task)
             .await
@@ -351,7 +351,7 @@ async fn only_channels_with_actions_get_a_poller_and_a_button() {
     let plain = notifier(&server, None);
     let (_stop, rx) = watch::channel(false);
     let dynamic: Arc<dyn ChatActions> = handler.clone();
-    assert!(plain.spawn_pollers(&dynamic, &rx).is_empty());
+    assert!(plain.spawn_listeners(&dynamic, &rx).is_empty());
 
     Mock::given(method("POST"))
         .and(path(api("sendMessage")))

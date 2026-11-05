@@ -47,11 +47,13 @@ zeroize.workspace = true
 embed-web = ["saka-api/embed-web"]
 
 [dev-dependencies]
+futures-util.workspace = true
 rusqlite.workspace = true
 saka-spec = { path = "../saka-spec" }
 saka-testkit = { path = "../saka-testkit" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite.workspace = true
 wiremock.workspace = true
 
 [[test]]

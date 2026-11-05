@@ -8,7 +8,7 @@ use serde_json::json;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::discord::Discord;
+use crate::discord::{Discord, Gateway};
 use crate::render::{Lang, button, render};
 use crate::telegram::{PollTiming, Poller, Telegram};
 
@@ -114,27 +114,41 @@ impl ChatNotifier {
         })
     }
 
-    pub fn spawn_pollers(
+    pub fn spawn_listeners(
         &self,
         handler: &Arc<dyn ChatActions>,
         stop: &watch::Receiver<bool>,
     ) -> Vec<JoinHandle<()>> {
         let mut tasks = Vec::new();
         for (name, channel) in &self.channels {
-            let (Sender::Telegram(telegram), Some(allowed)) =
-                (&channel.sender, &channel.allowed_users)
-            else {
+            let Some(allowed) = &channel.allowed_users else {
                 continue;
             };
-            let poller = Poller {
-                telegram: telegram.clone(),
-                channel: name.clone(),
-                allowed: allowed.clone(),
-                lang: self.language,
-                handler: handler.clone(),
-                timing: self.poll,
+            let task = match &channel.sender {
+                Sender::Telegram(telegram) => tokio::spawn(
+                    Poller {
+                        telegram: telegram.clone(),
+                        channel: name.clone(),
+                        allowed: allowed.clone(),
+                        lang: self.language,
+                        handler: handler.clone(),
+                        timing: self.poll,
+                    }
+                    .run(stop.clone()),
+                ),
+                Sender::Discord(discord) => tokio::spawn(
+                    Gateway {
+                        discord: discord.clone(),
+                        channel: name.clone(),
+                        allowed: allowed.clone(),
+                        lang: self.language,
+                        handler: handler.clone(),
+                        timing: self.poll,
+                    }
+                    .run(stop.clone()),
+                ),
             };
-            tasks.push(tokio::spawn(poller.run(stop.clone())));
+            tasks.push(task);
         }
         tasks
     }
@@ -156,7 +170,10 @@ impl Notifier for ChatNotifier {
             .and_then(|_| button(self.language, notification));
         match &channel.sender {
             Sender::Telegram(t) => t.send(&text, button.as_ref()).await?,
-            Sender::Discord(d) => d.send(&text, &notification.dedupe_key).await?,
+            Sender::Discord(d) => {
+                d.send(&text, &notification.dedupe_key, button.as_ref())
+                    .await?;
+            }
         }
         tracing::info!(
             channel = %notification.channel,

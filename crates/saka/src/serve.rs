@@ -906,7 +906,7 @@ async fn run(
     };
     let chat_pollers = chat_notifier.map_or_else(Vec::new, |chat| {
         let actions: Arc<dyn saka_ports::ChatActions> = engine.clone();
-        chat.spawn_pollers(&actions, &stopped)
+        chat.spawn_listeners(&actions, &stopped)
     });
     let running = tokio::spawn(engine.clone().run(WORKERS, stopped));
     shutdown_signal().await;
