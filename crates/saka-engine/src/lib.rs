@@ -18,6 +18,7 @@ pub mod recipe;
 mod reconciler;
 mod register;
 mod reload;
+pub mod review_packet;
 mod runner;
 mod secrets;
 mod text;

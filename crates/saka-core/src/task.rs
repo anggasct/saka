@@ -2658,13 +2658,20 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
         code: b.code.as_str().to_string(),
         params: b.params.clone(),
     };
+    let owner = RunOwner::StageRun {
+        work_item_id: task.item.id,
+        stage_run_id: run.id,
+    };
+    let reviewing = run.stage == Stage::Review;
+    // A reviewer never inherits another run's conversation: only its own session is visible.
+    let session = task
+        .session
+        .as_ref()
+        .filter(|s| !reviewing || s.owner == owner);
     Some(RunView {
-        owner: RunOwner::StageRun {
-            work_item_id: task.item.id,
-            stage_run_id: run.id,
-        },
+        owner,
         project_id: task.item.project_id,
-        session: task.session.as_ref(),
+        session,
         permissions: &task.permissions,
         prior_usage: task.prior_usage,
         budget: run.budget,
@@ -2677,10 +2684,14 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
                 .filter(|b| b.resolution.is_some())
                 .map(|b| (b.code, b.params.clone())),
         },
-        packet: Prompt::WorkPacket {
-            retry_of: blocker
-                .filter(|_| run.trigger == Trigger::Manual)
-                .map(coded),
+        packet: if reviewing {
+            Prompt::ReviewPacket
+        } else {
+            Prompt::WorkPacket {
+                retry_of: blocker
+                    .filter(|_| run.trigger == Trigger::Manual)
+                    .map(coded),
+            }
         },
     })
 }

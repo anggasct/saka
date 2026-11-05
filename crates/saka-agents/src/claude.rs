@@ -26,6 +26,14 @@ pub fn cut(text: &str, max: usize) -> String {
     }
 }
 
+pub fn cut_bytes(text: &str, max: usize) -> String {
+    let end = (0..=max.min(text.len()))
+        .rev()
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(0);
+    text[..end].to_string()
+}
+
 pub fn parse(line: &str, turn: u32) -> Output {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
         return Output::Event("activity", json!({ "category": "other", "summary": line }));
@@ -92,6 +100,7 @@ pub fn parse(line: &str, turn: u32) -> Output {
                     "input_tokens": v["usage"]["input_tokens"].as_i64(),
                     "output_tokens": v["usage"]["output_tokens"].as_i64(),
                     "result_summary": v["result"].as_str().unwrap_or_default(),
+                    "result_text": v["result"].as_str().unwrap_or_default(),
                 }),
                 num_turns: v["num_turns"].as_i64(),
             }
@@ -156,6 +165,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_byte_cut_never_splits_a_character() {
+        assert_eq!(cut_bytes("abc", 10), "abc");
+        assert_eq!(cut_bytes("aéb", 2), "a");
+        assert_eq!(cut_bytes("aéb", 3), "aé");
+        assert_eq!(cut_bytes("é", 0), "");
+    }
+
+    #[test]
     fn stream_json_lines_map_to_runner_events() {
         assert_eq!(
             parse(
@@ -183,7 +200,7 @@ mod tests {
                 2
             ),
             Output::TurnEnded {
-                data: json!({ "turn": 2, "status": "success", "cost_usd_micros": 12300, "input_tokens": 10, "output_tokens": 5, "result_summary": "done" }),
+                data: json!({ "turn": 2, "status": "success", "cost_usd_micros": 12300, "input_tokens": 10, "output_tokens": 5, "result_summary": "done", "result_text": "done" }),
                 num_turns: Some(3),
             }
         );

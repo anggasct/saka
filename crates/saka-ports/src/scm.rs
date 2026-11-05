@@ -129,7 +129,7 @@ pub struct ChangeSignal {
     pub kind: SignalKind,
 }
 
-pub const MAX_REVIEW_BODY_CHARS: usize = 60_000;
+pub const MAX_REVIEW_BODY_CHARS: usize = saka_core::review::MAX_REVIEW_BODY_CHARS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewPost {

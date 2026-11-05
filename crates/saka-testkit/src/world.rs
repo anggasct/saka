@@ -16,16 +16,16 @@ use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_core::vocab::{HostTool, Tool};
 use saka_ports::{
-    Agents, Blob, ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary,
-    ChangedPaths, Clock, CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob, DocCommit,
-    DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite, DocsRequest, EnvRef,
-    Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
-    OpenChangeRequest, OpenedChange, PortError, PortResult, PostedReview, PrepareRequest,
-    PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
-    RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo, RepoRef, ReviewPost,
-    RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed, SecretStore,
-    SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains, WebhookDelivery,
-    WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    Agents, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal, ChangeSnapshot,
+    ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit, DeviceCode,
+    DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree,
+    DocWrite, DocsRequest, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession,
+    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
+    Reattached, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo,
+    RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed,
+    SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains,
+    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -210,6 +210,8 @@ struct State {
     command_output: HashMap<String, String>,
     statuses: Vec<(String, StatusReport)>,
     statuses_refused: bool,
+    change_diffs: HashMap<String, ChangeDiff>,
+    change_diff_requests: Vec<String>,
     reviews: Vec<ReviewPost>,
     review_outages: u32,
     reviews_refused: bool,
@@ -368,6 +370,8 @@ impl FakeWorld {
                 command_output: HashMap::new(),
                 statuses: Vec::new(),
                 statuses_refused: false,
+                change_diffs: HashMap::new(),
+                change_diff_requests: Vec::new(),
                 reviews: Vec::new(),
                 review_outages: 0,
                 reviews_refused: false,
@@ -706,6 +710,14 @@ impl FakeWorld {
 
     pub fn statuses(&self) -> Vec<(String, StatusReport)> {
         self.state().statuses.clone()
+    }
+
+    pub fn script_change_diff(&self, head_sha: &str, diff: ChangeDiff) {
+        self.state().change_diffs.insert(head_sha.to_string(), diff);
+    }
+
+    pub fn change_diff_requests(&self) -> Vec<String> {
+        self.state().change_diff_requests.clone()
     }
 
     pub fn reviews(&self) -> Vec<ReviewPost> {
@@ -1106,6 +1118,7 @@ impl State {
                     input_tokens: Some(usage.input_tokens),
                     output_tokens: Some(usage.output_tokens),
                     result_summary: Some(format!("turn {turn} done")),
+                    result_text: None,
                 },
             );
         };
@@ -1191,11 +1204,14 @@ impl Environments for FakeWorld {
                 base_sha: w.base_sha.clone(),
             });
         }
-        let base = s
-            .refs(&request.repo.full_name)
-            .get(&request.base_branch)
-            .cloned()
-            .ok_or_else(|| PortError::permanent("base_branch_missing", json!({})))?;
+        let base = match &request.checkout {
+            Checkout::Change { head_sha, .. } => head_sha.clone(),
+            _ => s
+                .refs(&request.repo.full_name)
+                .get(&request.base_branch)
+                .cloned()
+                .ok_or_else(|| PortError::permanent("base_branch_missing", json!({})))?,
+        };
         s.prepared.push(Prepared {
             environment_id: request.environment_id,
             repo: request.repo.full_name.clone(),
@@ -1220,6 +1236,36 @@ impl Environments for FakeWorld {
             worktree_path: path,
             base_sha: base,
         })
+    }
+
+    async fn change_diff(
+        &self,
+        _repo: &RepoRef,
+        _base_branch: &str,
+        head_sha: &str,
+        max_bytes: usize,
+    ) -> PortResult<ChangeDiff> {
+        let mut s = self.state();
+        s.change_diff_requests.push(head_sha.to_string());
+        let mut diff = s
+            .change_diffs
+            .get(head_sha)
+            .cloned()
+            .unwrap_or_else(|| ChangeDiff {
+                text: "diff --git a/src/lib.rs b/src/lib.rs\n+fn changed() {}\n".to_string(),
+                files: vec!["src/lib.rs".to_string()],
+                truncated: false,
+                omitted_files: 0,
+            });
+        if diff.text.len() > max_bytes {
+            let end = (0..=max_bytes)
+                .rev()
+                .find(|i| diff.text.is_char_boundary(*i))
+                .unwrap_or(0);
+            diff.text.truncate(end);
+            diff.truncated = true;
+        }
+        Ok(diff)
     }
 
     async fn prepare_docs(&self, request: &DocsRequest) -> PortResult<PreparedDocs> {
@@ -2466,6 +2512,7 @@ impl Agents for FakeWorld {
                     input_tokens: Some(1),
                     output_tokens: Some(1),
                     result_summary: None,
+                    result_text: None,
                 },
             );
         }

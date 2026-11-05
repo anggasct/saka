@@ -18,6 +18,7 @@ pub mod reconcile;
 pub mod redact;
 pub mod rejection;
 pub mod resume;
+pub mod review;
 pub mod rule;
 pub mod scope;
 pub mod secret;

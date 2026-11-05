@@ -1410,3 +1410,153 @@ async fn a_branch_tip_is_fetched_first_and_a_directory_lists_only_its_own_files(
     let e = w.repos.branch_tip(&w.repo, "-x").await.unwrap_err();
     assert_eq!(e.code, "git_argument_invalid");
 }
+
+fn outside_head(w: &World, branch: &str, pull_ref: &str) -> String {
+    git(&w.other, &["checkout", "-q", "-b", branch, "main"]);
+    let head = commit_at(&w.other, "src/fork.rs", "fn fork() {}\n");
+    git(
+        &w.other,
+        &["push", "-q", "origin", &format!("{branch}:{pull_ref}")],
+    );
+    git(&w.other, &["checkout", "-q", "main"]);
+    head
+}
+
+#[tokio::test]
+async fn a_change_checkout_is_detached_at_a_head_only_the_pull_ref_serves() {
+    let w = World::new();
+    let head = outside_head(&w, "forkish", "refs/pull/1/head");
+    let request = |head_ref: Option<&str>| PrepareRequest {
+        environment_id: EnvironmentId(Uuid::from_u128(1)),
+        repo: w.repo.clone(),
+        checkout: Checkout::Change {
+            head_sha: head.clone(),
+            head_ref: head_ref.map(String::from),
+        },
+        base_branch: "main".into(),
+    };
+
+    let unseen = w.repos.prepare(&request(None)).await.unwrap_err();
+    assert_eq!(
+        (unseen.code.as_str(), unseen.retryable),
+        ("commit_missing", false)
+    );
+    for bad in ["-x", "heads/main", "refs/pull/1/head:refs/heads/x"] {
+        let refused = w.repos.prepare(&request(Some(bad))).await.unwrap_err();
+        assert_eq!(refused.code, "git_argument_invalid", "{bad}");
+    }
+    let wrong = w
+        .repos
+        .prepare(&request(Some("refs/pull/2/head")))
+        .await
+        .unwrap_err();
+    assert!(wrong.code == "git_failed" || wrong.code == "commit_missing");
+
+    let prepared = w
+        .repos
+        .prepare(&request(Some("refs/pull/1/head")))
+        .await
+        .unwrap();
+    let wt = PathBuf::from(&prepared.worktree_path);
+    assert_eq!(prepared.base_sha, head);
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&wt, &["branch", "--show-current"]), "");
+    assert!(wt.join("src/fork.rs").is_file());
+}
+
+#[tokio::test]
+async fn a_change_checkout_of_a_branch_head_needs_no_change_ref() {
+    let w = World::new();
+    git(&w.other, &["checkout", "-q", "-b", "feature"]);
+    let head = commit_at(&w.other, "feature.rs", "fn f() {}\n");
+    git(&w.other, &["push", "-q", "origin", "feature"]);
+    let env = w
+        .prepare_with(
+            1,
+            Checkout::Change {
+                head_sha: head.clone(),
+                head_ref: None,
+            },
+        )
+        .await;
+    assert_eq!(
+        git(&PathBuf::from(&env.worktree_path), &["rev-parse", "HEAD"]),
+        head
+    );
+}
+
+#[tokio::test]
+async fn a_change_diff_is_the_clean_diff_from_the_merge_base_and_is_cut_at_the_limit() {
+    let w = World::new();
+    let head = outside_head(&w, "forkish", "refs/pull/1/head");
+    git(&w.other, &["checkout", "-q", "forkish"]);
+    commit_at(&w.other, "src/second.rs", &"let x = 1;\n".repeat(200));
+    commit_at(&w.other, "src/third.rs", &"let y = 2;\n".repeat(200));
+    git(
+        &w.other,
+        &["push", "-q", "-f", "origin", "forkish:refs/pull/1/head"],
+    );
+    let head = {
+        let _ = head;
+        git(&w.other, &["rev-parse", "HEAD"])
+    };
+    git(&w.other, &["checkout", "-q", "main"]);
+    commit(&w.other, "NEWS.md", "moved on\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    w.prepare_with(
+        1,
+        Checkout::Change {
+            head_sha: head.clone(),
+            head_ref: Some("refs/pull/1/head".into()),
+        },
+    )
+    .await;
+
+    let whole = w
+        .repos
+        .change_diff(&w.repo, "main", &head, 1_000_000)
+        .await
+        .unwrap();
+    assert!(!whole.truncated);
+    assert_eq!(whole.omitted_files, 0);
+    assert_eq!(
+        whole.files,
+        ["src/fork.rs", "src/second.rs", "src/third.rs"]
+    );
+    assert!(
+        whole
+            .text
+            .contains("diff --git a/src/fork.rs b/src/fork.rs")
+    );
+    assert!(whole.text.contains("+fn fork() {}"));
+    assert!(
+        !whole.text.contains("NEWS.md"),
+        "the base's own change is not the change's"
+    );
+    assert!(w.log().contains("--no-ext-diff"));
+    assert!(w.log().contains("--no-textconv"));
+
+    let cut = w
+        .repos
+        .change_diff(&w.repo, "main", &head, 400)
+        .await
+        .unwrap();
+    assert!(cut.truncated);
+    assert!(cut.text.len() <= 400 && cut.text.ends_with('\n'));
+    assert_eq!(cut.files.len(), 3);
+    let shown = cut.text.matches("diff --git ").count();
+    assert!(cut.omitted_files >= 1 && cut.omitted_files == 3 - shown);
+
+    let missing = w
+        .repos
+        .change_diff(&w.repo, "main", &"1".repeat(40), 100)
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "commit_missing");
+    let invalid = w
+        .repos
+        .change_diff(&w.repo, "-x", &head, 100)
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code, "git_argument_invalid");
+}

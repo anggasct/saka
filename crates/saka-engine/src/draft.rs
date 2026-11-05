@@ -1041,7 +1041,9 @@ impl Engine {
             | Prompt::Uncommitted { .. }
             | Prompt::OutOfScope { .. }
             | Prompt::DocsUncommitted { .. }
-            | Prompt::DocsOutOfScope { .. } => {
+            | Prompt::DocsOutOfScope { .. }
+            | Prompt::ReviewPacket
+            | Prompt::VerdictFormat { .. } => {
                 return Err(PortError::permanent(
                     "prompt_invalid",
                     json!({ "prompt": "task" }),

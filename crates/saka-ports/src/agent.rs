@@ -9,10 +9,13 @@ use serde_json::Value;
 use crate::PortResult;
 use crate::env::EnvRef;
 
+pub const MAX_RESULT_TEXT_BYTES: usize = 32 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchProfile {
     Task,
     Architect { cwd: String },
+    Reviewer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +140,7 @@ pub enum RunnerEventKind {
         input_tokens: Option<i64>,
         output_tokens: Option<i64>,
         result_summary: Option<String>,
+        result_text: Option<String>,
     },
     CliExited {
         code: Option<i32>,

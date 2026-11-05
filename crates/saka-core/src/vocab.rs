@@ -92,6 +92,9 @@ vocab!(StageRunState {
     Cancelled => "cancelled",
 });
 vocab!(Trigger { Auto => "auto", Manual => "manual" });
+vocab!(ReviewOutcome { Approved => "approved", ChangesRequested => "changes_requested", SpecUnclear => "spec_unclear" });
+vocab!(Severity { Blocker => "blocker", Major => "major", Minor => "minor", Nit => "nit" });
+vocab!(ReviewBasis { Step => "step", Spec => "spec", None => "none" });
 vocab!(ReviewEvent { Approve => "approve", RequestChanges => "request_changes", Comment => "comment" });
 vocab!(ReloadTrigger { Poll => "poll", Operator => "operator" });
 vocab!(ReloadOutcome { Changed => "changed", Unchanged => "unchanged" });

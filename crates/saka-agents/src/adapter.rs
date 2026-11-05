@@ -125,6 +125,7 @@ impl ClaudeAgents {
             .map_err(|e| io_error("worktree_unreadable", &e))?;
         let (cwd, tools) = match &launch.profile {
             LaunchProfile::Task => (worktree.clone(), None),
+            LaunchProfile::Reviewer => (worktree.clone(), Some(launch::REVIEWER_TOOLS)),
             LaunchProfile::Architect { cwd } => {
                 let dir = std::fs::canonicalize(worktree.join(cwd))
                     .map_err(|e| io_error("worktree_unreadable", &e))?;
@@ -154,7 +155,7 @@ impl ClaudeAgents {
                         .map_err(|e| io_error("docs_dir_unreadable", &e))
                 })
                 .collect::<PortResult<Vec<_>>>()?,
-            LaunchProfile::Architect { .. } => Vec::new(),
+            LaunchProfile::Architect { .. } | LaunchProfile::Reviewer => Vec::new(),
         };
         let options = LaunchOptions {
             cwd: &cwd,
@@ -163,6 +164,7 @@ impl ClaudeAgents {
             resume: launch.resume_cli_session_id.as_deref(),
             author: &launch.author,
             add_dirs: &add_dirs,
+            isolated: launch.profile == LaunchProfile::Reviewer,
         };
         let mut spec = launch::claude(
             &self.cfg.claude,
@@ -178,6 +180,10 @@ impl ClaudeAgents {
                 json!({ "path": path.to_string_lossy() }),
             )
         })?;
+        // A reviewer reads untrusted code: nothing beyond the base env, not even operator extras.
+        if launch.profile == LaunchProfile::Reviewer {
+            return Ok((spec, paths));
+        }
         for (k, v) in &self.cfg.extra_env {
             spec.env.insert(k.clone(), v.clone());
         }
@@ -706,5 +712,73 @@ mod tests {
             .err()
             .unwrap_or_else(|| panic!("an architect cwd outside the worktree must be refused"));
         assert_eq!(refused.code, "session_cwd_invalid");
+    }
+
+    #[test]
+    fn a_reviewer_launch_is_read_only_ignores_the_repository_and_carries_no_recipe_env_or_secret() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .join("e-1");
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap_or_else(|e| panic!("{e}"));
+        let mut agents = agents(dir.path());
+        agents.cfg.extra_env = vec![("OPERATOR_EXTRA".into(), "1".into())];
+        let mut reviewer = launch(&root, LaunchProfile::Reviewer, Some("opus"));
+        reviewer.environment.extra_dirs = vec![saka_ports::ExtraDir {
+            path: worktree.to_string_lossy().into_owned(),
+            writable: true,
+        }];
+        let (spec, _paths) = agents
+            .launch_spec(Path::new("/usr/bin/claude"), &reviewer)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let settings = "{\"attribution\":{\"commit\":\"\",\"pr\":\"\"},\"claudeMdExcludes\":[\"**\"],\"disableAllHooks\":true}";
+        assert_eq!(
+            spec.args,
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "manual",
+                "--permission-prompt-tool",
+                "stdio",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--settings",
+                settings,
+                "--tools",
+                "Read,Glob,Grep,LS,TodoWrite",
+                "--model",
+                "opus",
+            ]
+        );
+        assert_eq!(spec.cwd, worktree.to_string_lossy());
+        let keys: Vec<&str> = spec.env.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "CLAUDE_CONFIG_DIR",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
+                "HOME",
+                "LANG",
+                "PATH",
+                "TERM",
+                "TMPDIR",
+            ]
+        );
+        assert_eq!(spec.env["PATH"], "/usr/bin:/bin");
+        assert_eq!(spec.secrets_path, None);
+        assert!(!spec.args.contains(&"--add-dir".to_string()));
+        assert!(!spec.args.contains(&"--resume".to_string()));
     }
 }
