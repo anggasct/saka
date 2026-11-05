@@ -44,6 +44,17 @@ const ready = detail(
   }),
 );
 
+const BLOCKER = "0193f0c4-1b2a-7c3d-9e8f-001122334488";
+
+const BASE_BLOCKER = {
+  id: BLOCKER,
+  code: "session_failed",
+  params: {},
+  opened_at: "2026-10-31T10:05:00.000Z",
+  stage: "dev",
+  primary_action: { kind: "retry", params: {} },
+};
+
 const blocked = detail(
   task(1, {
     state: "blocked",
@@ -207,7 +218,7 @@ describe("task actions", () => {
 
   it("retries from the blocker with a reason", async () => {
     const { requests } = fakeApi(
-      routes(() => blocked, { [`${DETAIL}/actions/retry`]: ACCEPTED }),
+      routes(() => blocked, { [`${DETAIL}/actions/primary`]: ACCEPTED }),
     );
     renderWithProviders(<TaskPage workItemId={ID} />);
     const card = await screen.findByRole("region", { name: "Blocker" });
@@ -227,22 +238,151 @@ describe("task actions", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
-    expect(posts(requests, "retry").map((r) => r.body)).toEqual([
-      { reason: "flaky" },
+    expect(posts(requests, "retry")).toEqual([]);
+    expect(posts(requests, "primary").map((r) => r.body)).toEqual([
+      { blocker_id: BLOCKER, reason: "flaky" },
     ]);
+  });
+
+  it("offers the primary action once on a blocked task and the other action in the header", async () => {
+    fakeApi(routes(() => blocked));
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    const header = await screen.findByRole("banner");
+    expect(within(card).getAllByRole("button")).toHaveLength(1);
+    expect(
+      within(header).queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(header).getByRole("button", { name: "Cancel task" }),
+    ).toBeInTheDocument();
+  });
+
+  it("cancels from the blocker when cancel is the primary action", async () => {
+    const closed = detail({
+      ...blocked,
+      available_actions: ["cancel"],
+      blocker: {
+        ...BASE_BLOCKER,
+        code: "change_closed",
+        params: { number: 12 },
+        primary_action: { kind: "cancel", params: {} },
+      },
+    });
+    const { requests } = fakeApi(
+      routes(() => closed, { [`${DETAIL}/actions/primary`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    expect(
+      within(card).getByText("The pull request was closed without merging."),
+    ).toBeInTheDocument();
+    const header = await screen.findByRole("banner");
+    expect(within(header).queryByRole("button")).not.toBeInTheDocument();
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Cancel task" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "closed");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Cancel the task" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests, "primary")).toHaveLength(1);
+    });
+    expect(posts(requests, "primary")[0]?.body).toEqual({
+      blocker_id: BLOCKER,
+      reason: "closed",
+    });
+  });
+
+  for (const [kind, code, href, name] of [
+    [
+      "set_secret",
+      "secret_missing",
+      `/settings/${PROJECT_ID}`,
+      "Set the secrets",
+    ],
+    [
+      "link_account",
+      "user_link_required",
+      `/settings/${PROJECT_ID}`,
+      "Link the account",
+    ],
+    [
+      "set_user_token",
+      "user_token_invalid",
+      `/settings/${PROJECT_ID}`,
+      "Store a token",
+    ],
+    [
+      "edit_spec",
+      "spec_unclear",
+      `/docs/${PROJECT_ID}?path=${encodeURIComponent(spec.path)}`,
+      "Edit the spec",
+    ],
+  ] as const) {
+    it(`sends ${kind} to where the operator can do it`, async () => {
+      const guided = detail({
+        ...blocked,
+        blocker: {
+          ...BASE_BLOCKER,
+          code,
+          params: { names: ["NPM_TOKEN"], cause: "missing" },
+          primary_action: { kind, params: {} },
+        },
+      });
+      fakeApi(routes(() => guided));
+      renderWithProviders(<TaskPage workItemId={ID} />);
+      const card = await screen.findByRole("region", { name: "Blocker" });
+      expect(await within(card).findByRole("link", { name })).toHaveAttribute(
+        "href",
+        href,
+      );
+      expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    });
+  }
+
+  it("says the blocker is gone when the primary action is late", async () => {
+    const { requests } = fakeApi(
+      routes(() => blocked, {
+        [`${DETAIL}/actions/primary`]: problem(409, "blocker_not_open", {
+          blocker_id: BLOCKER,
+        }),
+      }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    await userEvent.click(within(card).getByRole("button", { name: "Retry" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "late");
+    const reads = detailReads(requests);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Retry the stage" }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "This blocker is no longer open; the task has moved on.",
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(detailReads(requests)).toBeGreaterThan(reads);
+    });
   });
 
   it("explains the manual retry limit", async () => {
     fakeApi(
       routes(() => blocked, {
-        [`${DETAIL}/actions/retry`]: problem(409, "retry_limit_reached", {
+        [`${DETAIL}/actions/primary`]: problem(409, "retry_limit_reached", {
           stage: "dev",
           limit: 3,
         }),
       }),
     );
     renderWithProviders(<TaskPage workItemId={ID} />);
-    const dialog = await open("Retry");
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    await userEvent.click(within(card).getByRole("button", { name: "Retry" }));
+    const dialog = screen.getByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Reason"), "again");
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Retry the stage" }),

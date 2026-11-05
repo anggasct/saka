@@ -106,6 +106,7 @@ const tasks = [
       },
       opened_at: "2026-10-31T10:05:00.000Z",
       stage: "merge",
+      primary_action: { kind: "retry", params: {} },
     },
   }),
   task(2, { state: "in_stage", stage: "dev", stage_phase: "running_session" }),
@@ -200,7 +201,9 @@ for (const width of [375, 1280]) {
     await expect(
       page.getByRole("heading", { level: 1, name: "Step S1" }),
     ).toBeVisible();
-    await expect(page.getByRole("region", { name: "Blocker" })).toBeVisible();
+    const blocker = page.getByRole("region", { name: "Blocker" });
+    await expect(blocker).toBeVisible();
+    await expect(blocker.getByRole("button", { name: "Retry" })).toBeVisible();
     await noOverflow(page);
     const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
     expect(results.violations).toEqual([]);

@@ -120,6 +120,7 @@ const blocked = task(2, {
     params: {},
     opened_at: AT,
     stage: "dev",
+    primary_action: { kind: "retry", params: {} },
   },
   available_actions: ["retry", "cancel"],
 });
