@@ -524,6 +524,49 @@ fn a_failed_check_at_the_merge_commit_shows_the_gate_of_that_commit() {
 }
 
 #[test]
+fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str("\n[workflow]\npreset = \"build_only\"\n");
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    let mut cfg = SimConfig::default();
+    cfg.operator.merge = false;
+    let mut api = Api::with(Sim::multi_repo(cfg, &layout));
+    let project = api.sim.project_id.0;
+    let shown = api.get(&format!("/api/v1/projects/{project}"));
+    assert_eq!(
+        shown.body["workflow"],
+        json!({
+            "preset": "build_only",
+            "spec": true,
+            "change_request": null,
+            "stages": [{ "stage": "dev", "trigger": "auto" }],
+        })
+    );
+
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    let id = api.sim.task(1).item.id.0;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["available_actions"], json!(["cancel"]));
+    let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
+    assert_eq!(
+        listed.body["items"][0]["available_actions"],
+        json!(["cancel"])
+    );
+
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+    let merge = format!("/api/v1/work-items/{id}/actions/merge");
+    let r = api.post(&merge, &[("if-match", &etag)], json!({}));
+    problem(&r, StatusCode::CONFLICT, "stage_not_in_workflow");
+    assert_eq!(r.body["params"], json!({ "stage": "merge" }));
+}
+
+#[test]
 fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     let cfg = SimConfig {
         ci: CiScript::Silent,

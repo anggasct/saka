@@ -4294,7 +4294,7 @@
                 "workspace",
                 "repos",
                 "autonomy",
-                "workflow_preset",
+                "workflow",
                 "authorship_mode",
                 "config_commit",
                 "config_sha256",
@@ -4354,9 +4354,9 @@
                     "$ref": "#/components/schemas/ProjectWarning"
                   }
                 },
-                "workflow_preset": {
-                  "type": "string",
-                  "description": "`full_loop` in this version."
+                "workflow": {
+                  "$ref": "#/components/schemas/Workflow",
+                  "description": "The workflow in force, from `[workflow]` in `saka.toml`."
                 },
                 "workspace": {
                   "$ref": "#/components/schemas/Workspace"
@@ -5268,7 +5268,7 @@
           "workspace",
           "repos",
           "autonomy",
-          "workflow_preset",
+          "workflow",
           "authorship_mode",
           "config_commit",
           "config_sha256",
@@ -5328,9 +5328,9 @@
               "$ref": "#/components/schemas/ProjectWarning"
             }
           },
-          "workflow_preset": {
-            "type": "string",
-            "description": "`full_loop` in this version."
+          "workflow": {
+            "$ref": "#/components/schemas/Workflow",
+            "description": "The workflow in force, from `[workflow]` in `saka.toml`."
           },
           "workspace": {
             "$ref": "#/components/schemas/Workspace"
@@ -7905,6 +7905,116 @@
           },
           "path": {
             "type": "string"
+          }
+        }
+      },
+      "Workflow": {
+        "type": "object",
+        "required": [
+          "preset",
+          "spec",
+          "stages"
+        ],
+        "properties": {
+          "change_request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEntry",
+                "description": "The entry point for pull requests opened outside Saka; `null` when the workflow has none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preset": {
+            "type": "string",
+            "description": "`full_loop | review_only | build_only | custom`"
+          },
+          "spec": {
+            "type": "boolean",
+            "description": "Whether an approved spec creates tasks."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStage"
+            },
+            "description": "The stages in pipeline order, each with its trigger."
+          }
+        }
+      },
+      "WorkflowEntry": {
+        "type": "object",
+        "required": [
+          "trigger",
+          "labels",
+          "authors",
+          "branches",
+          "paths",
+          "include_forks",
+          "include_drafts",
+          "trigger_label"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A pull request matches when its author is any of these logins; empty matches all."
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Glob patterns on the head branch name; empty matches all."
+          },
+          "include_drafts": {
+            "type": "boolean"
+          },
+          "include_forks": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A pull request matches when it carries any of these labels; empty matches all."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Path patterns (`path_scope` syntax); a pull request matches when it touches one included path."
+          },
+          "trigger": {
+            "type": "string",
+            "description": "`auto | manual`"
+          },
+          "trigger_label": {
+            "type": "string",
+            "description": "The label that asks for a review when the trigger is `manual`."
+          }
+        }
+      },
+      "WorkflowStage": {
+        "type": "object",
+        "required": [
+          "stage",
+          "trigger"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "description": "`dev | review | fix | merge`"
+          },
+          "trigger": {
+            "type": "string",
+            "description": "`auto | manual`"
           }
         }
       },

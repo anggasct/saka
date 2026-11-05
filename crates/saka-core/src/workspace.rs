@@ -7,7 +7,8 @@ use crate::ids::{ProjectId, RepoId, WorkItemId};
 use crate::model::{ConfigError, Project, ProjectRepo, Repo};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
-use crate::vocab::{Autonomy, ReloadTrigger, WorkItemState, WorkflowPreset};
+use crate::vocab::{Autonomy, ReloadTrigger, WorkItemState};
+use crate::workflow::Workflow;
 
 pub const MAX_BINDINGS: usize = 16;
 
@@ -107,6 +108,7 @@ pub struct NewConfig<'a> {
     pub name: &'a str,
     pub commit: &'a str,
     pub sha256: &'a str,
+    pub workflow: Workflow,
     pub repos: Vec<ProjectRepo>,
     pub trigger: ReloadTrigger,
 }
@@ -117,6 +119,7 @@ pub fn config_changed(project_id: ProjectId, config: NewConfig<'_>) -> Option<Ev
         name: config.name.to_string(),
         config_commit: config.commit.to_string(),
         config_sha256: config.sha256.to_string(),
+        workflow: config.workflow,
         repos: config.repos,
         trigger: config.trigger,
     })
@@ -155,6 +158,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             base_branch,
             config_commit,
             config_sha256,
+            workflow,
             repos,
         } => Some(Project {
             id: *project_id,
@@ -166,7 +170,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_sha256: config_sha256.clone(),
             config_error: None,
             autonomy: Autonomy::Standard,
-            workflow_preset: WorkflowPreset::FullLoop,
+            workflow: workflow.clone(),
             repos: sorted(repos),
             created_at: project.as_ref().map_or(now, |p| p.created_at),
             updated_at: now,
@@ -175,12 +179,14 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             name,
             config_commit,
             config_sha256,
+            workflow,
             repos,
             ..
         } => project.map(|p| Project {
             name: name.clone(),
             config_commit: config_commit.clone(),
             config_sha256: config_sha256.clone(),
+            workflow: workflow.clone(),
             config_error: None,
             repos: sorted(repos),
             updated_at: now,

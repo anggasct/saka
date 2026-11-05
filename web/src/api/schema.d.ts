@@ -1173,8 +1173,8 @@ export interface components {
         repos: components["schemas"]["ProjectRepo"][];
         updated_at: string;
         warnings: components["schemas"]["ProjectWarning"][];
-        /** @description `full_loop` in this version. */
-        workflow_preset: string;
+        /** @description The workflow in force, from `[workflow]` in `saka.toml`. */
+        workflow: components["schemas"]["Workflow"];
         workspace: components["schemas"]["Workspace"];
       }[];
       next_cursor?: string | null;
@@ -1432,8 +1432,8 @@ export interface components {
       repos: components["schemas"]["ProjectRepo"][];
       updated_at: string;
       warnings: components["schemas"]["ProjectWarning"][];
-      /** @description `full_loop` in this version. */
-      workflow_preset: string;
+      /** @description The workflow in force, from `[workflow]` in `saka.toml`. */
+      workflow: components["schemas"]["Workflow"];
       workspace: components["schemas"]["Workspace"];
     };
     /** @description Who authors a project's agent changes. Tokens are never part of it. */
@@ -2235,6 +2235,37 @@ export interface components {
       /** @description `link` or `always`; `null` for the spec. */
       origin?: string | null;
       path: string;
+    };
+    Workflow: {
+      change_request?: components["schemas"]["WorkflowEntry"] | null;
+      /** @description `full_loop | review_only | build_only | custom` */
+      preset: string;
+      /** @description Whether an approved spec creates tasks. */
+      spec: boolean;
+      /** @description The stages in pipeline order, each with its trigger. */
+      stages: components["schemas"]["WorkflowStage"][];
+    };
+    WorkflowEntry: {
+      /** @description A pull request matches when its author is any of these logins; empty matches all. */
+      authors: string[];
+      /** @description Glob patterns on the head branch name; empty matches all. */
+      branches: string[];
+      include_drafts: boolean;
+      include_forks: boolean;
+      /** @description A pull request matches when it carries any of these labels; empty matches all. */
+      labels: string[];
+      /** @description Path patterns (`path_scope` syntax); a pull request matches when it touches one included path. */
+      paths: string[];
+      /** @description `auto | manual` */
+      trigger: string;
+      /** @description The label that asks for a review when the trigger is `manual`. */
+      trigger_label: string;
+    };
+    WorkflowStage: {
+      /** @description `dev | review | fix | merge` */
+      stage: string;
+      /** @description `auto | manual` */
+      trigger: string;
     };
     Workspace: {
       base_branch: string;

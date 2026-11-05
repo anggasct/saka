@@ -96,6 +96,10 @@ pub enum Rejection {
     UserTokenRejected { status: u16 },
     #[error("the user token cannot read every repo of the project")]
     UserTokenRepoInaccessible { repos: Value },
+    #[error("the project workflow has no {entry} entry point")]
+    EntryPointDisabled { entry: &'static str },
+    #[error("the project workflow has no {stage} stage")]
+    StageNotInWorkflow { stage: &'static str },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -147,6 +151,8 @@ impl Rejection {
             Rejection::UserTokenNotFineGrained => "user_token_not_fine_grained",
             Rejection::UserTokenRejected { .. } => "user_token_rejected",
             Rejection::UserTokenRepoInaccessible { .. } => "user_token_repo_inaccessible",
+            Rejection::EntryPointDisabled { .. } => "entry_point_disabled",
+            Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -209,6 +215,8 @@ impl Rejection {
             }
             Rejection::UserTokenRejected { status } => json!({ "status": status }),
             Rejection::UserTokenRepoInaccessible { repos } => json!({ "repos": repos }),
+            Rejection::EntryPointDisabled { entry } => json!({ "entry": entry }),
+            Rejection::StageNotInWorkflow { stage } => json!({ "stage": stage }),
             Rejection::Invalid { field, code } => {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }

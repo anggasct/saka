@@ -652,6 +652,8 @@ const ERRORS = [
   "precondition_required",
   "merge_not_ready",
   "retry_limit_reached",
+  "entry_point_disabled",
+  "stage_not_in_workflow",
   "permission_already_answered",
   "idempotency_key_reused",
   "work_packet_unavailable",

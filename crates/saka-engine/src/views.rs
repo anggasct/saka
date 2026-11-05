@@ -9,7 +9,7 @@ use saka_core::model::{
 use saka_core::plan::RevisionPlan;
 use saka_core::spec as core_spec;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{SpecState, WorkItemState};
+use saka_core::vocab::{SpecState, Stage, WorkItemState};
 use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
 use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 use saka_store::{SpecRevisionRow, StoredEvent, TaskSet, read};
@@ -134,6 +134,7 @@ pub struct DependencyView {
 pub struct TaskView {
     pub task: Task,
     pub repo_name: Option<String>,
+    pub merges: bool,
     pub waiting_on: Vec<Waiting>,
     pub budget: Option<BudgetView>,
 }
@@ -170,6 +171,7 @@ pub struct PermissionView {
 pub struct TaskDetail {
     pub task: Task,
     pub repo_name: Option<String>,
+    pub merges: bool,
     pub stage_runs: Vec<StageRun>,
     pub waiting_on: Vec<Waiting>,
     pub budget: Option<BudgetView>,
@@ -628,16 +630,17 @@ impl Engine {
             .read(|c| read::load_tasks(c, TaskSet::Ids(&ids)))?;
         tasks.sort_by_key(|t| ids.iter().position(|id| *id == t.item.id));
         let waiting = self.waiting(&tasks)?;
-        let names = self.repo_names(&tasks)?;
+        let facts = self.project_facts(&tasks)?;
         Ok(Paged {
             items: tasks
                 .into_iter()
                 .zip(waiting)
-                .zip(names)
-                .map(|((task, waiting_on), repo_name)| TaskView {
+                .zip(facts)
+                .map(|((task, waiting_on), (repo_name, merges))| TaskView {
                     budget: self.budget_view(&task),
                     task,
                     repo_name,
+                    merges,
                     waiting_on,
                 })
                 .collect(),
@@ -645,7 +648,7 @@ impl Engine {
         })
     }
 
-    fn repo_names(&self, tasks: &[Task]) -> Result<Vec<Option<String>>> {
+    fn project_facts(&self, tasks: &[Task]) -> Result<Vec<(Option<String>, bool)>> {
         let mut projects: Vec<Project> = Vec::new();
         let mut names = Vec::with_capacity(tasks.len());
         for t in tasks {
@@ -655,13 +658,13 @@ impl Engine {
             {
                 projects.push(p);
             }
-            names.push(
-                projects
-                    .iter()
-                    .find(|p| p.id == id)
+            let project = projects.iter().find(|p| p.id == id);
+            names.push((
+                project
                     .and_then(|p| p.binding(t.item.repo_id))
                     .map(|b| b.name.clone()),
-            );
+                project.is_none_or(|p| p.workflow.has_stage(Stage::Merge)),
+            ));
         }
         Ok(names)
     }
@@ -678,15 +681,16 @@ impl Engine {
             .into_iter()
             .next()
             .unwrap_or_default();
-        let repo_name = self
-            .repo_names(std::slice::from_ref(&task))?
+        let (repo_name, merges) = self
+            .project_facts(std::slice::from_ref(&task))?
             .into_iter()
             .next()
-            .flatten();
+            .unwrap_or((None, true));
         Ok(Some(TaskDetail {
             budget: self.budget_view(&task),
             task,
             repo_name,
+            merges,
             stage_runs,
             waiting_on,
         }))

@@ -23,6 +23,7 @@ pub mod spec;
 pub mod task;
 pub mod time;
 pub mod vocab;
+pub mod workflow;
 pub mod workspace;
 
 use ids::IdSource;

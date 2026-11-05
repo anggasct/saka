@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use saka_core::scope::{PathScope, ScopeIssue};
+use saka_core::workflow::Workflow;
 use saka_core::workspace::MAX_BINDINGS;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -8,11 +9,14 @@ use sha2::{Digest, Sha256};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
+mod workflow;
+
 use crate::register::{branch_ok, parse_repo_url};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub name: String,
+    pub workflow: Workflow,
     pub repos: Vec<RepoEntry>,
 }
 
@@ -382,13 +386,18 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
         text,
         issues: Vec::new(),
     };
-    c.unknown(doc, "", &["project", "repo"]);
+    c.unknown(doc, "", &["project", "repo", "workflow"]);
     let name = project_name(&mut c, doc);
     let repos = repos(&mut c, doc);
+    let workflow = workflow::parse(&mut c, doc);
     let mut issues = c.issues;
     issues.sort_by_key(|i| i.line.unwrap_or(0));
     match name {
-        Some(name) if issues.is_empty() => Ok(ProjectConfig { name, repos }),
+        Some(name) if issues.is_empty() => Ok(ProjectConfig {
+            name,
+            workflow,
+            repos,
+        }),
         _ => Err(issues),
     }
 }

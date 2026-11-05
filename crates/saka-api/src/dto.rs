@@ -82,6 +82,71 @@ pub struct ProjectWarning {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct Workflow {
+    /// `full_loop | review_only | build_only | custom`
+    pub preset: String,
+    /// Whether an approved spec creates tasks.
+    pub spec: bool,
+    /// The entry point for pull requests opened outside Saka; `null` when the workflow has none.
+    pub change_request: Option<WorkflowEntry>,
+    /// The stages in pipeline order, each with its trigger.
+    pub stages: Vec<WorkflowStage>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkflowEntry {
+    /// `auto | manual`
+    pub trigger: String,
+    /// A pull request matches when it carries any of these labels; empty matches all.
+    pub labels: Vec<String>,
+    /// A pull request matches when its author is any of these logins; empty matches all.
+    pub authors: Vec<String>,
+    /// Glob patterns on the head branch name; empty matches all.
+    pub branches: Vec<String>,
+    /// Path patterns (`path_scope` syntax); a pull request matches when it touches one included path.
+    pub paths: Vec<String>,
+    pub include_forks: bool,
+    pub include_drafts: bool,
+    /// The label that asks for a review when the trigger is `manual`.
+    pub trigger_label: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkflowStage {
+    /// `dev | review | fix | merge`
+    pub stage: String,
+    /// `auto | manual`
+    pub trigger: String,
+}
+
+impl From<&saka_core::workflow::Workflow> for Workflow {
+    fn from(w: &saka_core::workflow::Workflow) -> Workflow {
+        Workflow {
+            preset: w.preset.as_str().to_string(),
+            spec: w.spec,
+            change_request: w.change_request.as_ref().map(|e| WorkflowEntry {
+                trigger: e.trigger.as_str().to_string(),
+                labels: e.labels.clone(),
+                authors: e.authors.clone(),
+                branches: e.branches.clone(),
+                paths: e.paths.clone(),
+                include_forks: e.include_forks,
+                include_drafts: e.include_drafts,
+                trigger_label: e.trigger_label.clone(),
+            }),
+            stages: w
+                .stages
+                .iter()
+                .map(|s| WorkflowStage {
+                    stage: s.stage.as_str().to_string(),
+                    trigger: s.trigger.as_str().to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Project {
     pub id: Uuid,
     pub name: String,
@@ -90,8 +155,8 @@ pub struct Project {
     pub repos: Vec<ProjectRepo>,
     /// `standard` in this version.
     pub autonomy: String,
-    /// `full_loop` in this version.
-    pub workflow_preset: String,
+    /// The workflow in force, from `[workflow]` in `saka.toml`.
+    pub workflow: Workflow,
     /// `bot | user | user_pat`: who authors the agent's commits and opens its pull requests.
     pub authorship_mode: String,
     pub config_commit: String,
@@ -138,7 +203,7 @@ impl Project {
                 })
                 .collect(),
             autonomy: p.autonomy.as_str().to_string(),
-            workflow_preset: p.workflow_preset.as_str().to_string(),
+            workflow: Workflow::from(&p.workflow),
             authorship_mode: v.authorship_mode.as_str().to_string(),
             config_commit: p.config_commit.clone(),
             config_sha256: p.config_sha256.clone(),
@@ -825,6 +890,14 @@ impl WorkItem {
             &v.waiting_on,
             v.budget.as_ref(),
         )
+        .merging(v.merges)
+    }
+
+    fn merging(mut self, merges: bool) -> WorkItem {
+        if !merges {
+            self.available_actions.retain(|a| a != "merge");
+        }
+        self
     }
 
     pub fn from_task(
@@ -962,7 +1035,8 @@ impl WorkItemDetail {
                 d.repo_name.as_deref(),
                 &d.waiting_on,
                 d.budget.as_ref(),
-            ),
+            )
+            .merging(d.merges),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
         }
     }

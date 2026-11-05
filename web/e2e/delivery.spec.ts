@@ -2,6 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { FULL_LOOP } from "./workflow";
+
 const PROJECT_ID = "0193f0c4-1b2a-7c3d-9e8f-001122334455";
 const SPEC_ID = "0193f0c4-1b2a-7c3d-9e8f-001122334466";
 const LONG =
@@ -19,7 +21,7 @@ const project = {
   repos: [],
   autonomy: "standard",
   authorship_mode: "bot",
-  workflow_preset: "full_loop",
+  workflow: FULL_LOOP,
   config_commit: "9f1c".padEnd(40, "0"),
   created_at: "2026-10-31T10:00:00.000Z",
   updated_at: "2026-10-31T10:00:00.000Z",

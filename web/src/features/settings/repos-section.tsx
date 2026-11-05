@@ -7,7 +7,7 @@ import { Disclosure } from "@/ui/disclosure";
 import type { Project, ProjectRepo } from "./queries";
 import { configPath, warningText } from "./text";
 
-function Scope({ globs }: { globs: readonly string[] }) {
+export function Scope({ globs }: { globs: readonly string[] }) {
   return (
     <ul className="flex flex-wrap gap-1">
       {globs.map((glob) => (

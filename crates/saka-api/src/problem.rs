@@ -121,6 +121,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserTokenMissing
         | R::UserTokenInvalid { .. }
         | R::UserTokenInUse
+        | R::EntryPointDisabled { .. }
+        | R::StageNotInWorkflow { .. }
         | R::UserTokenMultiIntegration { .. } => StatusCode::CONFLICT,
     }
 }

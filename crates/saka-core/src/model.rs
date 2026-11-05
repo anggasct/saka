@@ -15,8 +15,9 @@ use crate::vocab::{
     ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, GateOutcome,
     GateSource, InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause, SessionState,
     SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
-    WorkItemOrigin, WorkItemState, WorkflowPreset,
+    WorkItemOrigin, WorkItemState,
 };
+use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -91,7 +92,7 @@ pub struct Project {
     pub config_sha256: String,
     pub config_error: Option<ConfigError>,
     pub autonomy: Autonomy,
-    pub workflow_preset: WorkflowPreset,
+    pub workflow: Workflow,
     pub repos: Vec<ProjectRepo>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,

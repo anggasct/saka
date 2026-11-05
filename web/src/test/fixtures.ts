@@ -21,7 +21,17 @@ export const project: ProjectItem = {
   repos: [],
   autonomy: "standard",
   authorship_mode: "bot",
-  workflow_preset: "full_loop",
+  workflow: {
+    preset: "full_loop",
+    spec: true,
+    change_request: null,
+    stages: [
+      { stage: "dev", trigger: "auto" },
+      { stage: "review", trigger: "auto" },
+      { stage: "fix", trigger: "auto" },
+      { stage: "merge", trigger: "manual" },
+    ],
+  },
   config_commit: "9f1c".padEnd(40, "0"),
   config_sha256: `sha256:${"4b8e".padEnd(64, "0")}`,
   config_error: null,
