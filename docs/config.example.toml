@@ -128,7 +128,7 @@ commands = ["go test *", "go vet *", "go build *", "gofmt *", "npm test*", "npm 
 name = "announce-merge"            # ^[a-z0-9-]{1,32}$, unique per project
 project = "tasks"                  # a project name, or its id
 on = "merged"
-action = "webhook"                 # webhook | notify (run and run_host arrive with the next hook step)
+action = "webhook"                 # run | run_host | webhook | notify
 url = "https://ci.example.com/saka"   # https, or http on a loopback host; no credentials in the URL
 secret = "HOOK_SIGNING_KEY"        # a project secret (`saka secret set`) that signs the body with HMAC-SHA256
 repos = ["app"]                    # optional: repo binding names; empty = all
@@ -142,3 +142,30 @@ on = "blocked"
 action = "notify"
 channel = "ops"                    # a channel name; delivered by the notifier once one is set up
 codes = ["ci_red", "dod_failed"]   # optional, only with on = "blocked"
+
+# `run` executes the command in a throwaway environment checked out at the commit of the event
+# (spec_shipped: the tip of the named repo's base branch, so it needs exactly one `repos` entry),
+# with the project's toolchain, a cgroup, and a timeout. Only the secrets listed here are passed.
+# The recipe's setup commands are not run: put what the command needs in the command itself.
+
+[[hook]]
+name = "deploy-staging"
+project = "tasks"
+on = "merged"
+action = "run"
+command = "./scripts/deploy.sh staging"   # sh -c; SAKA_EVENT, SAKA_PROJECT, SAKA_REPO, SAKA_SHA, SAKA_PR, SAKA_TASK_KEY, SAKA_SPEC, SAKA_BRANCH, SAKA_HOOK, SAKA_HOOK_RUN
+secrets = ["DEPLOY_TOKEN"]         # project secrets passed to the command
+timeout_secs = 600                 # 1..=3600, default 300
+
+# `run_host` runs on this machine, outside any sandbox, as the user running Saka. It is allowed only
+# here: saka.toml and .saka/ cannot define it, and `saka serve` refuses to start if this file is
+# writable by anyone else. The command gets only PATH, HOME, LANG and the SAKA_* variables above,
+# never a project secret, and runs in its own cgroup with a timeout.
+
+[[hook]]
+name = "refresh-dashboard"
+project = "tasks"
+on = "task_done"
+action = "run_host"
+command = "/usr/local/bin/refresh-dashboard"
+cwd = "~/dashboards"               # optional; default is a private scratch directory

@@ -257,9 +257,6 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
         .action
         .parse()
         .map_err(|_| issue("hook_action_invalid", name, Some("action")))?;
-    if matches!(kind, HookActionKind::Run | HookActionKind::RunHost) {
-        return Err(issue("hook_action_unsupported", name, Some("action")));
-    }
     let run = kind == HookActionKind::Run;
     let run_host = kind == HookActionKind::RunHost;
     let webhook = kind == HookActionKind::Webhook;
@@ -529,7 +526,35 @@ pub fn spec_context(spec: &Spec, project_name: &str, now: Timestamp) -> HookCont
     }
 }
 
+fn clean(value: &str) -> String {
+    value.chars().filter(|c| !c.is_control()).collect()
+}
+
 impl HookContext {
+    pub fn env_vars(&self, run: HookRunId, hook: &str) -> Vec<(String, String)> {
+        let mut vars = vec![
+            ("SAKA_EVENT".to_string(), self.event.as_str().to_string()),
+            ("SAKA_PROJECT".to_string(), clean(&self.project.name)),
+            ("SAKA_HOOK".to_string(), clean(hook)),
+            ("SAKA_HOOK_RUN".to_string(), run.to_string()),
+        ];
+        let mut set = |name: &str, value: Option<String>| {
+            if let Some(value) = value {
+                vars.push((name.to_string(), clean(&value)));
+            }
+        };
+        set("SAKA_REPO", self.repo.as_ref().map(|r| r.name.clone()));
+        set("SAKA_SHA", self.sha.clone());
+        set(
+            "SAKA_PR",
+            self.change.as_ref().map(|c| c.number.to_string()),
+        );
+        set("SAKA_TASK_KEY", self.task.as_ref().map(|t| t.key.clone()));
+        set("SAKA_SPEC", self.spec.as_ref().map(|s| s.path.clone()));
+        set("SAKA_BRANCH", self.branch.clone());
+        vars
+    }
+
     pub fn payload(&self, run: HookRunId, hook: &str) -> Value {
         let mut value = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
         value["id"] = json!(run);
@@ -803,7 +828,7 @@ mod tests {
         bad.mode = Some("gate".into());
         assert_eq!(code(bad), "hook_mode_unsupported");
         assert_eq!(code(raw("teleport")), "hook_action_invalid");
-        assert_eq!(code(raw("run_host")), "hook_action_unsupported");
+        assert_eq!(code(raw("run_host")), "hook_field_invalid");
         let mut bad = raw("notify");
         bad.channel = None;
         assert_eq!(code(bad), "hook_field_invalid");
@@ -819,6 +844,97 @@ mod tests {
         let mut bad = raw("notify");
         bad.project = String::new();
         assert_eq!(code(bad), "hook_field_invalid");
+    }
+
+    fn command(action: &str, on: &str) -> RawHook {
+        RawHook {
+            name: "deploy".into(),
+            project: "saka".into(),
+            on: on.into(),
+            action: action.into(),
+            command: Some("./deploy.sh".into()),
+            ..RawHook::default()
+        }
+    }
+
+    #[test]
+    fn run_hooks_need_a_commit_to_run_at() {
+        for on in ["change_opened", "merged", "task_done"] {
+            assert_eq!(code(command("run", on)), "ok", "{on}");
+        }
+        assert_eq!(code(command("run", "blocked")), "hook_run_event_invalid");
+        assert_eq!(
+            code(command("run", "spec_shipped")),
+            "hook_run_event_invalid"
+        );
+        let mut tip = command("run", "spec_shipped");
+        tip.repos = vec!["api".into()];
+        assert_eq!(code(tip.clone()), "ok");
+        tip.repos = vec!["api".into(), "web".into()];
+        assert_eq!(code(tip), "hook_run_event_invalid");
+        let mut other = raw("notify");
+        other.on = "spec_shipped".into();
+        other.repos = vec!["api".into()];
+        assert_eq!(code(other), "hook_filter_invalid");
+    }
+
+    #[test]
+    fn commands_have_their_own_fields_and_timeouts() {
+        let mut run = command("run", "merged");
+        run.secrets = Some(vec!["DEPLOY_TOKEN".into()]);
+        assert_eq!(code(run.clone()), "ok");
+        assert_eq!(hook(run.clone()).timeout_ms, 300_000);
+        run.secrets = Some(vec!["DEPLOY_TOKEN".into(), "DEPLOY_TOKEN".into()]);
+        assert_eq!(code(run.clone()), "hook_secret_name_invalid");
+        run.secrets = Some(vec!["bad".into()]);
+        assert_eq!(code(run.clone()), "hook_secret_name_invalid");
+        run.secrets = None;
+        run.timeout_secs = Some(3601);
+        assert_eq!(code(run.clone()), "hook_timeout_invalid");
+        run.timeout_secs = Some(3600);
+        assert_eq!(code(run.clone()), "ok");
+        run.command = None;
+        assert_eq!(code(run), "hook_field_invalid");
+
+        let mut host = command("run_host", "task_done");
+        host.cwd = Some("~/deploy".into());
+        assert_eq!(code(host.clone()), "ok");
+        host.cwd = Some("relative/dir".into());
+        assert_eq!(code(host.clone()), "hook_field_invalid");
+        host.cwd = None;
+        host.secrets = Some(vec!["DEPLOY_TOKEN".into()]);
+        assert_eq!(
+            code(host),
+            "hook_field_invalid",
+            "run_host never receives secrets"
+        );
+        let mut host = command("run_host", "blocked");
+        assert_eq!(code(host.clone()), "ok", "run_host needs no commit");
+        host.command = Some("   ".into());
+        assert_eq!(code(host), "hook_field_invalid");
+    }
+
+    #[test]
+    fn the_environment_of_a_command_carries_only_values_that_exist() {
+        let mut ctx = ctx(HookEvent::Merged);
+        ctx.sha = Some("abc\ndef".into());
+        ctx.change = Some(ChangeRef {
+            number: 42,
+            url: "u".into(),
+        });
+        let run = HookRunId(Uuid::from_u128(9));
+        let vars: std::collections::BTreeMap<_, _> =
+            ctx.env_vars(run, "deploy").into_iter().collect();
+        assert_eq!(vars["SAKA_EVENT"], "merged");
+        assert_eq!(vars["SAKA_PROJECT"], "saka");
+        assert_eq!(vars["SAKA_REPO"], "api");
+        assert_eq!(vars["SAKA_SHA"], "abcdef", "control characters are dropped");
+        assert_eq!(vars["SAKA_PR"], "42");
+        assert_eq!(vars["SAKA_HOOK_RUN"], run.to_string());
+        assert_eq!(vars["SAKA_BRANCH"], "release/1");
+        assert!(!vars.contains_key("SAKA_TASK_KEY"));
+        assert!(!vars.contains_key("SAKA_SPEC"));
+        assert!(vars.keys().all(|k| k.starts_with("SAKA_")));
     }
 
     #[test]

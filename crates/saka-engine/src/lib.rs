@@ -8,6 +8,7 @@ pub mod diagnostics;
 mod docs;
 mod draft;
 mod hooks;
+mod hooks_run;
 mod metrics;
 pub mod packet;
 pub mod project_config;
@@ -128,6 +129,7 @@ pub struct Ports {
     pub releases: Arc<dyn ReleaseIndex>,
     pub webhooks: Arc<dyn saka_ports::Webhooks>,
     pub notifier: Arc<dyn saka_ports::Notifier>,
+    pub host: Arc<dyn saka_ports::HostCommands>,
 }
 
 #[derive(Debug, thiserror::Error)]

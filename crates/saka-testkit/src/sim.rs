@@ -347,6 +347,7 @@ impl Sim {
             releases: self.world.clone(),
             webhooks: self.hooks.clone(),
             notifier: self.hooks.clone(),
+            host: self.hooks.clone(),
         };
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),

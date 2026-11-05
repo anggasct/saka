@@ -5,7 +5,7 @@ use saka_core::secret::SecretText;
 use saka_core::vocab::HookRunState;
 use saka_engine::{Cause, HookRunFilter, Page};
 use saka_ports::PortError;
-use saka_testkit::{Sim, SimConfig, WebhookScript};
+use saka_testkit::{CommandScript, HostScript, Sim, SimConfig, WebhookScript};
 use serde_json::json;
 
 const STEPS: usize = 8_000;
@@ -351,4 +351,243 @@ fn a_pending_run_whose_hook_is_gone_fails_visibly() {
     let run = runs(&sim).remove(0);
     assert_eq!(run.state, HookRunState::Failed);
     assert_eq!(run.error.as_ref().unwrap().code, "hook_not_configured");
+}
+
+fn command_hook(name: &str, on: &str, action: &str) -> RawHook {
+    RawHook {
+        name: name.into(),
+        project: "tasks".into(),
+        on: on.into(),
+        action: action.into(),
+        command: Some("./deploy.sh staging".into()),
+        ..RawHook::default()
+    }
+}
+
+fn hook_runs_of(sim: &Sim, action: &str) -> Vec<saka_testkit::RecipeRun> {
+    sim.world
+        .recipe_runs()
+        .into_iter()
+        .filter(|r| r.phase == action)
+        .collect()
+}
+
+#[test]
+fn a_run_hook_executes_in_a_throwaway_environment_at_the_merge_commit() {
+    let mut hook = command_hook("deploy", "merged", "run");
+    hook.secrets = Some(vec!["DEPLOY_TOKEN".into()]);
+    let mut sim = sim(vec![hook]);
+    set_secret(&sim, "DEPLOY_TOKEN", "deploy-token-123456");
+    set_secret(&sim, "UNRELATED", "unrelated-secret-1");
+    deliver(&mut sim);
+
+    let all = runs(&sim);
+    assert!(
+        all.iter().all(|r| r.state == HookRunState::Succeeded),
+        "{all:?}"
+    );
+    let first = &all[0];
+    assert_eq!(first.result.as_ref().unwrap()["exit_code"], 0);
+
+    let ran = hook_runs_of(&sim, "hook");
+    assert_eq!(ran.len(), 2);
+    assert_eq!(ran[0].command, "./deploy.sh staging");
+    assert_eq!(
+        ran[0].environment_id.0, first.id.0,
+        "the environment is the run's own"
+    );
+    assert_eq!(ran[0].secrets.len(), 1);
+    assert_eq!(ran[0].secrets["DEPLOY_TOKEN"], "deploy-token-123456");
+    assert_eq!(ran[0].redacted, ["DEPLOY_TOKEN"]);
+    assert_eq!(ran[0].vars["SAKA_EVENT"], "merged");
+    assert_eq!(ran[0].vars["SAKA_PROJECT"], "tasks");
+    assert_eq!(ran[0].vars["SAKA_REPO"], "app");
+    assert_eq!(ran[0].vars["SAKA_SHA"], first.sha.clone().unwrap());
+    assert_eq!(ran[0].vars["SAKA_HOOK_RUN"], first.id.to_string());
+    assert!(ran[0].vars.contains_key("SAKA_PR"));
+    assert!(ran[0].vars.contains_key("SAKA_TASK_KEY"));
+    assert!(
+        !ran[0]
+            .vars
+            .values()
+            .any(|v| v.contains("secret") || v.contains("token"))
+    );
+
+    let checkout = sim
+        .world
+        .checkouts()
+        .into_iter()
+        .find(|(env, _)| env.0 == first.id.0)
+        .unwrap();
+    assert_eq!(Some(checkout.1), first.sha);
+    let stats = sim.world.stats();
+    assert_eq!(
+        stats.prepares, stats.teardowns,
+        "every environment is torn down"
+    );
+    for e in sim.engine().events_after(0, 10_000).unwrap() {
+        assert!(
+            !e.payload.to_string().contains("deploy-token-123456"),
+            "{}",
+            e.kind
+        );
+    }
+}
+
+#[test]
+fn a_failing_or_slow_command_fails_the_run_once_and_still_tears_the_environment_down() {
+    let mut sim = sim(vec![command_hook("deploy", "merged", "run")]);
+    sim.world
+        .script_command("./deploy.sh staging", CommandScript::Exit(3));
+    sim.world
+        .script_command("./deploy.sh staging", CommandScript::Timeout);
+    deliver(&mut sim);
+    let all = runs(&sim);
+    let codes: Vec<_> = all
+        .iter()
+        .map(|r| r.error.as_ref().map(|e| e.code.clone()))
+        .collect();
+    assert!(
+        codes.contains(&Some("hook_command_failed".into())),
+        "{codes:?}"
+    );
+    assert!(codes.contains(&Some("hook_timed_out".into())), "{codes:?}");
+    assert!(
+        all.iter().all(|r| r.attempts == 1),
+        "a failed command is never repeated"
+    );
+    let failed = all
+        .iter()
+        .find(|r| r.error.as_ref().unwrap().code == "hook_command_failed")
+        .unwrap();
+    assert_eq!(failed.error.as_ref().unwrap().params["exit_code"], 3);
+    assert_eq!(hook_runs_of(&sim, "hook").len(), 2);
+    let stats = sim.world.stats();
+    assert_eq!(stats.prepares, stats.teardowns);
+}
+
+#[test]
+fn a_supervisor_that_keeps_crashing_ends_as_retries_exhausted_and_leaves_no_environment() {
+    let mut sim = sim(vec![command_hook("deploy", "task_done", "run")]);
+    for _ in 0..6 {
+        sim.world
+            .script_command("./deploy.sh staging", CommandScript::Crash);
+    }
+    deliver(&mut sim);
+    for run in runs(&sim) {
+        assert_eq!(run.state, HookRunState::Failed);
+        assert_eq!(run.error.as_ref().unwrap().code, "retries_exhausted");
+        assert_eq!(run.attempts, 3);
+    }
+    let stats = sim.world.stats();
+    assert_eq!(stats.prepares, stats.teardowns);
+}
+
+#[test]
+fn a_missing_run_secret_fails_before_any_environment_exists() {
+    let mut hook = command_hook("deploy", "merged", "run");
+    hook.secrets = Some(vec!["NOT_SET".into()]);
+    let mut sim = sim(vec![hook]);
+    let before = sim.world.stats().prepares;
+    deliver(&mut sim);
+    let all = runs(&sim);
+    assert!(
+        all.iter()
+            .all(|r| r.error.as_ref().unwrap().code == "hook_secret_missing")
+    );
+    assert!(hook_runs_of(&sim, "hook").is_empty());
+    assert!(sim.world.stats().prepares >= before);
+    assert!(
+        !sim.world
+            .prepared()
+            .iter()
+            .any(|p| p.environment_id.0 == all[0].id.0)
+    );
+}
+
+#[test]
+fn a_spec_shipped_run_uses_the_tip_of_the_named_repos_base_branch() {
+    let mut hook = command_hook("release", "spec_shipped", "run");
+    hook.repos = vec!["app".into()];
+    let mut sim = sim(vec![hook]);
+    deliver(&mut sim);
+    let run = runs(&sim).remove(0);
+    assert_eq!(run.state, HookRunState::Succeeded, "{:?}", run.error);
+    assert!(run.work_item_id.is_none());
+    let checkout = sim
+        .world
+        .checkouts()
+        .into_iter()
+        .find(|(env, _)| env.0 == run.id.0)
+        .unwrap();
+    assert_eq!(checkout.1, sim.world.base_head());
+    let vars = &hook_runs_of(&sim, "hook")[0].vars;
+    assert_eq!(vars["SAKA_SPEC"], sim.spec().path);
+    assert!(!vars.contains_key("SAKA_SHA"));
+}
+
+#[test]
+fn a_spec_shipped_run_naming_an_unbound_repo_fails_visibly() {
+    let mut hook = command_hook("release", "spec_shipped", "run");
+    hook.repos = vec!["nope".into()];
+    let mut sim = sim(vec![hook]);
+    deliver(&mut sim);
+    let run = runs(&sim).remove(0);
+    assert_eq!(run.error.as_ref().unwrap().code, "hook_commit_unavailable");
+}
+
+#[test]
+fn a_host_hook_gets_the_event_variables_and_no_secrets() {
+    let mut hook = command_hook("notify-host", "merged", "run_host");
+    hook.cwd = Some("/srv/deploy".into());
+    let mut sim = sim(vec![hook]);
+    set_secret(&sim, "DEPLOY_TOKEN", "deploy-token-123456");
+    sim.hooks.host_output("deployed");
+    deliver(&mut sim);
+    let all = runs(&sim);
+    assert!(all.iter().all(|r| r.state == HookRunState::Succeeded));
+    assert_eq!(all[0].result.as_ref().unwrap()["output_tail"], "deployed");
+    let calls = sim.hooks.host_calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].command, "./deploy.sh staging");
+    assert_eq!(calls[0].cwd.as_deref(), Some("/srv/deploy"));
+    assert_eq!(
+        calls[0].scratch_key,
+        format!("{}/notify-host", sim.project_id)
+    );
+    assert_eq!(calls[0].env["SAKA_EVENT"], "merged");
+    assert_eq!(calls[0].env["SAKA_HOOK"], "notify-host");
+    assert!(calls[0].env.keys().all(|k| k.starts_with("SAKA_")));
+    assert!(!format!("{:?}", calls[0]).contains("deploy-token-123456"));
+    assert!(
+        hook_runs_of(&sim, "hook").is_empty(),
+        "no sandbox environment is made"
+    );
+}
+
+#[test]
+fn a_host_command_that_exits_with_an_error_or_times_out_is_not_repeated() {
+    let mut sim = sim(vec![command_hook("host", "task_done", "run_host")]);
+    sim.hooks.script_host(HostScript::Exit(9));
+    sim.hooks.script_host(HostScript::Timeout);
+    deliver(&mut sim);
+    let all = runs(&sim);
+    let mut codes: Vec<String> = all
+        .iter()
+        .map(|r| r.error.as_ref().unwrap().code.clone())
+        .collect();
+    codes.sort();
+    assert_eq!(codes, ["hook_command_failed", "hook_timed_out"]);
+    assert!(all.iter().all(|r| r.attempts == 1));
+    assert_eq!(sim.hooks.host_calls().len(), 2);
+}
+
+#[test]
+fn a_host_runner_that_cannot_start_is_retried() {
+    let mut sim = sim(vec![command_hook("host", "task_done", "run_host")]);
+    sim.hooks.script_host(HostScript::Crash);
+    deliver(&mut sim);
+    let all = runs(&sim);
+    assert!(all.iter().all(|r| r.state == HookRunState::Succeeded));
+    assert_eq!(all[0].attempts, 2);
 }

@@ -24,7 +24,7 @@ pub use fixtures::{
     AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec, repo_entry,
     saka_toml,
 };
-pub use hooks::{FakeHooks, WebhookRecord, WebhookScript};
+pub use hooks::{FakeHooks, HostScript, WebhookRecord, WebhookScript};
 pub use releases::FakeReleases;
 pub use sim::{
     DOCS_REPO, Layout, Operator, SECOND_INTEGRATION, SECOND_WEB_URL, SHOP_REPO, Sim, SimConfig,

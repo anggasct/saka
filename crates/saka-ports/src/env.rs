@@ -82,6 +82,7 @@ pub enum RecipePhase {
     Setup,
     Teardown,
     Gate,
+    Hook,
 }
 
 impl RecipePhase {
@@ -90,6 +91,7 @@ impl RecipePhase {
             RecipePhase::Setup => "setup",
             RecipePhase::Teardown => "teardown",
             RecipePhase::Gate => "gate",
+            RecipePhase::Hook => "hook",
         }
     }
 }
