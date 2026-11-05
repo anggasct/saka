@@ -102,23 +102,35 @@ impl GitHub {
         path: &str,
         body: Option<Value>,
     ) -> Result<(StatusCode, Value)> {
-        let mut request = self
-            .http
-            .request(method, format!("{API}{path}"))
-            .bearer_auth(bearer)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", API_VERSION);
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
+        // A dropped connection fails a whole 30-minute run, so reads retry; writes do not,
+        // because a write may have landed before the connection dropped.
+        let attempts = if method == Method::GET { 3 } else { 1 };
         self.runtime.block_on(async {
-            let response = request
-                .send()
-                .await
-                .with_context(|| format!("call {path}"))?;
-            let status = response.status();
-            let value = response.json::<Value>().await.unwrap_or(Value::Null);
-            Ok((status, value))
+            let mut attempt = 1;
+            loop {
+                let mut request = self
+                    .http
+                    .request(method.clone(), format!("{API}{path}"))
+                    .bearer_auth(bearer)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", API_VERSION);
+                if let Some(body) = &body {
+                    request = request.json(body);
+                }
+                match request.send().await {
+                    Ok(response) => {
+                        let status = response.status();
+                        let value = response.json::<Value>().await.unwrap_or(Value::Null);
+                        return Ok((status, value));
+                    }
+                    Err(err) if attempt < attempts => {
+                        eprintln!("  retry  {path}: {err}");
+                        tokio::time::sleep(Duration::from_secs(2 * attempt)).await;
+                        attempt += 1;
+                    }
+                    Err(err) => return Err(err).with_context(|| format!("call {path}")),
+                }
+            }
         })
     }
 
