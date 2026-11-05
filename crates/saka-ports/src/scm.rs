@@ -4,9 +4,9 @@ use saka_core::gate::Check;
 use saka_core::ids::RepoId;
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{AuthorizationFailure, ChangeState, MergeMethod};
+use saka_core::vocab::{AuthorizationFailure, ChangeState, MergeMethod, ReviewEvent};
 
-use crate::PortResult;
+use crate::{PortError, PortResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
@@ -129,6 +129,41 @@ pub struct ChangeSignal {
     pub kind: SignalKind,
 }
 
+pub const MAX_REVIEW_BODY_CHARS: usize = 60_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPost {
+    pub repo: RepoRef,
+    pub number: u64,
+    pub head_sha: String,
+    pub event: ReviewEvent,
+    pub body: String,
+}
+
+impl ReviewPost {
+    pub fn check(&self) -> PortResult<()> {
+        let sha = self.head_sha.len() == 40 && self.head_sha.bytes().all(|b| b.is_ascii_hexdigit());
+        if !sha {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                serde_json::json!({ "field": "head_sha" }),
+            ));
+        }
+        if self.body.chars().count() > MAX_REVIEW_BODY_CHARS {
+            return Err(PortError::permanent(
+                "git_argument_invalid",
+                serde_json::json!({ "field": "body" }),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostedReview {
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeRequest {
     pub repo: RepoRef,
@@ -197,6 +232,8 @@ pub trait Scm: Send + Sync {
     ) -> PortResult<Vec<ChangeSignal>>;
 
     async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool>;
+
+    async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview>;
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
 
@@ -357,6 +394,7 @@ pub struct ScmCapabilities {
     pub delete_branch_after_merge: bool,
     pub commit_status: bool,
     pub user_authorship: bool,
+    pub change_head_ref: &'static str,
     pub diagnostics: Option<saka_core::diagnostics::AppRequirements>,
 }
 

@@ -11,12 +11,13 @@ use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
 use saka_core::gate::Check;
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{ChangeState, CheckKind, MergeMethod};
+use saka_core::vocab::{ChangeState, CheckKind, MergeMethod, ReviewEvent};
 use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange,
-    PortError, PortResult, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef, Repos, Scm,
-    ScmCapabilities, StatusReport, StatusState, TokenRefresh, WebhookDelivery, WebhookSignature,
+    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
+    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, StatusState, TokenRefresh,
+    WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -34,6 +35,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     user_authorship: false,
+    change_head_ref: "refs/merge-requests/{number}/head",
     diagnostics: None,
 };
 
@@ -482,6 +484,64 @@ impl Scm for GitLab {
             StatusCode::NOT_FOUND => Ok(()),
             _ => Err(self.client.unexpected("delete_branch", &reply)),
         }
+    }
+
+    async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview> {
+        post.check()?;
+        let full_name = &post.repo.full_name;
+        let number = post.number.to_string();
+        let refused = |reply: &Reply| {
+            PortError::permanent("review_refused", json!({ "status": reply.status.as_u16() }))
+        };
+        let note = self
+            .project_call(
+                full_name,
+                Method::POST,
+                &["merge_requests", &number, "notes"],
+                Some(&json!({ "body": post.body })),
+            )
+            .await?;
+        match note.status {
+            s if s.is_success() => {}
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED => {
+                return Err(refused(&note));
+            }
+            _ => return Err(self.client.unexpected("post_review", &note)),
+        }
+        match post.event {
+            ReviewEvent::Comment => {}
+            ReviewEvent::Approve => {
+                let approval = self
+                    .project_call(
+                        full_name,
+                        Method::POST,
+                        &["merge_requests", &number, "approve"],
+                        Some(&json!({ "sha": post.head_sha })),
+                    )
+                    .await?;
+                match approval.status {
+                    s if s.is_success() => {}
+                    StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED | StatusCode::CONFLICT => {
+                        return Err(refused(&approval));
+                    }
+                    _ => return Err(self.client.unexpected("post_review", &approval)),
+                }
+            }
+            ReviewEvent::RequestChanges => {
+                let withdrawn = self
+                    .project_call(
+                        full_name,
+                        Method::POST,
+                        &["merge_requests", &number, "unapprove"],
+                        None,
+                    )
+                    .await?;
+                if withdrawn.status.is_server_error() {
+                    return Err(self.client.unexpected("post_review", &withdrawn));
+                }
+            }
+        }
+        Ok(PostedReview { url: None })
     }
 
     async fn report_status(

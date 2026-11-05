@@ -20,12 +20,12 @@ use saka_ports::{
     ChangedPaths, Clock, CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob, DocCommit,
     DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite, DocsRequest, EnvRef,
     Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
-    OpenChangeRequest, OpenedChange, PortError, PortResult, PrepareRequest, PreparedDocs,
-    PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand, RecipeCommandOutcome,
-    Release, ReleaseIndex, RepoAccess, RepoInfo, RepoRef, RunnerEvent, RunnerEventKind, RunnerUnit,
-    Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor,
-    TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile,
-    WorktreeState,
+    OpenChangeRequest, OpenedChange, PortError, PortResult, PostedReview, PrepareRequest,
+    PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached, RecipeCommand,
+    RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo, RepoRef, ReviewPost,
+    RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed, SecretStore,
+    SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains, WebhookDelivery,
+    WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -210,6 +210,9 @@ struct State {
     command_output: HashMap<String, String>,
     statuses: Vec<(String, StatusReport)>,
     statuses_refused: bool,
+    reviews: Vec<ReviewPost>,
+    review_outages: u32,
+    reviews_refused: bool,
     draft_turns: VecDeque<DraftTurn>,
     push_outages: u32,
     provider_reads_fail: bool,
@@ -365,6 +368,9 @@ impl FakeWorld {
                 command_output: HashMap::new(),
                 statuses: Vec::new(),
                 statuses_refused: false,
+                reviews: Vec::new(),
+                review_outages: 0,
+                reviews_refused: false,
                 draft_turns: VecDeque::new(),
                 push_outages: 0,
                 provider_reads_fail: false,
@@ -700,6 +706,18 @@ impl FakeWorld {
 
     pub fn statuses(&self) -> Vec<(String, StatusReport)> {
         self.state().statuses.clone()
+    }
+
+    pub fn reviews(&self) -> Vec<ReviewPost> {
+        self.state().reviews.clone()
+    }
+
+    pub fn fail_reviews(&self, times: u32) {
+        self.state().review_outages = times;
+    }
+
+    pub fn refuse_reviews(&self) {
+        self.state().reviews_refused = true;
     }
 
     pub fn refuse_statuses(&self) {
@@ -2080,6 +2098,35 @@ impl Scm for FakeWorld {
         Ok(())
     }
 
+    async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview> {
+        post.check()?;
+        let mut s = self.state();
+        s.call("post_review");
+        if s.review_outages > 0 {
+            s.review_outages -= 1;
+            return Err(PortError::retryable("scm_unavailable", json!({})));
+        }
+        let known = s
+            .prs
+            .iter()
+            .any(|p| p.repo == post.repo.full_name && p.number == post.number);
+        if s.reviews_refused || !known {
+            return Err(PortError::permanent(
+                "review_refused",
+                json!({ "status": 422 }),
+            ));
+        }
+        s.reviews.push(post.clone());
+        Ok(PostedReview {
+            url: Some(format!(
+                "https://scm.test/{}/pull/{}#review-{}",
+                post.repo.full_name,
+                post.number,
+                s.reviews.len()
+            )),
+        })
+    }
+
     async fn report_status(
         &self,
         _repo: &RepoRef,
@@ -2230,6 +2277,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     user_authorship: true,
+    change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(FAKE_APP_REQUIREMENTS),
 };
 

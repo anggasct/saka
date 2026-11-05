@@ -13,7 +13,7 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, MergeMethod};
 use saka_ports::{
     ChangeCredential, ChangeOpening, GitAccess, MergeOutcome, MergeRequest, OpenChangeRequest,
-    PortError, Scm, StatusReport, StatusState,
+    PortError, ReviewPost, Scm, StatusReport, StatusState,
 };
 use serde_json::{Value, json};
 use support::gitlab::{GitLabWorld, TOKEN, mr};
@@ -844,4 +844,38 @@ async fn a_member_below_developer_cannot_write_and_a_missing_membership_cannot_e
     )
     .await;
     assert!(!w.gl.can_write(&w.repo, "alice").await.unwrap());
+}
+
+#[tokio::test]
+async fn an_approval_the_host_refuses_after_the_note_is_a_permanent_refusal() {
+    let w = GitLabWorld::new().await;
+    let base = "/projects/acme%2Fapp/merge_requests/3";
+    serve(
+        &w,
+        "POST",
+        &format!("{base}/notes"),
+        201,
+        json!({ "id": 1 }),
+    )
+    .await;
+    serve(
+        &w,
+        "POST",
+        &format!("{base}/approve"),
+        409,
+        json!({ "message": "SHA does not match HEAD of source branch" }),
+    )
+    .await;
+    let post = ReviewPost {
+        repo: w.repo.clone(),
+        number: 3,
+        head_sha: HEAD.into(),
+        event: saka_core::vocab::ReviewEvent::Approve,
+        body: "Looks right".into(),
+    };
+    let err = w.gl.post_review(&post).await.unwrap_err();
+    assert_eq!(err.code, "review_refused");
+    assert!(!err.retryable);
+    assert_eq!(err.params["status"], 409);
+    assert!(!err.to_string().contains(TOKEN));
 }
