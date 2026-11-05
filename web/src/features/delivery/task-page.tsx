@@ -89,6 +89,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       {item.blocker && (
         <BlockerCard
           blocker={item.blocker}
+          projectId={item.project_id}
           action={
             item.available_actions.includes("retry") && (
               <RetryDialog task={item} primary />

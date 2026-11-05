@@ -105,6 +105,50 @@ const report = {
   ],
 };
 
+const hook = {
+  name: "deploy-staging",
+  on: "merged",
+  mode: "after",
+  action: "run",
+  repos: ["app"],
+  branches: ["main"],
+  codes: [],
+  timeout_secs: 300,
+  target: {
+    command: "./scripts/deploy.sh staging",
+    cwd: null,
+    url: null,
+    secret: null,
+    secrets: ["DEPLOY_TOKEN"],
+    channel: null,
+  },
+};
+
+function hookRun(id: string, state: string, error: object | null) {
+  return {
+    id,
+    project_id: PROJECT_ID,
+    hook: "deploy-staging",
+    action: "run",
+    mode: "after",
+    trigger: "merged",
+    state,
+    work_item_id: null,
+    task_key: null,
+    spec_id: null,
+    repo_id: null,
+    sha: null,
+    context: {},
+    rerun_of: null,
+    attempts: 1,
+    result: { exit_code: error === null ? 0 : 3, output_tail: "log line" },
+    error,
+    queued_at: AT,
+    finished_at: AT,
+    duration_ms: 10,
+  };
+}
+
 type Server = {
   secrets: { name: string; updated_at: string }[];
   polls: number;
@@ -150,6 +194,21 @@ async function mockApi(page: Page, server: Server) {
       server.polls += 1;
       await route.fulfill({
         json: authorization(server.polls >= 2 ? "completed" : "pending"),
+      });
+    } else if (path === `/api/v1/projects/${PROJECT_ID}/hooks`) {
+      await route.fulfill({ json: { items: [hook] } });
+    } else if (path === "/api/v1/hook-runs") {
+      await route.fulfill({
+        json: {
+          items: [
+            hookRun("0193f0c4-1b2a-7c3d-9e8f-0011223355b2", "failed", {
+              code: "hook_command_failed",
+              params: { exit_code: 3 },
+            }),
+            hookRun("0193f0c4-1b2a-7c3d-9e8f-0011223355b1", "succeeded", null),
+          ],
+          next_cursor: null,
+        },
       });
     } else if (path === "/api/v1/diagnostics") {
       await route.fulfill({ json: report });
@@ -210,6 +269,21 @@ for (const width of [375, 1280]) {
       timeout: 10_000,
     });
     await expect(author.getByText("WDJB-MJHT")).toBeHidden();
+
+    const hooks = page.getByRole("region", { name: "Hooks" });
+    await expect(hooks.getByText("./scripts/deploy.sh staging")).toBeVisible();
+    await expect(
+      hooks.getByText("The command exited with code 3."),
+    ).toBeVisible();
+    await hooks
+      .getByRole("button", { name: "Run deploy-staging again" })
+      .first()
+      .click();
+    await expect(
+      page.getByRole("dialog", { name: "Run deploy-staging again" }),
+    ).toBeVisible();
+    await accessible(page);
+    await page.keyboard.press("Escape");
 
     const diagnostics = page.getByRole("region", { name: "Diagnostics" });
     await diagnostics.getByText("Show diagnostics").click();

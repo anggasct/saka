@@ -13,11 +13,17 @@ export type ReloadResult = components["schemas"]["ProjectReload"];
 
 export type Authorship = components["schemas"]["ProjectAuthorship"];
 export type UserLink = components["schemas"]["UserLink"];
+export type Hook = components["schemas"]["Hook"];
+export type HookRun = components["schemas"]["HookRun"];
+
+export const HOOK_RUNS_SHOWN = 20;
 export type Authorization = components["schemas"]["UserLinkAuthorization"];
 
 export const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
 export const settingsKeys = {
+  hooks: (projectId: string) => [QUERY_ROOTS.hooks, projectId] as const,
+  hookRuns: (projectId: string) => [QUERY_ROOTS.hookRuns, projectId] as const,
   secrets: (projectId: string) => [QUERY_ROOTS.secrets, projectId] as const,
   authorship: (projectId: string) =>
     [QUERY_ROOTS.authorship, projectId] as const,
@@ -42,6 +48,48 @@ export function useSecrets(projectId: string) {
         }),
       ).items,
   });
+}
+
+export function useHooks(projectId: string) {
+  return useQuery({
+    queryKey: settingsKeys.hooks(projectId),
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/v1/projects/{project_id}/hooks", {
+          params: { path: { project_id: projectId } },
+          signal,
+        }),
+      ).items,
+  });
+}
+
+export function useHookRuns(projectId: string) {
+  return useQuery({
+    queryKey: settingsKeys.hookRuns(projectId),
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/v1/hook-runs", {
+          params: { query: { project_id: projectId, limit: HOOK_RUNS_SHOWN } },
+          signal,
+        }),
+      ).items,
+  });
+}
+
+export async function rerunHook(
+  hookRunId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<HookRun> {
+  return unwrap(
+    await api.POST("/api/v1/hook-runs/{hook_run_id}/actions/rerun", {
+      params: {
+        path: { hook_run_id: hookRunId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
 }
 
 export async function reloadProject(
