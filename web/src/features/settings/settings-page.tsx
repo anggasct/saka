@@ -9,6 +9,7 @@ import { Skeleton } from "@/ui/skeleton";
 
 import { AuthorshipSection } from "./authorship-section";
 import { ConfigSection } from "./config-section";
+import { DiagnosticsSection } from "./diagnostics-section";
 import { ReposSection } from "./repos-section";
 import { SecretsSection } from "./secrets-section";
 import { WorkflowSection } from "./workflow-section";
@@ -30,6 +31,7 @@ export function SettingsPage({ projectId }: { projectId: string }) {
           <WorkflowSection project={project.data} />
           <SecretsSection projectId={project.data.id} />
           <AuthorshipSection projectId={project.data.id} />
+          <DiagnosticsSection projectId={project.data.id} />
         </>
       ) : missing ? (
         <Card role="alert" className="space-y-3 p-4">
