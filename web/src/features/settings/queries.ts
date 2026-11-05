@@ -243,3 +243,21 @@ export async function deleteUserToken(
     unwrap(result);
   }
 }
+
+export type DiagnosticReport = components["schemas"]["DiagnosticReport"];
+export type DiagnosticCheck = components["schemas"]["DiagnosticCheck"];
+
+export function useDiagnostics(projectId: string) {
+  return useQuery({
+    queryKey: [QUERY_ROOTS.diagnostics, projectId] as const,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/v1/diagnostics", {
+          params: { query: { project_id: projectId } },
+          signal,
+        }),
+      ),
+  });
+}
