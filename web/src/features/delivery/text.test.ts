@@ -296,6 +296,9 @@ function hookFailures(): [string, Record<string, unknown>][] {
 }
 
 const VARIANTS: [string, Record<string, unknown>][] = [
+  ["verdict_failed", {}],
+  ["review_rounds_exhausted", {}],
+  ["spec_unclear", {}],
   [
     "env_setup_failed",
     {
@@ -665,6 +668,14 @@ const LABELS: Record<string, string[]> = {
   "permission.state": ["pending", "allowed", "denied", "expired"],
   "packet.kind": ["spec", "context"],
   "packet.origin": ["link", "always"],
+  "blocker.action": [
+    "retry",
+    "cancel",
+    "set_secret",
+    "link_account",
+    "set_user_token",
+    "edit_spec",
+  ],
 };
 
 const ERRORS = [

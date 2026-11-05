@@ -1,5 +1,6 @@
 pub mod admission;
 pub mod authorship;
+pub mod blocker;
 pub mod diagnostics;
 pub mod draft;
 pub mod event;

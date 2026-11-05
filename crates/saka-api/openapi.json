@@ -3110,6 +3110,64 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/actions/primary": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "primary_action",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrimaryActionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items/{work_item_id}/actions/retry": {
       "post": {
         "tags": [
@@ -3477,7 +3535,8 @@
           "id",
           "code",
           "params",
-          "opened_at"
+          "opened_at",
+          "primary_action"
         ],
         "properties": {
           "code": {
@@ -3491,6 +3550,9 @@
             "type": "string"
           },
           "params": {},
+          "primary_action": {
+            "$ref": "#/components/schemas/PrimaryAction"
+          },
           "stage": {
             "type": [
               "string",
@@ -5920,6 +5982,40 @@
             "minimum": 0
           }
         }
+      },
+      "PrimaryAction": {
+        "type": "object",
+        "required": [
+          "kind",
+          "params"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`retry | cancel | set_secret | link_account | set_user_token | edit_spec`. Only `retry` and\n`cancel` run through `actions/primary`; the others need input the client collects."
+          },
+          "params": {
+            "description": "`set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`."
+          }
+        }
+      },
+      "PrimaryActionBody": {
+        "type": "object",
+        "required": [
+          "blocker_id",
+          "reason"
+        ],
+        "properties": {
+          "blocker_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The blocker the operator saw; a blocker that is no longer the open one of the task is refused."
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "Problem": {
         "type": "object",

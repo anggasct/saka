@@ -55,6 +55,7 @@ const blocked = detail(
       params: {},
       opened_at: "2026-10-31T10:05:00.000Z",
       stage: "dev",
+      primary_action: { kind: "retry", params: {} },
     },
     available_actions: ["retry", "cancel"],
   }),

@@ -49,6 +49,7 @@ const blocked = detail(
       },
       opened_at: "2026-10-31T10:05:00.000Z",
       stage: "merge",
+      primary_action: { kind: "retry", params: {} },
     },
     gates: [
       {
@@ -180,6 +181,7 @@ describe("TaskPage", () => {
           },
           opened_at: "2026-10-31T10:05:00.000Z",
           stage: "sync",
+          primary_action: { kind: "retry", params: {} },
         },
       }),
     );

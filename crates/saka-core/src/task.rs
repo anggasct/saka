@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use crate::Ctx;
 use crate::authorship::CredentialBlock;
+use crate::blocker::primary_action;
 use crate::event::{Event, Prompt};
 use crate::external;
 use crate::gate::{self, Check, GatePolicy};
@@ -20,11 +21,10 @@ use crate::session::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
+    BlockerAction, BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
     EnvironmentState, ExternalCause, GateOutcome, GateSource, HookRunState, MergeMethod,
-    ResumeCause,
-    ResumeTrigger, ScopeStage, SessionState, Stage, StagePhase, StageRunState, Trigger,
-    WorkItemOrigin, WorkItemState,
+    ResumeCause, ResumeTrigger, ScopeStage, SessionState, Stage, StagePhase, StageRunState,
+    Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -176,6 +176,10 @@ pub enum TaskInput {
         reason: String,
     },
     Cancel {
+        reason: String,
+    },
+    ResolveBlocker {
+        blocker_id: BlockerId,
         reason: String,
     },
     JobExhausted {
@@ -393,6 +397,9 @@ pub fn decide(
         I::AutoRetry => d.auto_retry(ctx),
         I::Resume { trigger } => d.resume(trigger, ctx),
         I::Cancel { reason } => return d.cancel(reason),
+        I::ResolveBlocker { blocker_id, reason } => {
+            return d.resolve_blocker(blocker_id, reason, ctx);
+        }
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
         I::ReviewRequested { .. } => return Err(Rejection::Unsupported),
     })
@@ -1735,6 +1742,33 @@ impl Decider<'_> {
         Ok(events)
     }
 
+    fn resolve_blocker(
+        &self,
+        blocker_id: BlockerId,
+        reason: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let open = self
+            .task
+            .open_blocker()
+            .filter(|b| b.id == blocker_id && self.item().state == WorkItemState::Blocked);
+        if open.is_none() {
+            return Err(Rejection::BlockerNotOpen {
+                blocker_id: blocker_id.0.to_string(),
+            });
+        }
+        match primary_action(self.task).map(|a| a.kind) {
+            Some(BlockerAction::Retry) => self.retry(reason, ctx),
+            Some(BlockerAction::Cancel) => self.cancel(reason),
+            Some(other) => Err(Rejection::ActionNeedsInput {
+                action: other.as_str(),
+            }),
+            None => Err(Rejection::BlockerNotOpen {
+                blocker_id: blocker_id.0.to_string(),
+            }),
+        }
+    }
+
     fn cancel(&self, reason: String) -> Result<Vec<Event>, Rejection> {
         if !matches!(
             self.item().state,
@@ -2446,19 +2480,22 @@ pub fn gates_clear(task: &Task) -> bool {
         && at_head.iter().any(|g| g.outcome == GateOutcome::Passed)
 }
 
+pub fn can_retry(task: &Task) -> bool {
+    task.item.state == WorkItemState::Blocked
+        && task.open_blocker().is_some_and(|b| {
+            retry_entry(b.code, &b.params).is_some_and(|(stage, _)| {
+                task.retries.get(&stage).map_or(0, |r| r.manual) < MANUAL_RETRY_LIMIT
+            })
+        })
+}
+
 pub fn available_actions(task: &Task) -> Vec<&'static str> {
     let mut actions = Vec::new();
     let merge_ready = task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(task);
     if merge_ready {
         actions.push("merge");
     }
-    let retryable = task.item.state == WorkItemState::Blocked
-        && task.open_blocker().is_some_and(|b| {
-            retry_entry(b.code, &b.params).is_some_and(|(stage, _)| {
-                task.retries.get(&stage).map_or(0, |r| r.manual) < MANUAL_RETRY_LIMIT
-            })
-        });
-    if retryable {
+    if can_retry(task) {
         actions.push("retry");
     }
     if matches!(
