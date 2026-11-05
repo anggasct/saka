@@ -291,6 +291,23 @@ export async function retryTask(
   );
 }
 
+export async function runPrimaryAction(
+  workItemId: string,
+  blockerId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/primary", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: { blocker_id: blockerId, reason },
+    }),
+  );
+}
+
 export async function cancelTask(
   workItemId: string,
   reason: string,

@@ -19,7 +19,7 @@ import {
 } from "./queries";
 import { SessionSection } from "./session-section";
 import { StageRunsSection } from "./stage-runs-section";
-import { RetryDialog, TaskActions } from "./task-actions";
+import { TaskActions } from "./task-actions";
 import { TaskHeader } from "./task-header";
 import { WaitingSection } from "./waiting-section";
 import { WorkPacketSection } from "./work-packet-section";
@@ -88,13 +88,9 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       />
       {item.blocker && (
         <BlockerCard
+          task={item}
           blocker={item.blocker}
-          projectId={item.project_id}
-          action={
-            item.available_actions.includes("retry") && (
-              <RetryDialog task={item} primary />
-            )
-          }
+          specPath={spec.data?.path}
         />
       )}
       <WaitingSection task={item} tasks={tasks} />

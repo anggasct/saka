@@ -7,10 +7,10 @@ import { ActionDialog } from "./action-dialog";
 import { useFormat } from "./format";
 import { codeOf } from "./page-error";
 import type { WorkItem } from "./queries";
-import { cancelTask, mergeTask, retryTask } from "./queries";
+import { cancelTask, mergeTask, retryTask, runPrimaryAction } from "./queries";
 import { blockerText, label, record, sha } from "./text";
 
-const RELOAD_ON = ["version_stale", "invalid_state"];
+const RELOAD_ON = ["version_stale", "invalid_state", "blocker_not_open"];
 
 function useAfterAction() {
   const queryClient = useQueryClient();
@@ -72,6 +72,16 @@ function MergeDialog({ task }: { task: WorkItem }) {
   );
 }
 
+type Run = (reason: string, idempotencyKey: string) => Promise<void>;
+
+function primaryRun(task: WorkItem): Run | undefined {
+  const blocker = task.blocker;
+  if (!blocker) {
+    return undefined;
+  }
+  return (reason, key) => runPrimaryAction(task.id, blocker.id, reason, key);
+}
+
 export function RetryDialog({
   task,
   primary = false,
@@ -83,6 +93,7 @@ export function RetryDialog({
   const format = useFormat();
   const after = useAfterAction();
   const blocker = task.blocker;
+  const run = primaryRun(task);
   return (
     <ActionDialog
       trigger={t("task.retry.trigger")}
@@ -92,7 +103,11 @@ export function RetryDialog({
       reason={{ label: t("dialog.reason"), required: true }}
       submit={t("task.retry.submit")}
       onSubmit={(reason, key) =>
-        after(() => retryTask(task.id, reason ?? "", key))
+        after(() =>
+          primary && run
+            ? run(reason ?? "", key)
+            : retryTask(task.id, reason ?? "", key),
+        )
       }
     >
       {blocker && (
@@ -118,25 +133,38 @@ export function RetryDialog({
   );
 }
 
-function CancelDialog({ task }: { task: WorkItem }) {
+export function CancelDialog({
+  task,
+  primary = false,
+}: {
+  task: WorkItem;
+  primary?: boolean;
+}) {
   const t = useT();
   const after = useAfterAction();
+  const run = primaryRun(task);
   return (
     <ActionDialog
       trigger={t("task.cancel.trigger")}
+      triggerVariant={primary ? "default" : "outline"}
       title={t("task.cancel.title")}
       description={t("task.cancel.description")}
       reason={{ label: t("dialog.reason"), required: true }}
       submit={t("task.cancel.submit")}
       onSubmit={(reason, key) =>
-        after(() => cancelTask(task.id, reason ?? "", key))
+        after(() =>
+          primary && run
+            ? run(reason ?? "", key)
+            : cancelTask(task.id, reason ?? "", key),
+        )
       }
     />
   );
 }
 
 export function TaskActions({ task }: { task: WorkItem }) {
-  const actions = task.available_actions;
+  const primary = task.blocker?.primary_action.kind;
+  const actions = task.available_actions.filter((a) => a !== primary);
   if (actions.length === 0) {
     return null;
   }

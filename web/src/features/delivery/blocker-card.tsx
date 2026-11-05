@@ -1,10 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
 
 import { useT } from "@/i18n/use-t";
 
 import { useFormat } from "./format";
-import type { Blocker } from "./queries";
+import { PrimaryAction } from "./primary-action";
+import type { Blocker, WorkItem } from "./queries";
 import { Section } from "./section";
 import { blockerText, label, record, sha, text } from "./text";
 import { When } from "./when";
@@ -14,13 +14,13 @@ function list(value: unknown): string[] {
 }
 
 export function BlockerCard({
+  task,
   blocker,
-  projectId,
-  action,
+  specPath,
 }: {
+  task: WorkItem;
   blocker: Blocker;
-  projectId: string;
-  action: ReactNode;
+  specPath: string | undefined;
 }) {
   const t = useT();
   const format = useFormat();
@@ -110,13 +110,13 @@ export function BlockerCard({
       {blocker.code === "hook_failed" && (
         <Link
           to="/settings/$projectId"
-          params={{ projectId }}
+          params={{ projectId: task.project_id }}
           className="inline-flex min-h-11 items-center text-sm font-medium text-primary underline underline-offset-4"
         >
           {t("task.blocker.hookHistory")}
         </Link>
       )}
-      {action}
+      <PrimaryAction task={task} specPath={specPath} />
     </Section>
   );
 }
