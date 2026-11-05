@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { useT } from "@/i18n/use-t";
@@ -14,9 +15,11 @@ function list(value: unknown): string[] {
 
 export function BlockerCard({
   blocker,
+  projectId,
   action,
 }: {
   blocker: Blocker;
+  projectId: string;
   action: ReactNode;
 }) {
   const t = useT();
@@ -103,6 +106,15 @@ export function BlockerCard({
         <p className="text-sm break-all text-muted-foreground">
           {t("task.blocker.log", { path: log })}
         </p>
+      )}
+      {blocker.code === "hook_failed" && (
+        <Link
+          to="/settings/$projectId"
+          params={{ projectId }}
+          className="inline-flex min-h-11 items-center text-sm font-medium text-primary underline underline-offset-4"
+        >
+          {t("task.blocker.hookHistory")}
+        </Link>
       )}
       {action}
     </Section>

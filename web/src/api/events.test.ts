@@ -77,6 +77,14 @@ describe("startEventStream", () => {
       [["permission-requests"], ["work-items"]],
     );
     invalidate.mockClear();
+    fake.emit("delivery.hook_run.finished.v1", {
+      seq: 9,
+      stream_type: "hook_run",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["hook-runs"]],
+    );
+    invalidate.mockClear();
     fake.emit("engine.job.exhausted.v1", { seq: 9, stream_type: "job" });
     expect(invalidate).not.toHaveBeenCalled();
 

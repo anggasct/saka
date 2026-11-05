@@ -270,6 +270,31 @@ describe("blockerText", () => {
 
 const HEAD = "a1b2c3d4e5f6".padEnd(40, "0");
 
+function hookFailures(): [string, Record<string, unknown>][] {
+  const failure = (
+    action: string,
+    code: string,
+    params: Record<string, unknown> = {},
+  ): [string, Record<string, unknown>] => [
+    "hook_failed",
+    { hook: "smoke", action, error: { code, params } },
+  ];
+  return [
+    failure("run", "hook_command_failed", { exit_code: 2 }),
+    failure("run_host", "hook_timed_out", { timeout_secs: 30 }),
+    failure("webhook", "hook_webhook_rejected", { status: 404 }),
+    failure("webhook", "hook_webhook_unavailable"),
+    failure("webhook", "hook_secret_missing", { name: "SIGNING_KEY" }),
+    failure("webhook", "hook_secret_unreadable", { name: "SIGNING_KEY" }),
+    failure("run", "hook_environment_failed"),
+    failure("run", "hook_commit_unavailable"),
+    failure("run", "hook_not_configured"),
+    failure("notify", "notify_channel_unconfigured", { channel: "ops" }),
+    failure("notify", "retries_exhausted"),
+    failure("notify", "future_code"),
+  ];
+}
+
 const VARIANTS: [string, Record<string, unknown>][] = [
   [
     "env_setup_failed",
@@ -380,6 +405,7 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ["no_changes", { dirty: false, commits: 0 }],
   ["push_rejected", { remote_sha: HEAD, local_sha: "f".repeat(40) }],
   ["push_rejected", {}],
+  ...hookFailures(),
   ["scm_unavailable", { phase: "awaiting_ci" }],
   ["scm_unavailable", { phase: "verifying" }],
   ["scm_unavailable", {}],
@@ -668,6 +694,9 @@ const ERRORS = [
   "user_token_not_fine_grained",
   "user_token_rejected",
   "user_token_repo_inaccessible",
+  "hook_run_pending",
+  "hook_not_configured",
+  "hook_run_gated",
 ];
 
 describe("catalog coverage", () => {
@@ -708,6 +737,29 @@ describe("catalog coverage", () => {
       );
     });
   }
+
+  it("names the hook, its kind, and the parameters of a failed gate", () => {
+    const en = translator("en");
+    expect(
+      blockerText(en, "hook_failed", {
+        hook: "smoke",
+        action: "run",
+        error: { code: "hook_command_failed", params: { exit_code: 2 } },
+      }),
+    ).toBe("The gate hook smoke (run) failed: the command exited with code 2.");
+    expect(
+      blockerText(en, "hook_failed", {
+        hook: "tell",
+        action: "notify",
+        error: {
+          code: "notify_channel_unconfigured",
+          params: { channel: "ops" },
+        },
+      }),
+    ).toBe(
+      "The gate hook tell (notify) failed: the channel ops is not set up.",
+    );
+  });
 
   it("fills the parameters of an error", () => {
     const en = translator("en");

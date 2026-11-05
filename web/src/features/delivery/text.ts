@@ -41,7 +41,7 @@ export function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function number(value: unknown): number {
+export function number(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
@@ -143,6 +143,11 @@ export function blockerText(
     login: text(params.login),
     status: text(params.status),
     number: text(params.number),
+    hook: text(params.hook),
+    action: text(params.action) || "other",
+    hook_exit: text(errorParams.exit_code),
+    hook_status: text(errorParams.status),
+    hook_detail: text(errorParams.name) || text(errorParams.channel),
   };
   return t(key, values);
 }
@@ -177,6 +182,7 @@ export function errorText(
       : "",
     cause: text(params.cause) || "other",
     status: text(params.status),
+    hook: text(params.hook),
     repos: Array.isArray(params.repos)
       ? params.repos.map((r) => text(record(r).full_name)).join(", ")
       : "",

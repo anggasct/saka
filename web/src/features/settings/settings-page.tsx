@@ -10,6 +10,7 @@ import { Skeleton } from "@/ui/skeleton";
 import { AuthorshipSection } from "./authorship-section";
 import { ConfigSection } from "./config-section";
 import { DiagnosticsSection } from "./diagnostics-section";
+import { HooksSection } from "./hooks-section";
 import { ReposSection } from "./repos-section";
 import { SecretsSection } from "./secrets-section";
 import { WorkflowSection } from "./workflow-section";
@@ -29,6 +30,7 @@ export function SettingsPage({ projectId }: { projectId: string }) {
           <ReposSection project={project.data} />
           <ConfigSection project={project.data} />
           <WorkflowSection project={project.data} />
+          <HooksSection projectId={project.data.id} />
           <SecretsSection projectId={project.data.id} />
           <AuthorshipSection projectId={project.data.id} />
           <DiagnosticsSection projectId={project.data.id} />

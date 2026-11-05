@@ -83,6 +83,8 @@ export const EVENT_KINDS = [
   "scm.user_link.relink_required",
   "scm.user_link.removed",
   "engine.job.exhausted",
+  "delivery.hook_run.queued",
+  "delivery.hook_run.finished",
 ] as const;
 
 export const QUERY_ROOTS = {
@@ -98,6 +100,8 @@ export const QUERY_ROOTS = {
   authorship: "authorship",
   userLinks: "user-links",
   diagnostics: "diagnostics",
+  hooks: "hooks",
+  hookRuns: "hook-runs",
 } as const;
 
 const AFFECTS: Record<string, readonly string[]> = {
@@ -108,6 +112,7 @@ const AFFECTS: Record<string, readonly string[]> = {
     QUERY_ROOTS.secrets,
     QUERY_ROOTS.authorship,
   ],
+  hook_run: [QUERY_ROOTS.hookRuns],
   user_link: [QUERY_ROOTS.userLinks, QUERY_ROOTS.authorship],
   user_link_authorization: [QUERY_ROOTS.userLinks],
   spec: [QUERY_ROOTS.specs],

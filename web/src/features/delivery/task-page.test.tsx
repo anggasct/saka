@@ -164,6 +164,40 @@ function routes(
 }
 
 describe("TaskPage", () => {
+  it("explains a failed gate hook and links to the project's hook runs", async () => {
+    const hookBlocked = detail(
+      task(1, {
+        state: "blocked",
+        change_request: change,
+        blocker: {
+          id: "0193f0c4-1b2a-7c3d-9e8f-001122334489",
+          code: "hook_failed",
+          params: {
+            hook: "smoke",
+            hook_run_id: "0193f0c4-1b2a-7c3d-9e8f-0011223355c1",
+            action: "run",
+            error: { code: "hook_command_failed", params: { exit_code: 2 } },
+          },
+          opened_at: "2026-10-31T10:05:00.000Z",
+          stage: "sync",
+        },
+      }),
+    );
+    fakeApi(routes(hookBlocked));
+    renderWithProviders(<TaskPage workItemId={hookBlocked.id} />);
+    const blocker = await screen.findByRole("region", { name: "Blocker" });
+    expect(
+      within(blocker).getByText(
+        "The gate hook smoke (run) failed: the command exited with code 2.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(blocker).getByRole("link", {
+        name: "See the hook runs in project settings",
+      }),
+    ).toHaveAttribute("href", `/settings/${PROJECT_ID}`);
+  });
+
   it("shows the evidence of a blocked task", async () => {
     fakeApi(routes(blocked));
     renderWithProviders(<TaskPage workItemId={blocked.id} />);
