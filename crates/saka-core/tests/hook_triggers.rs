@@ -3,11 +3,11 @@
 use saka_core::event::Event;
 use saka_core::hook::{self, Facts, RepoRef};
 use saka_core::ids::{ChangeRequestId, ProjectId, RepoId, SpecId, WorkItemId};
-use saka_core::model::{ChangeRequest, Task, WorkItem};
+use saka_core::model::{Blocker, ChangeRequest, Task, WorkItem};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    BlockerCode, ChangeCredentialKind, ChangeRole, ChangeState, HookEvent, WorkItemOrigin,
-    WorkItemState,
+    BlockerAction, BlockerCode, ChangeCredentialKind, ChangeRole, ChangeState, HookEvent,
+    WorkItemOrigin, WorkItemState,
 };
 use uuid::Uuid;
 
@@ -72,7 +72,24 @@ fn facts() -> Facts {
 }
 
 fn context(event: &Event) -> Option<hook::HookContext> {
-    hook::task_context(event, &task(), &facts(), Timestamp(1_793_786_400_123))
+    let mut task = task();
+    if let Event::WorkItemBlocked {
+        blocker_id, code, ..
+    } = event
+    {
+        task.item.state = WorkItemState::Blocked;
+        task.blocker = Some(Blocker {
+            id: *blocker_id,
+            work_item_id: WORK,
+            stage_run_id: None,
+            code: *code,
+            params: serde_json::json!({}),
+            resolution: None,
+            opened_at: Timestamp(1),
+            resolved_at: None,
+        });
+    }
+    hook::task_context(event, &task, &facts(), Timestamp(1_793_786_400_123))
 }
 
 fn merged(role: ChangeRole) -> Event {
@@ -136,7 +153,10 @@ fn a_blocker_triggers_with_its_code_except_hook_failed_which_never_triggers() {
     };
     let ctx = context(&blocked(BlockerCode::CiRed)).unwrap();
     assert_eq!(ctx.event, HookEvent::Blocked);
-    assert_eq!(ctx.blocker.unwrap().code, BlockerCode::CiRed);
+    let blocker = ctx.blocker.unwrap();
+    assert_eq!(blocker.code, BlockerCode::CiRed);
+    assert_eq!(blocker.id, saka_core::ids::BlockerId(Uuid::from_u128(6)));
+    assert_eq!(blocker.action, Some(BlockerAction::Retry));
     assert!(context(&blocked(BlockerCode::HookFailed)).is_none());
 }
 

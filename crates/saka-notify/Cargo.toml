@@ -14,11 +14,12 @@ workspace = true
 async-trait.workspace = true
 hmac.workspace = true
 reqwest.workspace = true
+saka-core = { path = "../saka-core" }
 saka-ports = { path = "../saka-ports" }
 serde_json.workspace = true
 sha2.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-saka-core = { path = "../saka-core" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock.workspace = true

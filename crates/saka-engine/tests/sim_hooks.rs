@@ -5,7 +5,7 @@ use saka_core::secret::SecretText;
 use saka_core::vocab::HookRunState;
 use saka_engine::{Cause, HookRunFilter, Page};
 use saka_ports::PortError;
-use saka_testkit::{CommandScript, HostScript, Sim, SimConfig, WebhookScript};
+use saka_testkit::{CiScript, CommandScript, HostScript, Sim, SimConfig, WebhookScript};
 use serde_json::json;
 
 const STEPS: usize = 8_000;
@@ -590,4 +590,35 @@ fn a_host_runner_that_cannot_start_is_retried() {
     let all = runs(&sim);
     assert!(all.iter().all(|r| r.state == HookRunState::Succeeded));
     assert_eq!(all[0].attempts, 2);
+}
+
+#[test]
+fn a_blocked_task_notifies_with_its_blocker_and_the_action_a_button_could_take() {
+    let mut cfg = SimConfig {
+        hooks: hook::parse_all(&[raw("tell-ops", "blocked", "notify")]).unwrap(),
+        ci: CiScript::Pass,
+        ..SimConfig::default()
+    };
+    cfg.operator.merge = false;
+    cfg.operator.retry = vec![];
+    let mut sim = Sim::new(cfg);
+    for _ in 0..9 {
+        sim.world
+            .script_command("cd cli && go test ./...", CommandScript::Crash);
+    }
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| settled(s) && !s.hooks.notifications().is_empty()));
+
+    let task = sim.task(1);
+    let blocker = task.open_blocker().cloned().unwrap();
+    let sent = sim.hooks.notifications();
+    assert_eq!(sent[0].channel, "ops");
+    let params = &sent[0].params;
+    assert_eq!(params["event"], "blocked");
+    assert_eq!(params["task"]["id"], task.item.id.0.to_string());
+    assert_eq!(params["blocker"]["id"], blocker.id.0.to_string());
+    assert_eq!(params["blocker"]["code"], "ci_red");
+    assert_eq!(params["blocker"]["action"], "retry");
+    let run = runs(&sim).remove(0);
+    assert_eq!(run.context.blocker.unwrap().id, blocker.id);
 }

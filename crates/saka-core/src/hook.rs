@@ -5,12 +5,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::blocker::primary_action;
 use crate::event::Event;
-use crate::ids::{HookRunId, IdSource, ProjectId, RepoId, SpecId, WorkItemId};
+use crate::ids::{BlockerId, HookRunId, IdSource, ProjectId, RepoId, SpecId, WorkItemId};
 use crate::model::{Coded, Spec, Task};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
-use crate::vocab::{BlockerCode, ChangeRole, HookActionKind, HookEvent, HookMode, HookRunState};
+use crate::vocab::{
+    BlockerAction, BlockerCode, ChangeRole, HookActionKind, HookEvent, HookMode, HookRunState,
+};
 
 pub const MAX_PER_PROJECT: usize = 32;
 pub const MAX_TOTAL: usize = 128;
@@ -421,7 +424,9 @@ pub struct ChangeRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockerRef {
+    pub id: BlockerId,
     pub code: BlockerCode,
+    pub action: Option<BlockerAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,9 +475,17 @@ pub fn task_context(
         Event::WorkItemDone {
             merge_commit_sha, ..
         } => (HookEvent::TaskDone, Some(merge_commit_sha.clone()), None),
-        Event::WorkItemBlocked { code, .. } if *code != BlockerCode::HookFailed => {
-            (HookEvent::Blocked, None, Some(BlockerRef { code: *code }))
-        }
+        Event::WorkItemBlocked {
+            blocker_id, code, ..
+        } if *code != BlockerCode::HookFailed => (
+            HookEvent::Blocked,
+            None,
+            Some(BlockerRef {
+                id: *blocker_id,
+                code: *code,
+                action: primary_action(task).map(|a| a.kind),
+            }),
+        ),
         _ => return None,
     };
     let item = &task.item;
@@ -1043,7 +1056,9 @@ mod tests {
             branch: Some("release/1".into()),
             sha: None,
             blocker: Some(BlockerRef {
+                id: BlockerId(Uuid::from_u128(3)),
                 code: BlockerCode::CiRed,
+                action: Some(BlockerAction::Retry),
             }),
             occurred_at: Timestamp(0).to_rfc3339(),
         }

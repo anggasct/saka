@@ -7,6 +7,10 @@ use saka_core::vocab::MergeMethod;
 use saka_scm::github::app::client_id_valid;
 use serde::Deserialize;
 
+mod notify;
+
+pub use notify::Notify;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{code}: {detail}")]
 pub struct ConfigError {
@@ -50,6 +54,8 @@ pub struct Config {
     pub hooks: Option<Hooks>,
     #[serde(default)]
     pub hook: Vec<saka_core::hook::RawHook>,
+    #[serde(default)]
+    pub notify: Notify,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -689,7 +695,18 @@ impl Config {
                 "workspace.config_poll_secs must be 0 or 30..=86400",
             ));
         }
-        self.hooks_parsed()?;
+        let hooks = self.hooks_parsed()?;
+        self.notify.validate()?;
+        for hook in &hooks {
+            if let saka_core::hook::HookAction::Notify { channel } = &hook.action
+                && !self.notify.names().any(|n| n == channel)
+            {
+                return Err(err(
+                    "config_notify_invalid",
+                    format!("notify_hook_channel_unknown: hook {:?}", hook.name),
+                ));
+            }
+        }
         let mut ids = std::collections::BTreeSet::new();
         for s in &self.scm {
             if !id_ok(&s.id, 32) || !ids.insert(s.id.clone()) {
@@ -947,6 +964,9 @@ impl Config {
 
     pub fn check_key_files(&self) -> Result<(), ConfigError> {
         for file in self.scm.iter().flat_map(ScmEntry::private_files) {
+            check_private_file(&expand(file))?;
+        }
+        for file in self.notify_token_files() {
             check_private_file(&expand(file))?;
         }
         Ok(())
@@ -1282,6 +1302,12 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        assert_eq!(cfg.notify.channel[0].name, "ops");
+        assert_eq!(
+            cfg.notify.public_url.as_deref(),
+            Some("https://saka.example.com")
+        );
+        assert_eq!(cfg.notify.language, "en");
         let hooks = cfg.hooks_parsed().unwrap();
         assert_eq!(hooks.len(), 5);
         assert_eq!(hooks[0].name, "announce-merge");
@@ -1303,7 +1329,7 @@ mod tests {
     fn hooks_are_checked_with_a_coded_error_that_names_the_hook_and_field() {
         let hook = |extra: &str| {
             format!(
-                "[[hook]]\nname = \"tell\"\nproject = \"tasks\"\non = \"merged\"\naction = \"notify\"\nchannel = \"ops\"\n{extra}"
+                "[[notify.channel]]\nname = \"ops\"\nkind = \"telegram\"\ntoken_file = \"/t\"\nchat = \"-1\"\n[[hook]]\nname = \"tell\"\nproject = \"tasks\"\non = \"merged\"\naction = \"notify\"\nchannel = \"ops\"\n{extra}"
             )
         };
         assert_eq!(Config::parse(&hook("")).unwrap().hook.len(), 1);
@@ -1317,7 +1343,8 @@ mod tests {
             assert_eq!(e.code, "config_hook_invalid", "{extra}");
             assert!(e.detail.starts_with(code), "{extra}: {}", e.detail);
         }
-        let e = Config::parse(&format!("{}{}", hook(""), hook(""))).unwrap_err();
+        let twice = format!("{}{}", hook(""), hook("").replace("[[notify.channel]]\nname = \"ops\"\nkind = \"telegram\"\ntoken_file = \"/t\"\nchat = \"-1\"\n", ""));
+        let e = Config::parse(&twice).unwrap_err();
         assert!(e.detail.starts_with("hook_name_duplicate"), "{}", e.detail);
         let e = Config::parse(&hook("nope = 1\n")).unwrap_err();
         assert_eq!(e.code, "config_unknown_field");
@@ -1345,7 +1372,7 @@ mod tests {
                 assert_eq!(checked.unwrap_err().code, "config_hook_file_writable");
             }
         }
-        let plain = Config::parse("[[hook]]\nname = \"t\"\nproject = \"tasks\"\non = \"merged\"\naction = \"notify\"\nchannel = \"ops\"\n").unwrap();
+        let plain = Config::parse("[[notify.channel]]\nname = \"ops\"\nkind = \"telegram\"\ntoken_file = \"/t\"\nchat = \"-1\"\n[[hook]]\nname = \"t\"\nproject = \"tasks\"\non = \"merged\"\naction = \"notify\"\nchannel = \"ops\"\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert!(
             plain.check_hook_file(&path).is_ok(),

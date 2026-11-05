@@ -820,6 +820,19 @@ async fn run(
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    let notifier: Arc<dyn saka_ports::Notifier> = if cfg.notify.channel.is_empty() {
+        Arc::new(saka_notify::UnconfiguredNotifier)
+    } else {
+        match cfg.chat_notifier(&format!("saka/{VERSION}"), &clock) {
+            Ok(n) => Arc::new(n),
+            Err(e) => {
+                tracing::error!(code = e.code, detail = %e.detail, "notify config refused");
+                let _ = stop.send(true);
+                let _ = http.await;
+                return ExitCode::from(EXIT_REFUSED);
+            }
+        }
+    };
     let agents = ClaudeAgents::new(agents_config(cfg), Arc::new(SystemdSupervisor), events_tx);
     let engine = Arc::new(Engine::new(
         store,
@@ -835,7 +848,7 @@ async fn run(
             supervisor: Arc::new(SystemdSupervisor),
             releases,
             webhooks: outbound,
-            notifier: Arc::new(saka_notify::UnconfiguredNotifier),
+            notifier,
             host: Arc::new(saka_env::HostRunner {
                 supervisor: Arc::new(SystemdSupervisor),
                 limits: UnitLimits {
