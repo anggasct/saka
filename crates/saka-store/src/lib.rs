@@ -3,6 +3,7 @@ mod codec;
 mod conn;
 pub mod draft;
 mod error;
+pub mod hook_run;
 mod jobs;
 pub mod list;
 mod migrate;

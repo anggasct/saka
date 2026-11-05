@@ -140,6 +140,184 @@
         }
       }
     },
+    "/api/v1/hook-runs": {
+      "get": {
+        "tags": [
+          "hooks"
+        ],
+        "operationId": "list_hook_runs",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hook",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`pending`, `succeeded`, or `failed`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "work_item_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_HookRun"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hook-runs/{hook_run_id}": {
+      "get": {
+        "tags": [
+          "hooks"
+        ],
+        "operationId": "get_hook_run",
+        "parameters": [
+          {
+            "name": "hook_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hook-runs/{hook_run_id}/actions/rerun": {
+      "post": {
+        "tags": [
+          "hooks"
+        ],
+        "operationId": "rerun_hook",
+        "parameters": [
+          {
+            "name": "hook_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookRun"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "tags": [
@@ -1056,6 +1234,45 @@
             }
           },
           "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hooks": {
+      "get": {
+        "tags": [
+          "hooks"
+        ],
+        "operationId": "list_project_hooks",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookList"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4100,6 +4317,262 @@
           }
         }
       },
+      "Hook": {
+        "type": "object",
+        "required": [
+          "name",
+          "on",
+          "mode",
+          "action",
+          "repos",
+          "branches",
+          "codes",
+          "timeout_secs",
+          "target"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`run`, `run_host`, `webhook`, or `notify`."
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "description": "`after` or `gate`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string",
+            "description": "`change_opened`, `merged`, `task_done`, `spec_shipped`, or `blocked`."
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target": {
+            "$ref": "#/components/schemas/HookTarget"
+          },
+          "timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HookList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hook"
+            }
+          }
+        }
+      },
+      "HookRun": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "hook",
+          "action",
+          "mode",
+          "trigger",
+          "state",
+          "context",
+          "attempts",
+          "queued_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`run`, `run_host`, `webhook`, or `notify`."
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "context": {
+            "description": "What triggered the run: event, project, repo, task, spec, change, branch, sha, and blocker."
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HookRunError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hook": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mode": {
+            "type": "string",
+            "description": "`after` or `gate`."
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "queued_at": {
+            "type": "string"
+          },
+          "repo_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "rerun_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The run this one repeats."
+          },
+          "result": {
+            "description": "`exit_code`, `timed_out`, `http_status`, `log`, `output_tail`, and `skipped`; `null` while pending."
+          },
+          "sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spec_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending`, `succeeded`, or `failed`."
+          },
+          "task_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "description": "The event that triggered the run."
+          },
+          "work_item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "HookRunError": {
+        "type": "object",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {}
+        }
+      },
+      "HookTarget": {
+        "type": "object",
+        "required": [
+          "secrets"
+        ],
+        "properties": {
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The channel of a `notify` hook."
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shell command of a `run` or `run_host` hook."
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The working directory of a `run_host` hook."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The project secret that signs a `webhook` hook."
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The project secrets a `run` hook receives."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The URL of a `webhook` hook without its query or fragment."
+          }
+        }
+      },
       "Lint": {
         "type": "object",
         "required": [
@@ -4193,6 +4666,146 @@
           }
         },
         "additionalProperties": false
+      },
+      "Page_HookRun": {
+        "type": "object",
+        "description": "A list page.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "hook",
+                "action",
+                "mode",
+                "trigger",
+                "state",
+                "context",
+                "attempts",
+                "queued_at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "description": "`run`, `run_host`, `webhook`, or `notify`."
+                },
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "context": {
+                  "description": "What triggered the run: event, project, repo, task, spec, change, branch, sha, and blocker."
+                },
+                "duration_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "error": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/HookRunError"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finished_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "hook": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "mode": {
+                  "type": "string",
+                  "description": "`after` or `gate`."
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "queued_at": {
+                  "type": "string"
+                },
+                "repo_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "rerun_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The run this one repeats."
+                },
+                "result": {
+                  "description": "`exit_code`, `timed_out`, `http_status`, `log`, `output_tail`, and `skipped`; `null` while pending."
+                },
+                "sha": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "spec_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "`pending`, `succeeded`, or `failed`."
+                },
+                "task_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "trigger": {
+                  "type": "string",
+                  "description": "The event that triggered the run."
+                },
+                "work_item_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "Page_PermissionRequest": {
         "type": "object",
@@ -8078,6 +8691,9 @@
     },
     {
       "name": "runtime"
+    },
+    {
+      "name": "hooks"
     },
     {
       "name": "spec-drafts"

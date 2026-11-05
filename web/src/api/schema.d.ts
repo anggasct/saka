@@ -52,6 +52,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/hook-runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_hook_runs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/hook-runs/{hook_run_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_hook_run"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/hook-runs/{hook_run_id}/actions/rerun": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["rerun_hook"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/meta": {
     parameters: {
       query?: never;
@@ -236,6 +284,22 @@ export interface paths {
       cookie?: never;
     };
     get: operations["list_files"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/hooks": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_project_hooks"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1101,6 +1165,81 @@ export interface components {
     Health: {
       status: string;
     };
+    Hook: {
+      /** @description `run`, `run_host`, `webhook`, or `notify`. */
+      action: string;
+      branches: string[];
+      codes: string[];
+      /** @description `after` or `gate`. */
+      mode: string;
+      name: string;
+      /** @description `change_opened`, `merged`, `task_done`, `spec_shipped`, or `blocked`. */
+      on: string;
+      repos: string[];
+      target: components["schemas"]["HookTarget"];
+      /** Format: int64 */
+      timeout_secs: number;
+    };
+    HookList: {
+      items: components["schemas"]["Hook"][];
+    };
+    HookRun: {
+      /** @description `run`, `run_host`, `webhook`, or `notify`. */
+      action: string;
+      /** Format: int32 */
+      attempts: number;
+      /** @description What triggered the run: event, project, repo, task, spec, change, branch, sha, and blocker. */
+      context: unknown;
+      /** Format: int64 */
+      duration_ms?: number | null;
+      error?: components["schemas"]["HookRunError"] | null;
+      finished_at?: string | null;
+      hook: string;
+      /** Format: uuid */
+      id: string;
+      /** @description `after` or `gate`. */
+      mode: string;
+      /** Format: uuid */
+      project_id: string;
+      queued_at: string;
+      /** Format: uuid */
+      repo_id?: string | null;
+      /**
+       * Format: uuid
+       * @description The run this one repeats.
+       */
+      rerun_of?: string | null;
+      /** @description `exit_code`, `timed_out`, `http_status`, `log`, `output_tail`, and `skipped`; `null` while pending. */
+      result?: unknown;
+      sha?: string | null;
+      /** Format: uuid */
+      spec_id?: string | null;
+      /** @description `pending`, `succeeded`, or `failed`. */
+      state: string;
+      task_key?: string | null;
+      /** @description The event that triggered the run. */
+      trigger: string;
+      /** Format: uuid */
+      work_item_id?: string | null;
+    };
+    HookRunError: {
+      code: string;
+      params: unknown;
+    };
+    HookTarget: {
+      /** @description The channel of a `notify` hook. */
+      channel?: string | null;
+      /** @description The shell command of a `run` or `run_host` hook. */
+      command?: string | null;
+      /** @description The working directory of a `run_host` hook. */
+      cwd?: string | null;
+      /** @description The project secret that signs a `webhook` hook. */
+      secret?: string | null;
+      /** @description The project secrets a `run` hook receives. */
+      secrets: string[];
+      /** @description The URL of a `webhook` hook without its query or fragment. */
+      url?: string | null;
+    };
     Lint: {
       issues: components["schemas"]["LintIssue"][];
       /** @description No issue with severity `error`. */
@@ -1130,6 +1269,49 @@ export interface components {
     };
     OptionalReason: {
       reason?: string | null;
+    };
+    /** @description A list page. */
+    Page_HookRun: {
+      items: {
+        /** @description `run`, `run_host`, `webhook`, or `notify`. */
+        action: string;
+        /** Format: int32 */
+        attempts: number;
+        /** @description What triggered the run: event, project, repo, task, spec, change, branch, sha, and blocker. */
+        context: unknown;
+        /** Format: int64 */
+        duration_ms?: number | null;
+        error?: components["schemas"]["HookRunError"] | null;
+        finished_at?: string | null;
+        hook: string;
+        /** Format: uuid */
+        id: string;
+        /** @description `after` or `gate`. */
+        mode: string;
+        /** Format: uuid */
+        project_id: string;
+        queued_at: string;
+        /** Format: uuid */
+        repo_id?: string | null;
+        /**
+         * Format: uuid
+         * @description The run this one repeats.
+         */
+        rerun_of?: string | null;
+        /** @description `exit_code`, `timed_out`, `http_status`, `log`, `output_tail`, and `skipped`; `null` while pending. */
+        result?: unknown;
+        sha?: string | null;
+        /** Format: uuid */
+        spec_id?: string | null;
+        /** @description `pending`, `succeeded`, or `failed`. */
+        state: string;
+        task_key?: string | null;
+        /** @description The event that triggered the run. */
+        trigger: string;
+        /** Format: uuid */
+        work_item_id?: string | null;
+      }[];
+      next_cursor?: string | null;
     };
     /** @description A list page. */
     Page_PermissionRequest: {
@@ -2374,6 +2556,106 @@ export interface operations {
       };
     };
   };
+  list_hook_runs: {
+    parameters: {
+      query?: {
+        project_id?: string;
+        hook?: string;
+        /** @description `pending`, `succeeded`, or `failed`. */
+        state?: string;
+        work_item_id?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_HookRun"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_hook_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        hook_run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HookRun"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  rerun_hook: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        hook_run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HookRun"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   meta: {
     parameters: {
       query?: never;
@@ -2965,6 +3247,35 @@ export interface operations {
         };
       };
       502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_project_hooks: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HookList"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

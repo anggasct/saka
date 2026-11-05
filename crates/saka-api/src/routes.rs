@@ -10,16 +10,16 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use saka_core::diagnostics::{self, CheckResult, Report, Subject};
 use saka_core::ids::{
-    PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId, SpecId,
+    HookRunId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId, SpecId,
     SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{AuthorshipMode, CheckId, DraftLocale, ReloadTrigger, ReportMode};
 use saka_engine::{
-    AddProject, CheckConfig, DiagnosticFilter, EngineError, NewSpecDraft, PermissionFilter,
-    Precondition, Produced, Reply, RunOf, SessionCommand, SessionView, StoredEvent, TimelineCursor,
-    WorkItemFilter,
+    AddProject, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, NewSpecDraft,
+    PermissionFilter, Precondition, Produced, Reply, RunOf, SessionCommand, SessionView,
+    StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -2188,4 +2188,118 @@ pub async fn diagnostics(
         axum::http::HeaderValue::from_static("no-store"),
     );
     response
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/projects/{project_id}/hooks", tag = "hooks",
+    params(("project_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::HookList), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_project_hooks(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = ProjectId(tri!(path_id(&id)));
+    let hooks = tri!(engine.project_hooks(id));
+    ok(
+        StatusCode::OK,
+        &dto::HookList {
+            items: hooks.iter().map(dto::Hook::from).collect(),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/hook-runs", tag = "hooks", params(dto::HookRunQuery),
+    responses((status = 200, body = dto::Page<dto::HookRun>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_hook_runs(
+    State(s): State<AppState>,
+    Query(q): Query<dto::HookRunQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let Some(project) = tri!(opt_id(q.project_id.as_deref(), "project_id")) else {
+        return ApiError::validation("project_id", "required").into_response();
+    };
+    let state = match q.state.as_deref().filter(|v| !v.is_empty()) {
+        None => None,
+        Some(v) => Some(tri!(
+            v.parse()
+                .map_err(|_| ApiError::validation("state", "invalid"))
+        )),
+    };
+    let filter = HookRunFilter {
+        project: Some(ProjectId(project)),
+        hook: q.hook.clone().filter(|h| !h.is_empty()),
+        state,
+        work_item: tri!(opt_id(q.work_item_id.as_deref(), "work_item_id")).map(WorkItemId),
+    };
+    let key = format!(
+        "hook-runs:{project}:{:?}:{:?}:{:?}",
+        filter.hook, filter.state, filter.work_item
+    );
+    let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
+    let paged = tri!(engine.hook_runs(&filter, &p));
+    ok(
+        StatusCode::OK,
+        &dto::Page {
+            items: paged.items.iter().map(dto::HookRun::from).collect(),
+            next_cursor: paged.next.map(|k| encode_cursor(k, &key)),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/hook-runs/{hook_run_id}", tag = "hooks",
+    params(("hook_run_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::HookRun), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn get_hook_run(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = HookRunId(tri!(path_id(&id)));
+    let run = tri!(engine.hook_run(id));
+    ok(StatusCode::OK, &dto::HookRun::from(&run))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/hook-runs/{hook_run_id}/actions/rerun", tag = "hooks",
+    params(("hook_run_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::HookRun), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn rerun_hook(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let run = HookRunId(tri!(path_id(&id)));
+    let req: dto::RequiredReason = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::HookRun(r) => reply(StatusCode::ACCEPTED, &dto::HookRun::from(r)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "hook_run.rerun",
+        target_type: "hook_run",
+        target_id: Some(run.0),
+        reason: Some(req.reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .rerun_hook(run, &req.reason, &cause, Some(&action))
+                .map(|r| Some(r.project_id))
+                .map_err(|e| (e, None))
+        },
+    )
+    .await
 }

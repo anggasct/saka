@@ -39,12 +39,13 @@ pub use state::{ApiConfig, AppState};
         routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
         routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
         routes::retry_spec_draft, routes::cancel_spec_draft,
+        routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::rerun_hook,
         routes::meta, routes::events, routes::diagnostics,
         ops::healthz, ops::readyz, ops::metrics,
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
-        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"),
+        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"), (name = "hooks"),
         (name = "spec-drafts"), (name = "system"), (name = "ops"),
     )
 )]
@@ -105,6 +106,16 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/specs/{spec_id}", get(routes::get_spec))
         .route("/api/v1/spec-template", get(routes::spec_template))
+        .route(
+            "/api/v1/projects/{project_id}/hooks",
+            get(routes::list_project_hooks),
+        )
+        .route("/api/v1/hook-runs", get(routes::list_hook_runs))
+        .route("/api/v1/hook-runs/{hook_run_id}", get(routes::get_hook_run))
+        .route(
+            "/api/v1/hook-runs/{hook_run_id}/actions/rerun",
+            post(routes::rerun_hook),
+        )
         .route(
             "/api/v1/specs/{spec_id}/approve",
             post(routes::approve_spec),

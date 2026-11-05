@@ -140,6 +140,7 @@ pub struct Batch {
     pub replaced_spec_dependencies: Vec<SpecId>,
     pub replaced_work_item_dependencies: Vec<WorkItemId>,
     pub permission_rules: Vec<PermissionRule>,
+    pub hook_runs: Vec<saka_core::hook::HookRun>,
     pub activities: Vec<(ProjectId, SessionActivity)>,
     pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
     pub jobs: Vec<NewJob>,
@@ -351,6 +352,9 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
     }
     for r in &b.permission_rules {
         permission_rule(tx, r)?;
+    }
+    for r in &b.hook_runs {
+        crate::hook_run::upsert(tx, r)?;
     }
     for (project, a) in &b.activities {
         tx.execute(

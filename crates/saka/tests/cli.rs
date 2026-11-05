@@ -212,6 +212,10 @@ fn write_config(dir: &Path, extra: &str) -> std::path::PathBuf {
     path
 }
 
+fn own_listen() -> String {
+    format!("listen = \"127.0.0.1:{}\"\n", free_port())
+}
+
 fn run_saka(config: &Path, args: &[&str]) -> Output {
     Command::new(SAKA)
         .args(args)
@@ -264,7 +268,7 @@ fn serve_refuses_a_data_dir_agent_sessions_cannot_scope_their_memory_to() {
 #[test]
 fn migrate_refuses_a_changed_migration_and_a_newer_database() {
     let dir = tempfile::tempdir().unwrap();
-    let config = write_config(dir.path(), "");
+    let config = write_config(dir.path(), &own_listen());
     assert_eq!(code(&run_saka(&config, &["migrate"])), 0);
     let db = dir.path().join("data/saka.db");
     assert!(db.is_file());
@@ -781,7 +785,7 @@ fn secret_commands_read_the_value_from_stdin_only() {
 fn serve_refuses_a_secret_key_that_is_not_0600() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
-    let config = write_config(dir.path(), "");
+    let config = write_config(dir.path(), &own_listen());
     let key = dir.path().join("secret.key");
     std::fs::write(&key, [0u8; 32]).unwrap();
     std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -972,7 +976,8 @@ fn gitlab_config(dir: &Path, extra: &str) -> std::path::PathBuf {
     write_config(
         dir,
         &format!(
-            "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\ntoken_file = \"{}\"\n{extra}",
+            "{}[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\ntoken_file = \"{}\"\n{extra}",
+            own_listen(),
             dir.join("gitlab.token").display()
         ),
     )
@@ -1009,7 +1014,10 @@ fn serve_refuses_a_gitlab_integration_it_cannot_use() {
     }
     let config = write_config(
         dir.path(),
-        "[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\napp_id = 1\n",
+        &format!(
+            "{}[[scm]]\nid = \"gitlab\"\nprovider = \"gitlab\"\napp_id = 1\n",
+            own_listen()
+        ),
     );
     let out = run_saka(&config, &["serve"]);
     assert_eq!(code(&out), 2);
@@ -1777,4 +1785,104 @@ fn project_user_token_reads_one_line_from_stdin_and_the_mode_can_then_use_it() {
         0,
         "removing twice is fine"
     );
+}
+
+#[test]
+fn serve_refuses_a_hook_it_cannot_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "{}[[hook]]\nname = \"deploy\"\nproject = \"tasks\"\non = \"merged\"\naction = \"webhook\"\nurl = \"http://ci.example.com/x\"\nsecret = \"KEY_NAME\"\n",
+            own_listen()
+        ),
+    );
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("config_hook_invalid"), "{stderr}");
+    assert!(stderr.contains("hook_url_invalid"), "{stderr}");
+}
+
+#[test]
+fn hook_commands_list_hooks_show_runs_and_run_one_again() {
+    use saka_core::hook::{self, RawHook};
+    let mut sim = Sim::new(SimConfig {
+        hooks: hook::parse_all(&[RawHook {
+            name: "announce".into(),
+            project: "tasks".into(),
+            on: "merged".into(),
+            action: "webhook".into(),
+            url: Some("https://ci.example.com/saka?token=1".into()),
+            secret: Some("KEY_NAME".into()),
+            ..RawHook::default()
+        }])
+        .unwrap(),
+        ..SimConfig::default()
+    });
+    sim.approve();
+    assert!(sim.run_to_shipped(8_000));
+    assert!(
+        sim.run_until(8_000, |s| s.events_of("delivery.hook_run.finished").len()
+            == 2)
+    );
+    let server = serve(&sim);
+
+    let listed = saka(&server, &["hook", "list", "tasks"]);
+    assert_eq!(code(&listed), 0);
+    assert_eq!(
+        stdout(&listed).trim(),
+        "announce  on merged  after  webhook"
+    );
+    let json_listed = saka(&server, &["--json", "hook", "list", "tasks"]);
+    assert_eq!(
+        json(&json_listed)["items"][0]["target"]["url"],
+        "https://ci.example.com/saka"
+    );
+
+    let runs = saka(
+        &server,
+        &["--json", "hook", "runs", "tasks", "--state", "failed"],
+    );
+    assert_eq!(code(&runs), 0);
+    let items = json(&runs)["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 2, "the signing secret was never set");
+    assert_eq!(items[0]["error"]["code"], "hook_secret_missing");
+    let id = items[0]["id"].as_str().unwrap().to_string();
+
+    let again = saka(
+        &server,
+        &["hook", "rerun", &id, "--reason", "secret is set now"],
+    );
+    assert_eq!(
+        code(&again),
+        0,
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert!(
+        stdout(&again).trim().ends_with("pending"),
+        "{}",
+        stdout(&again)
+    );
+    let pending = saka(&server, &["hook", "runs", "tasks", "--state", "pending"]);
+    assert_eq!(stdout(&pending).lines().count(), 1);
+    let new_id = stdout(&pending)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let too_early = saka(&server, &["hook", "rerun", &new_id, "--reason", "now"]);
+    assert_eq!(code(&too_early), 4, "409 hook_run_pending");
+    let unknown = saka(
+        &server,
+        &[
+            "hook",
+            "rerun",
+            "0193f0c4-0000-7000-8000-000000000000",
+            "--reason",
+            "x",
+        ],
+    );
+    assert_eq!(code(&unknown), 1);
 }

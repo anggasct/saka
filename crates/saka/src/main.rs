@@ -87,6 +87,41 @@ enum Command {
     #[command(about = "SCM integrations: create the GitHub App, link your account")]
     #[command(subcommand)]
     Scm(ScmCmd),
+    #[command(about = "Hooks of a project: what is configured, what ran, and run it again")]
+    #[command(subcommand)]
+    Hook(HookCmd),
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    #[command(about = "Lists the hooks configured for a project in the operator config")]
+    List {
+        #[arg(help = "Project id or name")]
+        project: String,
+    },
+    #[command(
+        about = "Lists recent hook runs, newest first",
+        after_help = "Exit codes: 0 ok, 1 failed, 3 problems."
+    )]
+    Runs {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "Only runs of this hook", long)]
+        hook: Option<String>,
+        #[arg(help = "pending, succeeded, or failed", long)]
+        state: Option<String>,
+        #[arg(help = "How many runs, 1 to 200", long, default_value_t = 20)]
+        limit: u32,
+    },
+    #[command(
+        about = "Runs a finished hook run again with the hook's current definition",
+        after_help = "Exit codes: 0 queued, 1 failed, 4 the run is pending or the hook is gone."
+    )]
+    Rerun {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -495,6 +530,25 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     },
                     SecretCmd::List { project } => client.secret_list(&project).await,
                     SecretCmd::Rm { project, name } => client.secret_rm(&project, &name).await,
+                }
+            })
+        }
+        Command::Hook(cmd) => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(async {
+                match cmd {
+                    HookCmd::List { project } => client.hook_list(&project).await,
+                    HookCmd::Runs {
+                        project,
+                        hook,
+                        state,
+                        limit,
+                    } => {
+                        client
+                            .hook_runs(&project, hook.as_deref(), state.as_deref(), limit)
+                            .await
+                    }
+                    HookCmd::Rerun { id, reason } => client.hook_rerun(&id, &reason).await,
                 }
             })
         }

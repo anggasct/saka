@@ -159,6 +159,17 @@ vocab!(SubjectKind {
 });
 vocab!(ReportMode { Online => "online", Offline => "offline" });
 vocab!(SecretPurpose { Setup => "setup", Session => "session" });
+vocab!(HookEvent {
+    ChangeOpened => "change_opened",
+    ReviewDone => "review_done",
+    Merged => "merged",
+    TaskDone => "task_done",
+    SpecShipped => "spec_shipped",
+    Blocked => "blocked",
+});
+vocab!(HookMode { After => "after", Gate => "gate" });
+vocab!(HookActionKind { Run => "run", RunHost => "run_host", Webhook => "webhook", Notify => "notify" });
+vocab!(HookRunState { Pending => "pending", Succeeded => "succeeded", Failed => "failed" });
 vocab!(UserLinkState { Active => "active", NeedsRelink => "needs_relink" });
 vocab!(RelinkCause { RefreshFailed => "refresh_failed", Revoked => "revoked", Expired => "expired" });
 vocab!(AuthorizationState {

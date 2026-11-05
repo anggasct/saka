@@ -152,7 +152,8 @@ impl Engine {
         let mut after = Some(spec.clone());
         for e in &events {
             after = spec::evolve(after, e, now);
-            self.push_event(&mut batch, e, Some(spec.project_id), cause, now);
+            let event_id = self.push_event(&mut batch, e, Some(spec.project_id), cause, now);
+            self.plan_spec_hooks(&mut batch, &spec, event_id, cause, now)?;
         }
         batch.specs.extend(after);
         self.commit(&batch)?;

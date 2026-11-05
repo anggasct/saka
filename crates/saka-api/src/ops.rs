@@ -402,6 +402,19 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     }
 
     t.family(
+        "saka_hook_runs_total",
+        "counter",
+        "Hook runs by action, mode, and outcome.",
+    );
+    for (action, mode, outcome, n) in &m.hook_runs {
+        t.sample(
+            "saka_hook_runs_total",
+            &[("action", action), ("mode", mode), ("outcome", outcome)],
+            n,
+        );
+    }
+
+    t.family(
         "saka_work_packet_bytes",
         "histogram",
         "Size of work packets sent as the first turn of a session.",

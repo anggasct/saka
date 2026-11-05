@@ -233,6 +233,8 @@ impl World {
                 secrets: world.clone(),
                 supervisor: world.clone(),
                 releases: Arc::new(releases),
+                webhooks: Arc::new(saka_testkit::FakeHooks::default()),
+                notifier: Arc::new(saka_testkit::FakeHooks::default()),
             },
             EngineConfig {
                 loop_cfg: sim.loop_cfg,
@@ -253,6 +255,7 @@ impl World {
                 architect_model: None,
                 config_poll_secs: 0,
                 diagnostics: DiagnosticLimits::default(),
+                hooks: Vec::new(),
             },
         );
         let cause = engine.cause("human:operator:local");

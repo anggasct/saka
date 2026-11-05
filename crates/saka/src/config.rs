@@ -48,6 +48,8 @@ pub struct Config {
     pub toolchain: Toolchain,
     #[serde(default)]
     pub hooks: Option<Hooks>,
+    #[serde(default)]
+    pub hook: Vec<saka_core::hook::RawHook>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -622,6 +624,16 @@ impl Config {
         Ok(cfg)
     }
 
+    pub fn hooks_parsed(&self) -> Result<Vec<saka_core::hook::Hook>, ConfigError> {
+        saka_core::hook::parse_all(&self.hook).map_err(|issue| {
+            let field = issue.field.map(|f| format!(".{f}")).unwrap_or_default();
+            err(
+                "config_hook_invalid",
+                format!("{}: hook {:?}{field}", issue.code, issue.hook),
+            )
+        })
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         self.listen()?;
         if let Some(hooks) = &self.hooks {
@@ -652,6 +664,7 @@ impl Config {
                 "workspace.config_poll_secs must be 0 or 30..=86400",
             ));
         }
+        self.hooks_parsed()?;
         let mut ids = std::collections::BTreeSet::new();
         for s in &self.scm {
             if !id_ok(&s.id, 32) || !ids.insert(s.id.clone()) {
@@ -1244,6 +1257,10 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        let hooks = cfg.hooks_parsed().unwrap();
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].name, "announce-merge");
+        assert_eq!(hooks[1].filter.codes.len(), 2);
         assert_eq!(
             cfg.scm[0].client_id.as_deref(),
             Some("Iv23liAbCdEfGh123456")
@@ -1252,6 +1269,30 @@ mod tests {
             (cfg.git.name.as_str(), cfg.git.email.as_str()),
             ("Saka Agent", "agent@saka.invalid")
         );
+    }
+
+    #[test]
+    fn hooks_are_checked_with_a_coded_error_that_names_the_hook_and_field() {
+        let hook = |extra: &str| {
+            format!(
+                "[[hook]]\nname = \"tell\"\nproject = \"tasks\"\non = \"merged\"\naction = \"notify\"\nchannel = \"ops\"\n{extra}"
+            )
+        };
+        assert_eq!(Config::parse(&hook("")).unwrap().hook.len(), 1);
+        for (extra, code) in [
+            ("timeout_secs = 99\n", "hook_timeout_invalid"),
+            ("command = \"ls\"\n", "hook_field_invalid"),
+            ("codes = [\"ci_red\"]\n", "hook_filter_invalid"),
+            ("mode = \"gate\"\n", "hook_mode_unsupported"),
+        ] {
+            let e = Config::parse(&hook(extra)).unwrap_err();
+            assert_eq!(e.code, "config_hook_invalid", "{extra}");
+            assert!(e.detail.starts_with(code), "{extra}: {}", e.detail);
+        }
+        let e = Config::parse(&format!("{}{}", hook(""), hook(""))).unwrap_err();
+        assert!(e.detail.starts_with("hook_name_duplicate"), "{}", e.detail);
+        let e = Config::parse(&hook("nope = 1\n")).unwrap_err();
+        assert_eq!(e.code, "config_unknown_field");
     }
 
     #[test]

@@ -754,7 +754,8 @@ impl Engine {
             | K::GateVerify
             | K::ScmReportStatus
             | K::ScmPollCommit
-            | K::ScmDeleteBranch => Ok(Effect::Skipped),
+            | K::ScmDeleteBranch
+            | K::HookRun => Ok(Effect::Skipped),
         }
     }
 

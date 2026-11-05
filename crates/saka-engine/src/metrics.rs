@@ -21,6 +21,7 @@ pub struct Counters {
     waiting: Mutex<BTreeMap<WorkItemId, Vec<Waiting>>>,
     packet_bytes: Mutex<Vec<u64>>,
     webhooks: Mutex<BTreeMap<(String, String, String), u64>>,
+    hook_runs: Mutex<BTreeMap<(String, String, String), u64>>,
     gate_runs: Mutex<BTreeMap<(String, String), u64>>,
     auto_retries: Mutex<BTreeMap<(String, String), u64>>,
     gate_seconds: Mutex<SecondsHistogram>,
@@ -174,6 +175,24 @@ impl Counters {
         }
     }
 
+    pub(crate) fn hook_run(&self, action: &str, mode: &str, outcome: &str) {
+        if let Ok(mut m) = self.hook_runs.lock() {
+            *m.entry((action.to_string(), mode.to_string(), outcome.to_string()))
+                .or_default() += 1;
+        }
+    }
+
+    fn hook_run_counts(&self) -> Vec<(String, String, String, u64)> {
+        self.hook_runs
+            .lock()
+            .map(|m| {
+                m.iter()
+                    .map(|((a, mo, o), n)| (a.clone(), mo.clone(), o.clone(), *n))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn webhook_counts(&self) -> Vec<(String, String, String, u64)> {
         self.webhooks
             .lock()
@@ -302,6 +321,7 @@ pub struct MetricsSnapshot {
     pub account_utilization: Vec<(String, String, f64)>,
     pub work_packet_bytes: PacketBytes,
     pub webhook_deliveries: Vec<(String, String, String, u64)>,
+    pub hook_runs: Vec<(String, String, String, u64)>,
     pub gate_runs: Vec<(String, String, u64)>,
     pub auto_retries: Vec<(String, u64)>,
     pub gate_seconds: SecondsHistogram,
@@ -447,6 +467,7 @@ impl Engine {
             admission_waiting: self.counters.waiting_counts(),
             work_packet_bytes: self.counters.packet_bytes(),
             webhook_deliveries: self.counters.webhook_counts(),
+            hook_runs: self.counters.hook_run_counts(),
             gate_runs: copy(&self.counters.gate_runs),
             auto_retries: copy(&self.counters.auto_retries)
                 .into_iter()

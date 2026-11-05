@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::authorship::SessionAuthor;
 use crate::gate::Check;
+use crate::hook::HookContext;
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
-    StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
+    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, HookRunId, PermissionRequestId,
+    PermissionRuleId, ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId,
+    SpecRevisionId, StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
@@ -17,9 +19,9 @@ use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, GateOutcome, GateSource,
-    InterruptBy, LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger,
-    ResumeCause, ResumeReason, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
-    TokenInvalidCause, Trigger,
+    HookActionKind, HookEvent, HookMode, HookRunState, InterruptBy, LintOutcome, MergeMethod,
+    PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, SessionState,
+    SpecOrigin, Stage, StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -626,6 +628,32 @@ pub enum Event {
     },
     #[serde(rename = "scm.user_link.removed")]
     UserLinkRemoved { link_id: UserLinkId },
+
+    #[serde(rename = "delivery.hook_run.queued")]
+    HookRunQueued {
+        hook_run_id: HookRunId,
+        project_id: ProjectId,
+        hook: String,
+        action: HookActionKind,
+        mode: HookMode,
+        trigger: HookEvent,
+        work_item_id: Option<WorkItemId>,
+        spec_id: Option<SpecId>,
+        repo_id: Option<RepoId>,
+        sha: Option<String>,
+        context: HookContext,
+        source_event_id: Uuid,
+        rerun_of: Option<HookRunId>,
+    },
+    #[serde(rename = "delivery.hook_run.finished")]
+    HookRunFinished {
+        hook_run_id: HookRunId,
+        outcome: HookRunState,
+        attempts: u32,
+        duration_ms: i64,
+        result: Value,
+        error: Option<Coded>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -680,6 +708,7 @@ pub enum Stream {
     Session(SessionId),
     PermissionRequest(PermissionRequestId),
     Job(uuid::Uuid),
+    HookRun(HookRunId),
     UserLinkAuthorization(UserLinkAuthorizationId),
     UserLink(UserLinkId),
 }
@@ -695,6 +724,7 @@ impl Stream {
             Stream::Session(_) => "session",
             Stream::PermissionRequest(_) => "permission_request",
             Stream::Job(_) => "job",
+            Stream::HookRun(_) => "hook_run",
             Stream::UserLinkAuthorization(_) => "user_link_authorization",
             Stream::UserLink(_) => "user_link",
         }
@@ -710,6 +740,7 @@ impl Stream {
             Stream::Session(id) => id.0,
             Stream::PermissionRequest(id) => id.0,
             Stream::Job(id) => id,
+            Stream::HookRun(id) => id.0,
             Stream::UserLinkAuthorization(id) => id.0,
             Stream::UserLink(id) => id.0,
         }
@@ -839,6 +870,9 @@ impl Event {
             | E::UserLinkRefreshed { link_id, .. }
             | E::UserLinkRelinkRequired { link_id, .. }
             | E::UserLinkRemoved { link_id } => Stream::UserLink(*link_id),
+            E::HookRunQueued { hook_run_id, .. } | E::HookRunFinished { hook_run_id, .. } => {
+                Stream::HookRun(*hook_run_id)
+            }
         }
     }
 

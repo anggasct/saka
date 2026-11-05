@@ -2255,6 +2255,8 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::UserLinkRefreshed { .. }
         | E::UserLinkRelinkRequired { .. }
         | E::UserLinkRemoved { .. }
+        | E::HookRunQueued { .. }
+        | E::HookRunFinished { .. }
         | E::ProjectAuthorshipSet { .. }
         | E::ProjectUserTokenSet { .. }
         | E::ProjectUserTokenRemoved { .. }

@@ -100,6 +100,10 @@ pub enum Rejection {
     EntryPointDisabled { entry: &'static str },
     #[error("the project workflow has no {stage} stage")]
     StageNotInWorkflow { stage: &'static str },
+    #[error("hook run is still pending")]
+    HookRunPending,
+    #[error("hook is not configured")]
+    HookNotConfigured { hook: String },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -153,6 +157,8 @@ impl Rejection {
             Rejection::UserTokenRepoInaccessible { .. } => "user_token_repo_inaccessible",
             Rejection::EntryPointDisabled { .. } => "entry_point_disabled",
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
+            Rejection::HookRunPending => "hook_run_pending",
+            Rejection::HookNotConfigured { .. } => "hook_not_configured",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -200,6 +206,7 @@ impl Rejection {
                 params
             }
             Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
+            Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
             Rejection::FilePathConflict { path } => json!({ "path": path }),
             Rejection::FilePushRejected { branch } => json!({ "branch": branch }),
             Rejection::FileUnsupported { reason } => reason.params(),

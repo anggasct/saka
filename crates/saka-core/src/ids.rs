@@ -46,4 +46,5 @@ id_type!(
     SpecDraftAttemptId,
     UserLinkId,
     UserLinkAuthorizationId,
+    HookRunId,
 );

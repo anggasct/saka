@@ -7,6 +7,7 @@ mod context;
 pub mod diagnostics;
 mod docs;
 mod draft;
+mod hooks;
 mod metrics;
 pub mod packet;
 pub mod project_config;
@@ -61,11 +62,13 @@ pub use draft::{
     DraftBudgetView, DraftContentView, DraftPacketDocument, DraftPacketView, DraftView,
     NewSpecDraft,
 };
+pub use hooks::HookReport;
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use register::{AddProject, Integration, MAX_CONFIG_BYTES, branch_ok, parse_repo_url};
 pub use reload::ReloadView;
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
+pub use saka_store::hook_run::HookRunFilter;
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
 pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
@@ -88,6 +91,7 @@ pub struct EngineConfig {
     pub architect_model: Option<String>,
     pub config_poll_secs: u32,
     pub diagnostics: DiagnosticLimits,
+    pub hooks: Vec<saka_core::hook::Hook>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +126,8 @@ pub struct Ports {
     pub secrets: Arc<dyn SecretStore>,
     pub supervisor: Arc<dyn Supervisor>,
     pub releases: Arc<dyn ReleaseIndex>,
+    pub webhooks: Arc<dyn saka_ports::Webhooks>,
+    pub notifier: Arc<dyn saka_ports::Notifier>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -380,7 +386,8 @@ impl Engine {
                 self.push_job(batch, job, project, cause);
             }
             log_runtime(e, &cause.actor);
-            self.push_event(batch, e, project, cause, now);
+            let event_id = self.push_event(batch, e, project, cause, now);
+            self.plan_task_hooks(batch, &after, e, event_id, cause, now)?;
         }
         Ok(after)
     }
@@ -392,10 +399,11 @@ impl Engine {
         project: Option<ProjectId>,
         cause: &Cause,
         now: Timestamp,
-    ) {
+    ) -> Uuid {
         let stream = e.stream();
+        let id = self.new_id();
         batch.events.push(EventRecord {
-            id: self.new_id(),
+            id,
             kind: e.kind(),
             version: Event::VERSION,
             stream_type: stream.kind().to_string(),
@@ -407,6 +415,7 @@ impl Engine {
             occurred_at: now,
             payload: e.payload(),
         });
+        id
     }
 
     fn push_job(&self, batch: &mut Batch, job: Job, project: Option<ProjectId>, cause: &Cause) {

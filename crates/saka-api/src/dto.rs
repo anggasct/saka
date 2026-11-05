@@ -2664,3 +2664,159 @@ impl From<&saka_core::diagnostics::Report> for DiagnosticReport {
         }
     }
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HookTarget {
+    /// The shell command of a `run` or `run_host` hook.
+    pub command: Option<String>,
+    /// The working directory of a `run_host` hook.
+    pub cwd: Option<String>,
+    /// The URL of a `webhook` hook without its query or fragment.
+    pub url: Option<String>,
+    /// The project secret that signs a `webhook` hook.
+    pub secret: Option<String>,
+    /// The project secrets a `run` hook receives.
+    pub secrets: Vec<String>,
+    /// The channel of a `notify` hook.
+    pub channel: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Hook {
+    pub name: String,
+    /// `change_opened`, `merged`, `task_done`, `spec_shipped`, or `blocked`.
+    pub on: String,
+    /// `after` or `gate`.
+    pub mode: String,
+    /// `run`, `run_host`, `webhook`, or `notify`.
+    pub action: String,
+    pub repos: Vec<String>,
+    pub branches: Vec<String>,
+    pub codes: Vec<String>,
+    pub timeout_secs: u64,
+    pub target: HookTarget,
+}
+
+impl From<&saka_core::hook::Hook> for Hook {
+    fn from(h: &saka_core::hook::Hook) -> Hook {
+        use saka_core::hook::HookAction;
+        let mut target = HookTarget {
+            command: None,
+            cwd: None,
+            url: None,
+            secret: None,
+            secrets: Vec::new(),
+            channel: None,
+        };
+        match &h.action {
+            HookAction::Run { command, secrets } => {
+                target.command = Some(command.clone());
+                target.secrets = secrets.clone();
+            }
+            HookAction::RunHost { command, cwd } => {
+                target.command = Some(command.clone());
+                target.cwd = cwd.clone();
+            }
+            HookAction::Webhook { url, secret } => {
+                target.url = Some(saka_core::hook::display_url(url));
+                target.secret = Some(secret.clone());
+            }
+            HookAction::Notify { channel } => target.channel = Some(channel.clone()),
+        }
+        Hook {
+            name: h.name.clone(),
+            on: h.on.as_str().into(),
+            mode: h.mode.as_str().into(),
+            action: h.action.kind().as_str().into(),
+            repos: h.filter.repos.clone(),
+            branches: h.filter.branches.clone(),
+            codes: h.filter.codes.iter().map(|c| c.as_str().into()).collect(),
+            timeout_secs: h.timeout_ms / 1000,
+            target,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HookList {
+    pub items: Vec<Hook>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HookRunError {
+    pub code: String,
+    pub params: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HookRun {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub hook: String,
+    /// `run`, `run_host`, `webhook`, or `notify`.
+    pub action: String,
+    /// `after` or `gate`.
+    pub mode: String,
+    /// The event that triggered the run.
+    pub trigger: String,
+    /// `pending`, `succeeded`, or `failed`.
+    pub state: String,
+    pub work_item_id: Option<Uuid>,
+    pub task_key: Option<String>,
+    pub spec_id: Option<Uuid>,
+    pub repo_id: Option<Uuid>,
+    pub sha: Option<String>,
+    /// What triggered the run: event, project, repo, task, spec, change, branch, sha, and blocker.
+    pub context: Value,
+    /// The run this one repeats.
+    pub rerun_of: Option<Uuid>,
+    pub attempts: u32,
+    /// `exit_code`, `timed_out`, `http_status`, `log`, `output_tail`, and `skipped`; `null` while pending.
+    pub result: Option<Value>,
+    pub error: Option<HookRunError>,
+    pub queued_at: String,
+    pub finished_at: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
+impl From<&saka_core::hook::HookRun> for HookRun {
+    fn from(r: &saka_core::hook::HookRun) -> HookRun {
+        HookRun {
+            id: r.id.0,
+            project_id: r.project_id.0,
+            hook: r.hook.clone(),
+            action: r.action.as_str().into(),
+            mode: r.mode.as_str().into(),
+            trigger: r.trigger.as_str().into(),
+            state: r.state.as_str().into(),
+            work_item_id: r.work_item_id.map(|x| x.0),
+            task_key: r.context.task.as_ref().map(|t| t.key.clone()),
+            spec_id: r.spec_id.map(|x| x.0),
+            repo_id: r.repo_id.map(|x| x.0),
+            sha: r.sha.clone(),
+            context: serde_json::to_value(&r.context).unwrap_or(Value::Null),
+            rerun_of: r.rerun_of.map(|x| x.0),
+            attempts: r.attempts,
+            result: r.result.clone(),
+            error: r.error.as_ref().map(|e| HookRunError {
+                code: e.code.clone(),
+                params: e.params.clone(),
+            }),
+            queued_at: time(r.queued_at),
+            finished_at: opt_time(r.finished_at),
+            duration_ms: r.duration_ms,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HookRunQuery {
+    pub project_id: Option<String>,
+    pub hook: Option<String>,
+    /// `pending`, `succeeded`, or `failed`.
+    pub state: Option<String>,
+    pub work_item_id: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
