@@ -8,7 +8,7 @@ use saka_core::model::{
 use saka_core::session::session_actions;
 use saka_core::task::available_actions;
 use saka_core::time::Timestamp;
-use saka_core::vocab::EnvironmentState;
+use saka_core::vocab::{Effect as CoreEffect, EnvironmentState, MatchKind as CoreMatch};
 use saka_engine::{
     AccountView, BudgetView, DocContentView, DocTreeView, DocWriteView, DraftBudgetView,
     DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView, ReloadView,
@@ -1806,16 +1806,75 @@ pub struct Timeline {
     pub prev_before: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleEffect {
+    Allow,
+    Deny,
+    Ask,
+}
+
+impl From<CoreEffect> for RuleEffect {
+    fn from(e: CoreEffect) -> RuleEffect {
+        match e {
+            CoreEffect::Allow => RuleEffect::Allow,
+            CoreEffect::Deny => RuleEffect::Deny,
+            CoreEffect::Ask => RuleEffect::Ask,
+        }
+    }
+}
+
+impl From<RuleEffect> for CoreEffect {
+    fn from(e: RuleEffect) -> CoreEffect {
+        match e {
+            RuleEffect::Allow => CoreEffect::Allow,
+            RuleEffect::Deny => CoreEffect::Deny,
+            RuleEffect::Ask => CoreEffect::Ask,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleMatch {
+    Exact,
+    Glob,
+}
+
+impl From<CoreMatch> for RuleMatch {
+    fn from(m: CoreMatch) -> RuleMatch {
+        match m {
+            CoreMatch::Exact => RuleMatch::Exact,
+            CoreMatch::Glob => RuleMatch::Glob,
+        }
+    }
+}
+
+impl From<RuleMatch> for CoreMatch {
+    fn from(m: RuleMatch) -> CoreMatch {
+        match m {
+            RuleMatch::Exact => CoreMatch::Exact,
+            RuleMatch::Glob => CoreMatch::Glob,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PermissionRule {
     pub id: Uuid,
     pub project_id: Uuid,
-    /// `allow`
-    pub effect: String,
+    pub effect: RuleEffect,
     pub tool: String,
-    /// The whole Bash command; `null` for other tools.
+    /// `exact` compares text verbatim; `glob` is a glob (`*` does not cross `/` in `path`).
+    #[serde(rename = "match")]
+    pub match_kind: RuleMatch,
+    /// One part of a Bash command (see `match`); `null` for other tools.
     pub command: Option<String>,
-    pub permission_request_id: Uuid,
+    /// Worktree-relative path the rule applies to; `null` means every path.
+    pub path: Option<String>,
+    pub note: Option<String>,
+    /// The request whose answer created the rule; `null` for a rule written by hand.
+    pub permission_request_id: Option<Uuid>,
     pub created_by: String,
     pub created_at: String,
     pub revoked_at: Option<String>,
@@ -1827,10 +1886,13 @@ impl From<&CoreRule> for PermissionRule {
         PermissionRule {
             id: r.id.0,
             project_id: r.project_id.0,
-            effect: "allow".into(),
+            effect: r.effect.into(),
             tool: r.tool.clone(),
+            match_kind: r.match_kind.into(),
             command: r.command.clone(),
-            permission_request_id: r.permission_request_id.0,
+            path: r.path.clone(),
+            note: r.note.clone(),
+            permission_request_id: r.permission_request_id.map(|p| p.0),
             created_by: r.created_by.clone(),
             created_at: time(r.created_at),
             revoked_at: opt_time(r.revoked_at),
@@ -1839,9 +1901,66 @@ impl From<&CoreRule> for PermissionRule {
     }
 }
 
+/// A rule from the operator's `config.toml`; read-only here.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OperatorPermissionRule {
+    pub id: String,
+    pub effect: RuleEffect,
+    pub tools: Vec<String>,
+    /// Globs relative to the worktree; empty means any path.
+    pub paths: Vec<String>,
+    /// Globs matched against one part of a Bash command; empty means any command.
+    pub commands: Vec<String>,
+}
+
+impl From<&saka_core::policy::RuleSpec> for OperatorPermissionRule {
+    fn from(r: &saka_core::policy::RuleSpec) -> OperatorPermissionRule {
+        OperatorPermissionRule {
+            id: r.id.clone(),
+            effect: r.effect.into(),
+            tools: r.tools.clone(),
+            paths: r.paths.clone(),
+            commands: r.commands.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PermissionRuleList {
+    /// Active project rules, oldest first.
     pub items: Vec<PermissionRule>,
+    /// The operator's rules in evaluation order; they cap what a project rule can do.
+    pub operator_rules: Vec<OperatorPermissionRule>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewPermissionRule {
+    pub effect: RuleEffect,
+    /// 1 to 100 characters, the agent CLI's tool name (`Bash`, `Edit`, ...).
+    pub tool: String,
+    /// `exact` or `glob`.
+    #[serde(rename = "match")]
+    pub match_kind: RuleMatch,
+    /// Required for `Bash`, at most 2000 characters, matched against one part of a compound command; not allowed for other tools. An `allow` glob made only of `*` is refused as too broad.
+    pub command: Option<String>,
+    /// Worktree-relative path, not allowed for `Bash`; omit to cover every path.
+    pub path: Option<String>,
+    /// At most 500 characters.
+    pub note: Option<String>,
+}
+
+impl From<NewPermissionRule> for saka_core::rule::NewRule {
+    fn from(r: NewPermissionRule) -> saka_core::rule::NewRule {
+        saka_core::rule::NewRule {
+            effect: r.effect.into(),
+            tool: r.tool,
+            match_kind: r.match_kind.into(),
+            command: r.command,
+            path: r.path,
+            note: r.note,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]

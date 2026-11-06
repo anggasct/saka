@@ -753,6 +753,64 @@ fn one_architect_slot_queues_the_second_draft_without_taking_task_slots() {
 }
 
 #[test]
+fn a_project_rule_that_allows_bash_does_not_reach_the_architect() {
+    let mut sim = sim(|cfg| {
+        cfg.agent = AgentScript {
+            outcome: AgentOutcome::Hang,
+            ask: Some(("Bash".into(), json!({ "command": "ls" }))),
+            ..AgentScript::default()
+        }
+    });
+    let engine = sim.engine();
+    for (kind, effect) in [
+        (saka_core::vocab::MatchKind::Exact, "ls"),
+        (saka_core::vocab::MatchKind::Glob, "ls*"),
+    ] {
+        engine
+            .add_rule(
+                sim.project_id,
+                saka_core::rule::NewRule {
+                    effect: saka_core::vocab::Effect::Allow,
+                    tool: "Bash".into(),
+                    match_kind: kind,
+                    command: Some(effect.into()),
+                    path: None,
+                    note: None,
+                },
+                &engine.cause("human:operator:local"),
+                None,
+            )
+            .unwrap();
+    }
+    let id = drafted(&sim, vec![write(good(true))]);
+    run_to(&mut sim, id, |d| {
+        d.session
+            .as_ref()
+            .is_some_and(|s| s.state == SessionState::Running)
+    });
+    assert!(sim.run_until(STEPS, |s| s.stats().answers_to_cli == 1));
+    let requests = sim
+        .engine()
+        .permission_requests(
+            &saka_engine::PermissionFilter {
+                spec_draft: Some(id),
+                ..Default::default()
+            },
+            &saka_engine::Page {
+                after: None,
+                limit: 10,
+            },
+        )
+        .unwrap()
+        .items;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].request.answer_source.as_deref(),
+        Some("policy:architect:deny")
+    );
+}
+
+#[test]
 fn an_operator_stop_fails_the_draft_and_architect_permissions_never_ask() {
     let mut sim = sim(|cfg| {
         cfg.agent = AgentScript {

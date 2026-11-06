@@ -2640,6 +2640,119 @@ fn operators_steer_interrupt_and_stop_a_session_over_the_api() {
 }
 
 #[test]
+fn a_project_rule_is_added_listed_replayed_and_refused_when_it_is_wrong() {
+    let mut api = Api::new(SimConfig {
+        rules: vec![saka_core::policy::RuleSpec {
+            id: "safe".into(),
+            effect: saka_core::policy::Effect::Allow,
+            tools: vec!["Bash".into()],
+            paths: vec![],
+            commands: vec!["ls*".into()],
+        }],
+        ..SimConfig::default()
+    });
+    let project = api.sim.project_id.to_string();
+    let path = format!("/api/v1/projects/{project}/permission-rules");
+    let rule = json!({
+        "effect": "deny", "tool": "Bash", "match": "glob", "command": "rm *", "path": null,
+        "note": "never delete"
+    });
+
+    let first = api.post_with(&path, Some("rule-key"), &[], &rule);
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.body);
+    assert_eq!(first.body["effect"], json!("deny"));
+    assert_eq!(first.body["match"], json!("glob"));
+    assert_eq!(first.body["command"], json!("rm *"));
+    assert_eq!(first.body["note"], json!("never delete"));
+    assert_eq!(first.body["permission_request_id"], Value::Null);
+    assert_eq!(first.body["created_by"], json!("human:operator:local"));
+    let seq = api.last_seq();
+    let replay = api.post_with(&path, Some("rule-key"), &[], &rule);
+    assert_eq!(replay.status, StatusCode::CREATED);
+    assert_eq!(replay.body, first.body);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(api.last_seq(), seq, "a replay writes no event");
+
+    let duplicate = api.post(&path, &[], rule.clone());
+    problem(&duplicate, StatusCode::CONFLICT, "rule_duplicate");
+    assert_eq!(duplicate.body["params"]["rule_id"], first.body["id"]);
+
+    let refused = |api: &mut Api, body: Value, status, code| {
+        let r = api.post(&path, &[], body);
+        problem(&r, status, code);
+    };
+    let unprocessable = StatusCode::UNPROCESSABLE_ENTITY;
+    refused(
+        &mut api,
+        json!({ "effect": "allow", "tool": "Bash", "match": "glob", "command": "*" }),
+        unprocessable,
+        "rule_too_broad",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "allow", "tool": "Bash", "match": "glob", "command": "[unclosed" }),
+        unprocessable,
+        "rule_invalid",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "allow", "tool": "Bash", "match": "exact" }),
+        unprocessable,
+        "rule_invalid",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "deny", "tool": "Edit", "match": "exact", "command": "ls" }),
+        unprocessable,
+        "rule_invalid",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "deny", "tool": "", "match": "exact" }),
+        unprocessable,
+        "validation_failed",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "deny", "tool": "Bash", "match": "exact", "command": "x".repeat(2001) }),
+        unprocessable,
+        "validation_failed",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "deny", "tool": "Bash", "match": "exact", "command": "ls", "note": "n".repeat(501) }),
+        unprocessable,
+        "validation_failed",
+    );
+    refused(
+        &mut api,
+        json!({ "effect": "deny", "tool": "Bash", "match": "exact", "command": "ls", "extra": 1 }),
+        unprocessable,
+        "validation_failed",
+    );
+    problem(
+        &api.post(
+            &format!("/api/v1/projects/{}/permission-rules", uuid::Uuid::nil()),
+            &[],
+            rule.clone(),
+        ),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+
+    let listed = api.get(&path);
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed.body["items"][0]["id"], first.body["id"]);
+    assert_eq!(
+        listed.body["operator_rules"],
+        json!([{
+            "id": "safe", "effect": "allow", "tools": ["Bash"], "paths": [], "commands": ["ls*"]
+        }])
+    );
+}
+
+#[test]
 fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
     let mut api = Api::new(SimConfig {
         agent: ask_script(),

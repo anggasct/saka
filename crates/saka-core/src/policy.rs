@@ -7,13 +7,7 @@ use crate::shell;
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
 pub const BUILTIN_GIT_PUSH: &str = "git_push";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Effect {
-    Allow,
-    Deny,
-    Ask,
-}
+pub use crate::vocab::Effect;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleSpec {
@@ -109,6 +103,7 @@ struct Rule {
 
 #[derive(Debug, Clone)]
 pub struct Policy {
+    specs: Vec<RuleSpec>,
     rules: Vec<Rule>,
 }
 
@@ -129,7 +124,14 @@ impl Policy {
                 commands: globs(&spec.id, &spec.commands, false)?,
             });
         }
-        Ok(Policy { rules })
+        Ok(Policy {
+            specs: specs.to_vec(),
+            rules,
+        })
+    }
+
+    pub fn specs(&self) -> &[RuleSpec] {
+        &self.specs
     }
 
     pub fn evaluate(&self, request: &ToolRequest) -> Decision {
@@ -141,6 +143,9 @@ impl Policy {
             return Decision::new(Effect::Deny, DecisionSource::Builtin(name.to_string()));
         }
         if let Some(rule) = self.first(Effect::Deny, request) {
+            return rule;
+        }
+        if let Some(rule) = project_first(Effect::Deny, request, project, true) {
             return rule;
         }
         match (request.tool.as_str(), request.command.as_deref()) {
@@ -194,13 +199,10 @@ impl Policy {
         if let Some(rule) = self.first(Effect::Deny, request) {
             return rule;
         }
-        if let Some(rule) = project
-            .iter()
-            .find(|r| crate::rule::matches(r, &request.tool, request.command.as_deref()))
-        {
-            return Decision::new(Effect::Allow, DecisionSource::Project(rule.id.to_string()));
-        }
-        self.first(Effect::Ask, request)
+        project_first(Effect::Deny, request, project, glob_allow)
+            .or_else(|| project_first(Effect::Ask, request, project, glob_allow))
+            .or_else(|| project_first(Effect::Allow, request, project, glob_allow))
+            .or_else(|| self.first(Effect::Ask, request))
             .or_else(|| {
                 glob_allow
                     .then(|| self.first(Effect::Allow, request))
@@ -217,6 +219,36 @@ impl Policy {
     }
 }
 
+fn project_first(
+    effect: Effect,
+    request: &ToolRequest,
+    project: &[PermissionRule],
+    glob_allow: bool,
+) -> Option<Decision> {
+    project
+        .iter()
+        .find(|r| r.effect == effect && crate::rule::matches(r, request, glob_allow))
+        .map(|r| Decision::new(effect, DecisionSource::Project(r.id.to_string())))
+}
+
+fn glob_builder(pattern: &str, literal_separator: bool) -> GlobBuilder<'_> {
+    let mut builder = GlobBuilder::new(pattern);
+    builder
+        .literal_separator(literal_separator)
+        .backslash_escape(true);
+    builder
+}
+
+pub(crate) fn glob_compiles(pattern: &str, literal_separator: bool) -> bool {
+    glob_builder(pattern, literal_separator).build().is_ok()
+}
+
+pub(crate) fn glob_matches(pattern: &str, literal_separator: bool, text: &str) -> bool {
+    glob_builder(pattern, literal_separator)
+        .build()
+        .is_ok_and(|g| g.compile_matcher().is_match(text))
+}
+
 fn globs(
     rule: &str,
     patterns: &[String],
@@ -227,9 +259,7 @@ fn globs(
     }
     let mut set = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob: Glob = GlobBuilder::new(pattern)
-            .literal_separator(literal_separator)
-            .backslash_escape(true)
+        let glob: Glob = glob_builder(pattern, literal_separator)
             .build()
             .map_err(|_| PolicyError::InvalidGlob {
                 rule: rule.to_string(),
@@ -546,20 +576,264 @@ mod tests {
         rule(id, Effect::Allow, &["Bash"], &[], commands)
     }
 
-    fn project_rule(id: u128, command: &str) -> PermissionRule {
-        use crate::ids::{PermissionRequestId, PermissionRuleId, ProjectId};
+    fn project_rule_of(
+        id: u128,
+        effect: Effect,
+        match_kind: crate::vocab::MatchKind,
+        tool: &str,
+        command: Option<&str>,
+        path: Option<&str>,
+    ) -> PermissionRule {
+        use crate::ids::{PermissionRuleId, ProjectId};
         use crate::time::Timestamp;
         PermissionRule {
             id: PermissionRuleId(uuid::Uuid::from_u128(id)),
             project_id: ProjectId(uuid::Uuid::from_u128(1)),
-            tool: "Bash".into(),
-            command: Some(command.into()),
-            permission_request_id: PermissionRequestId(uuid::Uuid::from_u128(2)),
+            effect,
+            tool: tool.into(),
+            match_kind,
+            command: command.map(String::from),
+            path: path.map(String::from),
+            note: None,
+            permission_request_id: None,
             created_by: "human:operator:local".into(),
             created_at: Timestamp(0),
             revoked_at: None,
             revoke_reason: None,
         }
+    }
+
+    fn project_rule(id: u128, command: &str) -> PermissionRule {
+        project_rule_of(
+            id,
+            Effect::Allow,
+            crate::vocab::MatchKind::Exact,
+            "Bash",
+            Some(command),
+            None,
+        )
+    }
+
+    fn project_glob(id: u128, effect: Effect, command: &str) -> PermissionRule {
+        project_rule_of(
+            id,
+            effect,
+            crate::vocab::MatchKind::Glob,
+            "Bash",
+            Some(command),
+            None,
+        )
+    }
+
+    #[test]
+    fn every_pair_of_colliding_levels_resolves_in_the_documented_order() {
+        let operator = |effect| rule("op", effect, &["Bash"], &[], &["make *"]);
+        let levels: Vec<(&str, Option<RuleSpec>, Option<PermissionRule>)> = vec![
+            ("policy:op", Some(operator(Effect::Deny)), None),
+            (
+                "policy:project:00000000-0000-0000-0000-000000000011",
+                None,
+                Some(project_glob(0x11, Effect::Deny, "make *")),
+            ),
+            (
+                "policy:project:00000000-0000-0000-0000-000000000012",
+                None,
+                Some(project_glob(0x12, Effect::Ask, "make *")),
+            ),
+            (
+                "policy:project:00000000-0000-0000-0000-000000000013",
+                None,
+                Some(project_glob(0x13, Effect::Allow, "make *")),
+            ),
+            ("policy:op", Some(operator(Effect::Ask)), None),
+            ("policy:op", Some(operator(Effect::Allow)), None),
+        ];
+        let effects = [
+            Effect::Deny,
+            Effect::Deny,
+            Effect::Ask,
+            Effect::Allow,
+            Effect::Ask,
+            Effect::Allow,
+        ];
+        for i in 0..levels.len() {
+            for j in (i + 1)..levels.len() {
+                let specs: Vec<RuleSpec> = [&levels[i], &levels[j]]
+                    .iter()
+                    .filter_map(|l| l.1.clone())
+                    .collect();
+                let project: Vec<PermissionRule> = [&levels[i], &levels[j]]
+                    .iter()
+                    .filter_map(|l| l.2.clone())
+                    .collect();
+                let d = Policy::compile(&specs)
+                    .unwrap()
+                    .evaluate_with(&bash("make test"), &project);
+                assert_eq!(d.effect, effects[i], "level {i} against {j}");
+                assert_eq!(
+                    d.source.answer_source().as_deref(),
+                    Some(levels[i].0),
+                    "level {i} against {j}"
+                );
+            }
+        }
+        let default = Policy::compile(&[]).unwrap().evaluate(&bash("make test"));
+        assert_eq!(
+            (default.effect, default.source),
+            (Effect::Ask, DecisionSource::Default)
+        );
+    }
+
+    #[test]
+    fn the_builtin_deny_beats_every_rule_of_every_level() {
+        let operator = Policy::compile(&[allow_bash("any", &["git *"])]).unwrap();
+        let project = [
+            project_glob(0x21, Effect::Allow, "git *"),
+            project_rule(0x22, "git push"),
+        ];
+        let d = operator.evaluate_with(&bash("git push"), &project);
+        assert_eq!(d.source, DecisionSource::Builtin(BUILTIN_GIT_PUSH.into()));
+        let deny_first =
+            Policy::compile(&[rule("no", Effect::Deny, &["Bash"], &[], &["git *"])]).unwrap();
+        let d = deny_first.evaluate_with(&bash("git push"), &project);
+        assert_eq!(d.source, DecisionSource::Builtin(BUILTIN_GIT_PUSH.into()));
+    }
+
+    #[test]
+    fn a_project_allow_never_beats_an_operator_deny() {
+        let p = Policy::compile(&[rule("no", Effect::Deny, &["Bash"], &[], &["rm *"])]).unwrap();
+        let project = [
+            project_rule(0x31, "rm x"),
+            project_glob(0x32, Effect::Allow, "rm *"),
+        ];
+        let d = p.evaluate_with(&bash("ls && rm x"), &project);
+        assert_eq!(
+            (d.effect, d.source),
+            (Effect::Deny, DecisionSource::Rule("no".into()))
+        );
+    }
+
+    #[test]
+    fn a_project_deny_or_ask_applies_to_a_command_that_cannot_be_split() {
+        let p = Policy::compile(&[]).unwrap();
+        let deny = [project_glob(0x41, Effect::Deny, "*rm -rf*")];
+        assert_eq!(
+            p.evaluate_with(&bash("echo $(rm -rf /)"), &deny).effect,
+            Effect::Deny
+        );
+        let ask = [
+            project_glob(0x42, Effect::Ask, "ls*"),
+            project_rule(0x43, "ls $(pwd)"),
+        ];
+        let d = p.evaluate_with(&bash("ls $(pwd)"), &ask);
+        assert_eq!(
+            (d.effect, d.source),
+            (Effect::Ask, DecisionSource::Project(ask[0].id.to_string()))
+        );
+    }
+
+    #[test]
+    fn a_project_allow_glob_never_applies_to_a_command_that_cannot_be_split() {
+        let p = Policy::compile(&[]).unwrap();
+        let project = [project_glob(0x51, Effect::Allow, "ls*")];
+        assert_eq!(
+            p.evaluate_with(&bash("ls -la"), &project).effect,
+            Effect::Allow
+        );
+        assert_eq!(
+            p.evaluate_with(&bash("ls $(pwd)"), &project).effect,
+            Effect::Ask
+        );
+        assert_eq!(
+            p.evaluate_with(&bash("ls && rm x"), &project).effect,
+            Effect::Ask
+        );
+    }
+
+    #[test]
+    fn project_rules_on_files_match_by_exact_path_or_glob_inside_the_worktree() {
+        use crate::vocab::MatchKind::{Exact, Glob};
+        let p = Policy::compile(&[]).unwrap();
+        let exact = [project_rule_of(
+            0x61,
+            Effect::Allow,
+            Exact,
+            "Edit",
+            None,
+            Some("src/a.rs"),
+        )];
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "src/a.rs", true), &exact)
+                .effect,
+            Effect::Allow
+        );
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "src/b.rs", true), &exact)
+                .effect,
+            Effect::Ask
+        );
+        let glob = [project_rule_of(
+            0x62,
+            Effect::Allow,
+            Glob,
+            "Edit",
+            None,
+            Some("src/*"),
+        )];
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "src/b.rs", true), &glob)
+                .effect,
+            Effect::Allow
+        );
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "src/x/b.rs", true), &glob)
+                .effect,
+            Effect::Ask
+        );
+        let any_path = [project_rule_of(
+            0x63,
+            Effect::Allow,
+            Exact,
+            "Edit",
+            None,
+            None,
+        )];
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "a.md", true), &any_path)
+                .effect,
+            Effect::Allow
+        );
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "/etc/x", false), &any_path)
+                .effect,
+            Effect::Deny
+        );
+        let mut through = file("Edit", "src/a.rs", true);
+        if let Some(path) = through.path.as_mut() {
+            path.through_symlink = true;
+        }
+        assert_eq!(p.evaluate_with(&through, &exact).effect, Effect::Ask);
+        let deny = [project_rule_of(
+            0x64,
+            Effect::Deny,
+            Glob,
+            "Edit",
+            None,
+            Some("**/.env"),
+        )];
+        assert_eq!(
+            p.evaluate_with(&file("Edit", "app/.env", true), &deny)
+                .effect,
+            Effect::Deny
+        );
+    }
+
+    #[test]
+    fn a_revoked_project_rule_does_not_apply() {
+        let p = Policy::compile(&[]).unwrap();
+        let mut gone = project_rule(0x71, "ls");
+        gone.revoked_at = Some(crate::time::Timestamp(5));
+        assert_eq!(p.evaluate_with(&bash("ls"), &[gone]).effect, Effect::Ask);
     }
 
     #[test]

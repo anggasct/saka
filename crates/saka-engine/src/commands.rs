@@ -945,6 +945,48 @@ impl Engine {
         }
     }
 
+    pub fn add_rule(
+        &self,
+        project: ProjectId,
+        new: saka_core::rule::NewRule,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<PermissionRule> {
+        let _guard = self.locked()?;
+        let now = self.now();
+        if self
+            .store
+            .read(|c| read::load_project(c, project))?
+            .is_none()
+        {
+            return Err(EngineError::Rejected(Rejection::NotFound));
+        }
+        let active = self
+            .store
+            .read(|c| read::active_permission_rules(c, project))?;
+        let mut ids = IdsSource(&*self.ports.ids);
+        let mut ctx = Ctx { now, ids: &mut ids };
+        let event = saka_core::rule::add(
+            project,
+            new,
+            &active,
+            &format!("human:{OPERATOR}"),
+            &mut ctx,
+        )?;
+        let rule = saka_core::rule::evolve(None, &event, now)
+            .ok_or_else(|| EngineError::Internal("add dropped the rule".into()))?;
+        let mut batch = Batch::new(now);
+        self.push_event(&mut batch, &event, Some(project), cause, now);
+        crate::log_runtime(&event, &cause.actor);
+        if let Some(a) = action {
+            let reply = (a.respond)(Produced::Rule(&rule));
+            batch.action = Some(a.record(self, cause, Some(project), Some(rule.id.0), reply));
+        }
+        batch.permission_rules.push(rule.clone());
+        self.commit(&batch)?;
+        Ok(rule)
+    }
+
     pub fn revoke_rule(
         &self,
         id: PermissionRuleId,

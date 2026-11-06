@@ -20,6 +20,16 @@ pub struct NewDraft<'a> {
     pub wait: bool,
 }
 
+pub struct NewRule<'a> {
+    pub project: &'a str,
+    pub effect: &'a str,
+    pub tool: &'a str,
+    pub match_kind: &'a str,
+    pub command: Option<&'a str>,
+    pub path: Option<&'a str>,
+    pub note: Option<&'a str>,
+}
+
 pub struct Client {
     base: String,
     http: reqwest::Client,
@@ -1259,17 +1269,49 @@ impl Client {
             .await
         {
             Ok(a) => self.finish(&a, |b| {
-                lines(b, |r| {
-                    format!(
-                        "{}  {}  {}",
-                        text(&r["id"]),
-                        text(&r["tool"]),
-                        r["command"].as_str().unwrap_or_default()
-                    )
-                    .trim_end()
-                    .to_string()
-                })
+                let project_rules = lines(b, rule_line);
+                let operator = b["operator_rules"]
+                    .as_array()
+                    .map(|rules| {
+                        rules
+                            .iter()
+                            .map(operator_rule_line)
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                [project_rules, operator]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn permission_rule_add(&self, rule: NewRule<'_>) -> ExitCode {
+        let id = match self.project_id(rule.project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let body = json!({
+            "effect": rule.effect,
+            "tool": rule.tool,
+            "match": rule.match_kind,
+            "command": rule.command,
+            "path": rule.path,
+            "note": rule.note,
+        });
+        match self
+            .post(
+                &format!("/api/v1/projects/{id}/permission-rules"),
+                &body,
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} added", text(&b["id"]))),
             Err(code) => code,
         }
     }
@@ -1311,6 +1353,40 @@ impl Client {
 
 fn text(v: &Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), String::from)
+}
+
+fn rule_line(r: &Value) -> String {
+    format!(
+        "{}  {}  {}  {}  {}",
+        text(&r["id"]),
+        text(&r["effect"]),
+        text(&r["match"]),
+        text(&r["tool"]),
+        r["command"]
+            .as_str()
+            .or_else(|| r["path"].as_str())
+            .unwrap_or_default()
+    )
+    .trim_end()
+    .to_string()
+}
+
+fn operator_rule_line(r: &Value) -> String {
+    let list = |key: &str| {
+        r[key]
+            .as_array()
+            .map(|items| items.iter().map(text).collect::<Vec<_>>().join(","))
+            .unwrap_or_default()
+    };
+    format!(
+        "operator:{}  {}  {}  {}",
+        text(&r["id"]),
+        text(&r["effect"]),
+        list("tools"),
+        [list("commands"), list("paths")].join(" ").trim()
+    )
+    .trim_end()
+    .to_string()
 }
 
 fn lines(body: &Value, line: impl Fn(&Value) -> String) -> String {

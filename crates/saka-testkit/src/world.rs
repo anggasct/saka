@@ -54,6 +54,7 @@ pub enum AgentOutcome {
 pub struct AgentScript {
     pub outcome: AgentOutcome,
     pub ask: Option<(String, Value)>,
+    pub reviewer_ask: Option<(String, Value)>,
     pub usage: TurnUsage,
     pub rate_limit: Option<Value>,
 }
@@ -80,6 +81,7 @@ impl Default for AgentScript {
         AgentScript {
             outcome: AgentOutcome::Commit,
             ask: None,
+            reviewer_ask: None,
             usage: TurnUsage::default(),
             rate_limit: None,
         }
@@ -2754,7 +2756,7 @@ impl Agents for FakeWorld {
     async fn send_turn(&self, session: &SessionRef, turn: u32, text: &str) -> PortResult<()> {
         let mut s = self.state();
         s.prompts.push(text.to_string());
-        let ask = s.script.ask.clone();
+        let (ask, reviewer_ask) = (s.script.ask.clone(), s.script.reviewer_ask.clone());
         let fs = s.session_mut(session)?;
         if !fs.turns.insert(turn) {
             return Ok(());
@@ -2762,7 +2764,7 @@ impl Agents for FakeWorld {
         fs.open_turn = Some(turn);
         fs.current_turn = turn;
         let first = turn == 1;
-        let ask_now = ask.filter(|_| !fs.asked && !fs.reviewer);
+        let ask_now = if fs.reviewer { reviewer_ask } else { ask }.filter(|_| !fs.asked);
         if ask_now.is_some() {
             fs.asked = true;
             fs.waiting_turn = Some(turn);

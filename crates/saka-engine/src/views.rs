@@ -547,6 +547,10 @@ impl Engine {
             .collect())
     }
 
+    pub fn operator_rules(&self) -> &[saka_core::policy::RuleSpec] {
+        self.cfg.policy.specs()
+    }
+
     pub fn permission_rules(&self, project: ProjectId) -> Result<Option<Vec<PermissionRule>>> {
         if self
             .store

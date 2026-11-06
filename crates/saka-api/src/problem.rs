@@ -102,6 +102,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserTokenRepoInaccessible { .. }
         | R::ActionNeedsInput { .. }
         | R::ReturnTargetInvalid { .. }
+        | R::RuleTooBroad
+        | R::RuleInvalid { .. }
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
@@ -111,6 +113,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::SpecHasActiveTasks { .. }
         | R::MergeNotReady { .. }
         | R::PermissionAlreadyAnswered
+        | R::RuleDuplicate { .. }
         | R::ProjectExists { .. }
         | R::ProjectRepoInUse { .. }
         | R::SpecSlugConflict { .. }

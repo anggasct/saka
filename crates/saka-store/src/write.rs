@@ -938,16 +938,20 @@ fn account_quota(tx: &Transaction<'_>, q: &AccountQuota) -> Result<()> {
 
 fn permission_rule(tx: &Transaction<'_>, r: &PermissionRule) -> Result<()> {
     tx.execute(
-        "INSERT INTO permission_rule (id, project_id, effect, tool, command, permission_request_id, created_by,
-           created_at, revoked_at, revoke_reason)
-         VALUES (?1, ?2, 'allow', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO permission_rule (id, project_id, effect, tool, match_kind, command, path, note,
+           permission_request_id, created_by, created_at, revoked_at, revoke_reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (id) DO UPDATE SET revoked_at = excluded.revoked_at, revoke_reason = excluded.revoke_reason",
         params![
             r.id.to_string(),
             r.project_id.to_string(),
+            r.effect.as_str(),
             r.tool,
+            r.match_kind.as_str(),
             r.command,
-            r.permission_request_id.to_string(),
+            r.path,
+            r.note,
+            r.permission_request_id.map(|p| p.to_string()),
             r.created_by,
             r.created_at.0,
             r.revoked_at.map(|x| x.0),

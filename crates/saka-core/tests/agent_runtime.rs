@@ -898,7 +898,7 @@ fn remember_makes_an_exact_project_rule_that_never_beats_a_deny() {
             "Bash".into(),
             Some("npm install".into()),
             "human:operator:local".into(),
-            PermissionRequestId(Uuid::from_u128(900))
+            Some(PermissionRequestId(Uuid::from_u128(900)))
         )
     );
     assert!(matches!(

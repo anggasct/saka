@@ -3,7 +3,9 @@
     reason = "simulations fail loudly on a broken setup"
 )]
 
-use saka_core::policy::{Effect, RuleSpec};
+use saka_core::policy::RuleSpec;
+use saka_core::rule::NewRule;
+use saka_core::vocab::{Effect, MatchKind};
 use saka_engine::Page;
 use saka_testkit::{AgentScript, Operator, Sim, SimConfig};
 use serde_json::json;
@@ -118,5 +120,93 @@ fn always_allow_on_a_compound_command_remembers_each_part_and_the_next_run_does_
     assert!(
         sources.iter().all(Option::is_some),
         "nothing is left pending: {sources:?}"
+    );
+}
+
+fn add_rule(
+    sim: &Sim,
+    effect: Effect,
+    kind: MatchKind,
+    command: &str,
+) -> saka_core::model::PermissionRule {
+    let engine = sim.engine();
+    engine
+        .add_rule(
+            sim.project_id,
+            NewRule {
+                effect,
+                tool: "Bash".into(),
+                match_kind: kind,
+                command: Some(command.into()),
+                path: None,
+                note: None,
+            },
+            &engine.cause("human:operator:local"),
+            None,
+        )
+        .unwrap()
+}
+
+#[test]
+fn a_project_allow_rule_serves_the_developer_and_never_the_reviewer() {
+    let agent = AgentScript {
+        reviewer_ask: Some(("Bash".into(), json!({ "command": "ls" }))),
+        ..asking("ls")
+    };
+    let mut sim = sim(agent, vec![]);
+    let rule = add_rule(&sim, Effect::Allow, MatchKind::Glob, "ls*");
+    assert!(sim.run_to_shipped(STEPS));
+    let sources: Vec<String> = answer_sources(&sim).into_iter().flatten().collect();
+    assert!(
+        sources.contains(&format!("policy:project:{}", rule.id)),
+        "{sources:?}"
+    );
+    assert!(
+        sources.contains(&"policy:reviewer:deny".to_string()),
+        "the reviewer asked and was refused: {sources:?}"
+    );
+    assert!(
+        sources
+            .iter()
+            .all(|s| s.starts_with("policy:project:") || s == "policy:reviewer:deny"),
+        "{sources:?}"
+    );
+}
+
+#[test]
+fn a_project_deny_rule_refuses_without_asking_and_beats_the_operators_allow() {
+    let mut sim = sim(
+        asking("ls && rm -rf build"),
+        vec![allow_bash("anything", "ls*"), allow_bash("rm", "rm *")],
+    );
+    let rule = add_rule(&sim, Effect::Deny, MatchKind::Glob, "rm *");
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1)
+            .permissions
+            .iter()
+            .any(|p| p.answer_source.is_some())
+    }));
+    let denied = &sim.task(1).permissions[0];
+    assert_eq!(
+        denied.answer_source.as_deref(),
+        Some(format!("policy:project:{}", rule.id).as_str())
+    );
+    assert_eq!(denied.state, saka_core::vocab::PermissionState::Denied);
+}
+
+#[test]
+fn a_new_rule_does_not_answer_a_request_that_is_already_waiting() {
+    let mut sim = sim(asking("make deploy"), vec![]);
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1)
+            .permissions
+            .iter()
+            .any(|p| p.answer_source.is_none())
+    }));
+    add_rule(&sim, Effect::Allow, MatchKind::Exact, "make deploy");
+    assert!(sim.task(1).permissions[0].answer_source.is_none());
+    assert_eq!(
+        sim.task(1).permissions[0].state,
+        saka_core::vocab::PermissionState::Pending
     );
 }
