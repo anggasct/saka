@@ -20,12 +20,14 @@ struct FakeCli {
 }
 
 impl FakeCli {
+    // A copy would leave a write handle open while a sibling test forks, and exec of that
+    // file then fails with ETXTBSY; the symlink never opens the script for writing.
     fn new() -> FakeCli {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-claude");
-        std::fs::copy(fixture, bin.join("claude")).unwrap();
+        std::os::unix::fs::symlink(fixture, bin.join("claude")).unwrap();
         FakeCli {
             account: dir.path().join("account"),
             bin,
