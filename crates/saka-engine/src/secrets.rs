@@ -1,5 +1,6 @@
 use saka_core::event::Event;
 use saka_core::ids::ProjectId;
+use saka_core::redact::Redactor;
 use saka_core::rejection::Rejection;
 use saka_core::secret::{
     PER_PROJECT_MAX, SecretScope, SecretText, SecretVar, VALUE_MAX_BYTES, VALUE_MIN_BYTES,
@@ -159,6 +160,35 @@ impl Engine {
             tracing::info!(project_id = %project.0, name, "secret removed");
         }
         Ok(())
+    }
+
+    pub(crate) fn project_redactor(
+        &self,
+        project: ProjectId,
+    ) -> std::result::Result<Redactor, PortError> {
+        let rows = self
+            .store
+            .read(|c| read::project_secrets(c, project))
+            .map_err(|e| {
+                PortError::retryable("store_unavailable", json!({ "detail": e.to_string() }))
+            })?;
+        let mut named = Vec::new();
+        for row in rows {
+            let sealed = Sealed {
+                nonce: row.nonce,
+                ciphertext: row.ciphertext,
+            };
+            let scope = SecretScope::Project {
+                project_id: project,
+                name: &row.name,
+            };
+            match self.ports.secrets.open(&scope, &sealed) {
+                Ok(value) => named.push((row.name, value.expose().to_string())),
+                Err(e) if e.retryable => return Err(e),
+                Err(_) => {}
+            }
+        }
+        Ok(Redactor::named(&[], &named))
     }
 
     // Every secret the recipe declares, opened; one that is missing or unreadable refuses them all.

@@ -12,8 +12,7 @@ use crate::{Cause, Engine, EngineError, Extra, Result, Shows};
 
 pub const AGENT_ACTOR: &str = "agent:decision";
 
-fn redacted(question: Question) -> Question {
-    let redactor = Redactor::new(&[]);
+fn redacted(question: Question, redactor: &Redactor) -> Question {
     let clean = |text: &str| redactor.text(text).into_owned();
     Question {
         question: clean(&question.question),
@@ -91,10 +90,21 @@ impl Decisions for Engine {
             .read(|c| read::session_owner(c, session))
             .map_err(|_| AskRefusal::Unavailable)?
             .ok_or(AskRefusal::SessionNotRunning)?;
+        let redactor = self
+            .store
+            .read(|c| read::session_project(c, session))
+            .map_err(|_| AskRefusal::Unavailable)?
+            .ok_or(AskRefusal::SessionNotRunning)
+            .and_then(|project| {
+                self.project_redactor(project).map_err(|e| {
+                    tracing::warn!(session_id = %session, code = %e.code, "decision request failed");
+                    AskRefusal::Unavailable
+                })
+            })?;
         let decision_id = DecisionRequestId(self.new_id());
         let input = SessionInput::AskDecision {
             decision_id,
-            question: redacted(question),
+            question: redacted(question, &redactor),
         };
         let cause = self.cause(AGENT_ACTOR);
         match self.decide_owner(owner, input, &cause, Extra::default()) {
