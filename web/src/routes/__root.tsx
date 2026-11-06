@@ -1,18 +1,15 @@
 import type { QueryClient } from "@tanstack/react-query";
 import {
-  Link,
   Outlet,
   createRootRouteWithContext,
   useLocation,
 } from "@tanstack/react-router";
 
-import { AuthNav } from "@/features/auth/auth-nav";
 import { OfflineBanner } from "@/features/connection/offline-banner";
-import { InboxNavLink } from "@/features/inbox/nav-link";
-import { LanguageSelect } from "@/i18n/language-select";
+import { BottomNav, CompactHeader, TopNav } from "@/features/nav/main-nav";
+import { useNarrow } from "@/features/nav/use-narrow";
 import { initialLocale } from "@/i18n/locale";
 import { useT } from "@/i18n/use-t";
-import { platform } from "@/platform";
 import { Providers } from "@/providers";
 
 export type RouterContext = { queryClient: QueryClient };
@@ -23,6 +20,8 @@ function Layout() {
   const t = useT();
   const pathname = useLocation({ select: (l) => l.pathname });
   const bare = BARE_PATHS.includes(pathname);
+  const narrow = useNarrow();
+  const bottom = narrow && !bare;
   return (
     <div className="min-h-dvh">
       <a
@@ -32,53 +31,18 @@ function Layout() {
         {t("app.skipToContent")}
       </a>
       <header className="border-b border-border">
-        <nav className="mx-auto flex max-w-4xl flex-wrap items-center gap-x-4 px-4">
-          <span className="py-3 font-semibold">{t("app.name")}</span>
-          {!bare && (
-            <>
-              <InboxNavLink />
-              <Link
-                to="/docs"
-                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-              >
-                {t("nav.docs")}
-              </Link>
-              <Link
-                to="/delivery"
-                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-              >
-                {t("nav.delivery")}
-              </Link>
-              <Link
-                to="/sessions"
-                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-              >
-                {t("nav.sessions")}
-              </Link>
-              <Link
-                to="/settings"
-                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-              >
-                {t("nav.settings")}
-              </Link>
-              {platform.connections() !== null && (
-                <Link
-                  to="/connections"
-                  className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-                >
-                  {t("nav.connections")}
-                </Link>
-              )}
-              <AuthNav />
-            </>
-          )}
-          <LanguageSelect />
-        </nav>
+        {narrow ? <CompactHeader bare={bare} /> : <TopNav bare={bare} />}
       </header>
       <OfflineBanner />
-      <main id="content">
+      <main
+        id="content"
+        className={
+          bottom ? "pb-[calc(3.5rem+env(safe-area-inset-bottom))]" : ""
+        }
+      >
         <Outlet />
       </main>
+      {bottom && <BottomNav />}
     </div>
   );
 }

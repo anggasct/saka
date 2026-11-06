@@ -20,6 +20,12 @@ configure({ asyncUtilTimeout: 4000 });
 // CodeMirror measures text ranges after each update. Node-only suites skip this.
 if (typeof window !== "undefined") {
   window.scrollTo = () => undefined;
+  window.matchMedia = () =>
+    ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }) as unknown as MediaQueryList;
   const noRects = {
     length: 0,
     item: () => null,

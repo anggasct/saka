@@ -1278,5 +1278,6 @@
   "sessions.loadingOne": "Loading the session",
   "sessions.notFound": "This session does not exist",
   "sessions.error.titleOne": "Could not load the session",
-  "session.stop.descriptionFor": "The agent working on {task} stops now. Pending permission requests expire, and the task is blocked until you retry or cancel it."
+  "session.stop.descriptionFor": "The agent working on {task} stops now. Pending permission requests expire, and the task is blocked until you retry or cancel it.",
+  "nav.main": "Main"
 }
