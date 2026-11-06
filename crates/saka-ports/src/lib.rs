@@ -60,6 +60,10 @@ pub trait Ids: Send + Sync {
     fn new_id(&self) -> Uuid;
 }
 
+pub trait Entropy: Send + Sync {
+    fn fill(&self, buf: &mut [u8]) -> PortResult<()>;
+}
+
 pub struct IdsSource<'a>(pub &'a dyn Ids);
 
 impl IdSource for IdsSource<'_> {

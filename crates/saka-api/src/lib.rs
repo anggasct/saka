@@ -1,3 +1,5 @@
+mod auth;
+mod auth_routes;
 pub mod dto;
 mod guard;
 mod hooks;
@@ -14,6 +16,7 @@ use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{get, post, put};
 use utoipa::OpenApi;
 
+pub use auth::{AuthSettings, Authenticator};
 pub use guard::loopback_host;
 pub use hooks::{MAX_WEBHOOK_BYTES, hooks_router};
 pub use state::{ApiConfig, AppState};
@@ -40,13 +43,14 @@ pub use state::{ApiConfig, AppState};
         routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
         routes::retry_spec_draft, routes::cancel_spec_draft,
         routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::list_inbox, routes::inbox_summary, routes::dismiss_inbox_item, routes::rerun_hook,
+        auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
         routes::meta, routes::events, routes::diagnostics,
         ops::healthz, ops::readyz, ops::metrics,
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
         (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"), (name = "hooks"), (name = "inbox"),
-        (name = "spec-drafts"), (name = "system"), (name = "ops"),
+        (name = "spec-drafts"), (name = "system"), (name = "ops"), (name = "auth"),
     )
 )]
 pub struct ApiDoc;
@@ -257,6 +261,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/meta", get(routes::meta))
         .route("/api/v1/diagnostics", get(routes::diagnostics))
         .route("/api/v1/events", get(routes::events))
+        .route("/api/v1/auth/status", get(auth_routes::status))
+        .route("/api/v1/auth/pairings", post(auth_routes::create_pairing))
+        .route("/api/v1/auth/pair", post(auth_routes::pair))
+        .route("/api/v1/auth/devices", get(auth_routes::list_devices))
+        .route(
+            "/api/v1/auth/devices/{device_id}/revoke",
+            post(auth_routes::revoke_device),
+        )
         .route(
             "/api/{*rest}",
             get(routes::api_not_found).post(routes::api_not_found),

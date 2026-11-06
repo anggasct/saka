@@ -29,6 +29,197 @@
         }
       }
     },
+    "/api/v1/auth/devices": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "list_devices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthDevices"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/devices/{device_id}/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "revoke_device",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/pair": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "pair",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairedDevice"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/pairings": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "create_pairing",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCreated"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/status": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/diagnostics": {
       "get": {
         "tags": [
@@ -4221,6 +4412,55 @@
         },
         "additionalProperties": false
       },
+      "AuthDevices": {
+        "type": "object",
+        "required": [
+          "devices",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PasskeyCredential"
+            }
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            }
+          }
+        }
+      },
+      "AuthStatus": {
+        "type": "object",
+        "description": "Whether the server asks for credentials and who the caller is.",
+        "required": [
+          "enabled",
+          "setup_required",
+          "authenticated"
+        ],
+        "properties": {
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`operator:passkey:<id>` or `operator:device:<id>`; `null` when not authenticated."
+          },
+          "authenticated": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "setup_required": {
+            "type": "boolean",
+            "description": "No passkey is registered yet: the first one needs a `setup` code from the host."
+          }
+        }
+      },
       "AuthorshipAuthor": {
         "type": "object",
         "description": "A commit author identity.",
@@ -4649,6 +4889,50 @@
             ]
           }
         }
+      },
+      "Device": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DeviceKind",
+            "description": "`local_cli` is the token of the CLI on the host; it cannot be revoked."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DeviceKind": {
+        "type": "string",
+        "enum": [
+          "local_cli",
+          "client"
+        ]
       },
       "DiagnosticCheck": {
         "type": "object",
@@ -7093,6 +7377,116 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "PairBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "name"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A `token` pairing code."
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairedDevice": {
+        "type": "object",
+        "description": "A device token. It is shown once and cannot be read again.",
+        "required": [
+          "device_id",
+          "token"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "PairingBody": {
+        "type": "object",
+        "required": [
+          "purpose"
+        ],
+        "properties": {
+          "purpose": {
+            "$ref": "#/components/schemas/PairingPurpose"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingCreated": {
+        "type": "object",
+        "description": "A pairing code. Only the response that creates it carries `code`; a replay of the same request does not.",
+        "required": [
+          "id",
+          "purpose",
+          "expires_at"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ten characters of Crockford base32, valid once until `expires_at`."
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/PairingPurpose"
+          }
+        }
+      },
+      "PairingPurpose": {
+        "type": "string",
+        "description": "What a pairing code is for. `setup` lets the first passkey be registered and is only issued to the local CLI; `passkey` registers another passkey; `token` pairs a client that holds a device token.",
+        "enum": [
+          "setup",
+          "passkey",
+          "token"
+        ]
+      },
+      "PasskeyCredential": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -10594,6 +10988,9 @@
     },
     {
       "name": "ops"
+    },
+    {
+      "name": "auth"
     }
   ]
 }

@@ -49,6 +49,14 @@ impl Clock for SystemClock {
     }
 }
 
+pub struct OsEntropy;
+
+impl saka_ports::Entropy for OsEntropy {
+    fn fill(&self, buf: &mut [u8]) -> PortResult<()> {
+        getrandom::fill(buf).map_err(|_| PortError::permanent("entropy_unavailable", json!({})))
+    }
+}
+
 pub struct UuidV7;
 
 impl Ids for UuidV7 {
@@ -410,6 +418,43 @@ fn open_store(data_dir: &Path, now: Timestamp) -> Result<Store, ExitCode> {
     }
 }
 
+pub const CLI_TOKEN_FILE: &str = "cli-token";
+
+fn publish_cli_token(engine: &Engine, data_dir: &Path) -> Result<(), ExitCode> {
+    let refused = |code: &'static str, detail: String| {
+        tracing::error!(code, detail = %detail, "cannot publish the CLI token");
+        ExitCode::from(EXIT_REFUSED)
+    };
+    let token = engine
+        .issue_local_cli_token()
+        .map_err(|e| refused("cli_token_unavailable", e.to_string()))?;
+    write_private_file(&data_dir.join(CLI_TOKEN_FILE), token.expose())
+        .map_err(|e| refused("cli_token_unwritable", e.to_string()))
+}
+
+fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)?;
+    let written = file
+        .write_all(content.as_bytes())
+        .and_then(|()| file.sync_all());
+    drop(file);
+    match written.and_then(|()| std::fs::rename(&temp, path)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(e)
+        }
+    }
+}
+
 pub fn migrate(cfg: &Config) -> ExitCode {
     match open_store(&cfg.data_dir(), SystemClock.now()) {
         Ok(_) => ExitCode::SUCCESS,
@@ -610,8 +655,8 @@ pub fn serve(cfg: &Config) -> ExitCode {
         Ok(a) => a,
         Err(e) => return refuse(&e),
     };
-    if !config::is_loopback(&listen) {
-        tracing::error!(code = "non_loopback_requires_auth", listen = %listen, "listening beyond loopback needs auth, which this version does not have");
+    if !config::is_loopback(&listen) && cfg.auth.is_none() {
+        tracing::error!(code = "config_listen_not_loopback", listen = %listen, "listening beyond loopback needs an [auth] section");
         return ExitCode::from(EXIT_REFUSED);
     }
     if let Err(e) = cfg.check_key_files() {
@@ -706,6 +751,7 @@ async fn run(
     };
     let mut api_cfg = ApiConfig::new(VERSION);
     api_cfg.allowed_origins = cfg.server.allowed_origins.clone();
+    api_cfg.auth = cfg.auth_settings().map(saka_api::Authenticator::new);
     let state = AppState::new(api_cfg);
     if let Some(assets) = saka_api::spa::embedded() {
         state.set_assets(assets);
@@ -713,11 +759,15 @@ async fn run(
     let (stop, stopped) = watch::channel(false);
     let mut http_stop = stopped.clone();
     let http = tokio::spawn(
-        axum::serve(listener, saka_api::router(state.clone()))
-            .with_graceful_shutdown(async move {
-                let _ = http_stop.wait_for(|s| *s).await;
-            })
-            .into_future(),
+        axum::serve(
+            listener,
+            saka_api::router(state.clone())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = http_stop.wait_for(|s| *s).await;
+        })
+        .into_future(),
     );
     tracing::info!(listen = %listen, version = VERSION, "listening");
     let hooks_http = match webhooks.listen {
@@ -887,6 +937,7 @@ async fn run(
         Ports {
             clock,
             ids: Arc::new(UuidV7),
+            entropy: Arc::new(OsEntropy),
             env: repos.clone(),
             scm: Arc::new(scm),
             agents: Arc::new(agents),
@@ -931,6 +982,13 @@ async fn run(
     match engine.recover() {
         Ok(lost) => tracing::info!(sessions_lost = lost, "recovered"),
         Err(e) => tracing::error!(error = %e, "recovery failed"),
+    }
+    if cfg.auth.is_some()
+        && let Err(code) = publish_cli_token(&engine, &data_dir)
+    {
+        let _ = stop.send(true);
+        let _ = http.await;
+        return code;
     }
     state.set_engine(engine.clone());
     let forwarder = {

@@ -156,6 +156,12 @@ pub enum Rejection {
         field: &'static str,
         reason: &'static str,
     },
+    #[error("the pairing code is not valid")]
+    PairingCodeInvalid,
+    #[error("the last passkey cannot be revoked")]
+    LastCredential,
+    #[error("the device cannot be revoked")]
+    DeviceNotRevocable,
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -229,6 +235,9 @@ impl Rejection {
             Rejection::RuleDuplicate { .. } => "rule_duplicate",
             Rejection::RuleTooBroad => "rule_too_broad",
             Rejection::RuleInvalid { .. } => "rule_invalid",
+            Rejection::PairingCodeInvalid => "pairing_code_invalid",
+            Rejection::LastCredential => "last_credential",
+            Rejection::DeviceNotRevocable => "device_not_revocable",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }

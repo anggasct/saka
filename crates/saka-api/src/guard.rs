@@ -1,11 +1,16 @@
+use std::sync::Arc;
+
 use axum::extract::{MatchedPath, Request, State};
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use saka_core::identity::Actor;
+use saka_engine::Principal;
 use serde_json::json;
 use tracing::Instrument;
 use uuid::Uuid;
 
+use crate::auth::{self, ACTOR, ANONYMOUS, Authenticator, Caller, ClientKey};
 use crate::problem::{ApiError, CORRELATION};
 use crate::state::AppState;
 
@@ -54,6 +59,93 @@ pub async fn label(req: Request, next: Next) -> Response {
     response
 }
 
+struct Admitted {
+    principal: Option<Principal>,
+    limit: Option<(Arc<Authenticator>, ClientKey)>,
+}
+
+fn local_admission(state: &AppState, req: &Request) -> Result<Admitted, ApiError> {
+    let headers = req.headers();
+    let host_ok = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(loopback_host);
+    if !host_ok {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "host_not_allowed",
+            json!({}),
+        ));
+    }
+    if req.method() == Method::POST && !origin_allowed(headers, state) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "origin_not_allowed",
+            json!({}),
+        ));
+    }
+    Ok(Admitted {
+        principal: Some(Principal {
+            actor: Actor::Local,
+            device_kind: None,
+        }),
+        limit: None,
+    })
+}
+
+fn admission(state: &AppState, req: &Request) -> Result<Admitted, ApiError> {
+    let Some(auth) = state.authenticator() else {
+        return local_admission(state, req);
+    };
+    let principal = auth::admit(state, auth, req)?;
+    let limit = auth::limited_path(req.uri().path())
+        .then(|| (auth.clone(), ClientKey::of(auth::peer(req))));
+    Ok(Admitted { principal, limit })
+}
+
+fn too_many(retry_after: u64) -> Response {
+    let mut response = ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "auth_rate_limited",
+        json!({ "retry_after_secs": retry_after }),
+    )
+    .into_response();
+    if let Ok(value) = HeaderValue::from_str(&retry_after.to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
+
+async fn run_admitted(
+    state: &AppState,
+    mut req: Request,
+    next: Next,
+    admitted: Admitted,
+) -> Response {
+    let actor = admitted
+        .principal
+        .as_ref()
+        .map_or_else(|| ANONYMOUS.to_string(), |p| p.actor.to_string());
+    let now_ms = match (&admitted.limit, state.engine()) {
+        (Some(_), Ok(engine)) => engine.now().0,
+        (Some(_), Err(e)) => return e.into_response(),
+        (None, _) => 0,
+    };
+    if let Some((auth, client)) = &admitted.limit
+        && let Some(retry_after) = auth.blocked(*client, now_ms)
+    {
+        return too_many(retry_after);
+    }
+    req.extensions_mut().insert(Caller(admitted.principal));
+    let response = ACTOR.scope(actor, next.run(req)).await;
+    if let Some((auth, client)) = &admitted.limit
+        && response.status().is_client_error()
+    {
+        auth.failed(*client, now_ms);
+    }
+    response
+}
+
 pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let id = Uuid::now_v7();
     let method = req.method().clone();
@@ -64,35 +156,24 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
         route = tracing::field::Empty,
     );
     let started = std::time::Instant::now();
-    let headers = req.headers();
-    let host_ok = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(loopback_host);
-    let refusal = if !host_ok {
-        Some(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "host_not_allowed",
-            json!({}),
-        ))
-    } else if method == Method::POST && !origin_allowed(headers, &state) {
-        Some(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "origin_not_allowed",
-            json!({}),
-        ))
-    } else {
-        None
-    };
-    let response = CORRELATION
+    let admission = admission(&state, &req);
+    let secret_path =
+        state.authenticator().is_some() && req.uri().path().starts_with("/api/v1/auth/");
+    let inner_state = state.clone();
+    let mut response = CORRELATION
         .scope(id, async move {
-            match refusal {
-                Some(e) => e.into_response(),
-                None => next.run(req).await,
+            match admission {
+                Err(e) => e.into_response(),
+                Ok(admitted) => run_admitted(&inner_state, req, next, admitted).await,
             }
         })
         .instrument(span.clone())
         .await;
+    if secret_path {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     let status = response.status().as_u16();
     let route = response
         .extensions()

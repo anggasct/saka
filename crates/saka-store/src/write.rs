@@ -164,6 +164,9 @@ pub struct Batch {
     pub removed_user_links: Vec<saka_core::ids::UserLinkId>,
     pub project_authorships: Vec<crate::authorship::ProjectAuthorshipRow>,
     pub inbox_dismissals: Vec<crate::inbox::InboxDismissal>,
+    pub new_devices: Vec<crate::identity::NewDevice>,
+    pub revoked_devices: Vec<saka_core::ids::DeviceId>,
+    pub new_pairings: Vec<crate::identity::NewPairing>,
 }
 
 impl Batch {
@@ -393,6 +396,15 @@ pub(crate) fn write(
     }
     for r in &b.hook_runs {
         crate::hook_run::upsert(tx, r)?;
+    }
+    for p in &b.new_pairings {
+        crate::identity::insert_pairing(tx, p, b.now)?;
+    }
+    for d in &b.new_devices {
+        crate::identity::insert_device(tx, d)?;
+    }
+    for id in &b.revoked_devices {
+        crate::identity::revoke_device(tx, *id, b.now)?;
     }
     for (project, a) in &b.activities {
         tx.execute(

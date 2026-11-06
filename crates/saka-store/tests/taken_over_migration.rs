@@ -85,7 +85,7 @@ fn a_blocker_can_be_resolved_by_taking_the_task_over_and_old_blockers_survive() 
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+        vec![22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
     );
     drop(store);
 

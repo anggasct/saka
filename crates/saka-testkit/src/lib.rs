@@ -19,7 +19,7 @@ pub use accounts::{
     ACCESS_TOKEN_SECS, AccountCall, DEVICE_VERIFICATION_URI, DeviceAnswer, FakeAccounts,
     GitHubUser, REFRESH_TOKEN_SECS,
 };
-pub use clock::{FakeClock, FakeIds};
+pub use clock::{FakeClock, FakeEntropy, FakeIds};
 pub use fixtures::{
     AFTER_GRAPH_PATH, AFTER_GRAPH_SPEC, APPROVAL_PATH, approval_spec, one_step_spec, repo_entry,
     saka_toml,

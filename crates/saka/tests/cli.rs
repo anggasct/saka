@@ -261,7 +261,7 @@ fn serve_refuses_a_listen_address_beyond_loopback() {
     let out = run_saka(&path, &["serve"]);
     assert_eq!(code(&out), 2);
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("\"code\":\"non_loopback_requires_auth\"")
+        String::from_utf8_lossy(&out.stderr).contains("\"code\":\"config_listen_not_loopback\"")
     );
 
     std::fs::write(&path, "[server]\nport = 1\n").unwrap();
@@ -2217,4 +2217,224 @@ fn inbox_commands_list_what_waits_and_dismiss_a_spec_approval_with_documented_co
     assert_eq!(code(&again), 4, "409 inbox_item_closed");
     assert!(String::from_utf8_lossy(&again.stderr).contains("inbox_item_closed"));
     assert_eq!(stdout(&saka(&server, &["inbox", "list"])).trim(), "");
+}
+
+fn auth_config(dir: &Path, port: u16) -> std::path::PathBuf {
+    write_config(
+        dir,
+        &format!(
+            "listen = \"127.0.0.1:{port}\"\n[auth]\norigin = \"https://saka.example.com\"\nrp_id = \"example.com\"\n"
+        ),
+    )
+}
+
+fn start_serve(config: &Path, port: u16) -> std::process::Child {
+    let child = Command::new(SAKA)
+        .arg("serve")
+        .env("SAKA_CONFIG", config)
+        .env_remove("SAKA_TOKEN")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline && http_get(port, "/readyz").map(|r| r.0) != Some(200) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        http_get(port, "/readyz").map(|r| r.0),
+        Some(200),
+        "never ready"
+    );
+    child
+}
+
+fn stop_serve(mut child: std::process::Child) -> String {
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(child.wait().unwrap().success());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    stderr
+}
+
+fn saka_as(config: &Path, args: &[&str]) -> Output {
+    Command::new(SAKA)
+        .args(args)
+        .env("SAKA_CONFIG", config)
+        .env_remove("SAKA_TOKEN")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn serve_with_auth_issues_a_private_cli_token_that_the_cli_uses_without_flags() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let config = auth_config(dir.path(), port);
+    let child = start_serve(&config, port);
+
+    let token_path = dir.path().join("data/cli-token");
+    let mode = std::fs::metadata(&token_path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let token = std::fs::read_to_string(&token_path).unwrap();
+    assert!(token.starts_with("sdt_"));
+
+    assert_eq!(http_get(port, "/api/v1/projects").map(|r| r.0), Some(401));
+    assert_eq!(http_get(port, "/api/v1/meta").map(|r| r.0), Some(200));
+    let listed = saka_as(&config, &["project", "list"]);
+    assert_eq!(
+        code(&listed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let refused = saka_as(&config, &["project", "list"]);
+    assert_eq!(code(&refused), 2);
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("token_file_mode"));
+    std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let other = dir.path().join("other-token");
+    std::fs::write(&other, format!("sdt_{}", "0".repeat(64))).unwrap();
+    std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let wrong = saka_as(
+        &config,
+        &["--token-file", other.to_str().unwrap(), "project", "list"],
+    );
+    assert_eq!(code(&wrong), 1);
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("auth_invalid"));
+
+    let remote = Command::new(SAKA)
+        .args(["--server", "http://10.255.255.1:7420", "project", "list"])
+        .env("SAKA_CONFIG", &config)
+        .env("SAKA_TOKEN", "sdt_short")
+        .output()
+        .unwrap();
+    assert_eq!(code(&remote), 2);
+    assert!(String::from_utf8_lossy(&remote.stderr).contains("token_env_invalid"));
+
+    let stderr = stop_serve(child);
+    assert!(!stderr.contains(token.trim()), "the token reached the logs");
+}
+
+#[test]
+fn the_auth_commands_pair_a_device_and_revoke_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let config = auth_config(dir.path(), port);
+    let child = start_serve(&config, port);
+
+    let setup = saka_as(&config, &["--json", "auth", "setup"]);
+    assert_eq!(
+        code(&setup),
+        0,
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    assert_eq!(json(&setup)["code"].as_str().unwrap().len(), 10);
+    assert_eq!(json(&setup)["purpose"], "setup");
+
+    let pair = saka_as(&config, &["--json", "auth", "pair"]);
+    assert_eq!(code(&pair), 0);
+    let pairing = json(&pair)["code"].as_str().unwrap().to_string();
+
+    let out = dir.path().join("pixel-token");
+    let redeemed = saka_as(
+        &config,
+        &[
+            "auth",
+            "redeem",
+            &pairing,
+            "--name",
+            "Pixel",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        code(&redeemed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&redeemed.stderr)
+    );
+    assert!(!stdout(&redeemed).contains("sdt_"));
+    let again = saka_as(
+        &config,
+        &[
+            "auth",
+            "redeem",
+            &pairing,
+            "--name",
+            "Again",
+            "--out",
+            dir.path().join("x").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code(&again), 1);
+    assert!(String::from_utf8_lossy(&again.stderr).contains("pairing_code_invalid"));
+
+    let as_pixel = |args: &[&str]| {
+        let mut full = vec!["--token-file", out.to_str().unwrap()];
+        full.extend_from_slice(args);
+        saka_as(&config, &full)
+    };
+    let devices = as_pixel(&["--json", "auth", "devices"]);
+    assert_eq!(code(&devices), 0);
+    let listed = json(&devices);
+    let pixel = listed["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == "Pixel")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let local = listed["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == "local_cli")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let refused = saka_as(&config, &["auth", "revoke", &local]);
+    assert_eq!(code(&refused), 4);
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("device_not_revocable"));
+    let setup_as_pixel = as_pixel(&["auth", "setup"]);
+    assert_eq!(code(&setup_as_pixel), 1);
+    assert!(String::from_utf8_lossy(&setup_as_pixel.stderr).contains("setup_code_host_only"));
+
+    assert_eq!(code(&saka_as(&config, &["auth", "revoke", &pixel])), 0);
+    let revoked = as_pixel(&["auth", "devices"]);
+    assert_eq!(code(&revoked), 1);
+    assert!(String::from_utf8_lossy(&revoked.stderr).contains("auth_invalid"));
+    stop_serve(child);
+}
+
+#[test]
+fn serve_exits_2_when_the_cli_token_cannot_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let config = auth_config(dir.path(), port);
+    let blocker = dir.path().join("data/cli-token");
+    std::fs::create_dir_all(blocker.join("inside")).unwrap();
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2, "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cli_token_unwritable"));
 }

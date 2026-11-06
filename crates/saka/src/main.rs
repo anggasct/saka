@@ -1,5 +1,6 @@
 mod agent_login;
 mod cli;
+mod cli_token;
 mod config;
 mod doctor;
 mod init;
@@ -33,6 +34,12 @@ struct Cli {
     server: Option<String>,
     #[arg(help = "Print the API response body as JSON", long, global = true)]
     json: bool,
+    #[arg(
+        help = "A file holding a device token (default: SAKA_TOKEN, then the local CLI token for a loopback server)",
+        long,
+        global = true
+    )]
+    token_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -122,6 +129,11 @@ enum Command {
     #[command(about = "What waits for you across projects: permissions, blockers, approvals")]
     #[command(subcommand)]
     Inbox(InboxCmd),
+    #[command(
+        about = "Sign-in codes, device tokens, and revoking them (needs [auth] in the config)"
+    )]
+    #[command(subcommand)]
+    Auth(AuthCmd),
 }
 
 #[derive(Subcommand)]
@@ -145,6 +157,44 @@ enum InboxCmd {
         #[arg(long)]
         reason: String,
     },
+}
+
+#[derive(Subcommand)]
+enum AuthCmd {
+    #[command(
+        about = "Creates a code that registers a passkey from the browser; run it on the host",
+        after_help = "Exit codes: 0 created, 1 failed, 2 refused. The code is valid once for 15 minutes."
+    )]
+    Setup,
+    #[command(
+        about = "Creates a code that pairs another device (a token for a CLI or app, or a passkey with --passkey)",
+        after_help = "Exit codes: 0 created, 1 failed. The code is valid once for 5 minutes."
+    )]
+    Pair {
+        #[arg(
+            help = "Pair a passkey from the browser instead of a device token",
+            long
+        )]
+        passkey: bool,
+    },
+    #[command(
+        about = "Turns a token code into a device token; run it on the device being paired",
+        after_help = "Exit codes: 0 paired, 1 failed. The token is printed once, or written to --out with mode 0600."
+    )]
+    Redeem {
+        code: String,
+        #[arg(help = "A name for this device, 1 to 100 characters", long)]
+        name: String,
+        #[arg(help = "Write the token to this new file instead of printing it", long)]
+        out: Option<PathBuf>,
+    },
+    #[command(about = "Lists paired devices and passkeys")]
+    Devices,
+    #[command(
+        about = "Revokes a paired device; its token stops working at once",
+        after_help = "Exit codes: 0 revoked, 1 failed, 4 the local CLI token cannot be revoked."
+    )]
+    Revoke { id: String },
 }
 
 #[derive(Subcommand)]
@@ -620,6 +670,15 @@ fn load_config() -> Result<Config, ExitCode> {
     })
 }
 
+fn connect(
+    server: String,
+    json: bool,
+    token_file: Option<&std::path::Path>,
+) -> Result<Client, ExitCode> {
+    let token = cli_token::resolve(&server, token_file)?;
+    Ok(Client::new(&server, json).authorized(token.as_ref()))
+}
+
 fn current_thread() -> Result<tokio::runtime::Runtime, ExitCode> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -648,10 +707,13 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
     Ok(match cli.command {
         Command::Serve => serve::serve(&load_config()?),
         Command::Migrate => serve::migrate(&load_config()?),
-        Command::Init(args) => init::run(&args, cli.server, cli.json),
-        Command::Doctor(args) => {
-            current_thread()?.block_on(doctor::run(&args, cli.server, cli.json))
-        }
+        Command::Init(args) => init::run(&args, cli.server, cli.json, cli.token_file.as_deref()),
+        Command::Doctor(args) => current_thread()?.block_on(doctor::run(
+            &args,
+            cli.server,
+            cli.json,
+            cli.token_file.as_deref(),
+        )),
         Command::Agent(AgentCmd::Login { console, force }) => {
             agent_login::login(&load_config()?, console, force)
         }
@@ -662,7 +724,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
         }
         Command::Mcp { session } => current_thread()?.block_on(mcp::run(&session)),
         Command::Secret(cmd) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     SecretCmd::Set {
@@ -678,11 +740,29 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 }
             })
         }
+        Command::Auth(cmd) => {
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            current_thread()?.block_on(async {
+                match cmd {
+                    AuthCmd::Setup => client.auth_pairing("setup").await,
+                    AuthCmd::Pair { passkey } => {
+                        client
+                            .auth_pairing(if passkey { "passkey" } else { "token" })
+                            .await
+                    }
+                    AuthCmd::Redeem { code, name, out } => {
+                        client.auth_redeem(&code, &name, out.as_deref()).await
+                    }
+                    AuthCmd::Devices => client.auth_devices().await,
+                    AuthCmd::Revoke { id } => client.auth_revoke(&id).await,
+                }
+            })
+        }
         Command::Notify(NotifyCmd::Test { channel }) => {
             notify_cmd::test(&load_config()?, &channel, cli.json)
         }
         Command::Hook(cmd) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     HookCmd::List { project } => client.hook_list(&project).await,
@@ -720,7 +800,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 ScmCmd::CreateApp(_) => None,
             };
             let integration = integration_of(given)?;
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     ScmCmd::Link { no_wait, .. } => client.scm_link(&integration, !no_wait).await,
@@ -731,7 +811,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             })
         }
         Command::Project(cmd) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     ProjectCmd::Add {
@@ -767,7 +847,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             path,
             reason,
         }) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(client.spec_approve(&project, &path, reason.as_deref()))
         }
         Command::Spec(SpecCmd::Withdraw {
@@ -775,7 +855,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             path,
             reason,
         }) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(client.spec_withdraw(&project, &path, &reason))
         }
         Command::Spec(SpecCmd::Draft {
@@ -792,7 +872,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 (None, Some(file)) => cli::read_idea(&file)?,
                 (None, None) => String::new(),
             };
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             let new = cli::NewDraft {
                 project: &project,
                 path: &path,
@@ -804,7 +884,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             current_thread()?.block_on(client.spec_draft(&new))
         }
         Command::Draft(cmd) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     DraftCmd::List { project, state } => client.draft_list(&project, &state).await,
@@ -843,7 +923,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             })
         }
         Command::Spec(SpecCmd::Template { locale }) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(client.spec_template(&locale))
         }
         Command::Review {
@@ -851,11 +931,11 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             project,
             repo,
         } => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(client.review(number, project.as_deref(), repo.as_deref()))
         }
         Command::Task(cmd) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     TaskCmd::List {
@@ -904,7 +984,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             })
         }
         Command::Permission(cmd) => {
-            let client = Client::new(&server(cli.server)?, cli.json);
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {
                 match cmd {
                     PermissionCmd::List { state } => client.permission_list(&state).await,

@@ -226,6 +226,7 @@ impl World {
             Ports {
                 clock,
                 ids: Arc::new(FakeIds::default()),
+                entropy: Arc::new(saka_testkit::FakeEntropy::default()),
                 env: Arc::new(repos),
                 scm: world.clone(),
                 agents: world.clone(),

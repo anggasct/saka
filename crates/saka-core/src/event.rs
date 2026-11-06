@@ -6,8 +6,8 @@ use crate::authorship::SessionAuthor;
 use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, HookRunId, InboxItemId,
-    PermissionRequestId, PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId,
+    BlockerId, ChangeRequestId, DeviceId, EnvironmentId, GateResultId, HookRunId, InboxItemId,
+    PairingId, PermissionRequestId, PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId,
     SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
     UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
@@ -20,11 +20,12 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, Effect, ExternalCause,
-    GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject,
-    InterruptBy, LintOutcome, MatchKind, MergeMethod, PermissionState, RelinkCause, ReloadTrigger,
-    ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin,
-    Stage, StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
+    ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, Effect,
+    ExternalCause, GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState,
+    InboxSubject, InterruptBy, LintOutcome, MatchKind, MergeMethod, PairingPurpose,
+    PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis,
+    ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
+    TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -747,6 +748,22 @@ pub enum Event {
         source_id: String,
         reason: String,
     },
+    #[serde(rename = "identity.pairing.created")]
+    PairingCreated {
+        pairing_id: PairingId,
+        purpose: PairingPurpose,
+        expires_at: Timestamp,
+        created_by: String,
+    },
+    #[serde(rename = "identity.device.paired")]
+    DevicePaired {
+        device_id: DeviceId,
+        name: String,
+        kind: DeviceKind,
+        pairing_id: Option<PairingId>,
+    },
+    #[serde(rename = "identity.device.revoked")]
+    DeviceRevoked { device_id: DeviceId },
     #[serde(rename = "delivery.hook_run.finished")]
     HookRunFinished {
         hook_run_id: HookRunId,
@@ -818,6 +835,8 @@ pub enum Stream {
     UserLinkAuthorization(UserLinkAuthorizationId),
     UserLink(UserLinkId),
     InboxItem(InboxItemId),
+    Pairing(PairingId),
+    Device(DeviceId),
 }
 
 impl Stream {
@@ -835,6 +854,8 @@ impl Stream {
             Stream::UserLinkAuthorization(_) => "user_link_authorization",
             Stream::UserLink(_) => "user_link",
             Stream::InboxItem(_) => "inbox_item",
+            Stream::Pairing(_) => "pairing",
+            Stream::Device(_) => "device",
         }
     }
 
@@ -852,6 +873,8 @@ impl Stream {
             Stream::UserLinkAuthorization(id) => id.0,
             Stream::UserLink(id) => id.0,
             Stream::InboxItem(id) => id.0,
+            Stream::Pairing(id) => id.0,
+            Stream::Device(id) => id.0,
         }
     }
 }
@@ -994,6 +1017,10 @@ impl Event {
                 Stream::HookRun(*hook_run_id)
             }
             E::InboxItemDismissed { inbox_item_id, .. } => Stream::InboxItem(*inbox_item_id),
+            E::PairingCreated { pairing_id, .. } => Stream::Pairing(*pairing_id),
+            E::DevicePaired { device_id, .. } | E::DeviceRevoked { device_id } => {
+                Stream::Device(*device_id)
+            }
         }
     }
 

@@ -92,7 +92,7 @@ fn the_merge_queue_migration_keeps_rows_and_opens_the_queue_phases_and_the_queue
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![25, 26, 27, 28, 29, 30, 31, 32, 33]
+        vec![25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
     );
     drop(store);
 

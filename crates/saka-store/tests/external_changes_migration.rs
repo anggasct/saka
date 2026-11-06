@@ -94,7 +94,7 @@ fn outside_changes_may_share_a_branch_and_a_spec_step_branch_stays_unique() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+        vec![21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
     );
     drop(store);
 
