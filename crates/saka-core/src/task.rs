@@ -492,7 +492,7 @@ pub fn decide(
 const RETURN_STAGES: [Stage; 2] = [Stage::Dev, Stage::Merge];
 
 pub fn takeable(stage: Stage, phase: Option<StagePhase>) -> bool {
-    stage != Stage::Sync && phase != Some(StagePhase::Merging)
+    stage != Stage::Sync && !matches!(phase, Some(StagePhase::Merging | StagePhase::PostingReview))
 }
 
 fn takeover_place(task: &Task) -> Result<(Option<Stage>, Option<StagePhase>), Rejection> {
