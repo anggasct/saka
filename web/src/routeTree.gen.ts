@@ -10,12 +10,15 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as SetupRouteImport } from './routes/setup'
 import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
 import { Route as InboxItemIdRouteImport } from './routes/inbox.$itemId'
 import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as SettingsProjectIdRouteImport } from './routes/settings.$projectId'
+import { Route as SettingsDevicesRouteImport } from './routes/settings.devices'
 import { Route as DeliveryTasksWorkItemIdRouteImport } from './routes/delivery.tasks.$workItemId'
 import { Route as DocsProjectIdDraftsIndexRouteImport } from './routes/docs.$projectId_.drafts.index'
 import { Route as DocsProjectIdDraftsDraftIdRouteImport } from './routes/docs.$projectId_.drafts.$draftId'
@@ -23,6 +26,16 @@ import { Route as DocsProjectIdDraftsDraftIdRouteImport } from './routes/docs.$p
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeliveryIndexRoute = DeliveryIndexRouteImport.update({
@@ -55,6 +68,11 @@ const SettingsProjectIdRoute = SettingsProjectIdRouteImport.update({
   path: '/settings/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
+  id: '/settings/devices',
+  path: '/settings/devices',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeliveryTasksWorkItemIdRoute = DeliveryTasksWorkItemIdRouteImport.update({
   id: '/delivery/tasks/$workItemId',
   path: '/delivery/tasks/$workItemId',
@@ -75,9 +93,12 @@ const DocsProjectIdDraftsDraftIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/setup': typeof SetupRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
+  '/settings/devices': typeof SettingsDevicesRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -87,9 +108,12 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/setup': typeof SetupRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
+  '/settings/devices': typeof SettingsDevicesRoute
   '/delivery': typeof DeliveryIndexRoute
   '/docs': typeof DocsIndexRoute
   '/settings': typeof SettingsIndexRoute
@@ -100,9 +124,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/setup': typeof SetupRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
+  '/settings/devices': typeof SettingsDevicesRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -114,9 +141,12 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/login'
+    | '/setup'
     | '/docs/$projectId'
     | '/inbox/$itemId'
     | '/settings/$projectId'
+    | '/settings/devices'
     | '/delivery/'
     | '/docs/'
     | '/settings/'
@@ -126,9 +156,12 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/login'
+    | '/setup'
     | '/docs/$projectId'
     | '/inbox/$itemId'
     | '/settings/$projectId'
+    | '/settings/devices'
     | '/delivery'
     | '/docs'
     | '/settings'
@@ -138,9 +171,12 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/login'
+    | '/setup'
     | '/docs/$projectId'
     | '/inbox/$itemId'
     | '/settings/$projectId'
+    | '/settings/devices'
     | '/delivery/'
     | '/docs/'
     | '/settings/'
@@ -151,9 +187,12 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  LoginRoute: typeof LoginRoute
+  SetupRoute: typeof SetupRoute
   DocsProjectIdRoute: typeof DocsProjectIdRoute
   InboxItemIdRoute: typeof InboxItemIdRoute
   SettingsProjectIdRoute: typeof SettingsProjectIdRoute
+  SettingsDevicesRoute: typeof SettingsDevicesRoute
   DeliveryIndexRoute: typeof DeliveryIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
@@ -169,6 +208,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/delivery/': {
@@ -213,6 +266,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/devices': {
+      id: '/settings/devices'
+      path: '/settings/devices'
+      fullPath: '/settings/devices'
+      preLoaderRoute: typeof SettingsDevicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/delivery/tasks/$workItemId': {
       id: '/delivery/tasks/$workItemId'
       path: '/delivery/tasks/$workItemId'
@@ -239,9 +299,12 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  LoginRoute: LoginRoute,
+  SetupRoute: SetupRoute,
   DocsProjectIdRoute: DocsProjectIdRoute,
   InboxItemIdRoute: InboxItemIdRoute,
   SettingsProjectIdRoute: SettingsProjectIdRoute,
+  SettingsDevicesRoute: SettingsDevicesRoute,
   DeliveryIndexRoute: DeliveryIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
