@@ -1976,6 +1976,61 @@ fn review_takes_a_pull_request_and_exits_with_the_documented_codes() {
 }
 
 #[test]
+fn task_fix_starts_a_round_on_a_rejected_change_and_exits_with_the_documented_codes() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str(
+        "\n[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nfix = \"manual\"\n",
+    );
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    let mut sim = Sim::multi_repo(SimConfig::default(), &layout);
+    sim.world
+        .script_reviews(vec![saka_testkit::ReviewReply::request_changes(
+            "Cover the empty list.",
+        )]);
+    let number = sim.world.open_external_change(
+        SHOP_REPO,
+        saka_testkit::ChangeSpec::new("Add retries", "alice", "feature/retries"),
+    );
+    assert!(sim.run_until(5_000, |s| {
+        s.externals().iter().any(|t| {
+            t.is_at(
+                saka_core::vocab::Stage::Review,
+                saka_core::vocab::StagePhase::Reviewed,
+            )
+        })
+    }));
+    let id = sim.externals()[0].item.id.0.to_string();
+    let server = serve(&sim);
+
+    let started = saka(&server, &["task", "fix", &id]);
+    assert_eq!(
+        code(&started),
+        0,
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert_eq!(
+        stdout(&started).trim(),
+        format!("fix started shop#{number} admitted")
+    );
+    let again = saka(&server, &["task", "fix", &id]);
+    assert_eq!(code(&again), 4, "a round is already running");
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("fix_not_available"),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    let unknown = saka(
+        &server,
+        &["task", "fix", "0193f0c4-0000-7000-8000-000000000000"],
+    );
+    assert_eq!(code(&unknown), 1);
+}
+
+#[test]
 fn the_task_list_shows_where_a_merge_request_stands_in_the_queue() {
     let mut cfg = SimConfig::default();
     cfg.operator.merge = false;
