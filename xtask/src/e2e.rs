@@ -53,7 +53,7 @@ fn required(name: &str) -> Result<String> {
     std::env::var(name)
         .ok()
         .filter(|v| !v.is_empty())
-        .with_context(|| format!("{name} is not set (see the end-to-end section of the README)"))
+        .with_context(|| format!("{name} is not set (see the end-to-end section of docs/guide.md)"))
 }
 
 fn settings() -> Result<Settings> {
