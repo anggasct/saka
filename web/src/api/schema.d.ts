@@ -388,6 +388,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/permission-rules/evaluate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["evaluate_permission"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/permission-rules/preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["preview_permission_rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/secrets": {
     parameters: {
       query?: never;
@@ -1177,6 +1209,11 @@ export interface components {
     };
     /** @enum {string} */
     Decision: "allow" | "deny";
+    /** @description Who decided: `builtin`, `rule` (operator config), `project` (a project rule, `name` is its id), `default` (nothing matched, so ask). */
+    DecisionOrigin: {
+      kind: string;
+      name?: string | null;
+    };
     DiagnosticCheck: {
       /** @description What was found; the client turns it and `params` into text. Never holds a token, key, secret, or account email. */
       code: string;
@@ -1257,6 +1294,19 @@ export interface components {
        * @description The workspace repo the checkout is made from.
        */
       repo_id: string;
+    };
+    EvaluateBody: {
+      /** @description The Bash command; ignored for other tools. */
+      command?: string | null;
+      /** @description Worktree-relative path of a file tool; always treated as inside the worktree. */
+      path?: string | null;
+      tool: string;
+    };
+    EvaluatedPart: {
+      /** @description One part of a compound command, without the redirects Saka accepts. */
+      command: string;
+      effect: components["schemas"]["RuleEffect"];
+      source: components["schemas"]["DecisionOrigin"];
     };
     ExternalChange: {
       /** @description The login of who asked for it, or `null` when Saka took it on its own. */
@@ -1884,6 +1934,21 @@ export interface components {
       }[];
       next_cursor?: string | null;
     };
+    PermissionEvaluation: {
+      effect: components["schemas"]["RuleEffect"];
+      /** @description Empty for a tool other than `Bash` and for a command that cannot be split safely. */
+      parts: components["schemas"]["EvaluatedPart"][];
+      source: components["schemas"]["DecisionOrigin"];
+    };
+    PermissionPreview: {
+      /** @description The requests whose answer would change if the rule existed. */
+      changed: components["schemas"]["PreviewChange"][];
+      /**
+       * Format: int32
+       * @description How many of the project's latest task permission requests were re-judged (at most 200).
+       */
+      scanned: number;
+    };
     PermissionRequest: {
       answer_source?: string | null;
       answered_at?: string | null;
@@ -1955,6 +2020,14 @@ export interface components {
        * @description First port of the block.
        */
       start: number;
+    };
+    PreviewChange: {
+      after: components["schemas"]["RuleEffect"];
+      before: components["schemas"]["RuleEffect"];
+      command?: string | null;
+      /** Format: uuid */
+      permission_request_id: string;
+      tool: string;
     };
     PrimaryAction: {
       /**
@@ -3265,6 +3338,8 @@ export interface operations {
         /** @description One or more of `pending, allowed, denied, expired`, comma-separated. */
         state?: string;
         project_id?: string;
+        /** @description `policy` (answered by a rule) or `human` (answered by the operator). */
+        source?: string;
         /** @description Exclusive with `spec_draft_id`. */
         work_item_id?: string;
         spec_draft_id?: string;
@@ -3974,6 +4049,72 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["PermissionRule"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  evaluate_permission: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EvaluateBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PermissionEvaluation"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  preview_permission_rule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["NewPermissionRule"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PermissionPreview"];
         };
       };
       "4XX": {

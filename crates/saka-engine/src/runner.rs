@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::{Engine, Extra, Mode, Result, timeline};
 
-const FILE_TOOLS: &[(&str, &str)] = &[
+pub(crate) const FILE_TOOLS: &[(&str, &str)] = &[
     ("Read", "file_path"),
     ("Write", "file_path"),
     ("Edit", "file_path"),

@@ -15,6 +15,7 @@ mod inbox;
 mod intake;
 mod metrics;
 pub mod packet;
+mod permission_check;
 pub mod project_config;
 pub mod recipe;
 mod reconciler;
@@ -71,13 +72,14 @@ pub use draft::{
 };
 pub use hooks::HookReport;
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
+pub use permission_check::{PREVIEW_SCAN, PreviewChange, PreviewView};
 pub use register::{AddProject, Integration, MAX_CONFIG_BYTES, branch_ok, parse_repo_url};
 pub use reload::ReloadView;
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::hook_run::HookRunFilter;
 pub use saka_store::inbox::{InboxFilter, InboxItem, InboxSummary};
-pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
+pub use saka_store::list::{AnswerKind, Key, Page, PermissionFilter, WorkItemFilter};
 pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{

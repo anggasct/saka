@@ -535,6 +535,15 @@
             }
           },
           {
+            "name": "source",
+            "in": "query",
+            "description": "`policy` (answered by a rule) or `human` (answered by the operator).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "work_item_id",
             "in": "query",
             "description": "Exclusive with `spec_draft_id`.",
@@ -1612,6 +1621,104 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PermissionRule"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/permission-rules/evaluate": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "operationId": "evaluate_permission",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionEvaluation"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/permission-rules/preview": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "operationId": "preview_permission_rule",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPermissionRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionPreview"
                 }
               }
             }
@@ -4525,6 +4632,24 @@
           "deny"
         ]
       },
+      "DecisionOrigin": {
+        "type": "object",
+        "description": "Who decided: `builtin`, `rule` (operator config), `project` (a project rule, `name` is its id), `default` (nothing matched, so ask).",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "DiagnosticCheck": {
         "type": "object",
         "required": [
@@ -4772,6 +4897,52 @@
             "type": "string",
             "format": "uuid",
             "description": "The workspace repo the checkout is made from."
+          }
+        }
+      },
+      "EvaluateBody": {
+        "type": "object",
+        "required": [
+          "tool"
+        ],
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Bash command; ignored for other tools."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Worktree-relative path of a file tool; always treated as inside the worktree."
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvaluatedPart": {
+        "type": "object",
+        "required": [
+          "command",
+          "effect",
+          "source"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "One part of a compound command, without the redirects Saka accepts."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/RuleEffect"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DecisionOrigin"
           }
         }
       },
@@ -6925,6 +7096,51 @@
           }
         }
       },
+      "PermissionEvaluation": {
+        "type": "object",
+        "required": [
+          "effect",
+          "source",
+          "parts"
+        ],
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/RuleEffect"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluatedPart"
+            },
+            "description": "Empty for a tool other than `Bash` and for a command that cannot be split safely."
+          },
+          "source": {
+            "$ref": "#/components/schemas/DecisionOrigin"
+          }
+        }
+      },
+      "PermissionPreview": {
+        "type": "object",
+        "required": [
+          "scanned",
+          "changed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviewChange"
+            },
+            "description": "The requests whose answer would change if the rule existed."
+          },
+          "scanned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of the project's latest task permission requests were re-judged (at most 200).",
+            "minimum": 0
+          }
+        }
+      },
       "PermissionRequest": {
         "type": "object",
         "required": [
@@ -7147,6 +7363,36 @@
             "format": "int32",
             "description": "First port of the block.",
             "minimum": 0
+          }
+        }
+      },
+      "PreviewChange": {
+        "type": "object",
+        "required": [
+          "permission_request_id",
+          "tool",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/RuleEffect"
+          },
+          "before": {
+            "$ref": "#/components/schemas/RuleEffect"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permission_request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tool": {
+            "type": "string"
           }
         }
       },

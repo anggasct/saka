@@ -19,7 +19,7 @@ use saka_core::vocab::{
     AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode, Stage,
 };
 use saka_engine::{
-    AddProject, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, InboxFilter,
+    AddProject, AnswerKind, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, InboxFilter,
     NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf, SessionCommand,
     SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
@@ -1491,11 +1491,18 @@ pub async fn list_permissions(
             Some(RunOf::SpecDraft(id)) => Some(id),
             _ => None,
         },
+        source: match q.source.as_deref() {
+            None => None,
+            Some("policy") => Some(AnswerKind::Policy),
+            Some("human") => Some(AnswerKind::Human),
+            Some(_) => return ApiError::validation("source", "unknown").into_response(),
+        },
     };
     let key = format!(
-        "permissions:{}:{:?}:{run:?}",
+        "permissions:{}:{:?}:{run:?}:{:?}",
         filter.states.join(","),
         filter.project,
+        filter.source,
     );
     let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
     let paged = tri!(engine.permission_requests(&filter, &p));
@@ -1847,6 +1854,52 @@ pub async fn add_permission_rule(
         },
     )
     .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/permission-rules/preview", tag = "runtime",
+    params(("project_id" = uuid::Uuid, Path)), request_body = dto::NewPermissionRule,
+    responses((status = 200, body = dto::PermissionPreview), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn preview_permission_rule(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    raw: Bytes,
+) -> Response {
+    let project = ProjectId(tri!(path_id(&id)));
+    let req: dto::NewPermissionRule = tri!(body(&raw));
+    let engine = tri!(s.engine());
+    let preview = tri!(engine.preview_rule(project, req.into()));
+    ok(StatusCode::OK, &dto::PermissionPreview::from(&preview))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/permission-rules/evaluate", tag = "runtime",
+    params(("project_id" = uuid::Uuid, Path)), request_body = dto::EvaluateBody,
+    responses((status = 200, body = dto::PermissionEvaluation), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn evaluate_permission(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    raw: Bytes,
+) -> Response {
+    let project = ProjectId(tri!(path_id(&id)));
+    let req: dto::EvaluateBody = tri!(body(&raw));
+    if req.tool.trim().is_empty() {
+        return ApiError::validation("tool", "required").into_response();
+    }
+    let engine = tri!(s.engine());
+    let request = saka_core::policy::ToolRequest {
+        tool: req.tool,
+        command: req.command,
+        path: req.path.map(|path| saka_core::policy::RequestPath {
+            path,
+            inside_worktree: true,
+            through_symlink: false,
+        }),
+    };
+    let decision = tri!(engine.evaluate_permission(project, &request));
+    ok(StatusCode::OK, &dto::PermissionEvaluation::from(&decision))
 }
 
 #[utoipa::path(

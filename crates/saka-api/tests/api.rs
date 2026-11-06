@@ -2752,6 +2752,309 @@ fn a_project_rule_is_added_listed_replayed_and_refused_when_it_is_wrong() {
     );
 }
 
+fn asking_npm() -> AgentScript {
+    AgentScript {
+        ask: Some(("Bash".into(), json!({ "command": "npm install" }))),
+        ..AgentScript::default()
+    }
+}
+
+fn row_counts(api: &Api) -> Vec<(String, i64)> {
+    api.sim
+        .engine()
+        .store()
+        .read(|c| {
+            let names: Vec<String> = c
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            let mut out = Vec::new();
+            for name in names {
+                let n: i64 = c.query_row(&format!("SELECT count(*) FROM \"{name}\""), [], |r| r.get(0))?;
+                out.push((name, n));
+            }
+            Ok(out)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_preview_lists_the_recent_requests_a_rule_would_change_and_writes_nothing() {
+    let mut api = Api::new(SimConfig {
+        agent: asking_npm(),
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| !s.task(1).permissions.is_empty())
+    );
+    let request = api.sim.task(1).permissions[0].id.to_string();
+    let project = api.sim.project_id.to_string();
+    let path = format!("/api/v1/projects/{project}/permission-rules/preview");
+    let before = row_counts(&api);
+
+    let allow = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "effect": "allow", "tool": "Bash", "match": "glob", "command": "npm *" }),
+    );
+    assert_eq!(allow.status, StatusCode::OK, "{}", allow.body);
+    assert_eq!(allow.body["scanned"], json!(1));
+    assert_eq!(
+        allow.body["changed"],
+        json!([{
+            "permission_request_id": request, "tool": "Bash", "command": "npm install",
+            "before": "ask", "after": "allow"
+        }])
+    );
+    let deny = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "effect": "deny", "tool": "Bash", "match": "exact", "command": "npm install" }),
+    );
+    assert_eq!(deny.body["changed"][0]["after"], json!("deny"));
+    let unrelated = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "effect": "allow", "tool": "Bash", "match": "glob", "command": "go *" }),
+    );
+    assert_eq!(unrelated.body["changed"], json!([]));
+    assert_eq!(unrelated.body["scanned"], json!(1));
+
+    problem(
+        &api.post_with(
+            &path,
+            None,
+            &[],
+            &json!({ "effect": "allow", "tool": "Bash", "match": "glob", "command": "*" }),
+        ),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "rule_too_broad",
+    );
+    problem(
+        &api.post_with(
+            &format!(
+                "/api/v1/projects/{}/permission-rules/preview",
+                uuid::Uuid::nil()
+            ),
+            None,
+            &[],
+            &json!({ "effect": "allow", "tool": "Bash", "match": "glob", "command": "go *" }),
+        ),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    assert_eq!(row_counts(&api), before, "a preview writes no row");
+}
+
+#[test]
+fn an_evaluation_names_the_deciding_source_and_each_part_and_writes_nothing() {
+    let mut api = Api::new(SimConfig {
+        rules: vec![saka_core::policy::RuleSpec {
+            id: "safe".into(),
+            effect: saka_core::policy::Effect::Allow,
+            tools: vec!["Bash".into()],
+            paths: vec![],
+            commands: vec!["ls*".into()],
+        }],
+        ..SimConfig::default()
+    });
+    let project = api.sim.project_id.to_string();
+    let rule = api.post(
+        &format!("/api/v1/projects/{project}/permission-rules"),
+        &[],
+        json!({ "effect": "allow", "tool": "Bash", "match": "exact", "command": "git status" }),
+    );
+    assert_eq!(rule.status, StatusCode::CREATED);
+    let path = format!("/api/v1/projects/{project}/permission-rules/evaluate");
+    let before = row_counts(&api);
+
+    let mixed = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "tool": "Bash", "command": "git status && ls && rm -rf x" }),
+    );
+    assert_eq!(mixed.status, StatusCode::OK, "{}", mixed.body);
+    assert_eq!(mixed.body["effect"], json!("ask"));
+    assert_eq!(
+        mixed.body["source"],
+        json!({ "kind": "default", "name": null })
+    );
+    assert_eq!(
+        mixed.body["parts"],
+        json!([
+            { "command": "git status", "effect": "allow",
+              "source": { "kind": "project", "name": rule.body["id"] } },
+            { "command": "ls", "effect": "allow", "source": { "kind": "rule", "name": "safe" } },
+            { "command": "rm -rf x", "effect": "ask", "source": { "kind": "default", "name": null } },
+        ])
+    );
+    let allowed = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "tool": "Bash", "command": "ls -la" }),
+    );
+    assert_eq!(allowed.body["effect"], json!("allow"));
+    let push = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "tool": "Bash", "command": "ls; git push" }),
+    );
+    assert_eq!(push.body["effect"], json!("deny"));
+    assert_eq!(
+        push.body["source"],
+        json!({ "kind": "builtin", "name": "git_push" })
+    );
+    assert_eq!(push.body["parts"], json!([]));
+    let unsplittable = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "tool": "Bash", "command": "ls $(pwd)" }),
+    );
+    assert_eq!(unsplittable.body["effect"], json!("ask"));
+    assert_eq!(unsplittable.body["parts"], json!([]));
+    let file = api.post_with(
+        &path,
+        None,
+        &[],
+        &json!({ "tool": "Edit", "path": "src/a.rs" }),
+    );
+    assert_eq!(file.body["effect"], json!("ask"));
+    assert_eq!(file.body["parts"], json!([]));
+
+    problem(
+        &api.post_with(&path, None, &[], &json!({ "tool": "" })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post_with(
+            &format!(
+                "/api/v1/projects/{}/permission-rules/evaluate",
+                uuid::Uuid::nil()
+            ),
+            None,
+            &[],
+            &json!({ "tool": "Bash", "command": "ls" }),
+        ),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    assert_eq!(row_counts(&api), before, "an evaluation writes no row");
+}
+
+#[test]
+fn the_history_filters_by_who_answered_and_pages_with_a_cursor() {
+    let mut api = Api::new(SimConfig {
+        agent: asking_npm(),
+        operator: saka_testkit::Operator {
+            start: true,
+            merge: true,
+            retry: vec![],
+            answer: None,
+        },
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| !s.task(1).permissions.is_empty())
+    );
+    let first = api.sim.task(1).permissions[0].id.to_string();
+    let r = api.post(
+        &format!("/api/v1/permission-requests/{first}/answer"),
+        &[],
+        json!({ "decision": "allow", "remember": true }),
+    );
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(2)
+            .permissions
+            .iter()
+            .any(|p| p.answer_source.is_some())
+    }));
+    let project = api.sim.project_id.to_string();
+    let list = |query: &str| {
+        api.get(&format!(
+            "/api/v1/permission-requests?project_id={project}{query}"
+        ))
+    };
+    let all = list("");
+    assert_eq!(all.body["items"].as_array().unwrap().len(), 2);
+    let human = list("&source=human");
+    assert_eq!(human.body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(human.body["items"][0]["id"], json!(first));
+    let policy = list("&source=policy");
+    assert_eq!(policy.body["items"].as_array().unwrap().len(), 1);
+    assert!(
+        policy.body["items"][0]["answer_source"]
+            .as_str()
+            .unwrap()
+            .starts_with("policy:project:")
+    );
+    let page = list("&limit=1");
+    assert_eq!(page.body["items"].as_array().unwrap().len(), 1);
+    let cursor = page.body["next_cursor"].as_str().unwrap();
+    let next = list(&format!("&limit=1&cursor={cursor}"));
+    assert_eq!(next.body["items"].as_array().unwrap().len(), 1);
+    assert_ne!(next.body["items"][0]["id"], page.body["items"][0]["id"]);
+    problem(
+        &list("&source=robot"),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+}
+
+#[test]
+fn a_redacted_input_stays_redacted_in_the_history_and_the_preview() {
+    const SECRET: &str = "hunter2-very-secret";
+    let command = "deploy --token «secret:DEPLOY_TOKEN»";
+    let mut api = Api::new(SimConfig {
+        agent: AgentScript {
+            ask: Some(("Bash".into(), json!({ "command": command }))),
+            ..AgentScript::default()
+        },
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| !s.task(1).permissions.is_empty())
+    );
+    let project = api.sim.project_id.to_string();
+    let history = api.get(&format!("/api/v1/permission-requests?project_id={project}"));
+    let preview = api.post_with(
+        &format!("/api/v1/projects/{project}/permission-rules/preview"),
+        None,
+        &[],
+        &json!({ "effect": "deny", "tool": "Bash", "match": "glob", "command": "deploy *" }),
+    );
+    for reply in [&history, &preview] {
+        let text = reply.body.to_string();
+        assert!(text.contains("«secret:DEPLOY_TOKEN»"), "{text}");
+        assert!(!text.contains(SECRET), "{text}");
+    }
+    assert_eq!(preview.body["changed"][0]["command"], json!(command));
+    problem(
+        &api.post_with(
+            &format!("/api/v1/projects/{project}/permission-rules/preview"),
+            None,
+            &[],
+            &json!({ "effect": "allow", "tool": "Bash", "match": "exact", "command": command }),
+        ),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+}
+
 #[test]
 fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
     let mut api = Api::new(SimConfig {

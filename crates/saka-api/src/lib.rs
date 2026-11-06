@@ -34,7 +34,7 @@ pub use state::{ApiConfig, AppState};
         routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::start, routes::merge, routes::retry, routes::cancel, routes::takeover, routes::return_to_loop, routes::primary_action, routes::review, routes::fix, routes::take_external_change,
         routes::list_permissions, routes::answer_permission, routes::get_session,
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
-        routes::list_permission_rules, routes::add_permission_rule, routes::revoke_rule, routes::list_agent_accounts,
+        routes::list_permission_rules, routes::add_permission_rule, routes::preview_permission_rule, routes::evaluate_permission, routes::revoke_rule, routes::list_agent_accounts,
         routes::list_usage_records,
         routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
         routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
@@ -199,6 +199,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{project_id}/permission-rules",
             get(routes::list_permission_rules).post(routes::add_permission_rule),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/permission-rules/preview",
+            post(routes::preview_permission_rule),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/permission-rules/evaluate",
+            post(routes::evaluate_permission),
         )
         .route(
             "/api/v1/permission-rules/{rule_id}/revoke",
