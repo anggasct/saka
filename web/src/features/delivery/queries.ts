@@ -184,16 +184,18 @@ export function useSessions(owner: SessionsOf) {
   return useQuery({
     queryKey: deliveryKeys.sessions(owner),
     queryFn: async ({ signal }) =>
-      unwrap(
-        await api.GET("/api/v1/sessions", {
-          params: {
-            query:
-              owner.kind === "work_item"
-                ? { work_item_id: owner.id }
-                : { spec_draft_id: owner.id },
-          },
-          signal,
-        }),
+      (
+        unwrap(
+          await api.GET("/api/v1/sessions", {
+            params: {
+              query:
+                owner.kind === "work_item"
+                  ? { work_item_id: owner.id }
+                  : { spec_draft_id: owner.id },
+            },
+            signal,
+          }),
+        ) as components["schemas"]["SessionList"]
       ).items,
   });
 }

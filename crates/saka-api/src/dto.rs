@@ -10,9 +10,9 @@ use saka_core::task::available_actions;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{Effect as CoreEffect, EnvironmentState, MatchKind as CoreMatch};
 use saka_engine::{
-    AccountView, BudgetView, DecisionView, DocContentView, DocTreeView, DocWriteView,
-    DraftBudgetView, DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView,
-    ReloadView, SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    AccountView, ActiveSessionView, BudgetView, DecisionView, DocContentView, DocTreeView,
+    DocWriteView, DraftBudgetView, DraftContentView, DraftPacketView, DraftView, PermissionView,
+    ProjectView, ReloadView, SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1829,6 +1829,8 @@ pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
     pub owner: RunOwner,
+    /// The environment the session runs in; `null` when it no longer exists.
+    pub environment: Option<SessionEnvironment>,
     pub cli: String,
     pub cli_version: Option<String>,
     pub model: Option<String>,
@@ -1851,8 +1853,94 @@ pub struct Session {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct SessionEnvironment {
+    pub branch: Option<String>,
+    /// Toolchains on `PATH`; empty when the repo declares no versions.
+    pub toolchains: Vec<Toolchain>,
+    /// `null` when the recipe asks for no ports or the environment is torn down.
+    pub ports: Option<PortBlock>,
+    /// `preparing`, `ready`, `failed`, `teardown_failed` or `torn_down`.
+    pub setup_state: String,
+}
+
+impl SessionEnvironment {
+    fn from_env(e: &CoreEnvironment) -> SessionEnvironment {
+        let shown = WorkItemEnvironment::from_env(e);
+        SessionEnvironment {
+            branch: e.branch.clone(),
+            toolchains: shown.toolchains,
+            ports: shown.ports,
+            setup_state: shown.state,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SessionList {
     pub items: Vec<Session>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ActiveSession {
+    pub id: Uuid,
+    /// `starting`, `running`, `waiting`, `idle`, `interrupted`, `lost` or `resumed`.
+    pub state: String,
+    /// The stage of the owning run (`dev`, `review`, `fix`, `merge`, `sync`) or `architect` for a draft.
+    pub role: String,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub owner: RunOwner,
+    /// The task key, or the slug of the draft.
+    pub title: String,
+    pub model: Option<String>,
+    /// When the session started; the creation time while it is still `starting`.
+    pub started_at: String,
+    /// The time of the last recorded activity; `started_at` when there is none yet.
+    pub last_activity_at: String,
+    pub pending: PendingCounts,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PendingCounts {
+    /// Permission requests still waiting for an answer.
+    pub permissions: u32,
+    /// Decision requests still waiting for an answer.
+    pub decisions: u32,
+}
+
+impl From<&ActiveSessionView> for ActiveSession {
+    fn from(v: &ActiveSessionView) -> ActiveSession {
+        ActiveSession {
+            id: v.id.0,
+            state: v.state.as_str().to_string(),
+            role: v.role.clone(),
+            project_id: v.project_id.0,
+            project_name: v.project_name.clone(),
+            owner: RunOwner::from(&v.owner),
+            title: v.title.clone(),
+            model: v.model.clone(),
+            started_at: time(v.started_at),
+            last_activity_at: time(v.last_activity_at),
+            pending: PendingCounts {
+                permissions: v.pending_permissions,
+                decisions: v.pending_decisions,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ActiveSessionList {
+    pub items: Vec<ActiveSession>,
+    pub next_cursor: Option<String>,
+}
+
+/// The sessions of one run, or the active sessions of every project when `active=true`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum SessionsReply {
+    Run(SessionList),
+    Active(ActiveSessionList),
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -2249,6 +2337,7 @@ impl Session {
             id: s.id.0,
             project_id: v.project_id.0,
             owner: RunOwner::from(&s.owner),
+            environment: v.environment.as_ref().map(SessionEnvironment::from_env),
             cli: s.cli.clone(),
             cli_version: s.cli_version.clone(),
             model: s.model.clone(),
@@ -2829,9 +2918,14 @@ pub struct PermissionQuery {
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SessionsQuery {
-    /// Exactly one of `work_item_id` and `spec_draft_id` is required.
+    /// Without `active=true`, exactly one of `work_item_id` and `spec_draft_id` is required.
     pub work_item_id: Option<String>,
     pub spec_draft_id: Option<String>,
+    /// `true` lists the sessions that are not over, across projects, newest first; exclusive with the run filters.
+    pub active: Option<String>,
+    pub project_id: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

@@ -1698,26 +1698,48 @@ pub async fn get_session(State(s): State<AppState>, Path(id): Path<String>) -> R
 
 #[utoipa::path(
     get, path = "/api/v1/sessions", tag = "runtime", params(dto::SessionsQuery),
-    responses((status = 200, body = dto::SessionList), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+    responses((status = 200, body = dto::SessionsReply), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
 )]
 pub async fn list_sessions(
     State(s): State<AppState>,
     Query(q): Query<dto::SessionsQuery>,
 ) -> Response {
     let engine = tri!(s.engine());
-    let Some(run) = tri!(run_of(
+    let run = tri!(run_of(
         q.work_item_id.as_deref(),
         q.spec_draft_id.as_deref()
-    )) else {
-        return ApiError::validation("work_item_id", "required").into_response();
+    ));
+    let active = match q.active.as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return ApiError::validation("active", "invalid").into_response(),
     };
-    let sessions = tri!(engine.sessions_of(run));
-    ok(
-        StatusCode::OK,
-        &dto::SessionList {
-            items: sessions.iter().map(dto::Session::from_view).collect(),
-        },
-    )
+    match (run, active) {
+        (Some(run), false) => {
+            let sessions = tri!(engine.sessions_of(run));
+            ok(
+                StatusCode::OK,
+                &dto::SessionsReply::Run(dto::SessionList {
+                    items: sessions.iter().map(dto::Session::from_view).collect(),
+                }),
+            )
+        }
+        (None, true) => {
+            let project = tri!(opt_id(q.project_id.as_deref(), "project_id")).map(ProjectId);
+            let key = format!("sessions:{project:?}");
+            let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
+            let paged = tri!(engine.active_sessions(project, &p));
+            ok(
+                StatusCode::OK,
+                &dto::SessionsReply::Active(dto::ActiveSessionList {
+                    items: paged.items.iter().map(dto::ActiveSession::from).collect(),
+                    next_cursor: paged.next.map(|k| encode_cursor(k, &key)),
+                }),
+            )
+        }
+        (Some(_), true) => ApiError::validation("active", "exclusive").into_response(),
+        (None, false) => ApiError::validation("work_item_id", "required").into_response(),
+    }
 }
 
 fn run_of(work_item: Option<&str>, spec_draft: Option<&str>) -> Result<Option<RunOf>, ApiError> {
@@ -1810,13 +1832,16 @@ async fn session_action(
             )
         }
     };
-    let project = tri!(engine.session(session)).map(|v| v.project_id);
+    let current = tri!(engine.session(session));
+    let project = current.as_ref().map(|v| v.project_id);
+    let environment = current.and_then(|v| v.environment);
     let respond = |p: Produced<'_>| match (p, project) {
         (Produced::Session(session), Some(project_id)) => reply(
             StatusCode::ACCEPTED,
             &dto::Session::from_view(&SessionView {
                 session: session.clone(),
                 project_id,
+                environment: environment.clone(),
             }),
         ),
         _ => unexpected(),

@@ -5718,3 +5718,101 @@ fn a_task_in_the_merge_queue_shows_its_place_on_reads_only() {
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
     assert_eq!(detail.body["merge_queue"], Value::Null);
 }
+
+#[test]
+fn active_sessions_list_every_live_session_with_its_owner_and_pending_counts() {
+    let mut api = Api::new(SimConfig {
+        agent: ask_script(),
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| !s.task(1).permissions.is_empty())
+    );
+    let project = api.sim.project_id.0.to_string();
+    let list = api.get("/api/v1/sessions?active=true");
+    assert_eq!(list.status, StatusCode::OK, "{}", list.body);
+    let items = list.body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{}", list.body);
+    assert_eq!(list.body["next_cursor"], Value::Null);
+    let item = &items[0];
+    assert_eq!(item["state"], "waiting");
+    assert_eq!(item["role"], "dev");
+    assert_eq!(item["project_id"], project.as_str());
+    assert_eq!(item["project_name"], "tasks");
+    assert_eq!(item["owner"]["kind"], "stage_run");
+    assert_eq!(item["pending"], json!({ "permissions": 1, "decisions": 0 }));
+    assert!(item["title"].as_str().unwrap().contains("/s"));
+    let timeline = api.get(&format!(
+        "/api/v1/sessions/{}/timeline?tail=true",
+        item["id"].as_str().unwrap()
+    ));
+    let last = timeline.body["items"].as_array().unwrap().last().unwrap();
+    assert_eq!(item["last_activity_at"], last["at"]);
+    assert!(item["last_activity_at"].as_str() >= item["started_at"].as_str());
+
+    let mine = api.get(&format!(
+        "/api/v1/sessions?active=true&project_id={project}"
+    ));
+    assert_eq!(mine.body["items"][0]["id"], item["id"]);
+    let other = api.get(&format!(
+        "/api/v1/sessions?active=true&project_id={}",
+        uuid::Uuid::nil()
+    ));
+    assert_eq!(other.body["items"], json!([]));
+
+    let one = api.get(&format!(
+        "/api/v1/sessions/{}",
+        item["id"].as_str().unwrap()
+    ));
+    let env = &one.body["environment"];
+    assert_eq!(env["setup_state"], "ready");
+    assert!(env["branch"].as_str().is_some());
+    assert!(env["toolchains"].is_array());
+}
+
+#[test]
+fn active_sessions_leave_the_list_when_they_end_and_need_a_filter_or_active() {
+    let mut api = Api::new(SimConfig::default());
+    api.sim.approve();
+    assert!(api.sim.run_to_shipped(STEPS));
+    let list = api.get("/api/v1/sessions?active=true");
+    assert_eq!(list.status, StatusCode::OK, "{}", list.body);
+    assert_eq!(list.body["items"], json!([]));
+
+    rejected(&api, "/api/v1/sessions", "work_item_id", "required");
+    rejected(
+        &api,
+        "/api/v1/sessions?active=false",
+        "work_item_id",
+        "required",
+    );
+    rejected(&api, "/api/v1/sessions?active=maybe", "active", "invalid");
+    rejected(
+        &api,
+        &format!(
+            "/api/v1/sessions?active=true&work_item_id={}",
+            uuid::Uuid::nil()
+        ),
+        "active",
+        "exclusive",
+    );
+    rejected(
+        &api,
+        "/api/v1/sessions?active=true&limit=0",
+        "limit",
+        "out_of_range",
+    );
+    rejected(
+        &api,
+        "/api/v1/sessions?active=true&project_id=nope",
+        "project_id",
+        "invalid",
+    );
+    problem(
+        &api.get("/api/v1/sessions?active=true&cursor=garbage"),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "cursor_invalid",
+    );
+}

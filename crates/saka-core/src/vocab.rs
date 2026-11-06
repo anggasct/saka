@@ -342,6 +342,16 @@ vocab!(
     }
 );
 
+pub const ACTIVE_SESSION_STATES: [SessionState; 7] = [
+    SessionState::Starting,
+    SessionState::Running,
+    SessionState::Waiting,
+    SessionState::Idle,
+    SessionState::Interrupted,
+    SessionState::Lost,
+    SessionState::Resumed,
+];
+
 impl SessionState {
     pub fn is_live(self) -> bool {
         matches!(

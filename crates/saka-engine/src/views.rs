@@ -4,16 +4,19 @@ use saka_core::ids::{
     WorkItemId,
 };
 use saka_core::model::{
-    AccountQuota, Budget, ContextRef, DecisionRequest, PermissionRequest, PermissionRule, Project,
-    Repo, Session, SessionActivity, Spec, StageRun, StepPlan, Task, Usage, UsageRecord, step_repo,
+    AccountQuota, Budget, ContextRef, DecisionRequest, Environment, PermissionRequest,
+    PermissionRule, Project, Repo, Session, SessionActivity, Spec, StageRun, StepPlan, Task, Usage,
+    UsageRecord, step_repo,
 };
 use saka_core::plan::RevisionPlan;
 use saka_core::queue::{self, Position};
 use saka_core::spec as core_spec;
 use saka_core::task::auto_merge_enabled;
 use saka_core::time::Timestamp;
-use saka_core::vocab::{SpecState, Stage, WorkItemState};
-use saka_store::list::{self, DecisionFilter, Key, Page, PermissionFilter, WorkItemFilter};
+use saka_core::vocab::{ACTIVE_SESSION_STATES, SpecState, Stage, WorkItemState};
+use saka_store::list::{
+    self, ActiveSessionRow, DecisionFilter, Key, Page, PermissionFilter, WorkItemFilter,
+};
 use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 use saka_store::{SpecRevisionRow, StoredEvent, TaskSet, read};
 use serde_json::Value;
@@ -197,7 +200,10 @@ pub struct TaskDetail {
 pub struct SessionView {
     pub session: Session,
     pub project_id: ProjectId,
+    pub environment: Option<Environment>,
 }
+
+pub type ActiveSessionView = ActiveSessionRow;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Paged<T> {
@@ -507,15 +513,34 @@ impl Engine {
     }
 
     pub fn sessions_of(&self, of: RunOf) -> Result<Vec<SessionView>> {
-        Ok(self
+        Ok(self.store.read(|c| {
+            read::sessions(c, of)?
+                .into_iter()
+                .map(|(session, project_id)| {
+                    let environment = read::environment_of(c, session.environment_id)?;
+                    Ok(SessionView {
+                        session,
+                        project_id,
+                        environment,
+                    })
+                })
+                .collect()
+        })?)
+    }
+
+    pub fn active_sessions(
+        &self,
+        project: Option<ProjectId>,
+        page: &Page,
+    ) -> Result<Paged<ActiveSessionView>> {
+        let states: Vec<String> = ACTIVE_SESSION_STATES
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect();
+        let rows = self
             .store
-            .read(|c| read::sessions(c, of))?
-            .into_iter()
-            .map(|(session, project_id)| SessionView {
-                session,
-                project_id,
-            })
-            .collect())
+            .read(|c| list::active_sessions(c, &states, project, &probe(page)))?;
+        Ok(paged(rows, page, |r| (r.started_at.0, r.id.0)))
     }
 
     pub fn timeline(
@@ -823,13 +848,18 @@ impl Engine {
     }
 
     pub fn session(&self, id: SessionId) -> Result<Option<SessionView>> {
-        Ok(self
-            .store
-            .read(|c| list::load_session(c, id))?
-            .map(|(session, project_id)| SessionView {
-                session,
-                project_id,
-            }))
+        Ok(self.store.read(|c| {
+            list::load_session(c, id)?
+                .map(|(session, project_id)| {
+                    let environment = read::environment_of(c, session.environment_id)?;
+                    Ok(SessionView {
+                        session,
+                        project_id,
+                        environment,
+                    })
+                })
+                .transpose()
+        })?)
     }
 
     pub fn events_after(&self, after: i64, limit: u32) -> Result<Vec<StoredEvent>> {

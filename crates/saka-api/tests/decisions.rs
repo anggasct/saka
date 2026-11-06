@@ -286,3 +286,14 @@ fn the_inbox_item_names_this_endpoint_and_closes_when_the_answer_is_delivered() 
     let closed = api.get("/api/v1/inbox?kind=decision&state=closed");
     assert_eq!(closed.status, StatusCode::OK, "{}", closed.body);
 }
+
+#[test]
+fn an_open_question_counts_in_the_pending_numbers_of_the_active_session() {
+    let api = asking();
+    let list = api.get("/api/v1/sessions?active=true");
+    assert_eq!(list.status, StatusCode::OK, "{}", list.body);
+    assert_eq!(
+        list.body["items"][0]["pending"],
+        json!({ "permissions": 0, "decisions": 1 })
+    );
+}

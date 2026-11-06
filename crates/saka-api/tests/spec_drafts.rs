@@ -746,3 +746,50 @@ fn a_running_draft_shows_its_session_and_budget_and_refuses_remember() {
         ("remember".to_string(), "not_applicable".to_string())
     );
 }
+
+#[test]
+fn active_sessions_list_a_draft_beside_a_task_newest_first_and_page_by_cursor() {
+    let mut api = Api::with(SimConfig {
+        agent: AgentScript {
+            outcome: AgentOutcome::Hang,
+            ..AgentScript::default()
+        },
+        ..SimConfig::default()
+    });
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1)
+            .session
+            .is_some_and(|x| x.state == SessionState::Running)
+    }));
+    let id = api.scripted(vec![write(good())]);
+    api.run_to(id, |d| {
+        d.session
+            .as_ref()
+            .is_some_and(|s| s.state == SessionState::Running)
+    });
+
+    let all = api.get("/api/v1/sessions?active=true");
+    assert_eq!(all.status, StatusCode::OK, "{}", all.body);
+    let items = all.body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{}", all.body);
+    assert_eq!(items[0]["role"], "architect");
+    assert_eq!(items[0]["owner"]["kind"], "draft_attempt");
+    assert_eq!(items[0]["owner"]["spec_draft_id"], id.0.to_string());
+    assert_eq!(items[0]["title"], "export");
+    assert_eq!(items[1]["role"], "dev");
+    assert_eq!(items[1]["owner"]["kind"], "stage_run");
+    assert!(items[0]["started_at"].as_str() >= items[1]["started_at"].as_str());
+    for item in items {
+        assert_eq!(item["pending"], json!({ "permissions": 0, "decisions": 0 }));
+    }
+
+    let first = api.get("/api/v1/sessions?active=true&limit=1");
+    assert_eq!(first.body["items"][0]["id"], items[0]["id"]);
+    let cursor = first.body["next_cursor"].as_str().unwrap();
+    let second = api.get(&format!(
+        "/api/v1/sessions?active=true&limit=1&cursor={cursor}"
+    ));
+    assert_eq!(second.body["items"][0]["id"], items[1]["id"]);
+    assert_eq!(second.body["next_cursor"], Value::Null);
+}
