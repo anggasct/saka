@@ -25,6 +25,8 @@ const CLEANUP_LIMIT: Duration = Duration::from_secs(3 * 60);
 const STOP_LIMIT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_secs(1);
 const CONVERSATION_LIMIT: Duration = Duration::from_secs(600);
+const FIRST_LINT_REPLY_ROUND: u64 = 3;
+const LINT_REPLIES: u64 = 2;
 const DEFAULT_MODEL: &str = "haiku";
 const SLOW_COMMAND: &str = "sleep 30";
 const ADVANCE_LIMIT: Duration = Duration::from_secs(5 * 60);
@@ -896,6 +898,33 @@ fn wait_for_draft(api: &Api, draft: &str, state: &str, rounds: u64) -> Result<Va
     }
 }
 
+fn lint_reply(changes: &Value, path: &str) -> Option<String> {
+    if changes["lint"]["passed"] == true {
+        return None;
+    }
+    let findings = &changes["lint"]["findings"];
+    Some(format!(
+        "The lint of {path} reports: {findings}. Fix every finding except decision_unanswered without asking me anything, change nothing else, then end your turn."
+    ))
+}
+
+fn changes_past_the_lint(api: &Api, cli: &Cli<'_>, id: &str, path: &str) -> Result<Value> {
+    let url = format!("/api/v1/spec-drafts/{id}/changes");
+    let mut changes = api.get(&url)?;
+    for round in FIRST_LINT_REPLY_ROUND..FIRST_LINT_REPLY_ROUND + LINT_REPLIES {
+        let Some(reply) = lint_reply(&changes, path) else {
+            return Ok(changes);
+        };
+        cli.run(&["draft", "message", id, &reply])?;
+        wait_for_draft(api, id, "awaiting_operator", round)?;
+        changes = api.get(&url)?;
+    }
+    if lint_reply(&changes, path).is_some() {
+        bail!("the conversation's spec does not pass the lint: {changes}");
+    }
+    Ok(changes)
+}
+
 fn conversation(
     api: &Api,
     cli: &Cli<'_>,
@@ -918,7 +947,7 @@ fn conversation(
     );
     cli.run(&["draft", "message", &id, &reply])?;
     wait_for_draft(api, &id, "awaiting_operator", 2)?;
-    let changes = api.get(&format!("/api/v1/spec-drafts/{id}/changes"))?;
+    let changes = changes_past_the_lint(api, cli, &id, &path)?;
     let changed: Vec<&str> = changes["files"]
         .as_array()
         .into_iter()
@@ -927,9 +956,6 @@ fn conversation(
         .collect();
     if !changed.contains(&path.as_str()) || !changed.contains(&notes.as_str()) {
         bail!("the conversation did not change both files: {changes}");
-    }
-    if changes["lint"]["passed"] != true {
-        bail!("the conversation's spec does not pass the lint: {changes}");
     }
     let committed = cli.run(&[
         "draft",
@@ -1042,6 +1068,22 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spec_past_the_lint_needs_no_reply() {
+        let changes = serde_json::json!({ "lint": { "passed": true, "findings": [] } });
+        assert_eq!(lint_reply(&changes, "docs/specs/a.md"), None);
+    }
+
+    #[test]
+    fn a_refused_spec_gets_its_findings_back_as_a_reply() {
+        let changes = serde_json::json!({
+            "lint": { "passed": false, "findings": [{ "code": "step_ac_unknown", "line": 22 }] }
+        });
+        let reply = lint_reply(&changes, "docs/specs/a.md").unwrap();
+        assert!(reply.contains("docs/specs/a.md"));
+        assert!(reply.contains("step_ac_unknown"));
+    }
 
     #[test]
     fn the_fixture_spec_names_its_done_when_commands() {
