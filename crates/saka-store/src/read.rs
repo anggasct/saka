@@ -507,6 +507,15 @@ pub fn session_owner(conn: &Connection, session: SessionId) -> Result<Option<Run
     )
 }
 
+pub fn session_project(conn: &Connection, session: SessionId) -> Result<Option<ProjectId>> {
+    one(
+        conn,
+        "SELECT project_id FROM session WHERE id = ?1",
+        &[&session.0.to_string()],
+        |r| Ok(ProjectId(uuid(r, "project_id")?)),
+    )
+}
+
 pub fn permission_owner(
     conn: &Connection,
     request: PermissionRequestId,
