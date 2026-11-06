@@ -627,7 +627,6 @@ fn secrets_never_reach_the_file_the_socket_or_the_logs() {
         let file = std::fs::read_to_string(fx.log()).unwrap();
         let stderr = std::fs::read_to_string(fx.path("session/cli.stderr")).unwrap();
         let logs = std::fs::read_to_string(fx.path("runner.log")).unwrap();
-        // The JSON file escapes newlines; compare with the escaped form too.
         for (name, secret) in &samples {
             let escaped = serde_json::to_string(secret).unwrap();
             let escaped = escaped.trim_matches('"');
@@ -1140,7 +1139,6 @@ fn systemd_runs_recipe_commands_in_a_limited_unit_with_only_their_env() {
         let timed_out = slow.await.unwrap().unwrap();
         assert!(timed_out.timed_out && timed_out.exit_code.is_none());
 
-        // A secret reaches the command's env exactly, but never its argv or the unit's properties.
         let value = "tok'en $HOME \"quoted\"\nsecond line";
         let mut with_secret = unit(
             "printf '%s' \"$API_TOKEN\"; sleep 2",

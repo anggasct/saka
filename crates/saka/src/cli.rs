@@ -105,7 +105,6 @@ fn conflict_line(step: &Value) -> String {
     .to_string()
 }
 
-// With a terminal on stdin the value is typed without echo; otherwise it is piped in.
 pub fn read_secret(name: &str, multiline: bool) -> Result<SecretText, ExitCode> {
     use std::io::{BufRead, IsTerminal, Read};
     let stdin = std::io::stdin();

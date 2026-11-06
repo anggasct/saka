@@ -681,7 +681,6 @@ fn file_path(q: &dto::FileQuery) -> Result<&str, ApiError> {
         .as_deref()
         .filter(|p| !p.is_empty())
         .ok_or_else(|| ApiError::validation("path", "required"))?;
-    // Checked against the project folder once the project is known.
     match saka_core::paths::check_doc_path(".", path) {
         Ok(()) => Ok(path),
         Err(saka_core::paths::PathIssue::NotMarkdown) => {
@@ -874,7 +873,6 @@ pub async fn approve_spec(
         m,
         &respond,
         |cause, action| async move {
-            // A tag that is not a revision id can never match.
             let revision = tag
                 .trim_matches('"')
                 .parse()

@@ -292,15 +292,12 @@ struct Cli<'a> {
 }
 
 impl Cli<'_> {
-    // An action the loop needs from the operator; the scenarios' own injections go through `run`.
     fn touch(&self, label: String, args: &[&str]) -> Result<Value> {
         let reply = self.run(args)?;
         self.touches.borrow_mut().push(label);
         Ok(reply)
     }
 
-    // A tool permission the agent asked for. It is policy, not a decision about the delivery, so it
-    // is listed beside the touches and not counted in them.
     fn prompt(&self, label: String, args: &[&str]) -> Result<Value> {
         let reply = self.run(args)?;
         self.prompts.borrow_mut().push(label);
