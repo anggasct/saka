@@ -25,6 +25,18 @@ pub struct PullRequest {
     pub merged: bool,
 }
 
+pub struct PullState {
+    pub open: bool,
+    pub merged: bool,
+    pub head_sha: String,
+}
+
+pub struct Review {
+    pub commit_id: String,
+    pub state: String,
+    pub bot: bool,
+}
+
 fn jwt(app_id: u64, key_file: &Path) -> Result<String> {
     let pem = std::fs::read(key_file).with_context(|| format!("read {}", key_file.display()))?;
     let key = EncodingKey::from_rsa_pem(&pem).context("the private key is not an RSA PEM key")?;
@@ -39,21 +51,7 @@ fn jwt(app_id: u64, key_file: &Path) -> Result<String> {
 
 impl GitHub {
     pub fn connect(app_id: u64, key_file: &Path, repo: &str) -> Result<GitHub> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("start the runtime")?;
-        let http = reqwest::Client::builder()
-            .user_agent("saka-e2e")
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("build the HTTP client")?;
-        let mut github = GitHub {
-            http,
-            runtime,
-            repo: repo.to_string(),
-            token: String::new(),
-        };
+        let mut github = GitHub::with_token(String::new(), repo)?;
         let app = jwt(app_id, key_file)?;
         let installation = github.send_as(
             &app,
@@ -79,6 +77,24 @@ impl GitHub {
             .context("no installation token in the reply")?
             .to_string();
         Ok(github)
+    }
+
+    pub fn with_token(token: String, repo: &str) -> Result<GitHub> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("start the runtime")?;
+        let http = reqwest::Client::builder()
+            .user_agent("saka-e2e")
+            .timeout(Duration::from_secs(30))
+            .build()
+            .context("build the HTTP client")?;
+        Ok(GitHub {
+            http,
+            runtime,
+            repo: repo.to_string(),
+            token,
+        })
     }
 
     fn send_as(
@@ -171,6 +187,79 @@ impl GitHub {
             Some(json!({ "message": message, "content": encoded, "branch": branch })),
         )
         .map(|_| ())
+    }
+
+    pub fn branch_sha(&self, branch: &str) -> Result<String> {
+        let head = self.send(
+            Method::GET,
+            &format!("/repos/{}/git/ref/heads/{branch}", self.repo),
+            None,
+        )?;
+        Ok(head["object"]["sha"]
+            .as_str()
+            .with_context(|| format!("no sha for branch {branch}"))?
+            .to_string())
+    }
+
+    pub fn open_pull(&self, head: &str, base: &str, title: &str, body: &str) -> Result<u64> {
+        let pull = self.send(
+            Method::POST,
+            &format!("/repos/{}/pulls", self.repo),
+            Some(json!({ "title": title, "head": head, "base": base, "body": body })),
+        )?;
+        pull["number"]
+            .as_u64()
+            .context("no pull request number in the reply")
+    }
+
+    pub fn pull_state(&self, number: u64) -> Result<PullState> {
+        let pull = self.send(
+            Method::GET,
+            &format!("/repos/{}/pulls/{number}", self.repo),
+            None,
+        )?;
+        Ok(PullState {
+            open: pull["state"] == "open",
+            merged: !pull["merged_at"].is_null(),
+            head_sha: pull["head"]["sha"].as_str().unwrap_or_default().to_string(),
+        })
+    }
+
+    pub fn close_pull(&self, number: u64) -> Result<()> {
+        self.send(
+            Method::PATCH,
+            &format!("/repos/{}/pulls/{number}", self.repo),
+            Some(json!({ "state": "closed" })),
+        )
+        .map(|_| ())
+    }
+
+    pub fn checks_done(&self, sha: &str) -> Result<bool> {
+        let list = self.send(
+            Method::GET,
+            &format!("/repos/{}/commits/{sha}/check-runs", self.repo),
+            None,
+        )?;
+        let runs = list["check_runs"].as_array().cloned().unwrap_or_default();
+        Ok(!runs.is_empty() && runs.iter().all(|r| r["status"] == "completed"))
+    }
+
+    pub fn reviews(&self, number: u64) -> Result<Vec<Review>> {
+        let list = self.send(
+            Method::GET,
+            &format!("/repos/{}/pulls/{number}/reviews?per_page=100", self.repo),
+            None,
+        )?;
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| Review {
+                commit_id: r["commit_id"].as_str().unwrap_or_default().to_string(),
+                state: r["state"].as_str().unwrap_or_default().to_string(),
+                bot: r["user"]["type"] == "Bot",
+            })
+            .collect())
     }
 
     pub fn branch_exists(&self, branch: &str) -> Result<bool> {
