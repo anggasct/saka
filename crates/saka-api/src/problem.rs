@@ -145,7 +145,10 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::HookRunPending
         | R::HookNotConfigured { .. }
         | R::HookRunGated { .. }
+        | R::LastCredential
+        | R::DeviceNotRevocable
         | R::UserTokenMultiIntegration { .. } => StatusCode::CONFLICT,
+        R::PairingCodeInvalid => StatusCode::BAD_REQUEST,
     }
 }
 

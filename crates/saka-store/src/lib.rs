@@ -4,6 +4,7 @@ mod conn;
 pub mod draft;
 mod error;
 pub mod hook_run;
+pub mod identity;
 pub mod inbox;
 mod jobs;
 pub mod list;
@@ -78,6 +79,17 @@ impl Store {
         }
         tx.commit()?;
         Ok(seqs)
+    }
+
+    pub fn transact<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let mut conn = self.writer.lock().map_err(|_| StoreError::Poisoned)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let out = f(&tx)?;
+        tx.commit()?;
+        Ok(out)
     }
 
     pub fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {

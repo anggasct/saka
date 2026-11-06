@@ -96,6 +96,34 @@ Linking your GitHub account to an integration lets Saka author agent work as you
 
 `saka project authorship <project> --mode bot|user|user-pat` picks who authors a project's agent commits and opens its pull requests. `bot` is Saka and the App. `user` is the linked account, and the App badge still shows on its pull requests. `user-pat` is the owner of a fine-grained personal access token stored for the project, and its pull requests carry no badge. Store the token with `saka project user-token set <project>`, which reads one line from stdin. The token must start with `github_pat_`, all repos of the project must be on one integration, and the token needs read access to every one of them and write access to their pull requests. Saka checks the token with GitHub when you store it and reads its expiry from GitHub's answer. Only opening a pull request uses your token. Push, CI status, merge, and branch deletion always use the App. When the token expires or GitHub refuses it, the task stops with `user_token_invalid`, and storing a new token continues it by itself. `saka project user-token rm <project>` removes the token once the project uses another mode. `saka_change_requests_opened_total{credential}` counts pull requests by the credential that opened them.
 
+## Signing in and remote access
+
+By default Saka listens on loopback and asks for no credentials. Add an `[auth]` section to the config to open it beyond loopback, for example to use it from a phone:
+
+```toml
+[server]
+listen = "0.0.0.0:7420"
+
+[auth]
+origin = "https://saka.example.com"   # the address people type; https, except http://localhost:<port> for development
+rp_id = "example.com"                 # the domain of origin or a parent of it
+```
+
+**Saka does not terminate TLS.** Put a reverse proxy, a tunnel such as Cloudflare Tunnel or Tailscale Funnel, or a VPN in front of it, and use the `https` address it serves as `origin`. Without TLS in front, a device token travels in clear text, so do not open the listener to a network you do not trust. A non-loopback `listen` without `[auth]` exits with code 2 (`config_listen_not_loopback`).
+
+With `[auth]` on, every request needs a credential, including one from loopback and one that arrives through your own proxy: a source address or a `Host` header proves nothing behind a proxy. Only `/healthz`, `/readyz`, `/api/v1/meta`, the web app files, and the sign-in endpoints answer without one. `/metrics` needs a credential too. The `Host` header must name the `origin` host or a loopback address, and a `POST` from a browser must come from `origin` or an entry of `server.allowed_origins`.
+
+The operator is one person: there are no accounts or roles. A credential is a device token (`Authorization: Bearer sdt_…`), for the CLI and other programs. `saka serve` writes a token for the local CLI to `<data_dir>/cli-token` with mode 0600 and replaces it on every start, so `saka` on the host works with no flag. The CLI reads that file only for a loopback server and refuses it when its mode lets anyone else read it (`token_file_mode`). For another machine, run `saka auth pair` on the host and `saka auth redeem <code> --name "<device>" --out <file>` on the device, then use `--token-file <file>` or `SAKA_TOKEN`.
+
+```sh
+saka auth pair                   # a code that pairs another CLI or app (a token), valid once for 5 minutes
+saka auth redeem <code> --name "CI box" --out ~/.config/saka/token
+saka auth devices                # paired devices
+saka auth revoke <device-id>     # takes effect on the next request
+```
+
+A pairing code is ten characters of Crockford base32 (`I`, `L`, `O` and `U` are never used; typing them as `1` or `0` works), is stored only as a hash, and works once. Five wrong guesses void every live code. After ten failed attempts in a minute from the same address, the sign-in endpoints answer `429` with `Retry-After`; the address is the direct peer, so `X-Forwarded-For` is ignored. A token, a code, and a cookie are never written to logs, events, or error messages.
+
 ## Development
 
 | Path | Contents |

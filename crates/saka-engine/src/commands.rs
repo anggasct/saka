@@ -22,7 +22,7 @@ use serde_json::json;
 use crate::action::{Action, Produced};
 use crate::context::PinnedContext;
 use crate::views::{ProjectView, RevisionInfo, SpecView, step_items};
-use crate::{Cause, Engine, EngineError, Extra, Mode, OPERATOR, Result, Shows};
+use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
 
 const REASON_MAX: usize = 500;
 const STEER_MAX: usize = 4000;
@@ -970,7 +970,7 @@ impl Engine {
             project,
             new,
             &active,
-            &format!("human:{OPERATOR}"),
+            &format!("human:{}", cause.actor),
             &mut ctx,
         )?;
         let rule = saka_core::rule::evolve(None, &event, now)
@@ -1093,7 +1093,7 @@ impl Engine {
             permission_request_id: request,
             allow,
             message,
-            actor: OPERATOR.to_string(),
+            actor: cause.actor.clone(),
             remember,
             active_rules,
             allowed_parts,

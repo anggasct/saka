@@ -3487,3 +3487,146 @@ pub struct InboxQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
+
+/// What a pairing code is for. `setup` lets the first passkey be registered and is only issued to the local CLI; `passkey` registers another passkey; `token` pairs a client that holds a device token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingPurpose {
+    Setup,
+    Passkey,
+    Token,
+}
+
+impl From<PairingPurpose> for saka_core::vocab::PairingPurpose {
+    fn from(p: PairingPurpose) -> saka_core::vocab::PairingPurpose {
+        match p {
+            PairingPurpose::Setup => saka_core::vocab::PairingPurpose::Setup,
+            PairingPurpose::Passkey => saka_core::vocab::PairingPurpose::Passkey,
+            PairingPurpose::Token => saka_core::vocab::PairingPurpose::Token,
+        }
+    }
+}
+
+impl From<saka_core::vocab::PairingPurpose> for PairingPurpose {
+    fn from(p: saka_core::vocab::PairingPurpose) -> PairingPurpose {
+        match p {
+            saka_core::vocab::PairingPurpose::Setup => PairingPurpose::Setup,
+            saka_core::vocab::PairingPurpose::Passkey => PairingPurpose::Passkey,
+            saka_core::vocab::PairingPurpose::Token => PairingPurpose::Token,
+        }
+    }
+}
+
+/// Whether the server asks for credentials and who the caller is.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthStatus {
+    pub enabled: bool,
+    /// No passkey is registered yet: the first one needs a `setup` code from the host.
+    pub setup_required: bool,
+    pub authenticated: bool,
+    /// `operator:passkey:<id>` or `operator:device:<id>`; `null` when not authenticated.
+    pub actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PairingBody {
+    pub purpose: PairingPurpose,
+}
+
+/// A pairing code. Only the response that creates it carries `code`; a replay of the same request does not.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PairingCreated {
+    pub id: Uuid,
+    pub purpose: PairingPurpose,
+    pub expires_at: String,
+    /// Ten characters of Crockford base32, valid once until `expires_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl PairingCreated {
+    pub fn from_core(p: &saka_core::identity::Pairing) -> PairingCreated {
+        PairingCreated {
+            id: p.id.0,
+            purpose: p.purpose.into(),
+            expires_at: time(p.expires_at),
+            code: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PairBody {
+    /// A `token` pairing code.
+    pub code: String,
+    /// 1 to 100 characters.
+    pub name: String,
+}
+
+/// A device token. It is shown once and cannot be read again.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PairedDevice {
+    pub device_id: Uuid,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    LocalCli,
+    Client,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Device {
+    pub id: Uuid,
+    pub name: String,
+    /// `local_cli` is the token of the CLI on the host; it cannot be revoked.
+    pub kind: DeviceKind,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+impl From<&saka_core::identity::Device> for Device {
+    fn from(d: &saka_core::identity::Device) -> Device {
+        Device {
+            id: d.id.0,
+            name: d.name.clone(),
+            kind: match d.kind {
+                saka_core::vocab::DeviceKind::LocalCli => DeviceKind::LocalCli,
+                saka_core::vocab::DeviceKind::Client => DeviceKind::Client,
+            },
+            created_at: time(d.created_at),
+            last_used_at: opt_time(d.last_used_at),
+            revoked_at: opt_time(d.revoked_at),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PasskeyCredential {
+    pub id: Uuid,
+    pub name: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+impl From<&saka_core::identity::Credential> for PasskeyCredential {
+    fn from(c: &saka_core::identity::Credential) -> PasskeyCredential {
+        PasskeyCredential {
+            id: c.id.0,
+            name: c.name.clone(),
+            created_at: time(c.created_at),
+            last_used_at: opt_time(c.last_used_at),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthDevices {
+    pub devices: Vec<Device>,
+    pub credentials: Vec<PasskeyCredential>,
+}

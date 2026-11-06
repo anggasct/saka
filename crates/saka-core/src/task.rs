@@ -3798,6 +3798,9 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::HookRunQueued { .. }
         | E::HookRunFinished { .. }
         | E::InboxItemDismissed { .. }
+        | E::PairingCreated { .. }
+        | E::DevicePaired { .. }
+        | E::DeviceRevoked { .. }
         | E::ProjectAuthorshipSet { .. }
         | E::ProjectUserTokenSet { .. }
         | E::ProjectUserTokenRemoved { .. }

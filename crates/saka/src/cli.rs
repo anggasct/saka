@@ -33,6 +33,7 @@ pub struct NewRule<'a> {
 pub struct Client {
     base: String,
     http: reqwest::Client,
+    timeout: Option<std::time::Duration>,
     pub json: bool,
 }
 
@@ -50,6 +51,21 @@ impl Answer {
 
 pub(crate) fn out(text: &str) {
     let _ = writeln!(std::io::stdout(), "{text}");
+}
+
+fn out_text(text: &str) {
+    out(text);
+}
+
+fn write_token(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(token.as_bytes())?;
+    file.sync_all()
 }
 
 pub(crate) fn err(text: &str) {
@@ -165,21 +181,44 @@ impl Client {
         Client {
             base: base.trim_end_matches('/').to_string(),
             http: reqwest::Client::new(),
+            timeout: None,
             json,
         }
     }
 
     pub fn with_timeout(base: &str, json: bool, timeout: std::time::Duration) -> Client {
-        let http = reqwest::Client::builder()
-            .timeout(timeout)
-            .connect_timeout(timeout)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Client {
-            base: base.trim_end_matches('/').to_string(),
-            http,
-            json,
+        Client::new(base, json).rebuilt(Some(timeout), None)
+    }
+
+    pub fn authorized(self, token: Option<&SecretText>) -> Client {
+        let timeout = self.timeout;
+        self.rebuilt(timeout, token)
+    }
+
+    fn rebuilt(
+        mut self,
+        timeout: Option<std::time::Duration>,
+        token: Option<&SecretText>,
+    ) -> Client {
+        let mut builder = reqwest::Client::builder();
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout).connect_timeout(timeout);
         }
+        if let Some(token) = token {
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Ok(mut value) =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token.expose()))
+            {
+                value.set_sensitive(true);
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+            builder = builder
+                .default_headers(headers)
+                .redirect(reqwest::redirect::Policy::none());
+        }
+        self.http = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+        self.timeout = timeout;
+        self
     }
 
     pub async fn get_quiet(&self, path: &str) -> Result<Answer, String> {
@@ -418,6 +457,109 @@ impl Client {
             .await
         {
             Ok(a) => self.finish(&a, |_| format!("secret {name} set")),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn auth_pairing(&self, purpose: &str) -> ExitCode {
+        match self
+            .post(
+                "/api/v1/auth/pairings",
+                &json!({ "purpose": purpose }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                format!(
+                    "{} code {}  expires {}",
+                    text(&b["purpose"]),
+                    text(&b["code"]),
+                    text(&b["expires_at"])
+                )
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn auth_redeem(
+        &self,
+        code: &str,
+        name: &str,
+        out: Option<&std::path::Path>,
+    ) -> ExitCode {
+        let body = json!({ "code": code, "name": name });
+        let req = self
+            .http
+            .post(format!("{}/api/v1/auth/pair", self.base))
+            .json(&body);
+        let a = match self.send(req).await {
+            Ok(a) => a,
+            Err(code) => return code,
+        };
+        if !a.ok() {
+            if self.json {
+                out_text(&a.body.to_string());
+            }
+            return fail(&a);
+        }
+        let token = text(&a.body["token"]);
+        match out {
+            Some(path) => {
+                if let Err(e) = write_token(path, &token) {
+                    err(&format!(
+                        "error: token_file_unwritable {}",
+                        json!({ "path": path.display().to_string(), "reason": e.to_string() })
+                    ));
+                    return ExitCode::FAILURE;
+                }
+                out_text(&format!(
+                    "device {} paired; token written to {}",
+                    text(&a.body["device_id"]),
+                    path.display()
+                ));
+                ExitCode::SUCCESS
+            }
+            None => self.done(&a, |b| {
+                format!(
+                    "device {}\ntoken {}",
+                    text(&b["device_id"]),
+                    text(&b["token"])
+                )
+            }),
+        }
+    }
+
+    pub async fn auth_devices(&self) -> ExitCode {
+        match self.get("/api/v1/auth/devices").await {
+            Ok(a) => self.finish(&a, |b| {
+                let devices = b["devices"].as_array().into_iter().flatten().map(|d| {
+                    format!(
+                        "device\t{}\t{}\t{}\t{}",
+                        text(&d["id"]),
+                        text(&d["kind"]),
+                        text(&d["name"]),
+                        d["last_used_at"].as_str().unwrap_or("never")
+                    )
+                });
+                let credentials = b["credentials"].as_array().into_iter().flatten().map(|c| {
+                    format!(
+                        "passkey\t{}\t{}\t{}",
+                        text(&c["id"]),
+                        text(&c["name"]),
+                        c["last_used_at"].as_str().unwrap_or("never")
+                    )
+                });
+                devices.chain(credentials).collect::<Vec<_>>().join("\n")
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn auth_revoke(&self, id: &str) -> ExitCode {
+        let path = format!("/api/v1/auth/devices/{id}/revoke");
+        match self.post(&path, &json!({}), None).await {
+            Ok(a) => self.finish(&a, |b| format!("device {} revoked", text(&b["id"]))),
             Err(code) => code,
         }
     }

@@ -520,7 +520,7 @@ fn a_remembered_answer_lets_the_next_identical_request_through_until_revoked() {
     sim.cfg.operator.answer = None;
     assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
     let engine = sim.engine();
-    let cause = engine.cause("human:operator:local");
+    let cause = engine.cause("operator:local");
     let first = sim.task(1).permissions[0].id;
     engine
         .answer_permission_with(first, true, None, true, &cause, None)
@@ -575,7 +575,7 @@ fn a_one_character_difference_still_asks_the_operator() {
     sim.cfg.operator.answer = None;
     assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
     let engine = sim.engine();
-    let cause = engine.cause("human:operator:local");
+    let cause = engine.cause("operator:local");
     engine
         .answer_permission_with(
             sim.task(1).permissions[0].id,

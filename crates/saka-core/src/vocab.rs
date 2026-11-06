@@ -44,6 +44,8 @@ macro_rules! vocab {
     };
 }
 
+vocab!(PairingPurpose { Setup => "setup", Passkey => "passkey", Token => "token" });
+vocab!(DeviceKind { LocalCli => "local_cli", Client => "client" });
 vocab!(SpecState { Draft => "draft", Ready => "ready", Approved => "approved", Shipped => "shipped", Withdrawn => "withdrawn" });
 vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "intake" });
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });

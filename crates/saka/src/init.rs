@@ -1066,8 +1066,13 @@ fn print_error(e: &InitError, json_out: bool) {
     }
 }
 
-pub fn run(args: &InitArgs, server: Option<String>, json_out: bool) -> ExitCode {
-    let report = run_inner(args, server, json_out);
+pub fn run(
+    args: &InitArgs,
+    server: Option<String>,
+    json_out: bool,
+    token_file: Option<&std::path::Path>,
+) -> ExitCode {
+    let report = run_inner(args, server, json_out, token_file);
     match report {
         Ok(report) => {
             if json_out {
@@ -1091,6 +1096,7 @@ fn run_inner(
     args: &InitArgs,
     server: Option<String>,
     json_out: bool,
+    token_file: Option<&std::path::Path>,
 ) -> Result<InitReport, InitError> {
     let cfg = Config::load().map_err(|e| {
         InitError::usage(
@@ -1099,7 +1105,9 @@ fn run_inner(
         )
     })?;
     let server = server.unwrap_or_else(|| format!("http://{}", cfg.server.listen));
-    let client = Client::new(&server, json_out);
+    let token = crate::cli_token::resolve(&server, token_file)
+        .map_err(|_| InitError::usage("token_refused", json!({})))?;
+    let client = Client::new(&server, json_out).authorized(token.as_ref());
     let interactive =
         !args.yes && std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     let mut terminal = prompt::Terminal;

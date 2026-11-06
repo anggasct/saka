@@ -31,6 +31,8 @@ pub enum Produced<'a> {
     Doc(&'a DocWriteView),
     UserLinkAuthorization(&'a crate::accounts::AuthorizationView),
     Authorship(&'a crate::authorship::AuthorshipView),
+    Pairing(&'a saka_core::identity::Pairing),
+    Device(&'a saka_core::identity::Device),
     Nothing,
 }
 

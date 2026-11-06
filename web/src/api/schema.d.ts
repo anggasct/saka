@@ -20,6 +20,86 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/auth/devices": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_devices"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/devices/{device_id}/revoke": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["revoke_device"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/pair": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["pair"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/pairings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["create_pairing"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["status"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/diagnostics": {
     parameters: {
       query?: never;
@@ -1086,6 +1166,19 @@ export interface components {
       /** @description With `allow` only: also allow the same tool (and, for Bash, the same whole command) in this project from now on. */
       remember?: boolean;
     };
+    AuthDevices: {
+      credentials: components["schemas"]["PasskeyCredential"][];
+      devices: components["schemas"]["Device"][];
+    };
+    /** @description Whether the server asks for credentials and who the caller is. */
+    AuthStatus: {
+      /** @description `operator:passkey:<id>` or `operator:device:<id>`; `null` when not authenticated. */
+      actor?: string | null;
+      authenticated: boolean;
+      enabled: boolean;
+      /** @description No passkey is registered yet: the first one needs a `setup` code from the host. */
+      setup_required: boolean;
+    };
     /** @description A commit author identity. */
     AuthorshipAuthor: {
       email: string;
@@ -1214,6 +1307,18 @@ export interface components {
       kind: string;
       name?: string | null;
     };
+    Device: {
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      /** @description `local_cli` is the token of the CLI on the host; it cannot be revoked. */
+      kind: components["schemas"]["DeviceKind"];
+      last_used_at?: string | null;
+      name: string;
+      revoked_at?: string | null;
+    };
+    /** @enum {string} */
+    DeviceKind: "local_cli" | "client";
     DiagnosticCheck: {
       /** @description What was found; the client turns it and `params` into text. Never holds a token, key, secret, or account email. */
       code: string;
@@ -1933,6 +2038,42 @@ export interface components {
         work: string;
       }[];
       next_cursor?: string | null;
+    };
+    PairBody: {
+      /** @description A `token` pairing code. */
+      code: string;
+      /** @description 1 to 100 characters. */
+      name: string;
+    };
+    /** @description A device token. It is shown once and cannot be read again. */
+    PairedDevice: {
+      /** Format: uuid */
+      device_id: string;
+      token: string;
+    };
+    PairingBody: {
+      purpose: components["schemas"]["PairingPurpose"];
+    };
+    /** @description A pairing code. Only the response that creates it carries `code`; a replay of the same request does not. */
+    PairingCreated: {
+      /** @description Ten characters of Crockford base32, valid once until `expires_at`. */
+      code?: string | null;
+      expires_at: string;
+      /** Format: uuid */
+      id: string;
+      purpose: components["schemas"]["PairingPurpose"];
+    };
+    /**
+     * @description What a pairing code is for. `setup` lets the first passkey be registered and is only issued to the local CLI; `passkey` registers another passkey; `token` pairs a client that holds a device token.
+     * @enum {string}
+     */
+    PairingPurpose: "setup" | "passkey" | "token";
+    PasskeyCredential: {
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      last_used_at?: string | null;
+      name: string;
     };
     PermissionEvaluation: {
       effect: components["schemas"]["RuleEffect"];
@@ -3033,6 +3174,157 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentAccountList"];
+        };
+      };
+    };
+  };
+  list_devices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AuthDevices"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  revoke_device: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        device_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Device"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  pair: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PairBody"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PairedDevice"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  create_pairing: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PairingBody"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PairingCreated"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  status: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AuthStatus"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
     };

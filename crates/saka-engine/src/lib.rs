@@ -11,6 +11,7 @@ mod draft;
 mod fix_packet;
 mod hooks;
 mod hooks_run;
+mod identity;
 mod inbox;
 mod intake;
 mod metrics;
@@ -71,6 +72,7 @@ pub use draft::{
     NewSpecDraft,
 };
 pub use hooks::HookReport;
+pub use identity::{DeviceIssued, PairingIssued, Principal, digest};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use permission_check::{PREVIEW_SCAN, PreviewChange, PreviewView};
 pub use register::{AddProject, Integration, MAX_CONFIG_BYTES, branch_ok, parse_repo_url};
@@ -128,6 +130,7 @@ impl EnvConfig {
 pub struct Ports {
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn Ids>,
+    pub entropy: Arc<dyn saka_ports::Entropy>,
     pub env: Arc<dyn Environments>,
     pub scm: Arc<dyn Scm>,
     pub agents: Arc<dyn Agents>,

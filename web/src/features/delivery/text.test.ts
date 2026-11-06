@@ -753,6 +753,16 @@ const ERRORS = [
   "rule_duplicate",
   "rule_too_broad",
   "rule_invalid",
+  "pairing_code_invalid",
+  "last_credential",
+  "device_not_revocable",
+  "auth_required",
+  "auth_invalid",
+  "auth_rate_limited",
+  "origin_not_allowed",
+  "host_not_allowed",
+  "setup_code_host_only",
+  "auth_disabled",
 ];
 
 describe("catalog coverage", () => {

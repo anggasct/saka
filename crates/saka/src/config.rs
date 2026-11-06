@@ -59,7 +59,22 @@ pub struct Config {
     pub notify: Notify,
     #[serde(default)]
     pub autonomy: AutonomyConfig,
+    #[serde(default)]
+    pub auth: Option<Auth>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Auth {
+    pub origin: String,
+    pub rp_id: String,
+    #[serde(default)]
+    pub rp_name: Option<String>,
+    #[serde(default)]
+    pub session_hours: Option<u32>,
+}
+
+const RP_NAME_DEFAULT: &str = "Saka";
 
 pub const MAX_AUTONOMY_REPOS: usize = 256;
 
@@ -802,8 +817,60 @@ impl Config {
         }
     }
 
+    fn validate_auth(&self) -> Result<(), ConfigError> {
+        let Some(auth) = &self.auth else {
+            return Ok(());
+        };
+        let invalid = |detail: &str| err("config_auth_invalid", detail.to_string());
+        let origin = saka_core::identity::parse_origin(&auth.origin)
+            .ok_or_else(|| invalid("auth.origin must be https://<domain>[:port]"))?;
+        if origin.scheme != saka_core::identity::Scheme::Https {
+            let loopback = self.listen().is_ok_and(|a| is_loopback(&a));
+            if !(origin.is_dev_localhost() && loopback) {
+                return Err(invalid(
+                    "auth.origin must be https; http://localhost is only for a loopback listen",
+                ));
+            }
+        }
+        if !saka_core::identity::rp_id_valid(&origin, &auth.rp_id) {
+            return Err(invalid(
+                "auth.rp_id must be the domain of auth.origin or a parent domain of it",
+            ));
+        }
+        let hours = auth
+            .session_hours
+            .unwrap_or(saka_core::identity::SESSION_HOURS_DEFAULT);
+        if !(1..=saka_core::identity::SESSION_HOURS_MAX).contains(&hours) {
+            return Err(invalid("auth.session_hours must be 1..=720"));
+        }
+        if auth
+            .rp_name
+            .as_deref()
+            .is_some_and(|n| !saka_core::identity::name_valid(n))
+        {
+            return Err(invalid("auth.rp_name must be 1 to 100 characters"));
+        }
+        Ok(())
+    }
+
+    pub fn auth_settings(&self) -> Option<saka_api::AuthSettings> {
+        let auth = self.auth.as_ref()?;
+        Some(saka_api::AuthSettings {
+            origin: saka_core::identity::parse_origin(&auth.origin)?,
+            rp_id: auth.rp_id.clone(),
+            rp_name: auth
+                .rp_name
+                .clone()
+                .unwrap_or_else(|| RP_NAME_DEFAULT.to_string()),
+            session_hours: auth
+                .session_hours
+                .unwrap_or(saka_core::identity::SESSION_HOURS_DEFAULT),
+        })
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         self.listen()?;
+        self.validate_auth()?;
         if let Some(hooks) = &self.hooks {
             let at = self.hooks_listen()?;
             if Some(at) == self.listen().ok() || hooks.listen.trim() == self.server.listen.trim() {
@@ -1349,6 +1416,44 @@ mod tests {
     }
 
     #[test]
+    fn the_auth_section_is_checked_with_one_code() {
+        let auth = |extra: &str| {
+            format!(
+                "[auth]\norigin = \"https://saka.example.com\"\nrp_id = \"example.com\"\n{extra}"
+            )
+        };
+        assert!(Config::parse("").unwrap().auth.is_none());
+        let cfg = Config::parse(&auth("")).unwrap();
+        let settings = cfg.auth_settings().unwrap();
+        assert_eq!(
+            (settings.rp_name.as_str(), settings.session_hours),
+            ("Saka", 168)
+        );
+        assert!(Config::parse(&auth("session_hours = 1\n")).is_ok());
+        assert!(Config::parse(&auth("session_hours = 720\n")).is_ok());
+        assert!(Config::parse("[server]\nlisten = \"0.0.0.0:7420\"\n[auth]\norigin = \"https://saka.example.com\"\nrp_id = \"saka.example.com\"\n").is_ok());
+        for bad in [
+            "[auth]\norigin = \"http://saka.example.com\"\nrp_id = \"example.com\"\n".to_string(),
+            "[auth]\norigin = \"https://saka.example.com/app\"\nrp_id = \"example.com\"\n".to_string(),
+            "[auth]\norigin = \"https://127.0.0.1\"\nrp_id = \"127.0.0.1\"\n".to_string(),
+            "[auth]\norigin = \"https://saka.example.com\"\nrp_id = \"other.org\"\n".to_string(),
+            "[auth]\norigin = \"https://saka.example.com\"\nrp_id = \"com\"\n".to_string(),
+            auth("session_hours = 0\n"),
+            auth("session_hours = 721\n"),
+            auth("rp_name = \"\"\n"),
+            "[server]\nlisten = \"0.0.0.0:7420\"\n[auth]\norigin = \"http://localhost:5173\"\nrp_id = \"localhost\"\n".to_string(),
+        ] {
+            assert_eq!(Config::parse(&bad).unwrap_err().code, "config_auth_invalid", "{bad}");
+        }
+        let dev = "[auth]\norigin = \"http://localhost:5173\"\nrp_id = \"localhost\"\n";
+        assert!(Config::parse(dev).is_ok());
+        let e = Config::parse(&auth("nope = 1\n")).unwrap_err();
+        assert_eq!(e.code, "config_unknown_field");
+        let missing = Config::parse("[auth]\norigin = \"https://saka.example.com\"\n").unwrap_err();
+        assert_eq!(missing.code, "config_invalid");
+    }
+
+    #[test]
     fn toolchain_mirrors_must_be_https_or_loopback() {
         let cfg = Config::parse("").unwrap();
         assert_eq!(cfg.toolchain.go_dl_url, "https://go.dev/dl");
@@ -1519,6 +1624,16 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        let auth = cfg.auth_settings().unwrap();
+        assert_eq!(auth.origin.serialized(), "https://saka.example.com");
+        assert_eq!(
+            (
+                auth.rp_id.as_str(),
+                auth.rp_name.as_str(),
+                auth.session_hours
+            ),
+            ("example.com", "Saka", 168)
+        );
         assert_eq!(cfg.autonomy.default, Autonomy::Standard);
         assert_eq!(
             cfg.autonomy_ceilings().allowed("ACME/api"),

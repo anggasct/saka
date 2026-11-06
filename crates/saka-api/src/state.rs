@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use saka_engine::Engine;
 use serde_json::json;
 
+use crate::auth::Authenticator;
 use crate::problem::ApiError;
 use crate::spa::Assets;
 
@@ -14,6 +15,7 @@ pub struct ApiConfig {
     pub server_version: String,
     pub allowed_origins: Vec<String>,
     pub keep_alive: Duration,
+    pub auth: Option<Arc<Authenticator>>,
 }
 
 impl ApiConfig {
@@ -22,6 +24,7 @@ impl ApiConfig {
             server_version: server_version.into(),
             allowed_origins: Vec::new(),
             keep_alive: Duration::from_secs(15),
+            auth: None,
         }
     }
 }
@@ -58,6 +61,10 @@ impl AppState {
 
     pub(crate) fn assets(&self) -> Option<&Arc<dyn Assets>> {
         self.0.assets.get()
+    }
+
+    pub fn authenticator(&self) -> Option<&Arc<Authenticator>> {
+        self.0.cfg.auth.as_ref()
     }
 
     pub fn config(&self) -> &ApiConfig {

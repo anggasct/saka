@@ -212,7 +212,12 @@ fn query(filter: &DiagnosticFilter, project: Option<&str>) -> String {
     }
 }
 
-pub async fn run(args: &DoctorArgs, server_flag: Option<String>, json: bool) -> ExitCode {
+pub async fn run(
+    args: &DoctorArgs,
+    server_flag: Option<String>,
+    json: bool,
+    token_file: Option<&std::path::Path>,
+) -> ExitCode {
     let wanted = match filter_of(args) {
         Ok(f) => f,
         Err(code) => return code,
@@ -254,7 +259,11 @@ pub async fn run(args: &DoctorArgs, server_flag: Option<String>, json: bool) -> 
     let server = server_flag
         .clone()
         .unwrap_or_else(|| format!("http://{}", cfg.server.listen));
-    let quick = Client::with_timeout(&server, json, REACH_TIMEOUT);
+    let token = match crate::cli_token::resolve(&server, token_file) {
+        Ok(token) => token,
+        Err(code) => return code,
+    };
+    let quick = Client::with_timeout(&server, json, REACH_TIMEOUT).authorized(token.as_ref());
 
     let started = Instant::now();
     let health = match quick.get_quiet("/healthz").await {
@@ -304,7 +313,7 @@ pub async fn run(args: &DoctorArgs, server_flag: Option<String>, json: bool) -> 
     };
     client.push(CheckId::ServerVersion, version_finding, started);
 
-    let slow = Client::with_timeout(&server, json, REPORT_TIMEOUT);
+    let slow = Client::with_timeout(&server, json, REPORT_TIMEOUT).authorized(token.as_ref());
     let project = match &args.project {
         Some(p) => match slow.project_id(p).await {
             Ok(id) => Some(id),

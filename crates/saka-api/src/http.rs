@@ -4,7 +4,7 @@ use axum::body::Bytes;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
-use saka_engine::{Action, Cause, EngineError, Key, OPERATOR, Page, Reply, Respond};
+use saka_engine::{Action, Cause, EngineError, Key, Page, Reply, Respond};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -119,6 +119,18 @@ pub fn reply_response(reply: &Reply, replayed: bool) -> Response {
             .insert(REPLAYED, HeaderValue::from_static("true"));
     }
     response
+}
+
+fn revealed(reply: &Reply, reveal: &Reveal) -> Response {
+    let extra = reveal.lock().ok().and_then(|mut fields| fields.take());
+    let (Some(extra), Ok(status)) = (extra, StatusCode::from_u16(reply.status)) else {
+        return reply_response(reply, false);
+    };
+    let mut body = reply.body.clone();
+    if let Value::Object(map) = &mut body {
+        map.extend(extra);
+    }
+    json_response(status, &body)
 }
 
 pub fn body<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, ApiError> {
@@ -291,15 +303,59 @@ where
         >,
     >,
 {
+    mutate_revealing(
+        state,
+        key,
+        method,
+        path,
+        raw_body,
+        m,
+        respond,
+        &Reveal::default(),
+        run,
+    )
+    .await
+}
+
+pub type Reveal = std::sync::Mutex<Option<serde_json::Map<String, Value>>>;
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the request parts a mutation is keyed by, and the fields only the first reply carries"
+)]
+pub async fn mutate_revealing<'r, F, Fut>(
+    state: &AppState,
+    key: String,
+    method: &Method,
+    path: &str,
+    raw_body: &Bytes,
+    m: Mutation<'_>,
+    respond: &'r Respond<'r>,
+    reveal: &Reveal,
+    run: F,
+) -> Response
+where
+    F: FnOnce(Cause, Action<'r>) -> Fut,
+    Fut: Future<
+        Output = Result<
+            Option<saka_core::ids::ProjectId>,
+            (EngineError, Option<saka_core::ids::ProjectId>),
+        >,
+    >,
+{
     let engine = match state.engine() {
         Ok(e) => e.clone(),
         Err(e) => return e.into_response(),
     };
+    let actor = crate::auth::actor();
+    if actor == crate::auth::ANONYMOUS {
+        return ApiError::new(StatusCode::UNAUTHORIZED, "auth_required", json!({})).into_response();
+    }
     let hash = request_hash(method, path, raw_body);
     let lock = state.key_lock(&key);
     let response = {
         let _held = lock.lock().await;
-        match engine.find_action(OPERATOR, &key) {
+        match engine.find_action(&actor, &key) {
             Err(e) => ApiError::from(e).into_response(),
             Ok(Some(stored)) if stored.request_hash == hash => reply_response(&stored.reply, true),
             Ok(Some(_)) => ApiError::new(
@@ -310,7 +366,7 @@ where
             .into_response(),
             Ok(None) => {
                 let cause = Cause {
-                    actor: OPERATOR.to_string(),
+                    actor: actor.clone(),
                     causation_id: None,
                     correlation_id: correlation().unwrap_or_else(Uuid::now_v7),
                 };
@@ -333,8 +389,8 @@ where
                     respond,
                 };
                 match run(cause.clone(), action).await {
-                    Ok(_) => match engine.find_action(OPERATOR, &key) {
-                        Ok(Some(stored)) => reply_response(&stored.reply, false),
+                    Ok(_) => match engine.find_action(&actor, &key) {
+                        Ok(Some(stored)) => revealed(&stored.reply, reveal),
                         Ok(None) => ApiError::internal().into_response(),
                         Err(e) => ApiError::from(e).into_response(),
                     },

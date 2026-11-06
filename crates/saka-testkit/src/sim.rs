@@ -22,7 +22,7 @@ use saka_store::{Batch, SpecRevisionRow, Store, TaskSet, list, read};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::clock::{FakeClock, FakeIds};
+use crate::clock::{FakeClock, FakeEntropy, FakeIds};
 use crate::fixtures::{TWO_STEP_PATH, TWO_STEP_SPEC};
 use crate::world::{AgentScript, CiScript, FakeWorld, Stats};
 
@@ -397,6 +397,7 @@ impl Sim {
         let ports = Ports {
             clock: self.clock.clone(),
             ids: self.ids.clone(),
+            entropy: Arc::new(FakeEntropy::default()),
             env: self.world.clone(),
             scm: self.world.clone(),
             agents: self.world.clone(),

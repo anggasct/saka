@@ -50,4 +50,8 @@ id_type!(
     ReviewId,
     InboxItemId,
     DecisionRequestId,
+    DeviceId,
+    CredentialId,
+    PairingId,
+    LoginSessionId,
 );

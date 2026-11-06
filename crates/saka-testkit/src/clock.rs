@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use saka_core::time::Timestamp;
-use saka_ports::{Clock, Ids};
+use saka_ports::{Clock, Entropy, Ids, PortResult};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -44,5 +44,22 @@ impl Ids for FakeIds {
         let mut n = self.0.lock().unwrap();
         *n += 1;
         Uuid::from_u128(*n)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct FakeEntropy(Mutex<u64>);
+
+impl Entropy for FakeEntropy {
+    fn fill(&self, buf: &mut [u8]) -> PortResult<()> {
+        let mut state = self.0.lock().unwrap();
+        for byte in buf {
+            *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = *state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            *byte = ((z ^ (z >> 31)) >> 24) as u8;
+        }
+        Ok(())
     }
 }

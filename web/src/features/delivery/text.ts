@@ -200,6 +200,7 @@ export function errorText(
       : "",
     cause: text(params.cause) || "other",
     status: text(params.status),
+    retry_after: text(params.retry_after_secs),
     hook: text(params.hook),
     repos: Array.isArray(params.repos)
       ? params.repos.map((r) => text(record(r).full_name)).join(", ")

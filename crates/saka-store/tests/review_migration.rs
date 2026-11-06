@@ -93,7 +93,7 @@ fn the_review_migration_keeps_rows_and_opens_the_review_phases_and_a_branchless_
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+        vec![23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
     );
     drop(store);
 

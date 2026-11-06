@@ -4,9 +4,18 @@
 # Unknown fields are an error (config_unknown_field).
 
 [server]
-listen = "127.0.0.1:7420"          # loopback only; any other address exits with code 2
+listen = "127.0.0.1:7420"          # loopback unless [auth] is set; any other address then exits with code 2 (config_listen_not_loopback)
 allowed_origins = []               # extra browser origins, e.g. "http://localhost:5173" for the Vite dev server
 data_dir = "~/.local/share/saka"   # default $XDG_DATA_HOME/saka; no * ? [ ] { } ( ) ! + @ | \ in the path
+
+# Remove this section to run on loopback without credentials. With it, every request needs a passkey session or a
+# device token, loopback included, and `listen` may be a non-loopback address. Saka does not terminate TLS:
+# put a reverse proxy, a tunnel, or a VPN in front and use its https address as origin.
+[auth]
+origin = "https://saka.example.com"  # https://<domain>[:port]; http://localhost:<port> only for development on a loopback listen
+rp_id = "example.com"                # the domain of origin or a parent of it; passkeys are bound to it
+rp_name = "Saka"                     # shown by the browser when a passkey is created, 1..=100 characters
+session_hours = 168                  # 1..=720; a browser session ends this long after sign-in, with no renewal
 
 [scheduler]
 max_active_tasks = 2               # 1..=16
