@@ -804,6 +804,8 @@ pub struct WorkItem {
     pub external: Option<ExternalChange>,
     /// The newest reviewer verdict of the task; `null` before any review ran.
     pub review: Option<ReviewSummary>,
+    /// The latest fix round of the task; `null` before a round ran and when the workflow has no `fix` stage.
+    pub fix: Option<FixProgress>,
     /// Latest result per gate source for the current change request head, `scm` first.
     pub gates: Vec<Gate>,
     pub blocker: Option<Blocker>,
@@ -845,6 +847,40 @@ pub struct ExternalChange {
     pub cause: String,
     /// The login of who asked for it, or `null` when Saka took it on its own.
     pub actor: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FixProgress {
+    /// The highest round started. It passes `max_rounds` only when the operator granted another round after the limit.
+    pub round: u32,
+    /// The rounds the workflow allows a task.
+    pub max_rounds: u32,
+    /// `review | conflict`: what the round answered.
+    pub cause: String,
+}
+
+impl FixProgress {
+    fn of(t: &Task) -> Option<FixProgress> {
+        if !t.workflow.has_stage(saka_core::vocab::Stage::Fix) {
+            return None;
+        }
+        let latest = t
+            .retired_runs
+            .iter()
+            .chain(t.stage_run.iter())
+            .filter_map(|r| r.fix.as_ref())
+            .max_by_key(|f| f.number)?;
+        Some(FixProgress {
+            round: latest.number,
+            max_rounds: t.workflow.fix_rounds,
+            cause: if latest.cause.code == "merge_conflict" {
+                "conflict"
+            } else {
+                "review"
+            }
+            .to_string(),
+        })
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1134,6 +1170,7 @@ impl WorkItem {
             }),
             external: t.external.as_ref().map(ExternalChange::from),
             review: latest_review(t).map(|r| ReviewSummary::of(r, t)),
+            fix: FixProgress::of(t),
             gates: gates_at_head(t),
             blocker: t
                 .open_blocker()
@@ -1190,6 +1227,8 @@ pub struct StageRunItem {
     pub trigger: String,
     pub reason: Option<String>,
     pub head_sha: Option<String>,
+    /// The fix round the run belongs to; `null` for every other run.
+    pub round: Option<u32>,
     pub failure: Option<Failure>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
@@ -1205,6 +1244,7 @@ impl From<&StageRun> for StageRunItem {
             trigger: r.trigger.as_str().to_string(),
             reason: r.reason.clone(),
             head_sha: r.head_sha.clone(),
+            round: r.fix.as_ref().map(|f| f.number),
             failure: r.failure.as_ref().map(|f| Failure {
                 code: f.code.clone(),
                 params: f.params.clone(),

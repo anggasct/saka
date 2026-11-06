@@ -579,6 +579,52 @@ describe("review request", () => {
     expect(within(stage).getAllByRole("option")).toHaveLength(1);
   });
 
+  it("offers a review of the pull request, and a fix only after a rejection at its current head", async () => {
+    const verdict = (outcome: string, current: boolean) => ({
+      id: "0193f0c4-1b2a-7c3d-9e8f-001122339901",
+      outcome,
+      basis: "step",
+      head_sha: HEAD,
+      current,
+      summary: "Needs work.",
+      finding_count: 1,
+      posted: null,
+      created_at: "2026-10-31T10:06:00.000Z",
+    });
+    const takenOver = (review: ReturnType<typeof verdict>) =>
+      detail(
+        task(1, {
+          state: "taken_over",
+          stage: null,
+          stage_phase: null,
+          change_request: change,
+          available_actions: ["cancel", "return"],
+          review,
+        }),
+      );
+    const options = async (item: WorkItemDetail) => {
+      fakeApi(routes(() => item));
+      const { unmount } = renderWithProviders(<TaskPage workItemId={ID} />);
+      const dialog = await open("Return to the loop");
+      const values = within(within(dialog).getByLabelText("Stage to start"))
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("value"));
+      unmount();
+      return values;
+    };
+    expect(
+      await options(takenOver(verdict("changes_requested", true))),
+    ).toEqual(["dev", "review", "fix", "merge"]);
+    expect(await options(takenOver(verdict("approved", true)))).toEqual([
+      "dev",
+      "review",
+      "merge",
+    ]);
+    expect(
+      await options(takenOver(verdict("changes_requested", false))),
+    ).toEqual(["dev", "review", "merge"]);
+  });
+
   it("takes over from the blocker when someone pushed to the branch", async () => {
     const moved = detail(
       task(1, {

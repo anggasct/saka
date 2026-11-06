@@ -1255,6 +1255,20 @@ export interface components {
       spec?: components["schemas"]["Spec"] | null;
       spec_problem?: components["schemas"]["SpecProblem"] | null;
     };
+    FixProgress: {
+      /** @description `review | conflict`: what the round answered. */
+      cause: string;
+      /**
+       * Format: int32
+       * @description The rounds the workflow allows a task.
+       */
+      max_rounds: number;
+      /**
+       * Format: int32
+       * @description The highest round started. It passes `max_rounds` only when the operator granted another round after the limit.
+       */
+      round: number;
+    };
     Gate: {
       checks: components["schemas"]["GateCheck"][];
       head_sha: string;
@@ -1611,6 +1625,7 @@ export interface components {
         done_at?: string | null;
         environment?: components["schemas"]["WorkItemEnvironment"] | null;
         external?: components["schemas"]["ExternalChange"] | null;
+        fix?: components["schemas"]["FixProgress"] | null;
         /** @description Latest result per gate source for the current change request head, `scm` first. */
         gates: components["schemas"]["Gate"][];
         /** Format: uuid */
@@ -2318,6 +2333,11 @@ export interface components {
       /** Format: uuid */
       id: string;
       reason?: string | null;
+      /**
+       * Format: int32
+       * @description The fix round the run belongs to; `null` for every other run.
+       */
+      round?: number | null;
       stage: string;
       started_at?: string | null;
       state: string;
@@ -2509,6 +2529,7 @@ export interface components {
       done_at?: string | null;
       environment?: components["schemas"]["WorkItemEnvironment"] | null;
       external?: components["schemas"]["ExternalChange"] | null;
+      fix?: components["schemas"]["FixProgress"] | null;
       /** @description Latest result per gate source for the current change request head, `scm` first. */
       gates: components["schemas"]["Gate"][];
       /** Format: uuid */

@@ -106,6 +106,9 @@ export function blockerText(
     summary: text(params.summary),
     summary_known: text(params.summary) !== "" ? "yes" : "no",
     findings: number(params.findings),
+    rounds: number(params.rounds),
+    rounds_known: typeof params.rounds === "number" ? "yes" : "no",
+    max: number(params.max),
     account: text(params.account),
     window: text(params.window),
     resets:
