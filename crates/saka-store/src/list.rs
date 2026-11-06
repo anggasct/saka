@@ -4,12 +4,14 @@ use saka_core::ids::{
     WorkItemId,
 };
 use saka_core::model::{
-    DecisionRequest, PermissionRequest, Project, Repo, Session, Spec, StageRun,
+    DecisionRequest, PermissionRequest, Project, Repo, RunOwner, Session, Spec, StageRun,
 };
+use saka_core::time::Timestamp;
+use saka_core::vocab::SessionState;
 use saka_core::workspace::RepoTask;
 use uuid::Uuid;
 
-use crate::codec::{uuid, vocab};
+use crate::codec::{run_owner, uuid, vocab};
 use crate::error::Result;
 use crate::read::{
     DECISION_SELECT, PERMISSION_SELECT, decision, load_project, permission, project_row, repo_row,
@@ -470,6 +472,74 @@ pub fn load_permission(
     Ok(q.run(conn, PERMISSION_SELECT, "id", &page, permission_row)?
         .into_iter()
         .next())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveSessionRow {
+    pub id: SessionId,
+    pub state: SessionState,
+    pub role: String,
+    pub project_id: ProjectId,
+    pub project_name: String,
+    pub owner: RunOwner,
+    pub title: String,
+    pub model: Option<String>,
+    pub started_at: Timestamp,
+    pub last_activity_at: Timestamp,
+    pub pending_permissions: u32,
+    pub pending_decisions: u32,
+}
+
+const ACTIVE_SESSION_SELECT: &str = "SELECT s.*,
+    COALESCE(s.started_at, s.created_at) AS shown_at,
+    (SELECT name FROM project p WHERE p.id = s.project_id) AS project_name,
+    COALESCE((SELECT task_key FROM work_item w WHERE w.id = s.work_item_id),
+             (SELECT slug FROM spec_draft d WHERE d.id = s.spec_draft_id)) AS title,
+    COALESCE((SELECT stage FROM stage_run r WHERE r.id = s.stage_run_id), 'architect') AS role,
+    COALESCE((SELECT a.at FROM session_activity a WHERE a.session_id = s.id
+              ORDER BY a.\"offset\" DESC LIMIT 1), COALESCE(s.started_at, s.created_at)) AS last_activity_at,
+    (SELECT COUNT(*) FROM permission_request q WHERE q.session_id = s.id AND q.state = 'pending')
+      AS pending_permissions,
+    (SELECT COUNT(*) FROM decision_request x WHERE x.session_id = s.id AND x.state = 'asked')
+      AS pending_decisions
+  FROM session s";
+
+fn active_session_row(row: &Row<'_>) -> Result<ActiveSessionRow> {
+    Ok(ActiveSessionRow {
+        id: SessionId(uuid(row, "id")?),
+        state: vocab(row, "state")?,
+        role: row.get("role")?,
+        project_id: ProjectId(uuid(row, "project_id")?),
+        project_name: row.get("project_name")?,
+        owner: run_owner(row)?,
+        title: row.get("title")?,
+        model: row.get("model")?,
+        started_at: ts(row, "shown_at")?,
+        last_activity_at: ts(row, "last_activity_at")?,
+        pending_permissions: row.get("pending_permissions")?,
+        pending_decisions: row.get("pending_decisions")?,
+    })
+}
+
+pub fn active_sessions(
+    conn: &Connection,
+    states: &[String],
+    project: Option<ProjectId>,
+    page: &Page,
+) -> Result<Vec<ActiveSessionRow>> {
+    let mut q = Query::new();
+    q.any_of("state", states);
+    if let Some(p) = project {
+        q.eq("project_id", p.0.to_string());
+    }
+    q.after("COALESCE(started_at, created_at)", page, true);
+    q.run(
+        conn,
+        ACTIVE_SESSION_SELECT,
+        "shown_at DESC, s.id DESC",
+        page,
+        active_session_row,
+    )
 }
 
 pub fn load_session(conn: &Connection, id: SessionId) -> Result<Option<(Session, ProjectId)>> {

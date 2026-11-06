@@ -1276,6 +1276,30 @@ export interface components {
       id: string;
       text: string;
     };
+    ActiveSession: {
+      /** Format: uuid */
+      id: string;
+      /** @description The time of the last recorded activity; `started_at` when there is none yet. */
+      last_activity_at: string;
+      model?: string | null;
+      owner: components["schemas"]["RunOwner"];
+      pending: components["schemas"]["PendingCounts"];
+      /** Format: uuid */
+      project_id: string;
+      project_name: string;
+      /** @description The stage of the owning run (`dev`, `review`, `fix`, `merge`, `sync`) or `architect` for a draft. */
+      role: string;
+      /** @description When the session started; the creation time while it is still `starting`. */
+      started_at: string;
+      /** @description `starting`, `running`, `waiting`, `idle`, `interrupted`, `lost` or `resumed`. */
+      state: string;
+      /** @description The task key, or the slug of the draft. */
+      title: string;
+    };
+    ActiveSessionList: {
+      items: components["schemas"]["ActiveSession"][];
+      next_cursor?: string | null;
+    };
     /** @description The `data` of a `runtime.session.activity.v1` SSE message: a new timeline row to read with the timeline cursor. */
     ActivityNotice: {
       kind: string;
@@ -2293,6 +2317,18 @@ export interface components {
       /** @description A name for the passkey, 1 to 100 characters. */
       name: string;
     };
+    PendingCounts: {
+      /**
+       * Format: int32
+       * @description Decision requests still waiting for an answer.
+       */
+      decisions: number;
+      /**
+       * Format: int32
+       * @description Permission requests still waiting for an answer.
+       */
+      permissions: number;
+    };
     PermissionEvaluation: {
       effect: components["schemas"]["RuleEffect"];
       /** @description Empty for a tool other than `Bash` and for a command that cannot be split safely. */
@@ -2682,6 +2718,7 @@ export interface components {
       cost_usd?: string | null;
       end_reason?: components["schemas"]["Failure"] | null;
       ended_at?: string | null;
+      environment?: components["schemas"]["SessionEnvironment"] | null;
       /** Format: uuid */
       id: string;
       /** Format: int64 */
@@ -2727,9 +2764,21 @@ export interface components {
       started_at?: string | null;
       state: string;
     };
+    SessionEnvironment: {
+      branch?: string | null;
+      ports?: components["schemas"]["PortBlock"] | null;
+      /** @description `preparing`, `ready`, `failed`, `teardown_failed` or `torn_down`. */
+      setup_state: string;
+      /** @description Toolchains on `PATH`; empty when the repo declares no versions. */
+      toolchains: components["schemas"]["Toolchain"][];
+    };
     SessionList: {
       items: components["schemas"]["Session"][];
     };
+    /** @description The sessions of one run, or the active sessions of every project when `active=true`. */
+    SessionsReply:
+      | components["schemas"]["SessionList"]
+      | components["schemas"]["ActiveSessionList"];
     /** @description Request body that sets a project's authorship mode. */
     SetAuthorshipBody: {
       /**
@@ -5333,9 +5382,14 @@ export interface operations {
   list_sessions: {
     parameters: {
       query?: {
-        /** @description Exactly one of `work_item_id` and `spec_draft_id` is required. */
+        /** @description Without `active=true`, exactly one of `work_item_id` and `spec_draft_id` is required. */
         work_item_id?: string;
         spec_draft_id?: string;
+        /** @description `true` lists the sessions that are not over, across projects, newest first; exclusive with the run filters. */
+        active?: string;
+        project_id?: string;
+        cursor?: string;
+        limit?: number;
       };
       header?: never;
       path?: never;
@@ -5348,7 +5402,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["SessionList"];
+          "application/json": components["schemas"]["SessionsReply"];
         };
       };
       422: {

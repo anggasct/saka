@@ -507,6 +507,15 @@ pub fn session_owner(conn: &Connection, session: SessionId) -> Result<Option<Run
     )
 }
 
+pub fn environment_of(conn: &Connection, id: EnvironmentId) -> Result<Option<Environment>> {
+    one(
+        conn,
+        &format!("{ENVIRONMENT_SELECT} WHERE e.id = ?1"),
+        &[&id.0.to_string()],
+        environment,
+    )
+}
+
 pub fn session_project(conn: &Connection, session: SessionId) -> Result<Option<ProjectId>> {
     one(
         conn,
