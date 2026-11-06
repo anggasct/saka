@@ -268,15 +268,16 @@ fn without_the_capability_or_a_queue_on_the_branch_saka_keeps_its_own_queue() {
         vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
     );
     pair.sim.world.set_native_queue(true);
+    // The rebased task is reviewed at its new head and then takes a second turn.
     assert!(pair.run(|_| {}));
     assert!(pair.sim.world.enqueue_calls().is_empty());
-    assert_eq!(pair.sim.world.rebases().len(), 2);
+    assert_eq!(pair.sim.world.rebases().len(), 3);
 
     let mut pair = native_pair();
     pair.sim.world.set_native_queue(false);
     assert!(pair.run(|_| {}));
     assert!(pair.sim.world.enqueue_calls().is_empty());
-    assert_eq!(pair.sim.world.rebases().len(), 2);
+    assert_eq!(pair.sim.world.rebases().len(), 3);
 }
 
 #[test]
@@ -327,4 +328,24 @@ fn a_refused_enqueue_blocks_with_the_providers_reason() {
         blocked.open_blocker().unwrap().params["reason"],
         "not_mergeable"
     );
+}
+
+#[test]
+fn a_rebased_head_is_reviewed_before_it_merges_and_the_old_verdict_does_not_carry_over() {
+    let mut pair = Pair::new(
+        SimConfig::default(),
+        vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
+    );
+    assert!(pair.run(|_| {}));
+    let sim = &pair.sim;
+    let rebased = sim.events_of("delivery.merge.rebased");
+    assert_eq!(rebased.len(), 1);
+    let head = rebased[0].payload["head_sha"].as_str().unwrap();
+    let reviewed: Vec<_> = sim
+        .events_of("delivery.review.recorded")
+        .into_iter()
+        .filter(|e| e.payload["head_sha"] == head)
+        .collect();
+    assert_eq!(reviewed.len(), 1, "the rebased head has its own verdict");
+    assert_eq!(sim.events_of("delivery.review.recorded").len(), 3);
 }
