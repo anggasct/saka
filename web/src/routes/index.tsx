@@ -1,7 +1,7 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+
+import { InboxPage } from "@/features/inbox/inbox-page";
 
 export const Route = createFileRoute("/")({
-  beforeLoad: () => {
-    redirect({ to: "/delivery", throw: true });
-  },
+  component: InboxPage,
 });

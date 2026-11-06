@@ -40,6 +40,7 @@ pub struct InboxItem {
     pub stage: Option<String>,
     pub spec_slug: Option<String>,
     pub spec_title: Option<String>,
+    pub spec_path: Option<String>,
     pub draft_path: Option<String>,
     pub params: Value,
     pub action: InboxAction,
@@ -69,7 +70,7 @@ pub struct InboxSummary {
 }
 
 const SELECT: &str = "SELECT i.*, p.name AS project_name, w.task_key, w.stage AS stage,
-    s.slug AS spec_slug, s.title AS spec_title, d.path AS draft_path
+    s.slug AS spec_slug, s.title AS spec_title, s.path AS spec_path, d.path AS draft_path
   FROM inbox_item i
   JOIN project p ON p.id = i.project_id
   LEFT JOIN work_item w ON w.id = i.work_item_id
@@ -93,6 +94,7 @@ fn item_row(row: &Row<'_>) -> Result<InboxItem> {
         stage: row.get("stage")?,
         spec_slug: row.get("spec_slug")?,
         spec_title: row.get("spec_title")?,
+        spec_path: row.get("spec_path")?,
         draft_path: row.get("draft_path")?,
         params: json(row, "params")?,
         action: InboxAction {

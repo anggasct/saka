@@ -93,6 +93,7 @@ export const EVENT_KINDS = [
   "engine.job.exhausted",
   "delivery.hook_run.queued",
   "delivery.hook_run.finished",
+  "delivery.inbox_item.dismissed",
 ] as const;
 
 export const QUERY_ROOTS = {
@@ -110,6 +111,7 @@ export const QUERY_ROOTS = {
   diagnostics: "diagnostics",
   hooks: "hooks",
   hookRuns: "hook-runs",
+  inbox: "inbox",
 } as const;
 
 const AFFECTS: Record<string, readonly string[]> = {
@@ -123,15 +125,21 @@ const AFFECTS: Record<string, readonly string[]> = {
   hook_run: [QUERY_ROOTS.hookRuns],
   user_link: [QUERY_ROOTS.userLinks, QUERY_ROOTS.authorship],
   user_link_authorization: [QUERY_ROOTS.userLinks],
-  spec: [QUERY_ROOTS.specs],
-  work_item: [QUERY_ROOTS.workItems, QUERY_ROOTS.specs],
-  spec_draft: [QUERY_ROOTS.specDrafts, QUERY_ROOTS.specs],
+  inbox_item: [QUERY_ROOTS.inbox],
+  spec: [QUERY_ROOTS.specs, QUERY_ROOTS.inbox],
+  work_item: [QUERY_ROOTS.workItems, QUERY_ROOTS.specs, QUERY_ROOTS.inbox],
+  spec_draft: [QUERY_ROOTS.specDrafts, QUERY_ROOTS.specs, QUERY_ROOTS.inbox],
   session: [
     QUERY_ROOTS.workItems,
     QUERY_ROOTS.sessions,
     QUERY_ROOTS.specDrafts,
+    QUERY_ROOTS.inbox,
   ],
-  permission_request: [QUERY_ROOTS.permissions, QUERY_ROOTS.workItems],
+  permission_request: [
+    QUERY_ROOTS.permissions,
+    QUERY_ROOTS.workItems,
+    QUERY_ROOTS.inbox,
+  ],
 };
 
 export type Activity = components["schemas"]["SessionActivity"];

@@ -112,7 +112,7 @@ describe("Settings navigation", () => {
     const links = within(nav)
       .getAllByRole("link")
       .map((l) => l.textContent);
-    expect(links).toEqual(["Docs", "Delivery", "Settings"]);
+    expect(links).toEqual(["Inbox", "Docs", "Delivery", "Settings"]);
   });
 
   it("links the Delivery project header to its settings", async () => {

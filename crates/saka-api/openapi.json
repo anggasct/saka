@@ -5502,6 +5502,13 @@
             ],
             "description": "The path of the spec draft whose session asked, for a permission that belongs to a draft."
           },
+          "spec_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the spec lives in the docs, so a link can open it in the editor."
+          },
           "spec_slug": {
             "type": [
               "string",

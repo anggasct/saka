@@ -5,6 +5,7 @@ import {
   createRootRouteWithContext,
 } from "@tanstack/react-router";
 
+import { InboxNavLink } from "@/features/inbox/nav-link";
 import { LanguageSelect } from "@/i18n/language-select";
 import { initialLocale } from "@/i18n/locale";
 import { useT } from "@/i18n/use-t";
@@ -25,6 +26,7 @@ function Layout() {
       <header className="border-b border-border">
         <nav className="mx-auto flex max-w-4xl flex-wrap items-center gap-x-4 px-4">
           <span className="py-3 font-semibold">{t("app.name")}</span>
+          <InboxNavLink />
           <Link
             to="/docs"
             className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"

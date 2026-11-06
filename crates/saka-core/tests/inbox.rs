@@ -98,6 +98,8 @@ fn every_blocker_code_opens_one_item_whose_action_is_the_primary_action() {
             InboxKind::Blocker
         };
         assert_eq!(item.kind, expected, "{code}");
+        assert_eq!(item.params["code"], json!(code), "{code}");
+        assert_eq!(item.params["names"], json!(["A"]), "{code}");
         let mut params = primary.params;
         params["blocker_id"] = json!(BlockerId(id(9)));
         assert_eq!(item.action.params, params, "{code}");
