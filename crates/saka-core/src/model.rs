@@ -94,6 +94,7 @@ pub struct Project {
     pub config_sha256: String,
     pub config_error: Option<ConfigError>,
     pub workflow: Workflow,
+    pub hook_skip: Vec<String>,
     pub repos: Vec<ProjectRepo>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,

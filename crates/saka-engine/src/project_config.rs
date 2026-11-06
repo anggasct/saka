@@ -18,8 +18,18 @@ use crate::register::{branch_ok, parse_repo_url};
 pub struct ProjectConfig {
     pub name: String,
     pub workflow: Workflow,
+    pub hook_skip: Vec<HookSkip>,
     pub repos: Vec<RepoEntry>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookSkip {
+    pub name: String,
+    pub index: usize,
+    pub line: usize,
+}
+
+pub const MAX_HOOK_SKIP: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoEntry {
@@ -299,6 +309,49 @@ fn project_name(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Option<(String, Opt
     }
 }
 
+fn hook_skip(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Vec<HookSkip> {
+    let Some(section) = get(doc, "hooks") else {
+        return Vec::new();
+    };
+    let Some(table) = section.get_ref().as_table() else {
+        c.push("field_invalid", "hooks", Some(section.span().start));
+        return Vec::new();
+    };
+    c.unknown(table, "hooks.", &["skip"]);
+    let Some(list) = get(table, "skip") else {
+        return Vec::new();
+    };
+    let Some(items) = list.get_ref().as_array() else {
+        c.push("field_invalid", "hooks.skip", Some(list.span().start));
+        return Vec::new();
+    };
+    if items.len() > MAX_HOOK_SKIP {
+        c.push("field_invalid", "hooks.skip", Some(list.span().start));
+        return Vec::new();
+    }
+    let mut out: Vec<HookSkip> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let at = item.span().start;
+        let field = format!("hooks.skip[{index}]");
+        match item
+            .get_ref()
+            .as_str()
+            .filter(|n| saka_core::hook::slug_ok(n))
+        {
+            Some(name) if out.iter().any(|s| s.name == name) => {
+                c.push("field_invalid", &field, Some(at))
+            }
+            Some(name) => out.push(HookSkip {
+                name: name.to_string(),
+                index,
+                line: line_of(c.text, at),
+            }),
+            None => c.push("field_invalid", &field, Some(at)),
+        }
+    }
+    out
+}
+
 fn repos(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Vec<RepoEntry> {
     let list = match get(doc, "repo") {
         None => None,
@@ -410,7 +463,7 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
         text,
         issues: Vec::new(),
     };
-    c.unknown(doc, "", &["project", "repo", "workflow"]);
+    c.unknown(doc, "", &["project", "repo", "workflow", "hooks"]);
     let (name, project_autonomy) = match project_name(&mut c, doc) {
         Some((name, requested)) => (Some(name), requested),
         None => (None, None),
@@ -420,12 +473,14 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
         repo.autonomy = repo.autonomy.or(project_autonomy);
     }
     let workflow = workflow::parse(&mut c, doc);
+    let hook_skip = hook_skip(&mut c, doc);
     let mut issues = c.issues;
     issues.sort_by_key(|i| i.line.unwrap_or(0));
     match name {
         Some(name) if issues.is_empty() => Ok(ProjectConfig {
             name,
             workflow,
+            hook_skip,
             repos,
         }),
         _ => Err(issues),
@@ -524,6 +579,32 @@ url = "https://github.com/acme/web"
             [
                 row("field_invalid", "project.autonomy", Some(3)),
                 row("field_invalid", "repo[0].autonomy", Some(8)),
+            ]
+        );
+    }
+
+    #[test]
+    fn hooks_to_skip_are_named_once_each_and_nothing_else_is_taken() {
+        let text = format!("{TWO_REPOS}\n[hooks]\nskip = [\"announce\", \"audit\"]\n");
+        let cfg = parse(text.as_bytes()).unwrap();
+        let names: Vec<_> = cfg
+            .hook_skip
+            .iter()
+            .map(|s| (s.name.as_str(), s.line))
+            .collect();
+        assert_eq!(names, [("announce", 16), ("audit", 16)]);
+        assert!(parse(TWO_REPOS.as_bytes()).unwrap().hook_skip.is_empty());
+        assert_eq!(
+            codes(&format!(
+                "{TWO_REPOS}\n[hooks]\nskip = [\"a\", \"a\", \"Bad Name\"]\nrun = []\n"
+            ))
+            .iter()
+            .map(|(c, f, _)| (*c, f.clone().unwrap()))
+            .collect::<Vec<_>>(),
+            [
+                ("field_invalid", "hooks.skip[1]".to_string()),
+                ("field_invalid", "hooks.skip[2]".to_string()),
+                ("field_unknown", "hooks.run".to_string()),
             ]
         );
     }

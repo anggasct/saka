@@ -76,14 +76,15 @@ impl Engine {
             return Ok(());
         }
         let item = &task.item;
-        let Some(facts) = self.hook_facts(item.project_id, Some(item.repo_id), item.spec_id)?
+        let Some((facts, skip)) =
+            self.hook_facts(item.project_id, Some(item.repo_id), item.spec_id)?
         else {
             return Ok(());
         };
         let Some(ctx) = hook::task_context(event, task, &facts, now) else {
             return Ok(());
         };
-        self.queue_hooks(batch, &ctx, event_id, cause, now);
+        self.queue_hooks(batch, &ctx, &skip, event_id, cause, now);
         Ok(())
     }
 
@@ -150,7 +151,7 @@ impl Engine {
             return Ok(());
         };
         let ctx = hook::spec_context(spec, &project.name, now);
-        self.queue_hooks(batch, &ctx, event_id, cause, now);
+        self.queue_hooks(batch, &ctx, &project.hook_skip, event_id, cause, now);
         Ok(())
     }
 
@@ -159,7 +160,7 @@ impl Engine {
         project_id: ProjectId,
         repo_id: Option<RepoId>,
         spec_id: Option<saka_core::ids::SpecId>,
-    ) -> Result<Option<Facts>> {
+    ) -> Result<Option<(Facts, Vec<String>)>> {
         let loaded = self.store.read(|c| {
             let Some(project) = read::load_project(c, project_id)? else {
                 return Ok(None);
@@ -174,21 +175,24 @@ impl Engine {
             };
             Ok(Some((project, repo, spec)))
         })?;
-        Ok(loaded.map(|(project, repo, spec)| Facts {
-            project_id,
-            project_name: project.name.clone(),
-            repo: repo.and_then(|r| {
-                project
-                    .repos
-                    .iter()
-                    .find(|b| b.repo_id == r.id)
-                    .map(|b| RepoRef {
-                        id: r.id,
-                        name: b.name.clone(),
-                        full_name: r.full_name.clone(),
-                    })
-            }),
-            spec_path: spec.map(|s| s.path),
+        Ok(loaded.map(|(project, repo, spec)| {
+            let facts = Facts {
+                project_id,
+                project_name: project.name.clone(),
+                repo: repo.and_then(|r| {
+                    project
+                        .repos
+                        .iter()
+                        .find(|b| b.repo_id == r.id)
+                        .map(|b| RepoRef {
+                            id: r.id,
+                            name: b.name.clone(),
+                            full_name: r.full_name.clone(),
+                        })
+                }),
+                spec_path: spec.map(|s| s.path),
+            };
+            (facts, project.hook_skip)
         }))
     }
 
@@ -196,12 +200,20 @@ impl Engine {
         &self,
         batch: &mut Batch,
         ctx: &HookContext,
+        skip: &[String],
         source_event_id: Uuid,
         cause: &Cause,
         now: Timestamp,
     ) {
         let mut ids = IdsSource(&*self.ports.ids);
-        let events = hook::plan(&self.cfg.hooks, ctx, source_event_id, &mut ids);
+        let hooks: Vec<Hook> = self
+            .cfg
+            .hooks
+            .iter()
+            .filter(|h| !(h.mode == HookMode::After && skip.contains(&h.name)))
+            .cloned()
+            .collect();
+        let events = hook::plan(&hooks, ctx, source_event_id, &mut ids);
         for event in events {
             self.queue_hook_event(batch, event, cause, now);
         }
@@ -230,6 +242,35 @@ impl Engine {
         batch.hook_runs.extend(hook::evolve(None, &event, now));
         self.push_event(batch, &event, project, cause, now);
         self.push_job(batch, job, project, cause);
+    }
+
+    pub(crate) fn checked_hook_skip(
+        &self,
+        project: Option<ProjectId>,
+        config: &crate::project_config::ProjectConfig,
+    ) -> std::result::Result<Vec<String>, Vec<crate::project_config::Issue>> {
+        let id = project.unwrap_or(ProjectId(Uuid::nil()));
+        let issues: Vec<_> = config
+            .hook_skip
+            .iter()
+            .filter(|skip| {
+                !self.cfg.hooks.iter().any(|h| {
+                    h.name == skip.name
+                        && h.mode == saka_core::vocab::HookMode::After
+                        && h.project.selects(id, &config.name)
+                })
+            })
+            .map(|skip| crate::project_config::Issue {
+                code: "hook_skip_invalid",
+                field: Some(format!("hooks.skip[{}]", skip.index)),
+                line: Some(skip.line),
+            })
+            .collect();
+        if issues.is_empty() {
+            Ok(config.hook_skip.iter().map(|s| s.name.clone()).collect())
+        } else {
+            Err(issues)
+        }
     }
 
     pub fn project_hooks(&self, project: ProjectId) -> Result<Vec<Hook>> {

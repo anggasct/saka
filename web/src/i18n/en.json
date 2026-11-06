@@ -967,6 +967,7 @@
   "hook.error.unknown": "The run failed ({code}).",
   "settings.hooks.title": "Hooks",
   "settings.hooks.loading": "Loading hooks",
+  "settings.hooks.skipped": "Switched off for this project by saka.toml: {names}.",
   "settings.hooks.error": "The hooks could not be loaded.",
   "settings.hooks.empty": "No hooks are configured for this project. Add [[hook]] entries to the operator config.toml and restart saka serve.",
   "settings.hooks.summary": "on {event}, {mode}, {action}",

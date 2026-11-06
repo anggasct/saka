@@ -967,6 +967,7 @@
   "hook.error.unknown": "Eksekusi gagal ({code}).",
   "settings.hooks.title": "Hook",
   "settings.hooks.loading": "Memuat hook",
+  "settings.hooks.skipped": "Dimatikan untuk project ini oleh saka.toml: {names}.",
   "settings.hooks.error": "Hook tidak bisa dimuat.",
   "settings.hooks.empty": "Belum ada hook untuk project ini. Tambahkan entri [[hook]] ke config.toml operator, lalu restart saka serve.",
   "settings.hooks.summary": "saat {event}, {mode}, {action}",

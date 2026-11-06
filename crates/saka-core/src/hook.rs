@@ -153,7 +153,7 @@ fn issue(code: &'static str, hook: &str, field: Option<&'static str>) -> HookIss
     }
 }
 
-fn slug_ok(text: &str) -> bool {
+pub fn slug_ok(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= 32
         && text

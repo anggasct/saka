@@ -172,6 +172,8 @@ pub struct Project {
     pub repos: Vec<ProjectRepo>,
     /// The workflow in force, from `[workflow]` in `saka.toml`.
     pub workflow: Workflow,
+    /// Operator hooks that `[hooks] skip` in `saka.toml` turns off for this project.
+    pub hooks_skipped: Vec<String>,
     /// `bot | user | user_pat`: who authors the agent's commits and opens its pull requests.
     pub authorship_mode: String,
     pub config_commit: String,
@@ -229,6 +231,7 @@ impl Project {
                 })
                 .collect(),
             workflow: Workflow::from(&p.workflow),
+            hooks_skipped: p.hook_skip.clone(),
             authorship_mode: v.authorship_mode.as_str().to_string(),
             config_commit: p.config_commit.clone(),
             config_sha256: p.config_sha256.clone(),

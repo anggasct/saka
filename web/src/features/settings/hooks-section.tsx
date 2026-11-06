@@ -185,10 +185,21 @@ function Runs({ projectId }: { projectId: string }) {
   );
 }
 
-export function HooksSection({ projectId }: { projectId: string }) {
+export function HooksSection({
+  projectId,
+  skipped,
+}: {
+  projectId: string;
+  skipped: readonly string[];
+}) {
   const t = useT();
   return (
     <Section title={t("settings.hooks.title")}>
+      {skipped.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {t("settings.hooks.skipped", { names: skipped.join(", ") })}
+        </p>
+      )}
       <Definitions projectId={projectId} />
       <h3 className="text-base font-semibold">{t("settings.hooks.runs")}</h3>
       <Runs projectId={projectId} />

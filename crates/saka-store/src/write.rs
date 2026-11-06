@@ -494,11 +494,11 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
     let config_error = p.config_error.as_ref().map(to_json).transpose()?;
     tx.execute(
         "INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, config_sha256,
-           config_error, workflow, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+           config_error, workflow, hook_skip, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_branch = excluded.base_branch,
            config_commit = excluded.config_commit, config_sha256 = excluded.config_sha256,
-           config_error = excluded.config_error, workflow = excluded.workflow, updated_at = excluded.updated_at",
+           config_error = excluded.config_error, workflow = excluded.workflow, hook_skip = excluded.hook_skip, updated_at = excluded.updated_at",
         params![
             p.id.to_string(),
             p.name,
@@ -509,6 +509,7 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
             p.config_sha256,
             config_error,
             to_json(&p.workflow)?,
+            to_json(&p.hook_skip)?,
             p.created_at.0,
             p.updated_at.0,
         ],

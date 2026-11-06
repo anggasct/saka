@@ -272,6 +272,7 @@ impl World {
                         config_commit: "0".repeat(40),
                         config_sha256: saka_testkit::ZERO_SHA256.into(),
                         workflow: saka_core::workflow::Workflow::default(),
+                        hook_skip: Vec::new(),
                         bindings,
                     },
                     &cause,
