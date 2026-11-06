@@ -147,6 +147,7 @@ fn item(n: u32, state: WorkItemState) -> WorkItem {
         version: 1,
         admitted_at: None,
         done_at: None,
+        start_approved_at: None,
         created_at: APPROVED_AT,
         updated_at: APPROVED_AT,
     }

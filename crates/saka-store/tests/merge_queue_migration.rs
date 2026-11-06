@@ -90,7 +90,7 @@ fn the_merge_queue_migration_keeps_rows_and_opens_the_queue_phases_and_the_queue
         assert!(phase(&conn, "w0", "queued").is_err());
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![25, 26, 27, 28]);
+    assert_eq!(store.migration().applied, vec![25, 26, 27, 28, 29]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

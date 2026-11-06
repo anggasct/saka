@@ -398,6 +398,8 @@ enum TaskCmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    #[command(about = "Approves a step that waits for you before it starts")]
+    Start { id: String },
     #[command(about = "Tries the stopped stage again")]
     Retry {
         id: String,
@@ -775,6 +777,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                         client.task_merge(&id, reason.as_deref()).await
                     }
                     TaskCmd::Fix { id } => client.task_fix(&id).await,
+                    TaskCmd::Start { id } => client.task_start(&id).await,
                     TaskCmd::Retry { id, reason } => {
                         client.task_action(&id, "retry", &reason).await
                     }

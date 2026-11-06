@@ -416,6 +416,10 @@ pub enum Event {
         resolution: BlockerResolution,
         reason: Option<String>,
     },
+    #[serde(rename = "delivery.work_item.awaiting_start")]
+    WorkItemAwaitingStart { work_item_id: WorkItemId },
+    #[serde(rename = "delivery.work_item.start_approved")]
+    WorkItemStartApproved { work_item_id: WorkItemId },
     #[serde(rename = "delivery.work_item.cancelled")]
     WorkItemCancelled {
         work_item_id: WorkItemId,
@@ -924,6 +928,8 @@ impl Event {
             | E::WorkItemRepinned { work_item_id, .. }
             | E::WorkItemSuperseded { work_item_id, .. }
             | E::WorkItemAdmitted { work_item_id }
+            | E::WorkItemAwaitingStart { work_item_id }
+            | E::WorkItemStartApproved { work_item_id }
             | E::StageRunCreated { work_item_id, .. }
             | E::StageRunCancelled { work_item_id, .. }
             | E::ExternalChangeAccepted { work_item_id, .. }

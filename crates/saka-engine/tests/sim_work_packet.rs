@@ -27,6 +27,7 @@ fn the_first_turn_is_the_packet_of_the_pinned_revision_and_survives_doc_changes(
         max_active_tasks: 1,
         ci: CiScript::Fail(vec!["test".into()]),
         operator: Operator {
+            start: true,
             retry: vec![BlockerCode::SessionLost, BlockerCode::CiRed],
             ..Operator::default()
         },

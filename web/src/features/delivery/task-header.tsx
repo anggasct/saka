@@ -73,6 +73,11 @@ export function TaskHeader({
       {place !== null && (
         <p className="text-sm text-muted-foreground">{place}</p>
       )}
+      {task.state === "awaiting_start" && (
+        <p className="text-sm text-muted-foreground">
+          {t("task.awaitingStart")}
+        </p>
+      )}
       <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="font-medium">{t("task.key")}</dt>
         <dd className="break-all">

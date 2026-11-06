@@ -249,6 +249,10 @@ pub enum TaskInput {
         actor: Option<String>,
     },
     StartReview,
+    AwaitStart,
+    ApproveStart {
+        expected_version: u64,
+    },
     MergeTurn,
     Integrated(Integration),
     QueueLeft,
@@ -322,6 +326,8 @@ pub fn decide(
     }
     Ok(match input {
         I::Admit => d.admit(ctx),
+        I::AwaitStart => d.await_start(),
+        I::ApproveStart { expected_version } => return d.approve_start(expected_version),
         I::EnvironmentPrepared {
             environment_id,
             root_path,
@@ -791,6 +797,32 @@ impl Decider<'_> {
                 .stage_phase
                 .or(self.task.stage_run.as_ref().map(|r| r.entry_phase)),
         }]
+    }
+
+    fn await_start(&self) -> Vec<Event> {
+        if self.item().state != WorkItemState::Queued
+            || self.item().origin != WorkItemOrigin::SpecStep
+            || self.item().start_approved_at.is_some()
+        {
+            return vec![];
+        }
+        vec![Event::WorkItemAwaitingStart {
+            work_item_id: self.item().id,
+        }]
+    }
+
+    fn approve_start(&self, expected_version: u64) -> Result<Vec<Event>, Rejection> {
+        if expected_version != self.item().version {
+            return Err(Rejection::VersionStale);
+        }
+        if self.item().state != WorkItemState::AwaitingStart {
+            return Err(Rejection::InvalidState {
+                state: self.state_name(),
+            });
+        }
+        Ok(vec![Event::WorkItemStartApproved {
+            work_item_id: self.item().id,
+        }])
     }
 
     fn admit(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -2728,6 +2760,7 @@ impl Decider<'_> {
         if !matches!(
             self.item().state,
             WorkItemState::Queued
+                | WorkItemState::AwaitingStart
                 | WorkItemState::Admitted
                 | WorkItemState::InStage
                 | WorkItemState::Blocked
@@ -3114,6 +3147,7 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             version: 1,
             admitted_at: None,
             done_at: None,
+            start_approved_at: None,
             created_at: now,
             updated_at: now,
         }));
@@ -3157,6 +3191,7 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             version: 1,
             admitted_at: None,
             done_at: None,
+            start_approved_at: None,
             created_at: now,
             updated_at: now,
         });
@@ -3270,6 +3305,13 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::WorkItemAdmitted { .. } => {
             t.item.state = WorkItemState::Admitted;
             t.item.admitted_at = Some(now);
+        }
+        E::WorkItemAwaitingStart { .. } => {
+            t.item.state = WorkItemState::AwaitingStart;
+        }
+        E::WorkItemStartApproved { .. } => {
+            t.item.state = WorkItemState::Queued;
+            t.item.start_approved_at = Some(now);
         }
         E::StageRunCreated {
             stage_run_id,
@@ -3754,6 +3796,9 @@ pub fn can_retry(task: &Task) -> bool {
 
 pub fn available_actions(task: &Task) -> Vec<&'static str> {
     let mut actions = Vec::new();
+    if task.item.state == WorkItemState::AwaitingStart {
+        actions.push("start");
+    }
     if merge_ready(task) {
         actions.push("merge");
     }
@@ -3763,6 +3808,7 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
     if matches!(
         task.item.state,
         WorkItemState::Queued
+            | WorkItemState::AwaitingStart
             | WorkItemState::Admitted
             | WorkItemState::InStage
             | WorkItemState::Blocked

@@ -25,6 +25,7 @@ fn sim(agent: AgentScript, tune: impl FnOnce(&mut SimConfig)) -> Sim {
     let mut cfg = SimConfig {
         agent,
         operator: Operator {
+            start: true,
             merge: true,
             retry: vec![],
             answer: None,

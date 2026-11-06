@@ -113,6 +113,27 @@ pub fn waiting(
         .collect()
 }
 
+fn ready_for_start(task: &Task, snapshot: &Snapshot, waits: &[(WorkItemId, Vec<Waiting>)]) -> bool {
+    let approved = task.item.spec_id.is_some_and(|id| {
+        snapshot
+            .specs
+            .iter()
+            .any(|s| s.id == id && s.state == SpecState::Approved)
+    });
+    let blocked_by_work = waits
+        .iter()
+        .find(|(id, _)| *id == task.item.id)
+        .is_some_and(|(_, w)| {
+            w.iter()
+                .any(|w| matches!(w, Waiting::Step { .. } | Waiting::Spec { .. }))
+        });
+    let spec_cancelled = snapshot
+        .tasks
+        .iter()
+        .any(|t| t.item.spec_id == task.item.spec_id && t.item.state == WorkItemState::Cancelled);
+    approved && !blocked_by_work && !spec_cancelled
+}
+
 fn credential_resume(
     snapshot: &Snapshot,
     task: &Task,
@@ -151,9 +172,12 @@ pub fn reconcile(
     let reviewing = tasks.iter().filter(|t| holds_review_slot(t)).count();
     let active = active + reviewing;
     let waits = waiting(snapshot, cfg, now);
+    let holds_for_start =
+        |t: &Task| t.item.state == WorkItemState::Queued && t.needs_start_approval(&cfg.autonomy);
     let candidates: Vec<Candidate> = tasks
         .iter()
         .filter(|t| t.item.state == WorkItemState::Queued)
+        .filter(|t| !holds_for_start(t))
         .filter_map(|t| {
             let spec_id = t.item.spec_id?;
             let spec = snapshot
@@ -184,6 +208,11 @@ pub fn reconcile(
         .saturating_sub(admitted.len());
     for id in admitted {
         actions.push(Action::Decide(id, TaskInput::Admit));
+    }
+    for task in tasks.iter().filter(|t| holds_for_start(t)) {
+        if ready_for_start(task, snapshot, &waits) {
+            actions.push(Action::Decide(task.item.id, TaskInput::AwaitStart));
+        }
     }
     let paused = !admission::quota_waits(&snapshot.quotas, &cfg.account, cfg.rate_limit_pause, now)
         .is_empty();

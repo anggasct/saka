@@ -613,6 +613,48 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
 }
 
 #[test]
+fn a_step_waiting_for_its_start_offers_start_and_cancel_and_starts_once() {
+    let mut cfg = SimConfig::default();
+    cfg.operator.start = false;
+    cfg.loop_cfg.autonomy.default = saka_core::vocab::Autonomy::Strict;
+    let mut api = Api::new(cfg);
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).item.state == WorkItemState::AwaitingStart
+    }));
+    let id = api.sim.task(1).item.id.0;
+    let path = format!("/api/v1/work-items/{id}");
+    let detail = api.get(&path);
+    assert_eq!(detail.body["state"], "awaiting_start");
+    assert_eq!(detail.body["autonomy"], "strict");
+    assert_eq!(detail.body["available_actions"], json!(["start", "cancel"]));
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+
+    let start = format!("{path}/actions/start");
+    let missing = api.post(&start, &[], json!({}));
+    problem(
+        &missing,
+        StatusCode::PRECONDITION_REQUIRED,
+        "precondition_required",
+    );
+    let stale = api.post(&start, &[("if-match", "W/\"1\"")], json!({}));
+    problem(&stale, StatusCode::PRECONDITION_FAILED, "version_stale");
+
+    let key = api.key();
+    let ok = api.post_with(&start, Some(&key), &[("if-match", &etag)], &json!({}));
+    assert_eq!(ok.status, StatusCode::ACCEPTED, "{}", ok.body);
+    assert_eq!(ok.body["state"], "queued");
+    let replay = api.post_with(&start, Some(&key), &[("if-match", &etag)], &json!({}));
+    assert_eq!(replay.status, StatusCode::ACCEPTED);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+
+    let again = api.get(&path);
+    let etag = again.headers["etag"].to_str().unwrap().to_string();
+    let twice = api.post(&start, &[("if-match", &etag)], json!({}));
+    problem(&twice, StatusCode::CONFLICT, "invalid_state");
+}
+
+#[test]
 fn an_outside_pull_request_shows_who_opened_it_and_that_no_spec_stands_behind_it() {
     let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
     text.push_str(

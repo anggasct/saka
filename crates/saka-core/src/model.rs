@@ -252,6 +252,7 @@ pub struct WorkItem {
     pub version: u64,
     pub admitted_at: Option<Timestamp>,
     pub done_at: Option<Timestamp>,
+    pub start_approved_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }

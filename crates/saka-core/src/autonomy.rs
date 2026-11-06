@@ -1,5 +1,5 @@
 use crate::model::Task;
-use crate::vocab::Autonomy;
+use crate::vocab::{Autonomy, WorkItemOrigin};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ceilings {
@@ -52,6 +52,12 @@ impl Ceilings {
 }
 
 impl Task {
+    pub fn needs_start_approval(&self, ceilings: &Ceilings) -> bool {
+        self.item.origin == WorkItemOrigin::SpecStep
+            && self.item.start_approved_at.is_none()
+            && self.autonomy(ceilings) == Autonomy::Strict
+    }
+
     pub fn autonomy(&self, ceilings: &Ceilings) -> Autonomy {
         ceilings
             .levels(&self.policy.full_name, self.policy.requested)

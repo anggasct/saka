@@ -24,6 +24,7 @@ const HOUR_MS: i64 = 3_600_000;
 fn sim() -> Sim {
     let sim = Sim::new(SimConfig {
         operator: Operator {
+            start: true,
             retry: vec![],
             ..Operator::default()
         },

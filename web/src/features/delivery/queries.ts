@@ -258,6 +258,22 @@ export async function stopSession(
   );
 }
 
+export async function startTask(
+  workItemId: string,
+  version: number,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/start", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: { ...headers(idempotencyKey), "If-Match": `W/"${version}"` },
+      },
+      body: {},
+    }),
+  );
+}
+
 export async function mergeTask(
   workItemId: string,
   version: number,
