@@ -33,7 +33,6 @@ export const DIAGNOSTIC_CODES = {
     "toolchain_drift",
     "host_toolchain_mismatch",
     "host_toolchain_missing",
-    "auth_off",
   ],
   fail: [
     "config_invalid",
@@ -65,6 +64,7 @@ export const DIAGNOSTIC_CODES = {
   ],
   skip: [
     "config_absent",
+    "auth_not_configured",
     "engine_not_ready",
     "quota_unknown",
     "unsupported_by_adapter",

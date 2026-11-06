@@ -201,7 +201,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
     );
     assert_eq!(
         r.body["summary"],
-        json!({ "pass": 10, "warn": 1, "fail": 1, "skip": 7 })
+        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 8 })
     );
     assert_eq!(
         rows(&sim),
@@ -392,9 +392,9 @@ fn a_report_is_counted_in_metrics_and_logged() {
     assert!(text.contains("diagnostics.ran"), "{text}");
     for field in [
         "\"pass\":10",
-        "\"warn\":1",
+        "\"warn\":0",
         "\"fail\":1",
-        "\"skip\":7",
+        "\"skip\":8",
         "\"duration_ms\":",
     ] {
         assert!(text.contains(field), "{field} in {text}");
@@ -787,9 +787,15 @@ fn auth_finding(auth_enabled: bool, passkeys: u32) -> (String, String) {
 }
 
 #[test]
-fn the_auth_check_warns_without_an_auth_section_fails_without_a_passkey_and_passes_with_one() {
-    assert_eq!(auth_finding(false, 0), ("warn".into(), "auth_off".into()));
-    assert_eq!(auth_finding(false, 1), ("warn".into(), "auth_off".into()));
+fn the_auth_check_skips_without_an_auth_section_fails_without_a_passkey_and_passes_with_one() {
+    assert_eq!(
+        auth_finding(false, 0),
+        ("skip".into(), "auth_not_configured".into())
+    );
+    assert_eq!(
+        auth_finding(false, 1),
+        ("skip".into(), "auth_not_configured".into())
+    );
     assert_eq!(
         auth_finding(true, 0),
         ("fail".into(), "auth_no_passkey".into())

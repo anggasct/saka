@@ -1185,7 +1185,7 @@
   "auth.setup.error": "Sign-in status could not be loaded",
   "auth.nav.devices": "Devices and sign-in",
   "diagnostic.auth_ready": "Sign-in is on and {passkeys, plural, one {# passkey is} other {# passkeys are}} registered.",
-  "diagnostic.auth_off": "Sign-in is off. Saka answers only on this machine; add an [auth] section to the server config to use it from other devices.",
+  "diagnostic.auth_not_configured": "Sign-in is not configured. Saka answers only on this machine, which is fine for a local install; add an [auth] section to the server config to use it from other devices.",
   "diagnostic.auth_no_passkey": "Sign-in is on but no passkey is registered yet, so the browser cannot sign in.",
   "diagnosticFix.run_auth_setup": "Run the command on the server host and enter its code on the setup page.",
   "connection.offline": "You are offline. Saka cannot be reached, so what you see may be out of date."
