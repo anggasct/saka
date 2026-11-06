@@ -380,7 +380,6 @@ fn a_retry_in_a_new_environment_resumes_the_pushed_docs_branch_and_its_pr() {
     let pushed = sim.task(1).docs_change.clone().unwrap().head_sha;
     let old_env = sim.task(1).environment.clone().unwrap().id;
 
-    // The worktrees are lost while the task is blocked, so the retry prepares a new environment.
     let mut task = sim.task(1);
     if let Some(env) = task.environment.as_mut() {
         env.state = saka_core::vocab::EnvironmentState::TornDown;

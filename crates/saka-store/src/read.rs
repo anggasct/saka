@@ -324,15 +324,12 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         let Some(t) = tasks.get_mut(&g.work_item_id) else {
             continue;
         };
-        // A sync run that has no verification target yet still carries the evidence it merged on.
         let carried = t
             .stage_run
             .as_ref()
             .is_some_and(|r| r.stage == Stage::Sync && r.head_sha.is_none());
         let owner = t.stage_run.as_ref().map(|r| r.id);
         let merged_head = t.change_request.as_ref().map(|c| c.head_sha.as_str());
-        // A review, the merge after its approval, and the sync after that merge stand on the
-        // gates of the head they judged, whichever run recorded them.
         let judged = (carried
             || t.stage_run.as_ref().is_some_and(|r| {
                 r.stage == Stage::Review
@@ -1297,7 +1294,6 @@ pub fn revision_view_of(
         Some(steps) => serde_json::from_value(steps.clone())?,
         None => Vec::new(),
     };
-    // Version 1 models predate the After column: their steps always ran in order.
     if parser_version < 2 {
         for step in steps.iter_mut().filter(|s| s.index > 1) {
             step.after = vec![format!("S{}", step.index - 1)];

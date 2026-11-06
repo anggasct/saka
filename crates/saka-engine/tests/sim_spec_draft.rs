@@ -657,7 +657,6 @@ fn every_budget_dimension_fails_the_draft_after_one_warning() {
             .into_iter()
             .filter(|e| e.payload["dimension"] == json!(dimension))
             .collect();
-        // Turns are counted before each turn is sent, so that limit stops without a warning.
         let expected = usize::from(dimension != "turns");
         assert_eq!(warned.len(), expected, "{dimension}");
         assert_eq!(d.attempt.unwrap().budget_warnings.len(), expected);

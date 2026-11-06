@@ -310,7 +310,6 @@ fn without_the_capability_or_a_queue_on_the_branch_saka_keeps_its_own_queue() {
         vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
     );
     pair.sim.world.set_native_queue(true);
-    // The rebased task is reviewed at its new head and then takes a second turn.
     assert!(pair.run(|_| {}));
     assert!(pair.sim.world.enqueue_calls().is_empty());
     assert_eq!(pair.sim.world.rebases().len(), 3);

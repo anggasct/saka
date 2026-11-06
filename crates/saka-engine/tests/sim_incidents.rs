@@ -138,7 +138,6 @@ fn a_model_that_thinks_longer_than_the_runner_silence_window_is_neither_killed_n
     assert!(sim.run_until(STEPS, live_and_running));
     let session = sim.task(1).live_session().unwrap().clone();
 
-    // The runner keeps its link open while the model thinks: 20 times its 30 s silence window.
     for minute in 1..=10 {
         wait_minutes(&mut sim, 1);
         let task = sim.task(1);

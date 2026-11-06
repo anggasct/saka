@@ -46,7 +46,6 @@ impl Engine {
             c.change_head_ref
                 .replace("{number}", &cr.number.to_string())
         });
-        // One environment per stage run: a repeated job finds the one it made.
         let environment_id = EnvironmentId(run.0);
         let prepared = self
             .ports
@@ -184,8 +183,6 @@ impl Engine {
         let Some(spec) = spec else {
             return Ok(ReviewBasisInput::None);
         };
-        // The latest approved text wins, so a clarified criterion is what the reviewer reads.
-        // A step that no longer exists there is judged against the revision the task was pinned to.
         let models = [current, pinned].into_iter().flatten().map(|revision| {
             serde_json::from_value::<SpecModel>(revision.model.clone())
                 .map(|model| (revision, model))

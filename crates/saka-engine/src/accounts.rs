@@ -588,8 +588,6 @@ impl Engine {
         Ok(LinkCredential::Relink(cause_code))
     }
 
-    // The provider refused the token it was given: the link needs a relink, unless it was linked
-    // again meanwhile, in which case the job runs again with the new token.
     pub(crate) fn revoke_user_link(
         &self,
         used: &UserLink,

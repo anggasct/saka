@@ -94,7 +94,6 @@ fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second
     assert_eq!(sim.stats().merges, 1);
     assert!(sim.task(1).is_at(Stage::Merge, StagePhase::Merging));
 
-    // The lease (60 s) holds the job until it runs out.
     let crashed_at = sim.engine().now();
     let mut ran_at = None;
     for _ in 0..STEPS {

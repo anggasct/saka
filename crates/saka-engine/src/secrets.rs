@@ -191,7 +191,6 @@ impl Engine {
         Ok(Redactor::named(&[], &named))
     }
 
-    // Every secret the recipe declares, opened; one that is missing or unreadable refuses them all.
     pub(crate) fn recipe_secrets(
         &self,
         project: ProjectId,

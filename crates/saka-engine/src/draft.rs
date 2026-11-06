@@ -999,7 +999,6 @@ impl Engine {
         if d.draft.state != SpecDraftState::Preparing || ready {
             return Ok(Effect::Skipped);
         }
-        // One environment per attempt: a repeated job finds the worktree it made.
         let environment_id = EnvironmentId(attempt_id.0);
         let (project, repo) = self.workspace(d)?;
         let prepared = self
@@ -1187,7 +1186,6 @@ impl Engine {
         if d.draft.state != SpecDraftState::Drafting || d.live_session().is_some() {
             return Ok(Effect::Skipped);
         }
-        // One start job per session: a repeated start replaces the runner it left behind.
         let session_id = match &d.session {
             Some(previous) if previous.owner == owner => SessionId(job),
             _ => SessionId(attempt_id.0),

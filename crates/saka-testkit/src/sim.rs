@@ -259,7 +259,6 @@ impl Sim {
             cfg.agent.clone(),
             cfg.ci.clone(),
         ));
-        // RAM-backed when available: the crash property test opens many databases.
         let dir = match std::path::Path::new("/dev/shm").is_dir() {
             true => tempfile::tempdir_in("/dev/shm"),
             false => tempfile::tempdir(),
