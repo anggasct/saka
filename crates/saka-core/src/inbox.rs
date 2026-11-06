@@ -3,11 +3,11 @@ use serde_json::{Value, json};
 use crate::autonomy::Ceilings;
 use crate::blocker::primary_action;
 use crate::ids::{ProjectId, SpecDraftId, SpecId, WorkItemId};
-use crate::model::{Blocker, Draft, PermissionRequest, Spec, Task};
+use crate::model::{Blocker, DecisionRequest, Draft, PermissionRequest, Spec, Task};
 use crate::task::{auto_merge_enabled, merge_ready};
 use crate::vocab::{
-    BlockerCode, InboxActionKind, InboxKind, InboxSubject, PermissionState, SpecState, Stage,
-    StagePhase, WorkItemOrigin, WorkItemState,
+    BlockerCode, DecisionState, InboxActionKind, InboxKind, InboxState, InboxSubject,
+    PermissionState, SpecState, Stage, StagePhase, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +35,7 @@ pub struct InboxDraft {
     pub kind: InboxKind,
     pub subject: InboxSubject,
     pub source_id: String,
+    pub state: InboxState,
     pub project_id: ProjectId,
     pub work_item_id: Option<WorkItemId>,
     pub spec_id: Option<SpecId>,
@@ -79,6 +80,13 @@ fn for_task(task: &Task, ceilings: &Ceilings) -> Vec<InboxDraft> {
         .filter(|p| p.state == PermissionState::Pending && live == Some(p.session_id))
         .map(|p| permission_item(task.item.project_id, Some(task.item.id), p))
         .collect();
+    let owner = task.run_owner();
+    out.extend(
+        task.decisions
+            .iter()
+            .filter(|d| Some(d.owner) == owner && d.is_open())
+            .map(|d| decision_item(task.item.project_id, Some(task.item.id), d)),
+    );
     if let Some(blocker) = task.open_blocker()
         && let Some(primary) = primary_action(task)
     {
@@ -95,6 +103,7 @@ fn for_task(task: &Task, ceilings: &Ceilings) -> Vec<InboxDraft> {
             },
             subject: InboxSubject::Blocker,
             source_id: blocker.id.to_string(),
+            state: InboxState::Open,
             project_id: task.item.project_id,
             work_item_id: Some(task.item.id),
             spec_id: task.item.spec_id,
@@ -141,6 +150,7 @@ fn step_item(task: &Task, subject: InboxSubject, action: InboxActionKind) -> Inb
         kind: InboxKind::Approval,
         subject,
         source_id: task.item.id.to_string(),
+        state: InboxState::Open,
         project_id: task.item.project_id,
         work_item_id: Some(task.item.id),
         spec_id: task.item.spec_id,
@@ -156,12 +166,51 @@ fn step_item(task: &Task, subject: InboxSubject, action: InboxActionKind) -> Inb
 
 fn for_draft(draft: &Draft) -> Vec<InboxDraft> {
     let live = draft.live_session().map(|s| s.id);
-    draft
+    let owner = draft.run_owner();
+    let mut out: Vec<InboxDraft> = draft
         .permissions
         .iter()
         .filter(|p| p.state == PermissionState::Pending && live == Some(p.session_id))
         .map(|p| permission_item(draft.draft.project_id, None, p))
-        .collect()
+        .collect();
+    out.extend(
+        draft
+            .decisions
+            .iter()
+            .filter(|d| Some(d.owner) == owner && d.is_open())
+            .map(|d| decision_item(draft.draft.project_id, None, d)),
+    );
+    out
+}
+
+fn decision_item(
+    project_id: ProjectId,
+    work_item_id: Option<WorkItemId>,
+    d: &DecisionRequest,
+) -> InboxDraft {
+    InboxDraft {
+        kind: InboxKind::Decision,
+        subject: InboxSubject::Decision,
+        source_id: d.id.to_string(),
+        state: if d.state == DecisionState::Answered {
+            InboxState::Answered
+        } else {
+            InboxState::Open
+        },
+        project_id,
+        work_item_id,
+        spec_id: None,
+        params: json!({
+            "question": d.question,
+            "context": d.context,
+            "options": d.options,
+            "expires_at": d.expires_at,
+        }),
+        action: InboxAction {
+            kind: InboxActionKind::AnswerDecision,
+            params: json!({ "decision_request_id": d.id }),
+        },
+    }
 }
 
 fn permission_item(
@@ -173,6 +222,7 @@ fn permission_item(
         kind: InboxKind::Permission,
         subject: InboxSubject::Permission,
         source_id: p.id.to_string(),
+        state: InboxState::Open,
         project_id,
         work_item_id,
         spec_id: None,
@@ -192,6 +242,7 @@ fn for_spec(spec: &Spec) -> Vec<InboxDraft> {
         kind: InboxKind::Approval,
         subject: InboxSubject::Spec,
         source_id: format!("{}:{}", spec.id, spec.latest_revision_id),
+        state: InboxState::Open,
         project_id: spec.project_id,
         work_item_id: None,
         spec_id: Some(spec.id),

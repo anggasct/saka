@@ -5,6 +5,7 @@ mod chat;
 mod commands;
 mod config_check;
 mod context;
+mod decisions;
 pub mod diagnostics;
 mod docs;
 mod draft;

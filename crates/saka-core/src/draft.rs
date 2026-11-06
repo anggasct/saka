@@ -16,7 +16,7 @@ use crate::resume;
 use crate::session::{self, RunRetry, RunView, SessionConfig, SessionInput, SessionOutcome};
 use crate::time::Timestamp;
 use crate::vocab::{
-    DraftAttemptState, DraftFailureCode, DraftLocale, EnvironmentState, LintOutcome,
+    DecisionState, DraftAttemptState, DraftFailureCode, DraftLocale, EnvironmentState, LintOutcome,
     PermissionState, PrimaryAction, ResumeCause, SessionState, SpecDraftState, Trigger,
 };
 
@@ -125,6 +125,7 @@ pub fn run_view(d: &Draft) -> Option<RunView<'_>> {
         project_id: d.draft.project_id,
         session: d.session.as_ref().filter(|s| s.owner == owner),
         permissions: &d.permissions,
+        decisions: &d.decisions,
         prior_usage: d.prior_usage,
         budget: Some(attempt.budget),
         budget_warnings: &attempt.budget_warnings,
@@ -328,7 +329,9 @@ impl Decider<'_> {
                 SessionInput::Steer { .. }
                 | SessionInput::Interrupt { .. }
                 | SessionInput::Stop { .. }
-                | SessionInput::AnswerPermission { .. } => Err(Rejection::NotFound),
+                | SessionInput::AnswerPermission { .. }
+                | SessionInput::AskDecision { .. } => Err(Rejection::NotFound),
+                SessionInput::AnswerDecision { .. } => Err(Rejection::DecisionNotFound),
                 _ => Ok(vec![]),
             };
         };
@@ -893,7 +896,8 @@ pub fn react(d: &Draft, event: &Event, now: Timestamp) -> Vec<Job> {
         } if status == "success"
             && d.is_drafting()
             && d.live_session()
-                .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none()) =>
+                .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none())
+            && !run_view(d).is_some_and(|v| v.run_decisions().any(|r| r.is_open())) =>
         {
             vec![lint_job(*owner, *session_id, *turn, now)]
         }
@@ -998,6 +1002,13 @@ pub fn phase_jobs(d: &Draft, now: Timestamp) -> Vec<Job> {
                 {
                     jobs.push(session::deliver_job(p, now));
                 }
+            }
+            if let Some(view) = run_view(d) {
+                jobs.extend(
+                    view.run_decisions()
+                        .filter(|r| r.state == DecisionState::Answered)
+                        .map(|r| session::deliver_decision_job(r, now)),
+                );
             }
             if let Some(s) = d.live_session().filter(|s| {
                 s.owner == owner

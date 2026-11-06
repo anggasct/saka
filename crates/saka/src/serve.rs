@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +9,7 @@ use saka_agents::launch::{self, ClaudeSettings, UnsupportedPath};
 use saka_agents::{AgentsConfig, ClaudeAgents};
 use saka_api::{ApiConfig, AppState};
 use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
+use saka_core::ids::SessionId;
 use saka_core::model::Budget;
 use saka_core::policy::Policy;
 use saka_core::secret::SecretText;
@@ -574,6 +575,7 @@ fn draft_config(cfg: &Config) -> saka_core::draft::DraftConfig {
         },
         session: saka_core::session::SessionConfig {
             permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
+            decision_wait_ms: cfg.agent.decision_wait_hours * 3_600_000,
             idle_ms: cfg.agent.idle_minutes * 60_000,
             budget_warn_percent: cfg.budget.warn_percent,
             rate_limit_pause: cfg.agent.rate_limit_pause,
@@ -590,6 +592,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
     LoopConfig {
         max_followup_turns: cfg.agent.max_followup_turns,
         permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
+        decision_wait_ms: cfg.agent.decision_wait_hours * 3_600_000,
         idle_ms: cfg.agent.idle_minutes * 60_000,
         budgets: BTreeMap::from([
             (
@@ -1011,6 +1014,7 @@ async fn run(
             }
         })
     };
+    let mcp = start_mcp(cfg, &engine);
     let chat_pollers = chat_notifier.map_or_else(Vec::new, |chat| {
         let actions: Arc<dyn saka_ports::ChatActions> = engine.clone();
         chat.spawn_listeners(&actions, &stopped)
@@ -1028,7 +1032,42 @@ async fn run(
         let _ = tokio::time::timeout(Duration::from_secs(5), poller).await;
     }
     forwarder.abort();
+    if let Some((task, socket)) = mcp {
+        task.abort();
+        let _ = std::fs::remove_file(socket);
+    }
     ExitCode::SUCCESS
+}
+
+struct SessionTokens {
+    sessions_dir: PathBuf,
+}
+
+impl saka_mcp::Tokens for SessionTokens {
+    fn token(&self, session: SessionId) -> Option<SecretText> {
+        let path = saka_agents::launch::mcp_token_path(&self.sessions_dir, &session.to_string());
+        let text = std::fs::read_to_string(path).ok()?;
+        Some(SecretText::new(text.trim().to_string()))
+    }
+}
+
+fn start_mcp(cfg: &Config, engine: &Arc<Engine>) -> Option<(tokio::task::JoinHandle<()>, PathBuf)> {
+    let socket = agents_config(cfg).mcp_socket?;
+    let listener = match saka_mcp::bind(&socket) {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!(path = %socket.display(), error = %e, "mcp socket not started");
+            return None;
+        }
+    };
+    let tokens = Arc::new(SessionTokens {
+        sessions_dir: cfg.data_dir().join("sessions"),
+    });
+    let decisions: Arc<dyn saka_ports::Decisions> = engine.clone();
+    Some((
+        tokio::spawn(saka_mcp::serve(listener, tokens, decisions)),
+        socket,
+    ))
 }
 
 #[cfg(test)]
@@ -1118,5 +1157,29 @@ mod capability_tests {
             None
         );
         assert_eq!(capability_refusal(&config(""), |_| None), None);
+    }
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use saka_mcp::Tokens;
+
+    use super::*;
+
+    #[test]
+    fn a_session_token_is_read_from_its_private_file_and_unknown_sessions_have_none() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let known = SessionId(Uuid::from_u128(1));
+        let folder = dir.path().join(known.to_string());
+        std::fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(folder.join("mcp.token"), "abc123\n").unwrap_or_else(|e| panic!("{e}"));
+        let tokens = SessionTokens {
+            sessions_dir: dir.path().to_path_buf(),
+        };
+        assert_eq!(
+            tokens.token(known).map(|t| t.expose().to_string()),
+            Some("abc123".to_string())
+        );
+        assert!(tokens.token(SessionId(Uuid::from_u128(2))).is_none());
     }
 }

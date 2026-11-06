@@ -59,6 +59,7 @@ pub struct Operator {
     pub merge: bool,
     pub retry: Vec<BlockerCode>,
     pub answer: Option<bool>,
+    pub decide: Option<(Option<u32>, Option<String>)>,
 }
 
 impl Default for Operator {
@@ -68,6 +69,7 @@ impl Default for Operator {
             merge: true,
             retry: vec![BlockerCode::SessionLost],
             answer: None,
+            decide: None,
         }
     }
 }
@@ -117,6 +119,7 @@ pub fn draft_config() -> DraftConfig {
         },
         session: saka_core::session::SessionConfig {
             permission_wait_ms: 24 * 3_600_000,
+            decision_wait_ms: 72 * 3_600_000,
             idle_ms: 30 * 60_000,
             budget_warn_percent: 80,
             rate_limit_pause: 0.9,
@@ -147,6 +150,7 @@ impl Default for SimConfig {
             loop_cfg: LoopConfig {
                 max_followup_turns: 1,
                 permission_wait_ms: 24 * 3_600_000,
+                decision_wait_ms: 72 * 3_600_000,
                 idle_ms: 30 * 60_000,
                 budgets: std::collections::BTreeMap::from([
                     (
@@ -440,6 +444,8 @@ impl Sim {
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();
+        let decisions: Arc<dyn saka_ports::Decisions> = engine.clone();
+        self.world.connect_decisions(Arc::downgrade(&decisions));
         self.engine = Some(engine);
     }
 
@@ -823,6 +829,15 @@ impl Sim {
                 engine
                     .retry(id, "retried by the simulated operator", &cause)
                     .unwrap();
+            }
+            if let Some((option, note)) = self.cfg.operator.decide.clone() {
+                for d in task
+                    .decisions
+                    .iter()
+                    .filter(|d| d.state == saka_core::vocab::DecisionState::Asked)
+                {
+                    let _ = engine.answer_decision(d.id, option, note.clone(), &cause);
+                }
             }
             if let Some(allow) = self.cfg.operator.answer {
                 for p in task

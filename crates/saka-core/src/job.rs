@@ -37,6 +37,7 @@ job_kinds! {
     SessionStart => "session.start", 3;
     SessionSendTurn => "session.send_turn", 5;
     SessionDeliverPermissionAnswer => "session.deliver_permission_answer", 10;
+    SessionDeliverDecision => "session.deliver_decision", 10;
     SessionInterrupt => "session.interrupt", 5;
     SessionStop => "session.stop", 5;
     SessionSteer => "session.steer", 5;
@@ -79,6 +80,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         )),
         JobKind::SessionSendTurn
         | JobKind::SessionDeliverPermissionAnswer
+        | JobKind::SessionDeliverDecision
         | JobKind::SessionInterrupt
         | JobKind::SessionSteer => Some((
             BlockerCode::SessionLost,
@@ -171,6 +173,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::SessionStart => "session.start",
         JobKind::SessionSendTurn => "session.turn",
         JobKind::SessionDeliverPermissionAnswer => "perm.deliver",
+        JobKind::SessionDeliverDecision => "decision.deliver",
         JobKind::SessionInterrupt => "session.interrupt",
         JobKind::SessionStop => "session.stop",
         JobKind::SessionSteer => "session.steer",

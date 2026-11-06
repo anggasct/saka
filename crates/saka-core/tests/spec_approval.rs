@@ -42,6 +42,7 @@ fn cfg() -> LoopConfig {
     LoopConfig {
         max_followup_turns: 1,
         permission_wait_ms: 24 * 3_600_000,
+        decision_wait_ms: 72 * 3_600_000,
         idle_ms: 30 * 60_000,
         budgets: std::collections::BTreeMap::from([(
             saka_core::vocab::Stage::Dev,

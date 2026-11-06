@@ -84,6 +84,7 @@ fn sim(tune: impl FnOnce(&mut SimConfig)) -> Sim {
             merge: true,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     };

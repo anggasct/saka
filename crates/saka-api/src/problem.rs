@@ -85,6 +85,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
     use Rejection as R;
     match r {
         R::NotFound
+        | R::DecisionNotFound
         | R::SpecFileNotFound { .. }
         | R::UserLinkNotFound
         | R::InboxItemNotFound
@@ -104,6 +105,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::ReturnTargetInvalid { .. }
         | R::RuleTooBroad
         | R::RuleInvalid { .. }
+        | R::DecisionAnswerInvalid
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
@@ -113,6 +115,9 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::SpecHasActiveTasks { .. }
         | R::MergeNotReady { .. }
         | R::PermissionAlreadyAnswered
+        | R::DecisionAlreadyAnswered
+        | R::DecisionOnePerSession
+        | R::DecisionLimitReached
         | R::RuleDuplicate { .. }
         | R::ProjectExists { .. }
         | R::ProjectRepoInUse { .. }

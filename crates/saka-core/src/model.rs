@@ -4,21 +4,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::autonomy::RepoPolicy;
+use crate::decision::DecisionOption;
 use crate::gate::Check;
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    ProjectId, RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId,
-    SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
+    BlockerId, ChangeRequestId, DecisionRequestId, EnvironmentId, GateResultId,
+    PermissionRequestId, PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId,
+    SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
 };
 use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
-    ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, Effect, EnvironmentState,
-    ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind, PacketOrigin,
-    PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState,
-    SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
-    WorkItemOrigin, WorkItemState,
+    ContextOrigin, DecisionState, DocsMode, DraftAttemptState, DraftLocale, Effect,
+    EnvironmentState, ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind,
+    PacketOrigin, PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome,
+    SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool,
+    Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -584,6 +585,39 @@ pub struct PermissionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionAnswer {
+    pub option: Option<u32>,
+    pub note: Option<String>,
+    pub answered_by: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionRequest {
+    pub id: DecisionRequestId,
+    pub owner: RunOwner,
+    pub session_id: SessionId,
+    pub state: DecisionState,
+    pub question: String,
+    pub context: Option<String>,
+    pub options: Vec<DecisionOption>,
+    pub answer: Option<DecisionAnswer>,
+    pub asked_at: Timestamp,
+    pub answered_at: Option<Timestamp>,
+    pub delivered_at: Option<Timestamp>,
+    pub expires_at: Timestamp,
+}
+
+impl DecisionRequest {
+    pub fn is_open(&self) -> bool {
+        matches!(self.state, DecisionState::Asked | DecisionState::Answered)
+    }
+
+    pub fn recommended(&self) -> &str {
+        self.options.first().map_or("", |o| o.label.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub item: WorkItem,
     pub stage_run: Option<StageRun>,
@@ -595,6 +629,7 @@ pub struct Task {
     pub environment: Option<Environment>,
     pub session: Option<Session>,
     pub permissions: Vec<PermissionRequest>,
+    pub decisions: Vec<DecisionRequest>,
     pub attempts: BTreeMap<Stage, u32>,
     pub retries: BTreeMap<Stage, Retries>,
     pub retired_runs: Vec<StageRun>,
@@ -663,6 +698,7 @@ impl Task {
             environment: None,
             session: None,
             permissions: Vec::new(),
+            decisions: Vec::new(),
             attempts: BTreeMap::new(),
             retries: BTreeMap::new(),
             retired_runs: Vec::new(),
@@ -694,6 +730,7 @@ impl Task {
             session: &mut self.session,
             retired_sessions: &mut self.retired_sessions,
             permissions: &mut self.permissions,
+            decisions: &mut self.decisions,
             prior_usage: &mut self.prior_usage,
             usage_records: &mut self.usage_records,
             quota_observations: &mut self.quota_observations,
@@ -890,6 +927,7 @@ pub struct Draft {
     pub session: Option<Session>,
     pub retired_sessions: Vec<Session>,
     pub permissions: Vec<PermissionRequest>,
+    pub decisions: Vec<DecisionRequest>,
     pub prior_usage: Usage,
     pub usage_records: Vec<UsageRecord>,
     pub quota_observations: Vec<AccountQuota>,
@@ -908,6 +946,7 @@ impl Draft {
             session: None,
             retired_sessions: Vec::new(),
             permissions: Vec::new(),
+            decisions: Vec::new(),
             prior_usage: Usage::default(),
             usage_records: Vec::new(),
             quota_observations: Vec::new(),
@@ -927,6 +966,7 @@ impl Draft {
             session: &mut self.session,
             retired_sessions: &mut self.retired_sessions,
             permissions: &mut self.permissions,
+            decisions: &mut self.decisions,
             prior_usage: &mut self.prior_usage,
             usage_records: &mut self.usage_records,
             quota_observations: &mut self.quota_observations,

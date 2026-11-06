@@ -31,6 +31,7 @@ fn operator(start: bool, merge: bool) -> Operator {
         merge,
         retry: vec![],
         answer: None,
+        decide: None,
     }
 }
 
@@ -385,6 +386,7 @@ fn config() -> SimConfig {
             merge: true,
             retry: vec![],
             answer: Some(true),
+            decide: None,
         },
         ..SimConfig::default()
     };

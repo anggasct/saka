@@ -80,7 +80,7 @@ fn the_start_approval_migration_adds_the_time_without_touching_the_rows() {
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![29, 30, 31, 32, 33, 34]);
+    assert_eq!(store.migration().applied, vec![29, 30, 31, 32, 33, 34, 35]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

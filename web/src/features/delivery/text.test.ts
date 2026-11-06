@@ -51,6 +51,15 @@ describe("blockerText", () => {
       "A Bash request waited more than 24 hours for an answer: npm install",
     );
     expect(
+      blockerText(en, "decision_expired", {
+        question: "Where do we store audio?",
+        recommended: "Local disk",
+        hours: 72,
+      }),
+    ).toBe(
+      "A question to the operator waited more than 72 hours for an answer: Where do we store audio? Retry and the agent goes on with the recommended option, Local disk.",
+    );
+    expect(
       blockerText(en, "budget_exhausted", {
         dimension: "turns",
         used: 10,
@@ -365,6 +374,10 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ["session_timeout", { cause: "idle", minutes: 30 }],
   ["session_timeout", { minutes: 60 }],
   ["permission_expired", { tool: "Bash", summary: "ls", hours: 24 }],
+  [
+    "decision_expired",
+    { question: "Where?", recommended: "Local disk", hours: 72 },
+  ],
   ["budget_exhausted", { dimension: "running_minutes", used: 60, limit: 60 }],
   ["budget_exhausted", { dimension: "turns", used: 10, limit: 10 }],
   ["budget_exhausted", { dimension: "tokens", used: 9, limit: 9 }],

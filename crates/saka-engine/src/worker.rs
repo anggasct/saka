@@ -234,6 +234,11 @@ impl Engine {
                     .await?;
                 Ok(SessionJob::Done)
             }
+            JobKind::SessionDeliverDecision => {
+                Ok(SessionJob::Input(Box::new(SessionInput::DeliverDecision {
+                    decision_id: field(p, "decision_id")?,
+                })))
+            }
             JobKind::SessionInterrupt => {
                 let Some(target) = stopping_ref(session, field(p, "session_id")?) else {
                     return Ok(SessionJob::Skipped);
@@ -396,6 +401,7 @@ impl Engine {
                 .await
             }
             JobKind::SessionDeliverPermissionAnswer
+            | JobKind::SessionDeliverDecision
             | JobKind::SessionInterrupt
             | JobKind::SessionSteer
             | JobKind::SessionReattach

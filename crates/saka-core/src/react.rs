@@ -11,8 +11,8 @@ use crate::task::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    ChangeRole, ChangeState, EnvironmentState, GateOutcome, GateSource, PermissionState, Stage,
-    StagePhase, WorkItemState,
+    ChangeRole, ChangeState, DecisionState, EnvironmentState, GateOutcome, GateSource,
+    PermissionState, Stage, StagePhase, WorkItemState,
 };
 
 const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
@@ -44,7 +44,8 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
                 .is_none_or(|r| r.stage != Stage::Review)
             && task
                 .live_session()
-                .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none()) =>
+                .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none())
+            && !run_view(task).is_some_and(|v| v.run_decisions().any(|d| d.is_open())) =>
         {
             vec![Job::new(
                 JobKind::EnvInspectWorktree,
@@ -475,6 +476,13 @@ fn session_jobs(task: &Task, now: Timestamp) -> Vec<Job> {
         {
             jobs.push(session::deliver_job(p, now));
         }
+    }
+    if let Some(view) = view.as_ref() {
+        jobs.extend(
+            view.run_decisions()
+                .filter(|d| d.state == DecisionState::Answered)
+                .map(|d| session::deliver_decision_job(d, now)),
+        );
     }
     jobs
 }

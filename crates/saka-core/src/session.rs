@@ -2,22 +2,24 @@ use serde_json::{Value, json};
 
 use crate::Ctx;
 use crate::authorship::SessionAuthor;
+use crate::decision::Question;
 use crate::event::{Event, Prompt};
 use crate::ids::{
-    EnvironmentId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId, UsageRecordId,
+    DecisionRequestId, EnvironmentId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId,
+    UsageRecordId,
 };
 use crate::job::{Job, JobKind};
 use crate::model::{
-    AccountQuota, Budget, Coded, Environment, PermissionRequest, PermissionRule, RunOwner, Session,
-    ToolchainUse, Usage, UsageRecord,
+    AccountQuota, Budget, Coded, DecisionAnswer, DecisionRequest, Environment, PermissionRequest,
+    PermissionRule, RunOwner, Session, ToolchainUse, Usage, UsageRecord,
 };
 use crate::policy::{Decision, Effect};
 use crate::rejection::Rejection;
 use crate::resume;
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BudgetDimension, EnvironmentState, InterruptBy, MatchKind, PermissionState,
-    ResumeCause, SessionState, Trigger,
+    BlockerCode, BudgetDimension, DecisionState, EnvironmentState, InterruptBy, MatchKind,
+    PermissionState, ResumeCause, SessionState, Trigger,
 };
 
 pub const SESSION_ENDED_SOURCE: &str = "system:session_ended";
@@ -25,6 +27,8 @@ pub const WAIT_LIMIT_SOURCE: &str = "system:wait_limit";
 const DENIED_BY_OPERATOR: &str = "Denied by the operator.";
 const PERMISSION_EXPIRED_MESSAGE: &str = "The permission request expired.";
 const SAKA_INTERRUPT_GRACE_MS: i64 = 5_000;
+pub const DECISIONS_PER_RUN: usize = 5;
+pub const DECISION_NOTE_MAX: usize = 2000;
 const BUDGET_DIMENSIONS: [BudgetDimension; 4] = [
     BudgetDimension::RunningMinutes,
     BudgetDimension::Turns,
@@ -35,6 +39,7 @@ const BUDGET_DIMENSIONS: [BudgetDimension; 4] = [
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionConfig {
     pub permission_wait_ms: i64,
+    pub decision_wait_ms: i64,
     pub idle_ms: i64,
     pub budget_warn_percent: u32,
     pub rate_limit_pause: f64,
@@ -54,6 +59,7 @@ pub struct RunView<'a> {
     pub project_id: ProjectId,
     pub session: Option<&'a Session>,
     pub permissions: &'a [PermissionRequest],
+    pub decisions: &'a [DecisionRequest],
     pub prior_usage: Usage,
     pub budget: Option<Budget>,
     pub budget_warnings: &'a [BudgetDimension],
@@ -66,6 +72,20 @@ pub struct RunView<'a> {
 impl RunView<'_> {
     pub fn live_session(&self) -> Option<&Session> {
         self.session.filter(|s| s.state.is_live())
+    }
+
+    pub fn run_decisions(&self) -> impl Iterator<Item = &DecisionRequest> {
+        self.decisions.iter().filter(|d| d.owner == self.owner)
+    }
+
+    pub fn asked_decision(&self) -> Option<&DecisionRequest> {
+        self.run_decisions()
+            .find(|d| d.state == DecisionState::Asked)
+    }
+
+    pub fn answered_decision(&self) -> Option<&DecisionRequest> {
+        self.run_decisions()
+            .find(|d| d.state == DecisionState::Answered)
     }
 
     pub fn usage(&self, now: Timestamp) -> Usage {
@@ -116,6 +136,19 @@ pub enum SessionInput {
     },
     PermissionDelivered {
         permission_request_id: PermissionRequestId,
+    },
+    AskDecision {
+        decision_id: DecisionRequestId,
+        question: Question,
+    },
+    AnswerDecision {
+        decision_id: DecisionRequestId,
+        option: Option<u32>,
+        note: Option<String>,
+        actor: String,
+    },
+    DeliverDecision {
+        decision_id: DecisionRequestId,
     },
     TurnEnded {
         turn: u32,
@@ -265,6 +298,17 @@ pub fn decide(
         I::PermissionDelivered {
             permission_request_id,
         } => SessionOutcome::events(d.permission_delivered(permission_request_id)),
+        I::AskDecision {
+            decision_id,
+            question,
+        } => SessionOutcome::events(d.ask_decision(decision_id, question)?),
+        I::AnswerDecision {
+            decision_id,
+            option,
+            note,
+            actor,
+        } => SessionOutcome::events(d.answer_decision(decision_id, option, note, &actor)?),
+        I::DeliverDecision { decision_id } => d.deliver_decision(decision_id),
         I::TurnEnded {
             turn,
             status,
@@ -396,7 +440,21 @@ fn end_except(
             message: None,
         });
     }
+    if state != SessionState::Lost {
+        events.extend(expire_asked(view, code));
+    }
     events
+}
+
+fn expire_asked(view: &RunView<'_>, cause: &str) -> Vec<Event> {
+    view.run_decisions()
+        .filter(|d| d.state == DecisionState::Asked)
+        .map(|d| Event::DecisionExpired {
+            owner: d.owner,
+            decision_id: d.id,
+            cause: cause.to_string(),
+        })
+        .collect()
 }
 
 fn state_changed(session: &Session, state: SessionState, now: Timestamp) -> Event {
@@ -541,8 +599,13 @@ impl Decider<'_, '_> {
                 running_ms: previous.running_ms,
             });
         }
-        let prompt = match &plan {
-            Some(p) if p.cli_session_id.is_some() => Prompt::Resume {
+        let answered = self
+            .view
+            .answered_decision()
+            .filter(|_| plan.as_ref().is_some_and(|p| p.cli_session_id.is_some()));
+        let prompt = match (&plan, answered) {
+            (_, Some(d)) => Prompt::Decision { decision_id: d.id },
+            (Some(p), _) if p.cli_session_id.is_some() => Prompt::Resume {
                 cause: p.reason,
                 retry_of: p.retry_of.clone(),
             },
@@ -572,6 +635,10 @@ impl Decider<'_, '_> {
                 prompt,
             },
         ]);
+        events.extend(answered.map(|d| Event::DecisionDelivered {
+            owner: d.owner,
+            decision_id: d.id,
+        }));
         events
     }
 
@@ -746,6 +813,142 @@ impl Decider<'_, '_> {
         }
     }
 
+    fn ask_decision(
+        &self,
+        decision_id: DecisionRequestId,
+        question: Question,
+    ) -> Result<Vec<Event>, Rejection> {
+        let Some(session) = self.view.live_session() else {
+            return Err(Rejection::InvalidState {
+                state: "no_session".to_string(),
+            });
+        };
+        let mid_turn = session.turns > session.recorded_turn
+            && !matches!(session.state, SessionState::Interrupted);
+        if !mid_turn {
+            return Err(Rejection::InvalidState {
+                state: session.state.as_str().to_string(),
+            });
+        }
+        question.validate().map_err(|e| Rejection::Invalid {
+            field: e.field,
+            code: "invalid",
+        })?;
+        if self.view.run_decisions().any(|d| d.is_open()) {
+            return Err(Rejection::DecisionOnePerSession);
+        }
+        if self.view.run_decisions().count() >= DECISIONS_PER_RUN {
+            return Err(Rejection::DecisionLimitReached);
+        }
+        Ok(vec![Event::DecisionAsked {
+            owner: session.owner,
+            session_id: session.id,
+            decision_id,
+            question: question.question,
+            context: question.context,
+            options: question.options,
+            expires_at: self.now.plus_ms(self.cfg.decision_wait_ms),
+        }])
+    }
+
+    fn answer_decision(
+        &self,
+        id: DecisionRequestId,
+        option: Option<u32>,
+        note: Option<String>,
+        actor: &str,
+    ) -> Result<Vec<Event>, Rejection> {
+        let Some(request) = self.view.decisions.iter().find(|d| d.id == id) else {
+            return Err(Rejection::DecisionNotFound);
+        };
+        if request.state != DecisionState::Asked {
+            return Err(Rejection::DecisionAlreadyAnswered);
+        }
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        let option_ok = option.is_none_or(|o| (o as usize) < request.options.len());
+        let note_ok = note
+            .as_deref()
+            .is_none_or(|n| n.chars().count() <= DECISION_NOTE_MAX);
+        if (option.is_none() && note.is_none()) || !option_ok || !note_ok {
+            return Err(Rejection::DecisionAnswerInvalid);
+        }
+        Ok(vec![Event::DecisionAnswered {
+            owner: request.owner,
+            decision_id: id,
+            option,
+            note,
+            answered_by: actor.to_string(),
+        }])
+    }
+
+    fn between_turns(&self, session: &Session) -> bool {
+        matches!(session.state, SessionState::Idle | SessionState::Waiting)
+            && session.recorded_turn >= session.turns
+            && !self
+                .view
+                .permissions
+                .iter()
+                .any(|p| p.state == PermissionState::Pending)
+    }
+
+    fn deliver_decision(&self, id: DecisionRequestId) -> SessionOutcome {
+        let Some(request) = self
+            .view
+            .run_decisions()
+            .find(|d| d.id == id && d.state == DecisionState::Answered)
+        else {
+            return SessionOutcome::default();
+        };
+        let Some(session) = self
+            .view
+            .live_session()
+            .filter(|s| self.between_turns(s) && s.interrupt_requested.is_none())
+        else {
+            return SessionOutcome::default();
+        };
+        self.decision_turn(session, request, Vec::new())
+    }
+
+    fn decision_turn(
+        &self,
+        session: &Session,
+        request: &DecisionRequest,
+        mut events: Vec<Event>,
+    ) -> SessionOutcome {
+        let usage = self.view.usage(self.now);
+        if let Some(dimension) = self.exhausted(&usage, &[BudgetDimension::Turns]) {
+            let idle = Session {
+                state: SessionState::Idle,
+                ..session.clone()
+            };
+            if session.state == SessionState::Waiting {
+                events.push(state_changed(session, SessionState::Idle, self.now));
+            }
+            let mut stop = self.budget_stop(&idle, dimension, &usage);
+            events.append(&mut stop.events);
+            return SessionOutcome {
+                events,
+                signal: stop.signal,
+            };
+        }
+        events.push(Event::DecisionDelivered {
+            owner: request.owner,
+            decision_id: request.id,
+        });
+        if session.state == SessionState::Waiting {
+            events.push(state_changed(session, SessionState::Idle, self.now));
+        }
+        events.push(Event::SessionTurnRequested {
+            owner: session.owner,
+            session_id: session.id,
+            turn: session.turns + 1,
+            prompt: Prompt::Decision {
+                decision_id: request.id,
+            },
+        });
+        SessionOutcome::events(events)
+    }
+
     fn turn_ended(
         &self,
         turn: u32,
@@ -813,6 +1016,29 @@ impl Decider<'_, '_> {
                 signal: stop.signal,
             };
         }
+        if session.interrupt_requested.is_none() {
+            if let Some(request) = self.view.answered_decision() {
+                events.push(state_changed(session, SessionState::Idle, self.now));
+                events.extend(self.budget_warnings(&usage, &spend));
+                let idle = Session {
+                    state: SessionState::Idle,
+                    turns: turn,
+                    recorded_turn: turn,
+                    ..session.clone()
+                };
+                let mut next = self.decision_turn(&idle, request, Vec::new());
+                events.append(&mut next.events);
+                return SessionOutcome {
+                    events,
+                    signal: next.signal,
+                };
+            }
+            if self.view.asked_decision().is_some() {
+                events.push(state_changed(session, SessionState::Waiting, self.now));
+                events.extend(self.budget_warnings(&usage, &spend));
+                return SessionOutcome::events(events);
+            }
+        }
         events.push(state_changed(session, SessionState::Idle, self.now));
         events.extend(self.budget_warnings(&usage, &spend));
         SessionOutcome {
@@ -849,6 +1075,7 @@ impl Decider<'_, '_> {
         if resumable {
             return SessionOutcome::events(events);
         }
+        events.extend(expire_asked(self.view, "session_lost"));
         SessionOutcome::stopped(events, BlockerCode::SessionLost, json!({ "cause": cause }))
     }
 
@@ -965,10 +1192,40 @@ impl Decider<'_, '_> {
         stop
     }
 
+    fn overdue_decision(&self) -> Option<&DecisionRequest> {
+        self.view
+            .asked_decision()
+            .filter(|d| self.now.since(d.expires_at) > 0)
+    }
+
+    fn decision_expired_params(&self, request: &DecisionRequest) -> Value {
+        json!({
+            "question": request.question,
+            "recommended": request.recommended(),
+            "hours": self.cfg.decision_wait_ms / 3_600_000,
+        })
+    }
+
     fn tick(&self) -> SessionOutcome {
         let Some(session) = self.view.live_session() else {
-            return SessionOutcome::default();
+            return match self.overdue_decision() {
+                Some(request) => SessionOutcome::stopped(
+                    expire_asked(self.view, "decision_expired"),
+                    BlockerCode::DecisionExpired,
+                    self.decision_expired_params(request),
+                ),
+                None => SessionOutcome::default(),
+            };
         };
+        if let Some(request) = self.overdue_decision() {
+            return self.saka_stop(
+                session,
+                "decision_expired",
+                BlockerCode::DecisionExpired,
+                self.decision_expired_params(request),
+                None,
+            );
+        }
         let wait = self.cfg.permission_wait_ms;
         if let Some(p) =
             self.view.permissions.iter().find(|p| {
@@ -1029,6 +1286,7 @@ pub struct RunParts<'a> {
     pub session: &'a mut Option<Session>,
     pub retired_sessions: &'a mut Vec<Session>,
     pub permissions: &'a mut Vec<PermissionRequest>,
+    pub decisions: &'a mut Vec<DecisionRequest>,
     pub prior_usage: &'a mut Usage,
     pub usage_records: &'a mut Vec<UsageRecord>,
     pub quota_observations: &'a mut Vec<AccountQuota>,
@@ -1350,6 +1608,58 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
                 p.delivered_at = Some(now);
             }
         }
+        E::DecisionAsked {
+            owner,
+            session_id,
+            decision_id,
+            question,
+            context,
+            options,
+            expires_at,
+        } => {
+            run.decisions.push(DecisionRequest {
+                id: *decision_id,
+                owner: *owner,
+                session_id: *session_id,
+                state: DecisionState::Asked,
+                question: question.clone(),
+                context: context.clone(),
+                options: options.clone(),
+                answer: None,
+                asked_at: now,
+                answered_at: None,
+                delivered_at: None,
+                expires_at: *expires_at,
+            });
+        }
+        E::DecisionAnswered {
+            decision_id,
+            option,
+            note,
+            answered_by,
+            ..
+        } => {
+            if let Some(d) = run.decisions.iter_mut().find(|d| d.id == *decision_id) {
+                d.state = DecisionState::Answered;
+                d.answer = Some(DecisionAnswer {
+                    option: *option,
+                    note: note.clone(),
+                    answered_by: answered_by.clone(),
+                });
+                d.answered_at = Some(now);
+            }
+        }
+        E::DecisionDelivered { decision_id, .. } => {
+            if let Some(d) = run.decisions.iter_mut().find(|d| d.id == *decision_id) {
+                d.state = DecisionState::Delivered;
+                d.delivered_at = Some(now);
+            }
+        }
+        E::DecisionExpired { decision_id, .. } => {
+            if let Some(d) = run.decisions.iter_mut().find(|d| d.id == *decision_id) {
+                d.state = DecisionState::Expired;
+            }
+        }
         _ => return false,
     }
     true
@@ -1408,6 +1718,12 @@ pub fn react(view: &RunView<'_>, event: &Event, now: Timestamp) -> Vec<Job> {
             };
             session.map(|s| stop_job(s, at)).into_iter().collect()
         }
+        E::DecisionAnswered { decision_id, .. } => view
+            .decisions
+            .iter()
+            .filter(|d| d.id == *decision_id)
+            .map(|d| deliver_decision_job(d, now))
+            .collect(),
         E::PermissionAnswered {
             permission_request_id,
             state: PermissionState::Expired,
@@ -1443,6 +1759,19 @@ pub fn deliver_job(p: &PermissionRequest, now: Timestamp) -> Job {
             "cli_request_id": p.cli_request_id,
             "behavior": if p.state == PermissionState::Allowed { "allow" } else { "deny" },
             "message": p.message,
+        }),
+        now,
+    )
+}
+
+pub fn deliver_decision_job(d: &DecisionRequest, now: Timestamp) -> Job {
+    Job::new(
+        JobKind::SessionDeliverDecision,
+        d.id,
+        json!({
+            "owner": d.owner,
+            "session_id": d.session_id,
+            "decision_id": d.id,
         }),
         now,
     )

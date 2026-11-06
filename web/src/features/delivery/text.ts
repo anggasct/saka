@@ -104,6 +104,8 @@ export function blockerText(
     limit: text(params.limit),
     tool: text(params.tool),
     summary: text(params.summary),
+    question: text(params.question),
+    recommended: text(params.recommended),
     summary_known: text(params.summary) !== "" ? "yes" : "no",
     findings: number(params.findings),
     rounds: number(params.rounds),

@@ -75,6 +75,7 @@ export function failureText(
     hours: Number(text(params.hours)) || 0,
     tool: text(params.tool),
     summary: text(params.summary),
+    question: text(params.question),
     error: text(error.code) || "other",
     path: text(params.path),
     phase: text(params.phase) || "other",

@@ -3,13 +3,15 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::authorship::SessionAuthor;
+use crate::decision::DecisionOption;
 use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
-    BlockerId, ChangeRequestId, CredentialId, DeviceId, EnvironmentId, GateResultId, HookRunId,
-    InboxItemId, LoginSessionId, PairingId, PermissionRequestId, PermissionRuleId, ProjectId,
-    RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
-    StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
+    BlockerId, ChangeRequestId, CredentialId, DecisionRequestId, DeviceId, EnvironmentId,
+    GateResultId, HookRunId, InboxItemId, LoginSessionId, PairingId, PermissionRequestId,
+    PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId,
+    SpecId, SpecRevisionId, StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId,
+    WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
@@ -591,6 +593,35 @@ pub enum Event {
         owner: RunOwner,
         permission_request_id: PermissionRequestId,
     },
+    #[serde(rename = "runtime.decision.asked")]
+    DecisionAsked {
+        owner: RunOwner,
+        session_id: SessionId,
+        decision_id: DecisionRequestId,
+        question: String,
+        context: Option<String>,
+        options: Vec<DecisionOption>,
+        expires_at: Timestamp,
+    },
+    #[serde(rename = "runtime.decision.answered")]
+    DecisionAnswered {
+        owner: RunOwner,
+        decision_id: DecisionRequestId,
+        option: Option<u32>,
+        note: Option<String>,
+        answered_by: String,
+    },
+    #[serde(rename = "runtime.decision.delivered")]
+    DecisionDelivered {
+        owner: RunOwner,
+        decision_id: DecisionRequestId,
+    },
+    #[serde(rename = "runtime.decision.expired")]
+    DecisionExpired {
+        owner: RunOwner,
+        decision_id: DecisionRequestId,
+        cause: String,
+    },
     #[serde(rename = "runtime.permission_rule.added")]
     PermissionRuleAdded {
         rule_id: PermissionRuleId,
@@ -825,6 +856,9 @@ pub enum Prompt {
     Steer {
         text: String,
     },
+    Decision {
+        decision_id: DecisionRequestId,
+    },
     ReviewPacket,
     VerdictFormat {
         reason: String,
@@ -849,6 +883,7 @@ pub enum Stream {
     SpecDraft(SpecDraftId),
     Session(SessionId),
     PermissionRequest(PermissionRequestId),
+    DecisionRequest(DecisionRequestId),
     Job(uuid::Uuid),
     HookRun(HookRunId),
     UserLinkAuthorization(UserLinkAuthorizationId),
@@ -869,6 +904,7 @@ impl Stream {
             Stream::SpecDraft(_) => "spec_draft",
             Stream::Session(_) => "session",
             Stream::PermissionRequest(_) => "permission_request",
+            Stream::DecisionRequest(_) => "decision_request",
             Stream::Job(_) => "job",
             Stream::HookRun(_) => "hook_run",
             Stream::UserLinkAuthorization(_) => "user_link_authorization",
@@ -889,6 +925,7 @@ impl Stream {
             Stream::SpecDraft(id) => id.0,
             Stream::Session(id) => id.0,
             Stream::PermissionRequest(id) => id.0,
+            Stream::DecisionRequest(id) => id.0,
             Stream::Job(id) => id,
             Stream::HookRun(id) => id.0,
             Stream::UserLinkAuthorization(id) => id.0,
@@ -986,6 +1023,10 @@ impl Event {
                 permission_request_id,
                 ..
             } => Stream::PermissionRequest(*permission_request_id),
+            E::DecisionAsked { decision_id, .. }
+            | E::DecisionAnswered { decision_id, .. }
+            | E::DecisionDelivered { decision_id, .. }
+            | E::DecisionExpired { decision_id, .. } => Stream::DecisionRequest(*decision_id),
             E::WorkItemCreated { work_item_id, .. }
             | E::WorkItemRepinned { work_item_id, .. }
             | E::WorkItemSuperseded { work_item_id, .. }
@@ -1070,6 +1111,10 @@ impl Event {
             | E::PermissionRequested { owner, .. }
             | E::PermissionAnswered { owner, .. }
             | E::PermissionDelivered { owner, .. }
+            | E::DecisionAsked { owner, .. }
+            | E::DecisionAnswered { owner, .. }
+            | E::DecisionDelivered { owner, .. }
+            | E::DecisionExpired { owner, .. }
             | E::BudgetWarned { owner, .. }
             | E::QuotaObserved { owner, .. } => Some(owner),
             E::PermissionRuleAdded { owner, .. } => owner.as_ref(),

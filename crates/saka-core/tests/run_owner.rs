@@ -308,6 +308,7 @@ impl IdSource for Seq {
 fn cfg() -> SessionConfig {
     SessionConfig {
         permission_wait_ms: 3_600_000,
+        decision_wait_ms: 72 * 3_600_000,
         idle_ms: 1_800_000,
         budget_warn_percent: 80,
         rate_limit_pause: 0.9,
@@ -358,6 +359,7 @@ fn draft_view(session: Option<&Session>) -> RunView<'_> {
         project_id: ProjectId(id(16)),
         session,
         permissions: &[],
+        decisions: &[],
         prior_usage: Usage::default(),
         budget: None,
         budget_warnings: &[],

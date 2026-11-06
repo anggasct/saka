@@ -88,7 +88,8 @@ const SELECT: &str = "SELECT i.*, p.name AS project_name, w.task_key, w.stage AS
   LEFT JOIN work_item w ON w.id = i.work_item_id
   LEFT JOIN spec s ON s.id = i.spec_id
   LEFT JOIN permission_request pr ON i.subject = 'permission' AND i.work_item_id IS NULL AND pr.id = i.source_id
-  LEFT JOIN spec_draft d ON d.id = pr.spec_draft_id";
+  LEFT JOIN decision_request dr ON i.subject = 'decision' AND i.work_item_id IS NULL AND dr.id = i.source_id
+  LEFT JOIN spec_draft d ON d.id = COALESCE(pr.spec_draft_id, json_extract(dr.owner, '$.spec_draft_id'))";
 
 fn item_row(row: &Row<'_>) -> Result<InboxItem> {
     let action: Value = json(row, "action")?;
@@ -219,6 +220,7 @@ struct Live {
     source_id: String,
     params: String,
     action: String,
+    state: String,
 }
 
 fn live_items(tx: &Transaction<'_>, scope: Scope) -> Result<Vec<Live>> {
@@ -226,14 +228,18 @@ fn live_items(tx: &Transaction<'_>, scope: Scope) -> Result<Vec<Live>> {
         Scope::WorkItem(id) => ("work_item_id = ?1", id.to_string()),
         Scope::Spec(id) => ("subject = 'spec' AND spec_id = ?1", id.to_string()),
         Scope::Draft(id) => (
-            "subject = 'permission' AND work_item_id IS NULL
-             AND source_id IN (SELECT id FROM permission_request WHERE spec_draft_id = ?1)",
+            "work_item_id IS NULL AND (
+               (subject = 'permission'
+                AND source_id IN (SELECT id FROM permission_request WHERE spec_draft_id = ?1))
+               OR (subject = 'decision'
+                AND source_id IN (SELECT id FROM decision_request
+                                  WHERE json_extract(owner, '$.spec_draft_id') = ?1)))",
             id.to_string(),
         ),
     };
     let mut stmt = tx.prepare(&format!(
-        "SELECT id, subject, source_id, params, action FROM inbox_item
-         WHERE state = 'open' AND subject != 'decision' AND {clause}"
+        "SELECT id, subject, source_id, params, action, state FROM inbox_item
+         WHERE state IN ('open', 'answered') AND {clause}"
     ))?;
     let rows = stmt.query_map([bind], |r| {
         Ok(Live {
@@ -242,6 +248,7 @@ fn live_items(tx: &Transaction<'_>, scope: Scope) -> Result<Vec<Live>> {
             source_id: r.get(2)?,
             params: r.get(3)?,
             action: r.get(4)?,
+            state: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -318,6 +325,14 @@ pub(crate) fn sync(
                         params![item.id, params_json, action],
                     )?;
                 }
+                if d.state.as_str() != item.state {
+                    tx.execute(
+                        "UPDATE inbox_item SET state = ?2,
+                           answered_at = CASE WHEN ?2 = 'answered' THEN ?3 ELSE answered_at END
+                         WHERE id = ?1",
+                        params![item.id, d.state.as_str(), now.0],
+                    )?;
+                }
             }
         }
     }
@@ -341,7 +356,7 @@ pub(crate) fn sync(
         tx.execute(
             "INSERT INTO inbox_item (id, project_id, kind, subject, source_id, work_item_id, spec_id, state,
                params, action, opened_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?11, ?8, ?9, ?10)",
             params![
                 id.to_string(),
                 d.project_id.to_string(),
@@ -353,6 +368,7 @@ pub(crate) fn sync(
                 value_json(&d.params)?,
                 value_json(&action_json(&d.action))?,
                 now.0,
+                d.state.as_str(),
             ],
         )?;
         let (task_key, spec_path) = names(tx, d)?;

@@ -730,6 +730,7 @@ impl Engine {
                 Ok(Effect::Skipped)
             }
             K::SessionDeliverPermissionAnswer
+            | K::SessionDeliverDecision
             | K::SessionInterrupt
             | K::SessionSteer
             | K::SessionReattach
@@ -1040,6 +1041,12 @@ impl Engine {
             ),
             Prompt::Resume { cause, .. } => saka_core::resume::text(*cause),
             Prompt::Steer { text } => text.clone(),
+            Prompt::Decision { decision_id } => d
+                .decisions
+                .iter()
+                .find(|r| r.id == *decision_id)
+                .map(saka_core::decision::answer_text)
+                .ok_or_else(|| PortError::permanent("decision_missing", json!({})))?,
             Prompt::WorkPacket { .. }
             | Prompt::Uncommitted { .. }
             | Prompt::OutOfScope { .. }

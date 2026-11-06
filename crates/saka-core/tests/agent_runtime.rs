@@ -9,8 +9,8 @@ use saka_core::Ctx;
 use saka_core::admission::Waiting;
 use saka_core::event::{Event, Prompt};
 use saka_core::ids::{
-    EnvironmentId, IdSource, PermissionRequestId, ProjectId, RepoId, SessionId, SpecId,
-    SpecRevisionId, WorkItemId,
+    DecisionRequestId, EnvironmentId, IdSource, PermissionRequestId, ProjectId, RepoId, SessionId,
+    SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::job::{Job, JobKind};
 use saka_core::model::{AccountQuota, Budget, PermissionRule, Session, Task};
@@ -22,8 +22,8 @@ use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    BlockerCode, BudgetDimension, EnvironmentState, InterruptBy, MergeMethod, PermissionState,
-    ResumeCause, ResumeReason, SessionState, Stage, StagePhase, WorkItemState,
+    BlockerCode, BudgetDimension, DecisionState, EnvironmentState, InterruptBy, MergeMethod,
+    PermissionState, ResumeCause, ResumeReason, SessionState, Stage, StagePhase, WorkItemState,
 };
 use saka_core::{resume, rule, task};
 use serde_json::{Value, json};
@@ -59,6 +59,7 @@ fn cfg_with(dev: Budget) -> task::LoopConfig {
         delete_branch_after_merge: true,
         commit_status: true,
         permission_wait_ms: 24 * HOUR,
+        decision_wait_ms: 72 * 3_600_000,
         idle_ms: 30 * MINUTE,
         budgets: BTreeMap::from([(Stage::Dev, dev)]),
         budget_warn_percent: 80,
@@ -1370,5 +1371,225 @@ fn a_turn_that_ends_before_its_send_is_recorded_still_ends_once() {
         r.end_turn(1, "success"),
         vec![],
         "a replayed end is ignored"
+    );
+}
+
+fn question(text: &str) -> saka_core::decision::Question {
+    let option = |label: &str| saka_core::decision::DecisionOption {
+        label: label.into(),
+        detail: None,
+    };
+    saka_core::decision::Question {
+        question: text.into(),
+        options: vec![option("Local"), option("R2")],
+        context: None,
+    }
+}
+
+impl Run {
+    fn ask_decision(&mut self, n: u128, text: &str) -> Result<Vec<Event>, Rejection> {
+        self.try_decide(task::TaskInput::Session(SessionInput::AskDecision {
+            decision_id: DecisionRequestId(Uuid::from_u128(n)),
+            question: question(text),
+        }))
+    }
+
+    fn answer_decision(
+        &mut self,
+        n: u128,
+        option: Option<u32>,
+        note: Option<&str>,
+    ) -> Result<Vec<Event>, Rejection> {
+        self.try_decide(task::TaskInput::Session(SessionInput::AnswerDecision {
+            decision_id: DecisionRequestId(Uuid::from_u128(n)),
+            option,
+            note: note.map(String::from),
+            actor: "operator:local".into(),
+        }))
+    }
+
+    fn decision_state(&self, n: u128) -> DecisionState {
+        self.task
+            .decisions
+            .iter()
+            .find(|d| d.id == DecisionRequestId(Uuid::from_u128(n)))
+            .unwrap()
+            .state
+    }
+}
+
+#[test]
+fn a_turn_that_ends_with_a_question_open_waits_and_neither_inspects_nor_signals() {
+    let mut run = Run::running(budget(60, 10, 0, 0));
+    run.ask_decision(900, "Where?").unwrap();
+    assert_eq!(run.session().state, SessionState::Running);
+    run.end_turn(1, "success");
+    assert_eq!(run.session().state, SessionState::Waiting);
+    assert_eq!(run.session().idle_since, None);
+    assert!(!run.take_jobs().contains(&JobKind::EnvInspectWorktree));
+
+    run.wait(100 * HOUR);
+    let events = run.try_decide(task::TaskInput::Tick).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::DecisionExpired { .. })),
+        "{events:?}"
+    );
+    assert_eq!(run.decision_state(900), DecisionState::Expired);
+    let (code, params) = run.blocker().unwrap();
+    assert_eq!(code, BlockerCode::DecisionExpired);
+    assert_eq!(params["question"], "Where?");
+    assert_eq!(params["recommended"], "Local");
+    assert_eq!(params["hours"], 72);
+}
+
+#[test]
+fn the_idle_timeout_does_not_run_while_a_question_waits() {
+    let mut run = Run::running(budget(60, 10, 0, 0));
+    run.ask_decision(900, "Where?").unwrap();
+    run.end_turn(1, "success");
+    run.wait(40 * MINUTE);
+    assert!(run.try_decide(task::TaskInput::Tick).unwrap().is_empty());
+    assert_eq!(run.session().state, SessionState::Waiting);
+}
+
+#[test]
+fn only_one_question_is_open_per_session_and_five_are_allowed_per_run() {
+    let mut run = Run::running(budget(60, 10, 0, 0));
+    run.ask_decision(900, "One?").unwrap();
+    assert_eq!(
+        run.ask_decision(901, "Two?"),
+        Err(Rejection::DecisionOnePerSession)
+    );
+    assert!(matches!(
+        run.ask_decision(902, ""),
+        Err(Rejection::Invalid {
+            field: "question",
+            ..
+        })
+    ));
+    for n in 0..4 {
+        run.answer_decision(900 + n, Some(0), None).unwrap();
+        let turn = run.session().turns;
+        run.end_turn(turn, "success");
+        let next = run.session().turns;
+        run.accept(next);
+        run.ask_decision(901 + n, "Next?").unwrap();
+    }
+    run.answer_decision(904, Some(0), None).unwrap();
+    run.end_turn(run.session().turns, "success");
+    let turn = run.session().turns;
+    run.accept(turn);
+    assert_eq!(run.task.decisions.len(), 5);
+    assert_eq!(
+        run.ask_decision(905, "Sixth?"),
+        Err(Rejection::DecisionLimitReached)
+    );
+}
+
+#[test]
+fn an_answer_needs_a_known_asked_question_a_valid_option_or_a_note() {
+    let mut run = Run::running(budget(60, 10, 0, 0));
+    assert_eq!(
+        run.answer_decision(900, Some(0), None),
+        Err(Rejection::DecisionNotFound)
+    );
+    run.ask_decision(900, "Where?").unwrap();
+    for (option, note) in [
+        (None, None),
+        (None, Some("   ")),
+        (Some(2), None),
+        (Some(9), Some("x")),
+    ] {
+        assert_eq!(
+            run.answer_decision(900, option, note),
+            Err(Rejection::DecisionAnswerInvalid),
+            "{option:?} {note:?}"
+        );
+    }
+    assert_eq!(
+        run.answer_decision(900, None, Some(&"x".repeat(2001))),
+        Err(Rejection::DecisionAnswerInvalid)
+    );
+    let events = run
+        .answer_decision(900, None, Some("  either is fine  "))
+        .unwrap();
+    assert!(matches!(
+        events.as_slice(),
+        [Event::DecisionAnswered { option: None, note: Some(n), .. }] if n == "either is fine"
+    ));
+    assert!(run.take_jobs().contains(&JobKind::SessionDeliverDecision));
+    assert_eq!(
+        run.answer_decision(900, Some(0), None),
+        Err(Rejection::DecisionAlreadyAnswered)
+    );
+}
+
+#[test]
+fn delivery_is_idempotent_and_waits_for_the_end_of_the_turn() {
+    let mut run = Run::running(budget(60, 10, 0, 0));
+    run.ask_decision(900, "Where?").unwrap();
+    run.answer_decision(900, Some(1), None).unwrap();
+    let deliver = || {
+        task::TaskInput::Session(SessionInput::DeliverDecision {
+            decision_id: DecisionRequestId(Uuid::from_u128(900)),
+        })
+    };
+    assert!(
+        run.decide(deliver()).is_empty(),
+        "the turn is still running"
+    );
+    assert_eq!(run.decision_state(900), DecisionState::Answered);
+
+    let ended = run.end_turn(1, "success");
+    assert!(ended.iter().any(|e| matches!(
+        e,
+        Event::SessionTurnRequested {
+            turn: 2,
+            prompt: Prompt::Decision { .. },
+            ..
+        }
+    )));
+    assert!(
+        ended
+            .iter()
+            .any(|e| matches!(e, Event::DecisionDelivered { .. }))
+    );
+    assert_eq!(run.decision_state(900), DecisionState::Delivered);
+    assert!(!run.take_jobs().contains(&JobKind::EnvInspectWorktree));
+    assert!(run.decide(deliver()).is_empty(), "delivered once");
+}
+
+#[test]
+fn a_session_that_is_lost_while_a_question_waits_is_not_restarted_until_it_is_answered() {
+    let mut run = Run::running(budget(60, 10, 0, 0));
+    run.ask_decision(900, "Where?").unwrap();
+    run.end_turn(1, "success");
+    run.decide(task::TaskInput::Session(SessionInput::Gone {
+        cause: "runner_exited".into(),
+    }));
+    assert_eq!(run.session().state, SessionState::Lost);
+    assert_eq!(run.decision_state(900), DecisionState::Asked);
+    assert!(!run.take_jobs().contains(&JobKind::SessionStart));
+    let view = task::run_view(&run.task).unwrap();
+    assert!(!resume::wants_session(&view));
+
+    run.answer_decision(900, Some(0), None).unwrap();
+    let view = task::run_view(&run.task).unwrap();
+    assert!(resume::wants_session(&view));
+    let launched = run.launch();
+    assert!(launched.iter().any(|e| matches!(
+        e,
+        Event::SessionTurnRequested {
+            turn: 1,
+            prompt: Prompt::Decision { .. },
+            ..
+        }
+    )));
+    assert!(
+        launched
+            .iter()
+            .any(|e| matches!(e, Event::DecisionDelivered { .. }))
     );
 }

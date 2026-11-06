@@ -24,6 +24,7 @@ fn hand_merge() -> SimConfig {
             merge: false,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     }
@@ -129,6 +130,7 @@ fn a_model_that_thinks_longer_than_the_runner_silence_window_is_neither_killed_n
             merge: true,
             retry: vec![],
             answer: Some(true),
+            decide: None,
         },
         ..SimConfig::without_review()
     });

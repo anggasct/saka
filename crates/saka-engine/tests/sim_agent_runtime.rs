@@ -21,6 +21,7 @@ fn sim(agent: AgentScript) -> Sim {
             merge: true,
             retry: vec![],
             answer: Some(true),
+            decide: None,
         },
         ..SimConfig::without_review()
     });
@@ -197,6 +198,7 @@ fn budgeted(agent: AgentScript, budget: Budget, retry: Vec<BlockerCode>) -> Sim 
             merge: true,
             retry,
             answer: Some(true),
+            decide: None,
         },
         ..SimConfig::without_review()
     };
