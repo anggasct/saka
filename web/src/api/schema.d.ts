@@ -2614,6 +2614,11 @@ export interface components {
     };
     Workflow: {
       change_request?: components["schemas"]["WorkflowEntry"] | null;
+      /**
+       * Format: int32
+       * @description How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
+       */
+      fix_rounds: number;
       /** @description `full_loop | review_only | build_only | custom` */
       preset: string;
       /** @description Whether an approved spec creates tasks. */

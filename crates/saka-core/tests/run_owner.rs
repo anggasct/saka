@@ -360,6 +360,7 @@ fn draft_view(session: Option<&Session>) -> RunView<'_> {
         retry: RunRetry {
             trigger: Trigger::Auto,
             retried: None,
+            follows_up: false,
         },
         packet: Prompt::Steer {
             text: "first turn".into(),

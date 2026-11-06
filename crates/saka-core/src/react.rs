@@ -191,7 +191,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     };
     let cr = task.change_request.as_ref();
     match (stage, phase) {
-        (Stage::Dev | Stage::Review, StagePhase::RunningSession) => {
+        (Stage::Dev | Stage::Fix | Stage::Review, StagePhase::RunningSession) => {
             jobs.extend(session_jobs(task, now));
         }
         (Stage::Review, StagePhase::PreparingEnvironment) => {
@@ -228,7 +228,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 ));
             }
         }
-        (Stage::Dev, StagePhase::Pushing) => {
+        (Stage::Dev | Stage::Fix, StagePhase::Pushing) => {
             let docs = task.environment.as_ref().and_then(|e| e.docs.as_ref());
             if let (Some(run_id), Some(sha), Some(docs)) = (run_id, docs_pending(task), docs) {
                 jobs.push(Job::new(
@@ -262,7 +262,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 ));
             }
         }
-        (Stage::Dev, StagePhase::OpeningChange) if cr.is_some() => {
+        (Stage::Dev | Stage::Fix, StagePhase::OpeningChange) if cr.is_some() => {
             if needs_docs_change(task) {
                 let run = run_id.map(|r| r.to_string()).unwrap_or_default();
                 jobs.push(Job::new(
@@ -273,7 +273,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 ));
             }
         }
-        (Stage::Dev, StagePhase::OpeningChange) => {
+        (Stage::Dev | Stage::Fix, StagePhase::OpeningChange) => {
             // Keyed per run: a retry into this phase opens the change again, with the credential
             // the project's mode names at that moment.
             let key = run_id.map_or_else(|| id.to_string(), |run| format!("{id}:{run}"));

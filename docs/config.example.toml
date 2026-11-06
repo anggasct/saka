@@ -79,6 +79,12 @@ turns = 3                          # 1..=100; the packet, one format correction,
 tokens = 0                         # 0 = no limit; input + output
 cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
 
+[budget.fix]
+running_minutes = 30               # 1..=1440; running time of one fix round
+turns = 6                          # 1..=100; turns sent to the CLI in a fix round
+tokens = 0                         # 0 = no limit; input + output
+cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
+
 [architect]
 max_active = 1                     # 1..=4; drafts preparing, drafting, or committing at once
 lint_rounds = 4                    # 1..=10; lint checks per attempt (the first after the first turn)

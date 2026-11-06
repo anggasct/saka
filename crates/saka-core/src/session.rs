@@ -45,6 +45,7 @@ pub struct SessionConfig {
 pub struct RunRetry {
     pub trigger: Trigger,
     pub retried: Option<(BlockerCode, Value)>,
+    pub follows_up: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -13,8 +13,8 @@ use crate::ids::{
 };
 use crate::job::{JobKind, exhausted_code};
 use crate::model::{
-    Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, ExternalChange, GateResult, Retries,
-    Review, ReviewPosted, RunOwner, Session, StageRun, Task, Usage, WorkItem,
+    Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, ExternalChange, FixRound, GateResult,
+    Retries, Review, ReviewPosted, RunOwner, Session, StageRun, Task, Usage, WorkItem,
 };
 use crate::rejection::Rejection;
 use crate::review;
@@ -381,7 +381,7 @@ pub fn decide(
             remote_sha,
             local_sha,
         } => {
-            if task.is_at(Stage::Dev, StagePhase::Pushing) {
+            if task.is_writing_at(StagePhase::Pushing) {
                 d.block(
                     BlockerCode::PushRejected,
                     json!({ "target": target, "remote_sha": remote_sha, "local_sha": local_sha }),
@@ -636,7 +636,41 @@ impl Decider<'_> {
             retry_of,
             budget: self.cfg.budgets.get(&stage).copied(),
             head_sha: None,
+            fix: None,
         }
+    }
+
+    fn fix_run(
+        &self,
+        round: FixRound,
+        trigger: Trigger,
+        reason: Option<String>,
+        ctx: &mut Ctx<'_>,
+    ) -> Event {
+        let entry = if self.task.ready_environment().is_some() {
+            StagePhase::RunningSession
+        } else {
+            StagePhase::PreparingEnvironment
+        };
+        let mut run = self.new_run(Stage::Fix, trigger, entry, reason, None, ctx);
+        if let Event::StageRunCreated { fix, .. } = &mut run {
+            *fix = Some(round);
+        }
+        run
+    }
+
+    // A round answers a verdict or a conflict; the automatic ones stop at the project's limit.
+    fn start_fix(&self, cause: Coded, ctx: &mut Ctx<'_>) -> Option<Event> {
+        let auto = self.task.item.origin == WorkItemOrigin::SpecStep
+            && self.task.workflow.stage_trigger(Stage::Fix) == Some(Trigger::Auto)
+            && self.task.fix_rounds_left();
+        auto.then(|| {
+            let round = FixRound {
+                number: self.task.fix_rounds_used() + 1,
+                cause,
+            };
+            self.fix_run(round, Trigger::Auto, None, ctx)
+        })
     }
 
     fn phase(&self, phase: StagePhase, head_sha: Option<String>) -> Vec<Event> {
@@ -681,7 +715,7 @@ impl Decider<'_> {
     }
 
     fn running_agent(&self) -> bool {
-        self.task.is_at(Stage::Dev, StagePhase::RunningSession)
+        self.task.is_writing_at(StagePhase::RunningSession)
             || self.task.is_at(Stage::Review, StagePhase::RunningSession)
     }
 
@@ -823,7 +857,7 @@ impl Decider<'_> {
         let Some(session) = self.task.live_session() else {
             return vec![];
         };
-        if !self.task.is_at(Stage::Dev, StagePhase::RunningSession)
+        if !self.task.is_writing_at(StagePhase::RunningSession)
             || session.turns != turn
             || session.state != SessionState::Idle
             || session.interrupt_requested.is_some()
@@ -1106,16 +1140,30 @@ impl Decider<'_> {
                     .filter(|f| matches!(f.severity, Severity::Blocker | Severity::Major))
                     .take(VERDICT_FAILED_FINDINGS)
                     .collect();
-                events.extend(self.block(
-                    BlockerCode::VerdictFailed,
-                    json!({
-                        "head_sha": review.head_sha,
-                        "findings": review.findings.len(),
-                        "summary": review.summary,
-                        "blocking": blocking,
-                    }),
-                    ctx,
-                ));
+                let mut params = json!({
+                    "head_sha": review.head_sha,
+                    "findings": review.findings.len(),
+                    "summary": review.summary,
+                    "blocking": blocking,
+                });
+                let cause = Coded {
+                    code: BlockerCode::VerdictFailed.as_str().to_string(),
+                    params: params.clone(),
+                };
+                if self.task.workflow.has_stage(Stage::Fix) && !self.task.fix_rounds_left() {
+                    params["rounds"] = json!(self.task.fix_rounds_used());
+                    params["max"] = json!(self.task.workflow.fix_rounds);
+                    events.extend(self.block(BlockerCode::ReviewRoundsExhausted, params, ctx));
+                } else if let Some(fix) = self.start_fix(cause, ctx) {
+                    events.push(Event::StageRunSucceeded {
+                        work_item_id: self.item().id,
+                        stage_run_id: run.id,
+                        head_sha: run.head_sha.clone(),
+                    });
+                    events.push(fix);
+                } else {
+                    events.extend(self.block(BlockerCode::VerdictFailed, params, ctx));
+                }
             }
             ReviewOutcome::SpecUnclear => return vec![],
         }
@@ -1498,7 +1546,7 @@ impl Decider<'_> {
     }
 
     fn branch_pushed(&self, sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
-        if !self.task.is_at(Stage::Dev, StagePhase::Pushing) || docs_pending(self.task).is_some() {
+        if !self.task.is_writing_at(StagePhase::Pushing) || docs_pending(self.task).is_some() {
             return vec![];
         }
         let mut events = vec![Event::BranchPushed {
@@ -1537,8 +1585,7 @@ impl Decider<'_> {
             .as_ref()
             .and_then(|e| e.docs.as_ref())
             .and_then(|d| d.branch.clone());
-        let (true, Some(branch)) = (self.task.is_at(Stage::Dev, StagePhase::Pushing), branch)
-        else {
+        let (true, Some(branch)) = (self.task.is_writing_at(StagePhase::Pushing), branch) else {
             return vec![];
         };
         let mut events = vec![Event::BranchPushed {
@@ -1594,7 +1641,7 @@ impl Decider<'_> {
             base_branch,
             opened_with,
         } = opened;
-        if !self.task.is_at(Stage::Dev, StagePhase::OpeningChange) {
+        if !self.task.is_writing_at(StagePhase::OpeningChange) {
             return vec![];
         }
         if role == ChangeRole::Docs {
@@ -1657,7 +1704,7 @@ impl Decider<'_> {
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let phase = block.phase();
-        let waiting = self.task.is_at(Stage::Dev, phase)
+        let waiting = self.task.is_writing_at(phase)
             && (phase != StagePhase::RunningSession || self.task.live_session().is_none());
         if !waiting {
             return vec![];
@@ -1920,7 +1967,7 @@ impl Decider<'_> {
                 None,
                 ctx,
             ));
-        } else if self.task.is_at_stage(Stage::Dev) {
+        } else if self.task.is_writing() {
             events.extend(self.end_session(SessionState::Ended, "branch_moved", json!({})));
             events.extend(self.block(
                 BlockerCode::BranchMoved,
@@ -2451,6 +2498,11 @@ impl Decider<'_> {
             Some(retry_of),
             ctx,
         );
+        if stage == Stage::Fix
+            && let Event::StageRunCreated { fix, .. } = &mut run
+        {
+            *fix = Some(self.retry_round(blocker));
+        }
         if stage == Stage::Review
             && let Event::StageRunCreated { head_sha, .. } = &mut run
         {
@@ -2492,6 +2544,30 @@ impl Decider<'_> {
         events.push(run);
         events.extend(repush);
         Ok(events)
+    }
+
+    // A retry inside a fix run goes on with the same round; a blocker raised elsewhere opens one.
+    fn retry_round(&self, blocker: &Blocker) -> FixRound {
+        if let Some(round) = self
+            .task
+            .stage_run
+            .as_ref()
+            .filter(|r| r.stage == Stage::Fix)
+            .and_then(|r| r.fix.clone())
+        {
+            return round;
+        }
+        let code = match blocker.code {
+            BlockerCode::ReviewRoundsExhausted => BlockerCode::VerdictFailed,
+            other => other,
+        };
+        FixRound {
+            number: self.task.fix_rounds_used() + 1,
+            cause: Coded {
+                code: code.as_str().to_string(),
+                params: blocker.params.clone(),
+            },
+        }
     }
 
     fn resolve_blocker(
@@ -2738,14 +2814,29 @@ impl Decider<'_> {
 }
 
 pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
-    let reviewing = task
-        .stage_run
-        .as_ref()
-        .is_some_and(|r| r.stage == Stage::Review);
-    if !reviewing {
-        return retry_entry(code, params);
+    let run_stage = task.stage_run.as_ref().map(|r| r.stage);
+    let fixes = task.item.origin == WorkItemOrigin::SpecStep && task.workflow.has_stage(Stage::Fix);
+    if run_stage == Some(Stage::Fix) {
+        return retry_entry(code, params).map(|(stage, phase)| match stage {
+            Stage::Dev => (Stage::Fix, phase),
+            other => (other, phase),
+        });
     }
     use BlockerCode as B;
+    if run_stage != Some(Stage::Review) {
+        return match code {
+            B::MergeConflict
+                if fixes
+                    && matches!(
+                        params.get("reason").and_then(Value::as_str),
+                        Some("rebase_conflict" | "worktree_unclean")
+                    ) =>
+            {
+                Some((Stage::Fix, StagePhase::RunningSession))
+            }
+            _ => retry_entry(code, params),
+        };
+    }
     match code {
         B::EnvSetupFailed
         | B::SessionFailed
@@ -2755,7 +2846,9 @@ pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(S
         | B::BudgetExhausted
         | B::QuotaExhausted
         | B::SpecUnclear => Some((Stage::Review, StagePhase::AwaitingReview)),
+        B::VerdictFailed if fixes => Some((Stage::Fix, StagePhase::RunningSession)),
         B::VerdictFailed => Some((Stage::Dev, StagePhase::RunningSession)),
+        B::ReviewRoundsExhausted if fixes => Some((Stage::Fix, StagePhase::RunningSession)),
         B::ScmUnavailable
             if params.get("phase").and_then(Value::as_str) == Some("posting_review") =>
         {
@@ -3039,6 +3132,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             reason,
             budget,
             head_sha,
+            fix,
             ..
         } => {
             count_retry(&mut t.retries, *stage, *trigger, reason.as_deref());
@@ -3071,6 +3165,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 docs_head_sha: None,
                 queued_at: None,
                 queue_native: false,
+                fix: fix.clone(),
                 failure: None,
                 budget: *budget,
                 budget_warnings: Vec::new(),
@@ -3396,7 +3491,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
             if let Some(run) = t.stage_run.as_mut().filter(|r| {
                 *role == ChangeRole::Code
-                    && r.stage == Stage::Dev
+                    && matches!(r.stage, Stage::Dev | Stage::Fix)
                     && matches!(r.state, StageRunState::Pending | StageRunState::Running)
             }) {
                 run.state = StageRunState::Cancelled;
@@ -3642,6 +3737,7 @@ pub fn watches_change(task: &Task) -> bool {
         WorkItemState::Blocked => true,
         WorkItemState::InStage => {
             task.item.stage == Some(Stage::Dev)
+                || task.item.stage == Some(Stage::Fix)
                 || task.item.stage == Some(Stage::Review)
                 || task.is_at(Stage::Merge, StagePhase::AwaitingCi)
                 || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
@@ -3688,6 +3784,13 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
             .chain(task.retired_sessions.iter().rev())
             .find(|s| !reviewer_session(task, s))
     };
+    let fixing = run.fix.as_ref();
+    let fix_cause = fixing.map(|f| {
+        (
+            f.cause.code.parse::<BlockerCode>().ok(),
+            f.cause.params.clone(),
+        )
+    });
     Some(RunView {
         owner,
         project_id: task.item.project_id,
@@ -3700,17 +3803,23 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
         ready_environment: task.ready_environment().map(|e| e.id),
         retry: RunRetry {
             trigger: run.trigger,
-            retried: blocker
-                .filter(|b| b.resolution.is_some())
-                .map(|b| (b.code, b.params.clone())),
+            retried: match fix_cause {
+                Some((Some(code), params)) => Some((code, params)),
+                _ => blocker
+                    .filter(|b| b.resolution.is_some())
+                    .map(|b| (b.code, b.params.clone())),
+            },
+            follows_up: fixing.is_some(),
         },
         packet: if reviewing {
             Prompt::ReviewPacket
         } else {
             Prompt::WorkPacket {
-                retry_of: blocker
-                    .filter(|_| run.trigger == Trigger::Manual)
-                    .map(coded),
+                retry_of: fixing.map(|f| f.cause.clone()).or_else(|| {
+                    blocker
+                        .filter(|_| run.trigger == Trigger::Manual)
+                        .map(coded)
+                }),
             }
         },
     })

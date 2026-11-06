@@ -1171,7 +1171,7 @@ impl Engine {
             return Ok(Effect::Skipped);
         };
         let reviewing = task.is_at(Stage::Review, StagePhase::RunningSession);
-        if !(reviewing || task.is_at(Stage::Dev, StagePhase::RunningSession))
+        if !(reviewing || task.is_writing_at(StagePhase::RunningSession))
             || task.live_session().is_some()
         {
             return Ok(Effect::Skipped);
@@ -1622,7 +1622,7 @@ impl Engine {
 
     async fn push_docs(&self, task: &Task, local_sha: String) -> Execution {
         let docs = task.environment.as_ref().and_then(|e| e.docs.as_ref());
-        let (true, Some(docs)) = (task.is_at(Stage::Dev, StagePhase::Pushing), docs) else {
+        let (true, Some(docs)) = (task.is_writing_at(StagePhase::Pushing), docs) else {
             return Ok(Effect::Skipped);
         };
         if saka_core::task::docs_pending(task).as_deref() != Some(local_sha.as_str()) {
@@ -1737,7 +1737,7 @@ impl Engine {
     }
 
     async fn push(&self, task: &Task, local_sha: String) -> Execution {
-        if !task.is_at(Stage::Dev, StagePhase::Pushing) {
+        if !task.is_writing_at(StagePhase::Pushing) {
             return Ok(Effect::Skipped);
         }
         let outcome = self
@@ -1764,7 +1764,7 @@ impl Engine {
     }
 
     async fn open_change(&self, task: &Task) -> Execution {
-        if !task.is_at(Stage::Dev, StagePhase::OpeningChange) || task.change_request.is_some() {
+        if !task.is_writing_at(StagePhase::OpeningChange) || task.change_request.is_some() {
             return Ok(Effect::Skipped);
         }
         let base_branch = self.base_branch(task)?;
@@ -1803,7 +1803,7 @@ impl Engine {
         let (Some(docs), Some(code)) = (docs, task.change_request.as_ref()) else {
             return Ok(Effect::Skipped);
         };
-        if !task.is_at(Stage::Dev, StagePhase::OpeningChange)
+        if !task.is_writing_at(StagePhase::OpeningChange)
             || !saka_core::task::needs_docs_change(task)
         {
             return Ok(Effect::Skipped);
@@ -1938,7 +1938,7 @@ impl Engine {
             .change_request(&self.repo_ref(task)?, change.number)
             .await?;
         if snapshot.state == ChangeState::Merged
-            && task.item.stage == Some(Stage::Dev)
+            && matches!(task.item.stage, Some(Stage::Dev | Stage::Fix))
             && let Some(docs_head_sha) = saka_core::task::docs_pending(task)
         {
             tracing::info!(

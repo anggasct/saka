@@ -243,6 +243,7 @@ describe("Changes from outside", () => {
           trigger_label: "saka:review",
         },
         stages: [{ stage: "review", trigger: "auto" }],
+        fix_rounds: 2,
       },
     };
     fakeApi({

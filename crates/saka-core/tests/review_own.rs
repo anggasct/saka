@@ -64,6 +64,7 @@ fn run_created(stage: Stage, entry: StagePhase, id: u128) -> Event {
         retry_of: None,
         budget: None,
         head_sha: Some(HEAD.into()),
+        fix: None,
     }
 }
 
@@ -259,9 +260,11 @@ fn the_gates_of_the_judged_head_survive_the_review_and_the_merge_after_it_but_no
 }
 
 #[test]
-fn a_rejected_verdict_goes_back_to_the_dev_session() {
+fn a_rejected_verdict_goes_back_to_the_dev_session_when_the_workflow_has_no_fix() {
     let params = json!({ "head_sha": HEAD, "findings": 1, "summary": "Needs work." });
-    let mut task = task_at_merge(Workflow::of(WorkflowPreset::FullLoop));
+    let mut workflow = Workflow::of(WorkflowPreset::FullLoop);
+    workflow.remove_stage(Stage::Fix);
+    let mut task = task_at_merge(workflow);
     assert_eq!(
         retry_target(&task, BlockerCode::VerdictFailed, &params),
         Some((Stage::Dev, StagePhase::RunningSession))
@@ -274,6 +277,11 @@ fn a_rejected_verdict_goes_back_to_the_dev_session() {
         retry_target(&task, BlockerCode::VerdictFailed, &params),
         Some((Stage::Dev, StagePhase::RunningSession)),
         "the blocked run is the review itself"
+    );
+    assert_eq!(
+        retry_target(&task, BlockerCode::ReviewRoundsExhausted, &params),
+        None,
+        "without a fix stage there are no rounds to exhaust"
     );
     assert_eq!(
         retry_target(&task, BlockerCode::SpecUnclear, &json!({})),

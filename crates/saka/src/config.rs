@@ -380,6 +380,8 @@ pub struct BudgetConfig {
     pub architect: ArchitectBudget,
     #[serde(default)]
     pub review: ReviewBudget,
+    #[serde(default)]
+    pub fix: FixBudget,
 }
 
 impl Default for BudgetConfig {
@@ -389,6 +391,7 @@ impl Default for BudgetConfig {
             dev: StageBudget::default(),
             architect: ArchitectBudget::default(),
             review: ReviewBudget::default(),
+            fix: FixBudget::default(),
         }
     }
 }
@@ -456,6 +459,30 @@ impl Default for ReviewBudget {
         ReviewBudget {
             running_minutes: twenty_minutes(),
             turns: three(),
+            tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixBudget {
+    #[serde(default = "thirty_minutes")]
+    pub running_minutes: u32,
+    #[serde(default = "six")]
+    pub turns: u32,
+    #[serde(default)]
+    pub tokens: i64,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+impl Default for FixBudget {
+    fn default() -> FixBudget {
+        FixBudget {
+            running_minutes: thirty_minutes(),
+            turns: six(),
             tokens: 0,
             cost_usd: 0.0,
         }
@@ -897,6 +924,25 @@ impl Config {
         if let Some((_, message)) = review.iter().find(|(ok, _)| !ok) {
             return Err(err("config_invalid", *message));
         }
+        let fb = &b.fix;
+        let fix: [(bool, &str); 4] = [
+            (
+                (1..=1440).contains(&fb.running_minutes),
+                "budget.fix.running_minutes must be 1..=1440",
+            ),
+            (
+                (1..=100).contains(&fb.turns),
+                "budget.fix.turns must be 1..=100",
+            ),
+            (fb.tokens >= 0, "budget.fix.tokens must be 0 or more"),
+            (
+                fb.cost_usd >= 0.0 && fb.cost_usd.is_finite(),
+                "budget.fix.cost_usd must be 0 or more",
+            ),
+        ];
+        if let Some((_, message)) = fix.iter().find(|(ok, _)| !ok) {
+            return Err(err("config_invalid", *message));
+        }
         let e = &self.env;
         if !(1..=100).contains(&e.ports_per_env) {
             return Err(err("config_invalid", "env.ports_per_env must be 1..=100"));
@@ -1093,6 +1139,25 @@ mod tests {
             let e = Config::parse(bad).unwrap_err();
             assert_eq!(e.code, "config_invalid");
             assert!(e.detail.starts_with("budget.review"), "{bad}: {}", e.detail);
+        }
+    }
+
+    #[test]
+    fn the_fix_budget_has_defaults_and_ranges() {
+        let cfg = Config::parse("").unwrap();
+        let b = &cfg.budget.fix;
+        assert_eq!((b.running_minutes, b.turns, b.tokens), (30, 6, 0));
+        let partial = Config::parse("[budget.fix]\ntokens = 5\n").unwrap();
+        assert_eq!(partial.budget.fix.running_minutes, 30);
+        for bad in [
+            "[budget.fix]\nrunning_minutes = 0\n",
+            "[budget.fix]\nturns = 101\n",
+            "[budget.fix]\ntokens = -1\n",
+            "[budget.fix]\ncost_usd = -1.0\n",
+        ] {
+            let e = Config::parse(bad).unwrap_err();
+            assert_eq!(e.code, "config_invalid");
+            assert!(e.detail.starts_with("budget.fix"), "{bad}: {}", e.detail);
         }
     }
 
@@ -1369,6 +1434,8 @@ mod tests {
         assert_eq!(gitlab.merge_method, MergeMethod::Merge);
         assert_eq!(cfg.agent.limits.cpu_quota, "200%");
         assert_eq!(cfg.budget.review.running_minutes, 20);
+        assert_eq!(cfg.budget.fix.running_minutes, 30);
+        assert_eq!(cfg.budget.fix.turns, 6);
         assert_eq!(cfg.permission.rule.len(), 3);
         assert_eq!(cfg.env.ports_per_env, 10);
         assert_eq!(cfg.env.limits.tasks_max, 512);

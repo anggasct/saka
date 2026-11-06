@@ -24,6 +24,13 @@ fn hand_merge() -> SimConfig {
     }
 }
 
+fn hand_merge_without_fix() -> SimConfig {
+    SimConfig {
+        workflow: saka_testkit::without_fix(),
+        ..hand_merge()
+    }
+}
+
 fn edit(path: &str) -> FileEdit {
     (path.to_string(), Some(format!("{path}\n")))
 }
@@ -199,7 +206,7 @@ fn a_head_that_moves_after_the_approval_is_checked_and_reviewed_again_before_the
 
 #[test]
 fn a_rejected_verdict_blocks_the_task_and_a_retry_hands_the_findings_to_the_author() {
-    let mut sim = Sim::new(hand_merge());
+    let mut sim = Sim::new(hand_merge_without_fix());
     fresh_commits(&sim);
     sim.world.script_reviews(vec![
         ReviewReply::request_changes("Cover the empty list."),
@@ -250,7 +257,7 @@ fn a_rejected_verdict_blocks_the_task_and_a_retry_hands_the_findings_to_the_auth
 
 #[test]
 fn after_three_rejected_rounds_the_only_action_left_is_to_cancel() {
-    let mut sim = Sim::new(hand_merge());
+    let mut sim = Sim::new(hand_merge_without_fix());
     fresh_commits(&sim);
     sim.world.script_reviews(
         (0..4)

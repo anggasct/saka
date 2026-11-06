@@ -291,6 +291,7 @@ impl Engine {
             .extend(extra.activity.map(|a| (task.item.project_id, a)));
         batch.session_offsets.extend(extra.offset);
         let project = Some(task.item.project_id);
+        let rounds_before = task.fix_rounds_used();
         let after = self.apply(&mut batch, task, &events, project, cause, now)?;
         for e in &extra.events {
             self.push_event(&mut batch, e, project, cause, now);
@@ -347,6 +348,28 @@ impl Engine {
                     self.counters
                         .review_verdict(outcome.as_str(), basis.as_str());
                     tracing::info!(%work_item_id, outcome = outcome.as_str(), basis = basis.as_str(), findings = findings.len(), "review.verdict");
+                }
+                Event::StageRunCreated {
+                    work_item_id,
+                    trigger,
+                    fix: Some(round),
+                    ..
+                } if round.number > rounds_before => {
+                    let cause = match (trigger, round.cause.code.as_str()) {
+                        (saka_core::vocab::Trigger::Manual, _) => "operator",
+                        (_, "merge_conflict") => "conflict",
+                        _ => "review",
+                    };
+                    self.counters.fix_round(cause);
+                    tracing::info!(%work_item_id, round = round.number, cause, "fix.round");
+                }
+                Event::WorkItemBlocked {
+                    work_item_id,
+                    code: saka_core::vocab::BlockerCode::ReviewRoundsExhausted,
+                    ..
+                } => {
+                    self.counters.fix_exhausted();
+                    tracing::info!(%work_item_id, "fix.exhausted");
                 }
                 Event::ReviewPosted {
                     work_item_id,

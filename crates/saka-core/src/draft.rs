@@ -136,6 +136,7 @@ pub fn run_view(d: &Draft) -> Option<RunView<'_>> {
         retry: RunRetry {
             trigger: attempt.trigger,
             retried: None,
+            follows_up: false,
         },
         packet: Prompt::DraftPacket,
     })

@@ -1,12 +1,14 @@
 use saka_core::scope::{PathScope, ScopeIssue};
 use saka_core::vocab::{Stage, Trigger, WorkflowPreset};
-use saka_core::workflow::{ChangeEntry, MAX_FILTER_ENTRIES, Workflow, filter_text_ok};
+use saka_core::workflow::{
+    ChangeEntry, MAX_FILTER_ENTRIES, MAX_FIX_ROUNDS, Workflow, filter_text_ok,
+};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
 use super::{Collector, get, line_of};
 
-const KEYS: &[&str] = &["preset", "spec", "change_request", "stages"];
+const KEYS: &[&str] = &["preset", "spec", "change_request", "stages", "fix_rounds"];
 const ENTRY_KEYS: &[&str] = &[
     "trigger",
     "labels",
@@ -178,6 +180,22 @@ fn stages(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<DeValu
     }
 }
 
+fn fix_rounds(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<DeValue<'_>>) {
+    let at = Some(value.span().start);
+    let rounds = value
+        .get_ref()
+        .as_integer()
+        .and_then(|n| u32::try_from(n.as_str().parse::<i64>().ok()?).ok())
+        .filter(|n| (1..=MAX_FIX_ROUNDS).contains(n));
+    match rounds {
+        None => c.push("field_invalid", "workflow.fix_rounds", at),
+        Some(_) if !workflow.has_stage(Stage::Fix) => {
+            c.push("workflow_stage_not_allowed", "workflow.fix_rounds", at);
+        }
+        Some(n) => workflow.fix_rounds = n,
+    }
+}
+
 pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Workflow {
     let Some(section) = get(doc, "workflow") else {
         return Workflow::default();
@@ -237,6 +255,9 @@ pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Workflow {
     }
     if let Some(v) = get(table, "stages") {
         stages(c, &mut workflow, v);
+    }
+    if let Some(v) = get(table, "fix_rounds") {
+        fix_rounds(c, &mut workflow, v);
     }
     if c.issues.len() == before {
         for issue in workflow.validate() {
@@ -320,6 +341,34 @@ fix = "manual"
         assert_eq!(entry.trigger_label, "run-saka");
         assert_eq!(w.stage_trigger(Stage::Review), Some(Trigger::Manual));
         assert_eq!(w.stage_trigger(Stage::Fix), Some(Trigger::Manual));
+    }
+
+    #[test]
+    fn the_fix_rounds_default_to_two_and_take_one_to_ten() {
+        assert_eq!(config("").unwrap().fix_rounds, 2);
+        assert_eq!(
+            config("[workflow]\nfix_rounds = 4\n").unwrap().fix_rounds,
+            4
+        );
+        for bad in ["0", "11", "-1", "\"two\"", "2.5"] {
+            assert_eq!(
+                issues(&format!("[workflow]\nfix_rounds = {bad}\n")),
+                [("field_invalid", "workflow.fix_rounds".to_string(), 9)],
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn fix_rounds_without_a_fix_stage_are_refused() {
+        assert_eq!(
+            issues("[workflow]\npreset = \"build_only\"\nfix_rounds = 3\n"),
+            [(
+                "workflow_stage_not_allowed",
+                "workflow.fix_rounds".to_string(),
+                10
+            )]
+        );
     }
 
     #[test]
