@@ -33,6 +33,7 @@ pub enum Produced<'a> {
     Authorship(&'a crate::authorship::AuthorshipView),
     Pairing(&'a saka_core::identity::Pairing),
     Device(&'a saka_core::identity::Device),
+    Credential(&'a saka_core::identity::Credential),
     Nothing,
 }
 

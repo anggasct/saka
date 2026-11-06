@@ -3630,3 +3630,32 @@ pub struct AuthDevices {
     pub devices: Vec<Device>,
     pub credentials: Vec<PasskeyCredential>,
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PasskeyRegisterStartBody {
+    /// A `setup` or `passkey` pairing code. Not needed with a signed-in session.
+    pub code: Option<String>,
+    /// A name for the passkey, 1 to 100 characters.
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LoginStartBody {}
+
+/// A WebAuthn ceremony the server holds in memory for five minutes. It can be finished once.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CeremonyStarted {
+    pub ceremony_id: String,
+    /// The WebAuthn options for `navigator.credentials.create` or `.get`, in the JSON form of the WebAuthn spec.
+    pub options: Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CeremonyFinishBody {
+    pub ceremony_id: String,
+    /// The credential the browser returned, in the JSON form of the WebAuthn spec.
+    pub credential: Value,
+}

@@ -556,10 +556,14 @@ impl Client {
         }
     }
 
-    pub async fn auth_revoke(&self, id: &str) -> ExitCode {
-        let path = format!("/api/v1/auth/devices/{id}/revoke");
+    pub async fn auth_revoke(&self, id: &str, passkey: bool) -> ExitCode {
+        let (path, what) = if passkey {
+            (format!("/api/v1/auth/credentials/{id}/revoke"), "passkey")
+        } else {
+            (format!("/api/v1/auth/devices/{id}/revoke"), "device")
+        };
         match self.post(&path, &json!({}), None).await {
-            Ok(a) => self.finish(&a, |b| format!("device {} revoked", text(&b["id"]))),
+            Ok(a) => self.finish(&a, |b| format!("{what} {} revoked", text(&b["id"]))),
             Err(code) => code,
         }
     }

@@ -113,16 +113,23 @@ rp_id = "example.com"                 # the domain of origin or a parent of it
 
 With `[auth]` on, every request needs a credential, including one from loopback and one that arrives through your own proxy: a source address or a `Host` header proves nothing behind a proxy. Only `/healthz`, `/readyz`, `/api/v1/meta`, the web app files, and the sign-in endpoints answer without one. `/metrics` needs a credential too. The `Host` header must name the `origin` host or a loopback address, and a `POST` from a browser must come from `origin` or an entry of `server.allowed_origins`.
 
-The operator is one person: there are no accounts or roles. A credential is a device token (`Authorization: Bearer sdt_…`), for the CLI and other programs. `saka serve` writes a token for the local CLI to `<data_dir>/cli-token` with mode 0600 and replaces it on every start, so `saka` on the host works with no flag. The CLI reads that file only for a loopback server and refuses it when its mode lets anyone else read it (`token_file_mode`). For another machine, run `saka auth pair` on the host and `saka auth redeem <code> --name "<device>" --out <file>` on the device, then use `--token-file <file>` or `SAKA_TOKEN`.
+The operator is one person: there are no accounts or roles. A credential is either a device token or a session cookie.
+
+A **device token** (`Authorization: Bearer sdt_…`) is for the CLI and other programs. `saka serve` writes a token for the local CLI to `<data_dir>/cli-token` with mode 0600 and replaces it on every start, so `saka` on the host works with no flag. The CLI reads that file only for a loopback server and refuses it when its mode lets anyone else read it (`token_file_mode`). For another machine, run `saka auth pair` on the host and `saka auth redeem <code> --name "<device>" --out <file>` on the device, then use `--token-file <file>` or `SAKA_TOKEN`.
+
+A **session cookie** (`saka_session`, `HttpOnly; Secure; SameSite=Strict`) is for the browser and comes from a passkey. The first passkey needs a setup code from the host, so nobody who happens to open an exposed instance first can claim it. A session lasts `[auth] session_hours` (default 168, at most 720) from sign-in and is not renewed; signing out, revoking the passkey, or the end of that time ends it. Passkeys are verified by the `webauthn-rs` library; Saka does not implement WebAuthn itself.
 
 ```sh
+saka auth setup                  # on the host: a code that registers a passkey, valid once for 15 minutes; also recovers a lost one
 saka auth pair                   # a code that pairs another CLI or app (a token), valid once for 5 minutes
+saka auth pair --passkey         # a code that registers a passkey from another browser
 saka auth redeem <code> --name "CI box" --out ~/.config/saka/token
-saka auth devices                # paired devices
+saka auth devices                # paired devices and passkeys
 saka auth revoke <device-id>     # takes effect on the next request
+saka auth revoke <passkey-id> --passkey   # also ends that passkey's sessions; the last passkey cannot be revoked
 ```
 
-A pairing code is ten characters of Crockford base32 (`I`, `L`, `O` and `U` are never used; typing them as `1` or `0` works), is stored only as a hash, and works once. Five wrong guesses void every live code. After ten failed attempts in a minute from the same address, the sign-in endpoints answer `429` with `Retry-After`; the address is the direct peer, so `X-Forwarded-For` is ignored. A token, a code, and a cookie are never written to logs, events, or error messages.
+A pairing code is ten characters of Crockford base32 (`I`, `L`, `O` and `U` are never used; typing them as `1` or `0` works), is stored only as a hash, and works once. Five wrong guesses void every live code of the same kind. After ten failed attempts in a minute from the same address, the sign-in endpoints answer `429` with `Retry-After`; the address is the direct peer, so `X-Forwarded-For` is ignored. A token, a code, and a cookie are never written to logs, events, or error messages.
 
 ## Development
 

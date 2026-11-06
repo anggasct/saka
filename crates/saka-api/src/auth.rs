@@ -5,8 +5,12 @@ use std::sync::{Arc, Mutex};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use saka_core::identity::OriginParts;
+use saka_core::secret::SecretText;
 use saka_engine::Principal;
 use serde_json::json;
+use webauthn_rs::prelude::{
+    PasskeyAuthentication, PasskeyRegistration, Url, Webauthn, WebauthnBuilder,
+};
 
 use crate::guard::loopback_host;
 use crate::problem::ApiError;
@@ -15,6 +19,8 @@ use crate::state::AppState;
 pub const SESSION_COOKIE: &str = "saka_session";
 pub const ANONYMOUS: &str = "anonymous";
 
+const CEREMONY_TTL_MS: i64 = 5 * 60 * 1000;
+const MAX_CEREMONIES: usize = 256;
 const WINDOW_MS: i64 = 60_000;
 const MAX_FAILURES: usize = 10;
 const MAX_TRACKED_CLIENTS: usize = 4096;
@@ -40,18 +46,86 @@ pub struct AuthSettings {
     pub session_hours: u32,
 }
 
-#[derive(Debug)]
+pub(crate) enum CeremonyKind {
+    Register {
+        state: Box<PasskeyRegistration>,
+        name: String,
+        code: Option<SecretText>,
+    },
+    Login {
+        state: Box<PasskeyAuthentication>,
+    },
+}
+
+struct Ceremony {
+    kind: CeremonyKind,
+    started_ms: i64,
+}
+
 pub struct Authenticator {
     settings: AuthSettings,
     limiter: Mutex<Limiter>,
+    webauthn: Webauthn,
+    ceremonies: Mutex<HashMap<String, Ceremony>>,
+}
+
+impl std::fmt::Debug for Authenticator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Authenticator")
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Authenticator {
-    pub fn new(settings: AuthSettings) -> Arc<Authenticator> {
-        Arc::new(Authenticator {
+    pub fn new(settings: AuthSettings) -> Result<Arc<Authenticator>, String> {
+        let origin = Url::parse(&settings.origin.serialized()).map_err(|e| e.to_string())?;
+        let webauthn = WebauthnBuilder::new(&settings.rp_id, &origin)
+            .map(|b| b.rp_name(&settings.rp_name))
+            .and_then(WebauthnBuilder::build)
+            .map_err(|e| format!("{e:?}"))?;
+        Ok(Arc::new(Authenticator {
             settings,
             limiter: Mutex::new(Limiter::default()),
-        })
+            webauthn,
+            ceremonies: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    pub(crate) fn webauthn(&self) -> &Webauthn {
+        &self.webauthn
+    }
+
+    pub(crate) fn begin(&self, id: String, kind: CeremonyKind, now_ms: i64) {
+        let mut held = self
+            .ceremonies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.retain(|_, c| now_ms.saturating_sub(c.started_ms) < CEREMONY_TTL_MS);
+        if held.len() >= MAX_CEREMONIES
+            && let Some(oldest) = held
+                .iter()
+                .min_by_key(|(_, c)| c.started_ms)
+                .map(|(k, _)| k.clone())
+        {
+            held.remove(&oldest);
+        }
+        held.insert(
+            id,
+            Ceremony {
+                kind,
+                started_ms: now_ms,
+            },
+        );
+    }
+
+    pub(crate) fn finish(&self, id: &str, now_ms: i64) -> Option<CeremonyKind> {
+        let ceremony = self
+            .ceremonies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)?;
+        (now_ms.saturating_sub(ceremony.started_ms) < CEREMONY_TTL_MS).then_some(ceremony.kind)
     }
 
     pub fn settings(&self) -> &AuthSettings {
@@ -188,7 +262,13 @@ pub(crate) fn peer(req: &axum::extract::Request) -> Option<SocketAddr> {
 
 const OPEN_GET: &[&str] = &["/healthz", "/readyz", "/api/v1/meta", "/api/v1/auth/status"];
 
-const OPEN_POST: &[&str] = &["/api/v1/auth/pair"];
+const OPEN_POST: &[&str] = &[
+    "/api/v1/auth/pair",
+    "/api/v1/auth/passkeys/register/start",
+    "/api/v1/auth/passkeys/register/finish",
+    "/api/v1/auth/login/start",
+    "/api/v1/auth/login/finish",
+];
 
 pub(crate) fn open_route(method: &Method, matched: Option<&str>, path: &str) -> bool {
     let read = method == Method::GET || method == Method::HEAD;
@@ -270,9 +350,11 @@ fn identify(state: &AppState, presented: &Presented) -> Result<Identity, ApiErro
                 .authenticate_token(token)?
                 .map_or(Identity::Invalid, Identity::Valid))
         }
-        Presented::Cookie(_) => {
-            state.engine()?;
-            Ok(Identity::Invalid)
+        Presented::Cookie(cookie) => {
+            let engine = state.engine()?;
+            Ok(engine
+                .authenticate_session(cookie)?
+                .map_or(Identity::Invalid, Identity::Valid))
         }
     }
 }

@@ -1,7 +1,7 @@
 use rusqlite::types::Value;
 use rusqlite::{Connection, Row, Transaction, params, params_from_iter};
 use saka_core::identity::{Credential, Device, MAX_FAILED_ATTEMPTS, Pairing, TOUCH_INTERVAL_MS};
-use saka_core::ids::{CredentialId, DeviceId, PairingId};
+use saka_core::ids::{CredentialId, DeviceId, LoginSessionId, PairingId};
 use saka_core::time::Timestamp;
 use saka_core::vocab::PairingPurpose;
 
@@ -10,11 +10,40 @@ use crate::error::Result;
 use crate::read::{one, opt_ts, ts};
 
 const PAIRING_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
+const SESSION_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewDevice {
     pub device: Device,
     pub token_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCredential {
+    pub credential: Credential,
+    pub passkey: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialLogin {
+    pub id: CredentialId,
+    pub at: Timestamp,
+    pub passkey: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSession {
+    pub id: LoginSessionId,
+    pub credential_id: CredentialId,
+    pub token_sha256: String,
+    pub created_at: Timestamp,
+    pub expires_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionHit {
+    pub id: LoginSessionId,
+    pub credential_id: CredentialId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +186,25 @@ pub fn claim_pairing(
     purposes: &[PairingPurpose],
     now: Timestamp,
 ) -> Result<Option<ClaimedPairing>> {
+    check_pairing(tx, code_sha256, purposes, now, true)
+}
+
+pub fn peek_pairing(
+    tx: &Transaction<'_>,
+    code_sha256: &str,
+    purposes: &[PairingPurpose],
+    now: Timestamp,
+) -> Result<Option<ClaimedPairing>> {
+    check_pairing(tx, code_sha256, purposes, now, false)
+}
+
+fn check_pairing(
+    tx: &Transaction<'_>,
+    code_sha256: &str,
+    purposes: &[PairingPurpose],
+    now: Timestamp,
+    consume: bool,
+) -> Result<Option<ClaimedPairing>> {
     let purpose_marks = |first: usize| {
         (first..first + purposes.len())
             .map(|n| format!("?{n}"))
@@ -169,13 +217,22 @@ pub fn claim_pairing(
             .map(|p| Value::Text(p.as_str().to_string()))
             .collect::<Vec<_>>()
     };
-    let claim = format!(
-        "UPDATE pairing_code SET used_at = ?1
-         WHERE code_sha256 = ?2 AND used_at IS NULL AND expires_at > ?1 AND failed < ?3
-           AND purpose IN ({})
-         RETURNING id, purpose, created_by",
-        purpose_marks(4)
-    );
+    let claim = if consume {
+        format!(
+            "UPDATE pairing_code SET used_at = ?1
+             WHERE code_sha256 = ?2 AND used_at IS NULL AND expires_at > ?1 AND failed < ?3
+               AND purpose IN ({})
+             RETURNING id, purpose, created_by",
+            purpose_marks(4)
+        )
+    } else {
+        format!(
+            "SELECT id, purpose, created_by FROM pairing_code
+             WHERE code_sha256 = ?2 AND used_at IS NULL AND expires_at > ?1
+               AND failed < ?3 AND purpose IN ({})",
+            purpose_marks(4)
+        )
+    };
     let mut bound = vec![
         Value::Integer(now.0),
         Value::Text(code_sha256.to_string()),
@@ -223,13 +280,128 @@ pub fn active_credential_list(conn: &Connection) -> Result<Vec<Credential>> {
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        out.push(Credential {
-            id: CredentialId(uuid(row, "id")?),
-            name: row.get("name")?,
-            created_at: ts(row, "created_at")?,
-            last_used_at: opt_ts(row, "last_used_at")?,
-            revoked_at: opt_ts(row, "revoked_at")?,
-        });
+        out.push(credential_row(row)?);
+    }
+    Ok(out)
+}
+
+pub(crate) fn insert_credential(tx: &Transaction<'_>, c: &NewCredential) -> Result<()> {
+    tx.execute(
+        "INSERT INTO credential (id, name, passkey, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            c.credential.id.to_string(),
+            c.credential.name,
+            c.passkey,
+            c.credential.created_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn record_login(tx: &Transaction<'_>, l: &CredentialLogin) -> Result<()> {
+    tx.execute(
+        "UPDATE credential SET last_used_at = ?2, passkey = coalesce(?3, passkey)
+         WHERE id = ?1 AND revoked_at IS NULL",
+        params![l.id.to_string(), l.at.0, l.passkey],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn revoke_credential(
+    tx: &Transaction<'_>,
+    id: CredentialId,
+    at: Timestamp,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE credential SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL",
+        params![id.to_string(), at.0],
+    )?;
+    tx.execute(
+        "UPDATE login_session SET revoked_at = ?2 WHERE credential_id = ?1 AND revoked_at IS NULL",
+        params![id.to_string(), at.0],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn insert_session(tx: &Transaction<'_>, s: &NewSession, now: Timestamp) -> Result<()> {
+    tx.execute(
+        "DELETE FROM login_session WHERE expires_at < ?1",
+        [now.0 - SESSION_RETENTION_MS],
+    )?;
+    tx.execute(
+        "INSERT INTO login_session (id, credential_id, token_sha256, created_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            s.id.to_string(),
+            s.credential_id.to_string(),
+            s.token_sha256,
+            s.created_at.0,
+            s.expires_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn revoke_session(
+    tx: &Transaction<'_>,
+    id: LoginSessionId,
+    at: Timestamp,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE login_session SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL",
+        params![id.to_string(), at.0],
+    )?;
+    Ok(())
+}
+
+pub fn session_by_token(
+    conn: &Connection,
+    token_sha256: &str,
+    now: Timestamp,
+) -> Result<Option<SessionHit>> {
+    one(
+        conn,
+        "SELECT s.id AS id, s.credential_id AS credential_id
+         FROM login_session s JOIN credential c ON c.id = s.credential_id
+         WHERE s.token_sha256 = ?1 AND s.revoked_at IS NULL AND s.expires_at > ?2
+           AND c.revoked_at IS NULL",
+        &[&token_sha256, &now.0],
+        |row| {
+            Ok(SessionHit {
+                id: LoginSessionId(uuid(row, "id")?),
+                credential_id: CredentialId(uuid(row, "credential_id")?),
+            })
+        },
+    )
+}
+
+pub fn credential(conn: &Connection, id: CredentialId) -> Result<Option<Credential>> {
+    one(
+        conn,
+        "SELECT id, name, created_at, last_used_at, revoked_at FROM credential WHERE id = ?1",
+        &[&id.to_string()],
+        credential_row,
+    )
+}
+
+fn credential_row(row: &Row<'_>) -> Result<Credential> {
+    Ok(Credential {
+        id: CredentialId(uuid(row, "id")?),
+        name: row.get("name")?,
+        created_at: ts(row, "created_at")?,
+        last_used_at: opt_ts(row, "last_used_at")?,
+        revoked_at: opt_ts(row, "revoked_at")?,
+    })
+}
+
+pub fn active_passkeys(conn: &Connection) -> Result<Vec<(CredentialId, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, passkey FROM credential WHERE revoked_at IS NULL ORDER BY created_at, id",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push((CredentialId(uuid(row, "id")?), row.get("passkey")?));
     }
     Ok(out)
 }

@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 utoipa.workspace = true
 uuid = { workspace = true, features = ["v7"] }
+webauthn-rs.workspace = true
 
 [features]
 # Builds `web/dist` into the binary (run `pnpm --dir web build` first).
@@ -37,4 +38,6 @@ saka-testkit = { path = "../saka-testkit" }
 tower = { workspace = true, features = ["util"] }
 uuid = { workspace = true, features = ["v7"] }
 http-body-util = "0.1.5"
+p256.workspace = true
+serde_cbor_2.workspace = true
 tracing-subscriber.workspace = true

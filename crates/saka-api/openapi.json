@@ -29,6 +29,54 @@
         }
       }
     },
+    "/api/v1/auth/credentials/{credential_id}/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "revoke_credential",
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyCredential"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/devices": {
       "get": {
         "tags": [
@@ -93,6 +141,94 @@
               }
             }
           },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeremonyFinishBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginStartBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeremonyStarted"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {},
           "4XX": {
             "content": {
               "application/problem+json": {
@@ -176,6 +312,82 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PairingCreated"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/passkeys/register/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "register_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeremonyFinishBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyCredential"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/passkeys/register/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "register_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRegisterStartBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeremonyStarted"
                 }
               }
             }
@@ -4539,6 +4751,38 @@
           }
         }
       },
+      "CeremonyFinishBody": {
+        "type": "object",
+        "required": [
+          "ceremony_id",
+          "credential"
+        ],
+        "properties": {
+          "ceremony_id": {
+            "type": "string"
+          },
+          "credential": {
+            "description": "The credential the browser returned, in the JSON form of the WebAuthn spec."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CeremonyStarted": {
+        "type": "object",
+        "description": "A WebAuthn ceremony the server holds in memory for five minutes. It can be finished once.",
+        "required": [
+          "ceremony_id",
+          "options"
+        ],
+        "properties": {
+          "ceremony_id": {
+            "type": "string"
+          },
+          "options": {
+            "description": "The WebAuthn options for `navigator.credentials.create` or `.get`, in the JSON form of the WebAuthn spec."
+          }
+        }
+      },
       "ChangeRequest": {
         "type": "object",
         "required": [
@@ -6091,6 +6335,10 @@
           }
         }
       },
+      "LoginStartBody": {
+        "type": "object",
+        "additionalProperties": false
+      },
       "Measure": {
         "type": "object",
         "required": [
@@ -7489,6 +7737,26 @@
             "type": "string"
           }
         }
+      },
+      "PasskeyRegisterStartBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A `setup` or `passkey` pairing code. Not needed with a signed-in session."
+          },
+          "name": {
+            "type": "string",
+            "description": "A name for the passkey, 1 to 100 characters."
+          }
+        },
+        "additionalProperties": false
       },
       "PermissionEvaluation": {
         "type": "object",

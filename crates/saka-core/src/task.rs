@@ -3801,6 +3801,10 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::PairingCreated { .. }
         | E::DevicePaired { .. }
         | E::DeviceRevoked { .. }
+        | E::CredentialRegistered { .. }
+        | E::CredentialRevoked { .. }
+        | E::LoginSessionOpened { .. }
+        | E::LoginSessionClosed { .. }
         | E::ProjectAuthorshipSet { .. }
         | E::ProjectUserTokenSet { .. }
         | E::ProjectUserTokenRemoved { .. }

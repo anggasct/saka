@@ -44,6 +44,7 @@ pub use state::{ApiConfig, AppState};
         routes::retry_spec_draft, routes::cancel_spec_draft,
         routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::list_inbox, routes::inbox_summary, routes::dismiss_inbox_item, routes::rerun_hook,
         auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
+        auth_routes::register_start, auth_routes::register_finish, auth_routes::login_start, auth_routes::login_finish, auth_routes::logout, auth_routes::revoke_credential,
         routes::meta, routes::events, routes::diagnostics,
         ops::healthz, ops::readyz, ops::metrics,
     ),
@@ -264,6 +265,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/auth/status", get(auth_routes::status))
         .route("/api/v1/auth/pairings", post(auth_routes::create_pairing))
         .route("/api/v1/auth/pair", post(auth_routes::pair))
+        .route(
+            "/api/v1/auth/passkeys/register/start",
+            post(auth_routes::register_start),
+        )
+        .route(
+            "/api/v1/auth/passkeys/register/finish",
+            post(auth_routes::register_finish),
+        )
+        .route("/api/v1/auth/login/start", post(auth_routes::login_start))
+        .route("/api/v1/auth/login/finish", post(auth_routes::login_finish))
+        .route("/api/v1/auth/logout", post(auth_routes::logout))
+        .route(
+            "/api/v1/auth/credentials/{credential_id}/revoke",
+            post(auth_routes::revoke_credential),
+        )
         .route("/api/v1/auth/devices", get(auth_routes::list_devices))
         .route(
             "/api/v1/auth/devices/{device_id}/revoke",

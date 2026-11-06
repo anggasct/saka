@@ -20,6 +20,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/auth/credentials/{credential_id}/revoke": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["revoke_credential"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/auth/devices": {
     parameters: {
       query?: never;
@@ -52,6 +68,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/auth/login/finish": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["login_finish"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/login/start": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["login_start"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/logout": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["logout"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/auth/pair": {
     parameters: {
       query?: never;
@@ -78,6 +142,38 @@ export interface paths {
     get?: never;
     put?: never;
     post: operations["create_pairing"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/passkeys/register/finish": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["register_finish"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/auth/passkeys/register/start": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["register_start"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1204,6 +1300,17 @@ export interface components {
       primary_action: components["schemas"]["PrimaryAction"];
       stage?: string | null;
     };
+    CeremonyFinishBody: {
+      ceremony_id: string;
+      /** @description The credential the browser returned, in the JSON form of the WebAuthn spec. */
+      credential: unknown;
+    };
+    /** @description A WebAuthn ceremony the server holds in memory for five minutes. It can be finished once. */
+    CeremonyStarted: {
+      ceremony_id: string;
+      /** @description The WebAuthn options for `navigator.credentials.create` or `.get`, in the JSON form of the WebAuthn spec. */
+      options: unknown;
+    };
     ChangeRequest: {
       base_branch: string;
       head_sha: string;
@@ -1692,6 +1799,7 @@ export interface components {
       /** @description `error` blocks approve; `warning` does not. */
       severity?: string;
     };
+    LoginStartBody: Record<string, never>;
     Measure: {
       /** @description `0` means no limit. */
       limit: unknown;
@@ -2073,6 +2181,12 @@ export interface components {
       /** Format: uuid */
       id: string;
       last_used_at?: string | null;
+      name: string;
+    };
+    PasskeyRegisterStartBody: {
+      /** @description A `setup` or `passkey` pairing code. Not needed with a signed-in session. */
+      code?: string | null;
+      /** @description A name for the passkey, 1 to 100 characters. */
       name: string;
     };
     PermissionEvaluation: {
@@ -3178,6 +3292,38 @@ export interface operations {
       };
     };
   };
+  revoke_credential: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        credential_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PasskeyCredential"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   list_devices: {
     parameters: {
       query?: never;
@@ -3226,6 +3372,91 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["Device"];
         };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  login_finish: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CeremonyFinishBody"];
+      };
+    };
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  login_start: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["LoginStartBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CeremonyStarted"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  logout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       "4XX": {
         headers: {
@@ -3290,6 +3521,68 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["PairingCreated"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  register_finish: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CeremonyFinishBody"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PasskeyCredential"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  register_start: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PasskeyRegisterStartBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CeremonyStarted"];
         };
       };
       "4XX": {

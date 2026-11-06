@@ -284,3 +284,131 @@ fn setup_is_required_until_a_passkey_exists() {
         1
     );
 }
+
+fn credential(n: u128) -> identity::NewCredential {
+    identity::NewCredential {
+        credential: saka_core::identity::Credential {
+            id: saka_core::ids::CredentialId(Uuid::from_u128(n)),
+            name: format!("key {n}"),
+            created_at: NOW,
+            last_used_at: None,
+            revoked_at: None,
+        },
+        passkey: "{}".into(),
+    }
+}
+
+fn session(n: u128, credential: u128, hash: &str, ttl: i64) -> identity::NewSession {
+    identity::NewSession {
+        id: saka_core::ids::LoginSessionId(Uuid::from_u128(n)),
+        credential_id: saka_core::ids::CredentialId(Uuid::from_u128(credential)),
+        token_sha256: hash.into(),
+        created_at: NOW,
+        expires_at: Timestamp(NOW.0 + ttl),
+    }
+}
+
+#[test]
+fn a_session_is_found_until_it_expires_is_revoked_or_its_passkey_is_revoked() {
+    let (_dir, store) = store();
+    commit(&store, |b| {
+        b.new_credentials.push(credential(1));
+        b.new_credentials.push(credential(2));
+        b.new_sessions.push(session(10, 1, "s1", 1_000));
+        b.new_sessions.push(session(11, 1, "s2", 1_000));
+        b.new_sessions.push(session(12, 2, "s3", 1_000));
+    });
+    let find = |hash: &str, at: i64| {
+        store
+            .read(|c| identity::session_by_token(c, hash, Timestamp(at)))
+            .unwrap()
+    };
+    assert!(find("s1", NOW.0 + 999).is_some());
+    assert!(
+        find("s1", NOW.0 + 1_000).is_none(),
+        "the expiry instant is exclusive"
+    );
+    assert!(find("unknown", NOW.0).is_none());
+
+    commit(&store, |b| {
+        b.revoked_sessions
+            .push(saka_core::ids::LoginSessionId(Uuid::from_u128(11)))
+    });
+    assert!(find("s2", NOW.0).is_none());
+    assert!(find("s1", NOW.0).is_some());
+
+    commit(&store, |b| {
+        b.revoked_credentials
+            .push(saka_core::ids::CredentialId(Uuid::from_u128(1)))
+    });
+    assert!(
+        find("s1", NOW.0).is_none(),
+        "revoking a passkey ends its sessions"
+    );
+    assert!(find("s3", NOW.0).is_some());
+    assert_eq!(store.read(identity::active_credentials).unwrap(), 1);
+}
+
+#[test]
+fn a_login_stamps_the_passkey_and_keeps_the_stored_key_unless_it_changed() {
+    let (_dir, store) = store();
+    commit(&store, |b| b.new_credentials.push(credential(1)));
+    let id = saka_core::ids::CredentialId(Uuid::from_u128(1));
+    let stored = |store: &Store| store.read(identity::active_passkeys).unwrap().remove(0).1;
+    commit(&store, |b| {
+        b.credential_logins.push(identity::CredentialLogin {
+            id,
+            at: Timestamp(50),
+            passkey: None,
+        });
+    });
+    assert_eq!(stored(&store), "{}");
+    commit(&store, |b| {
+        b.credential_logins.push(identity::CredentialLogin {
+            id,
+            at: Timestamp(60),
+            passkey: Some("{\"counter\":2}".into()),
+        });
+    });
+    assert_eq!(stored(&store), "{\"counter\":2}");
+    let found = store
+        .read(|c| identity::credential(c, id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.last_used_at, Some(Timestamp(60)));
+}
+
+#[test]
+fn peeking_a_code_does_not_spend_it_but_a_miss_still_counts() {
+    let (_dir, store) = store();
+    commit(&store, |b| {
+        b.new_pairings
+            .push(pairing(1, PairingPurpose::Setup, "c1", 900_000))
+    });
+    let peek = |hash: &str| {
+        store
+            .transact(|tx| {
+                identity::peek_pairing(tx, hash, &[PairingPurpose::Setup], Timestamp(NOW.0 + 1))
+            })
+            .unwrap()
+    };
+    assert!(peek("c1").is_some());
+    assert!(peek("c1").is_some());
+    let claim = |hash: &str| {
+        store
+            .transact(|tx| {
+                identity::claim_pairing(tx, hash, &[PairingPurpose::Setup], Timestamp(NOW.0 + 1))
+            })
+            .unwrap()
+    };
+    assert!(claim("c1").is_some());
+    assert!(peek("c1").is_none());
+    commit(&store, |b| {
+        b.new_pairings
+            .push(pairing(2, PairingPurpose::Setup, "c2", 900_000))
+    });
+    for _ in 0..5 {
+        assert!(peek("wrong").is_none());
+    }
+    assert!(peek("c2").is_none(), "five misses void the live codes");
+}
