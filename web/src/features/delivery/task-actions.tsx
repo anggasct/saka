@@ -213,6 +213,10 @@ function ReturnDialog({ task }: { task: WorkItem | WorkItemDetail }) {
   const left = runs.at(-1)?.stage;
   const canMerge =
     task.change_request !== null && task.change_request !== undefined;
+  const canFix =
+    canMerge &&
+    task.review?.outcome === "changes_requested" &&
+    task.review.current;
   const [stage, setStage] = useState(
     canMerge && left === "merge" ? "merge" : "dev",
   );
@@ -241,6 +245,10 @@ function ReturnDialog({ task }: { task: WorkItem | WorkItemDetail }) {
           className="block min-h-11 w-full rounded-md border border-border bg-background px-2 text-sm"
         >
           <option value="dev">{label(t, "stage", "dev")}</option>
+          {canMerge && (
+            <option value="review">{label(t, "stage", "review")}</option>
+          )}
+          {canFix && <option value="fix">{label(t, "stage", "fix")}</option>}
           {canMerge && (
             <option value="merge">{label(t, "stage", "merge")}</option>
           )}

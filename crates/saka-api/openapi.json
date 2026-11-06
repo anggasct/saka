@@ -4664,6 +4664,32 @@
           }
         }
       },
+      "FixProgress": {
+        "type": "object",
+        "required": [
+          "round",
+          "max_rounds",
+          "cause"
+        ],
+        "properties": {
+          "cause": {
+            "type": "string",
+            "description": "`review | conflict`: what the round answered."
+          },
+          "max_rounds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The rounds the workflow allows a task.",
+            "minimum": 0
+          },
+          "round": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The highest round started. It passes `max_rounds` only when the operator granted another round after the limit.",
+            "minimum": 0
+          }
+        }
+      },
       "Gate": {
         "type": "object",
         "required": [
@@ -5973,6 +5999,17 @@
                     {
                       "$ref": "#/components/schemas/ExternalChange",
                       "description": "What is known about a pull request opened outside Saka; `null` for a task made from a spec step."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "fix": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/FixProgress",
+                      "description": "The latest fix round of the task; `null` before a round ran and when the workflow has no `fix` stage."
                     },
                     {
                       "type": "null"
@@ -8267,6 +8304,15 @@
               "null"
             ]
           },
+          "round": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The fix round the run belongs to; `null` for every other run.",
+            "minimum": 0
+          },
           "stage": {
             "type": "string"
           },
@@ -8893,6 +8939,17 @@
               {
                 "$ref": "#/components/schemas/ExternalChange",
                 "description": "What is known about a pull request opened outside Saka; `null` for a task made from a spec step."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fix": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FixProgress",
+                "description": "The latest fix round of the task; `null` before a round ran and when the workflow has no `fix` stage."
               },
               {
                 "type": "null"

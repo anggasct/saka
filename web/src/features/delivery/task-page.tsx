@@ -8,6 +8,7 @@ import { Skeleton } from "@/ui/skeleton";
 import { BlockerCard } from "./blocker-card";
 import { ChangeSection } from "./change-section";
 import { EnvironmentSection } from "./environment-section";
+import { FixSection } from "./fix-section";
 import { GatesSection } from "./gates-section";
 import { PageError } from "./page-error";
 import {
@@ -102,6 +103,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       <ChangeSection task={item} />
       <GatesSection task={item} />
       <ReviewSection task={item} />
+      <FixSection task={item} />
       <StageRunsSection task={item} spec={spec.data} tasks={tasks} />
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />

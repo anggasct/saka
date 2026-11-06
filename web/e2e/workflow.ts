@@ -8,4 +8,5 @@ export const FULL_LOOP = {
     { stage: "fix", trigger: "auto" },
     { stage: "merge", trigger: "manual" },
   ],
+  fix_rounds: 2,
 };

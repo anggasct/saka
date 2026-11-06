@@ -107,7 +107,7 @@ function task(step: number, extra: Record<string, unknown>) {
   };
 }
 
-const ready = task(1, {});
+const ready = task(1, { fix: { round: 1, max_rounds: 2, cause: "review" } });
 const blocked = task(2, {
   state: "blocked",
   stage: "dev",

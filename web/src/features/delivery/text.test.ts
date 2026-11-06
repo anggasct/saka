@@ -307,6 +307,14 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ],
   ["verdict_failed", { head_sha: "a1b2c3d4e5f6", findings: 1 }],
   ["review_rounds_exhausted", {}],
+  [
+    "review_rounds_exhausted",
+    { head_sha: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0", rounds: 2, max: 2 },
+  ],
+  [
+    "review_rounds_exhausted",
+    { head_sha: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0", rounds: 1, max: 1 },
+  ],
   ["spec_unclear", {}],
   [
     "env_setup_failed",

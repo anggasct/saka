@@ -77,6 +77,9 @@ export function StageRunsSection({
                   <span className="text-muted-foreground">
                     {label(t, "run.trigger", run.trigger)}
                   </span>
+                  {run.round !== null && run.round !== undefined && (
+                    <Badge>{t("task.runs.round", { round: run.round })}</Badge>
+                  )}
                 </div>
                 {run.reason && <p className="break-words">{run.reason}</p>}
                 {run.failure && (

@@ -4957,6 +4957,47 @@ fn takeover_api() -> Api {
 }
 
 #[test]
+fn a_fix_round_shows_on_the_task_and_on_the_stage_run_that_belongs_to_it() {
+    let mut api = takeover_api();
+    api.sim.world.script_reviews(vec![
+        saka_testkit::ReviewReply::request_changes("Cover the empty list."),
+        saka_testkit::ReviewReply::approve(),
+    ]);
+    api.sim.world.script_edits(
+        (1..=4)
+            .map(|n| vec![(format!("src/change{n}.rs"), Some("x\n".to_string()))])
+            .collect(),
+    );
+    let id = api.sim.task(1).item.id.0;
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["fix"],
+        json!({ "round": 1, "max_rounds": 2, "cause": "review" })
+    );
+    let rounds: Vec<(&str, &Value)> = detail.body["stage_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["stage"].as_str().unwrap(), &r["round"]))
+        .collect();
+    assert_eq!(
+        rounds,
+        [
+            ("dev", &Value::Null),
+            ("merge", &Value::Null),
+            ("review", &Value::Null),
+            ("fix", &json!(1)),
+            ("merge", &Value::Null),
+            ("review", &Value::Null),
+            ("merge", &Value::Null),
+        ]
+    );
+}
+
+#[test]
 fn a_task_is_taken_over_and_handed_back_through_the_actions() {
     let mut api = takeover_api();
     let id = api.sim.task(1).item.id.0;
