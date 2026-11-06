@@ -36,7 +36,7 @@ fn a_restart_reattaches_live_sessions_and_the_task_keeps_its_session() {
             retry: vec![],
             answer: None,
         },
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     });
     sim.approve();
     assert!(sim.run_until(STEPS, |s| {

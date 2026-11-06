@@ -171,4 +171,54 @@ describe("ReviewSection", () => {
     const blocker = await screen.findByRole("region", { name: "Blocker" });
     expect(within(blocker).getByText("Which store?")).toBeInTheDocument();
   });
+  it("tells a task of ours what the reviewer asked for and keeps the verdict beside the blocker", async () => {
+    const rejected = verdict({
+      outcome: "changes_requested",
+      summary: "The loop never backs off.",
+      finding_count: 1,
+      findings: [
+        {
+          path: "src/poll.rs",
+          line: 42,
+          severity: "major",
+          body: "Add a delay.",
+        },
+      ],
+      posted: { event: "comment", url: null },
+    });
+    const item = detail(
+      task(1, {
+        state: "blocked",
+        blocker: {
+          id: "0193f0c4-1b2a-7c3d-9e8f-001122334499",
+          code: "verdict_failed",
+          params: {
+            head_sha: HEAD,
+            findings: 1,
+            summary: "The loop never backs off.",
+          },
+          opened_at: "2026-10-31T10:05:00.000Z",
+          stage: "review",
+          primary_action: { kind: "retry", params: {} },
+        },
+      }),
+      { reviews: [rejected] },
+    );
+    fakeApi({
+      [`/api/v1/work-items/${item.id}`]: { body: item },
+      [`/api/v1/specs/${SPEC_ID}`]: { body: specWithSteps([["S1", []]]) },
+      [`/api/v1/projects/${PROJECT_ID}`]: { body: project },
+      "/api/v1/work-items": { body: page([item]) },
+    });
+    renderWithProviders(<TaskPage workItemId={item.id} />);
+    const blocker = await screen.findByRole("region", { name: "Blocker" });
+    expect(
+      within(blocker).getByText(
+        /asked for changes at a1b2c3d4e5f6: The loop never backs off\. Retry sends the 1 finding back to the agent\./,
+      ),
+    ).toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Review" });
+    expect(within(section).getByText("Add a delay.")).toBeVisible();
+    expect(within(section).getByText("Posted as a comment")).toBeVisible();
+  });
 });

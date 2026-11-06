@@ -78,7 +78,7 @@
   "blocker.user_token_invalid": "{cause, select, missing {Project ini membuat perubahan dengan token pengguna, tetapi tidak punya token untuk code host repo ini. Simpan token dengan saka project user-token set, atau ubah project ke mode bot; task lalu lanjut sendiri.} expired {Token pengguna project ini sudah kedaluwarsa. Simpan token baru dengan saka project user-token set, atau ubah project ke mode bot; task lalu lanjut sendiri.} other {Code host menolak token pengguna project ini. Simpan token baru dengan saka project user-token set, atau ubah project ke mode bot; task lalu lanjut sendiri.}}",
   "blocker.user_access_denied": "{credential, select, user_token {Token pengguna} other {Akun tertaut {login}}} tidak bisa membuka pull request di repo ini (HTTP {status}). Beri izin tulis pull request, atau ubah project ke mode bot, lalu coba lagi.",
   "blocker.quota_exhausted": "Akun agent {account} mencapai batas rate {window}{resets, select, none {} other {; reset {resets}}}.",
-  "blocker.verdict_failed": "Review tidak menyetujui pull request.",
+  "blocker.verdict_failed": "{summary_known, select, yes {Reviewer meminta perubahan pada {head}: {summary}} other {Reviewer meminta perubahan pada {head}.}} Retry mengirim {findings, plural, =0 {temuannya} other {# temuan}} kembali ke agent.",
   "blocker.review_rounds_exhausted": "Putaran review dan perbaikan habis sebelum pull request disetujui.",
   "blocker.spec_unclear": "Reviewer tidak bisa menilai perubahan karena spec-nya belum jelas; perjelas spec, lalu lanjutkan.",
   "blocker.action.retry": "Coba lagi",

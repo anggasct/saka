@@ -143,6 +143,35 @@ fn a_review_run_does_not_resume_the_session_of_another_run_even_on_a_manual_retr
 }
 
 #[test]
+fn the_agent_that_wrote_the_change_never_resumes_the_reviewers_conversation() {
+    let mut task = review_task();
+    let env = with_environment(&mut task);
+    let reviewer = session(task.run_owner().unwrap(), env, SessionState::Ended);
+    let review_run = task.stage_run.take().unwrap();
+    let dev_owner = RunOwner::StageRun {
+        work_item_id: task.item.id,
+        stage_run_id: saka_core::ids::StageRunId(Uuid::from_u128(998)),
+    };
+    let mut dev = session(dev_owner, env, SessionState::Ended);
+    dev.id = SessionId(Uuid::from_u128(51));
+    dev.cli_session_id = Some("cli-dev".into());
+    let mut retry = review_run.clone();
+    retry.id = saka_core::ids::StageRunId(Uuid::from_u128(997));
+    retry.stage = Stage::Dev;
+    retry.trigger = Trigger::Manual;
+    task.retired_runs.push(review_run);
+    task.stage_run = Some(retry);
+    task.retired_sessions = vec![dev];
+    task.session = Some(reviewer);
+
+    let view = run_view(&task).unwrap();
+    assert_eq!(view.session.unwrap().id, SessionId(Uuid::from_u128(51)));
+    let plan = resume::plan(&view).unwrap();
+    assert_eq!(plan.cli_session_id.as_deref(), Some("cli-dev"));
+    assert_eq!(plan.cause, ResumeCause::Retry);
+}
+
+#[test]
 fn a_review_run_resumes_its_own_lost_session() {
     let mut task = review_task();
     let env = with_environment(&mut task);

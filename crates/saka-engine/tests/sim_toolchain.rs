@@ -19,7 +19,7 @@ fn sim(retry: &[BlockerCode]) -> Sim {
     operator.retry.extend_from_slice(retry);
     Sim::new(SimConfig {
         operator,
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     })
 }
 

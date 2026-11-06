@@ -590,6 +590,8 @@ pub struct Task {
     pub added_rules: Vec<PermissionRule>,
     pub hook_gates: Vec<HookGate>,
     pub reviews: Vec<Review>,
+    #[serde(skip)]
+    pub workflow: Workflow,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -654,7 +656,18 @@ impl Task {
             added_rules: Vec::new(),
             hook_gates: Vec::new(),
             reviews: Vec::new(),
+            workflow: Workflow::default(),
         }
+    }
+
+    pub fn has_review_stage(&self) -> bool {
+        self.item.origin == WorkItemOrigin::SpecStep && self.workflow.has_stage(Stage::Review)
+    }
+
+    pub fn approved_at(&self, head_sha: &str) -> bool {
+        self.reviews
+            .iter()
+            .any(|r| r.head_sha == head_sha && r.outcome == ReviewOutcome::Approved)
     }
 
     pub fn run_parts(&mut self) -> crate::session::RunParts<'_> {

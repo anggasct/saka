@@ -78,7 +78,7 @@
   "blocker.user_token_invalid": "{cause, select, missing {The project authors changes with its user token, but has none for this repo's code host. Store one with saka project user-token set, or switch the project to bot mode; the task then continues by itself.} expired {The project's user token expired. Store a new one with saka project user-token set, or switch the project to bot mode; the task then continues by itself.} other {The code host refused the project's user token. Store a new one with saka project user-token set, or switch the project to bot mode; the task then continues by itself.}}",
   "blocker.user_access_denied": "{credential, select, user_token {The user token} other {The linked account {login}}} cannot open pull requests in this repo (HTTP {status}). Give it write access to pull requests, or switch the project to bot mode, then retry.",
   "blocker.quota_exhausted": "The agent account {account} hit its {window} rate limit{resets, select, none {} other {; it resets {resets}}}.",
-  "blocker.verdict_failed": "The review did not approve the pull request.",
+  "blocker.verdict_failed": "{summary_known, select, yes {The reviewer asked for changes at {head}: {summary}} other {The reviewer asked for changes at {head}.}} Retry sends {findings, plural, =0 {the findings} one {the # finding} other {the # findings}} back to the agent.",
   "blocker.review_rounds_exhausted": "The review and fix rounds ran out before the pull request was approved.",
   "blocker.spec_unclear": "The reviewer could not judge the change because the spec is unclear; clarify the spec, then continue.",
   "blocker.action.retry": "Retry",

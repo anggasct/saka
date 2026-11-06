@@ -11,7 +11,7 @@ const SCM: &str = "[gate]\nsource = \"scm\"\n";
 fn sim(ci: CiScript, recipe: Option<&str>) -> Sim {
     let mut cfg = SimConfig {
         ci,
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     };
     cfg.operator.merge = false;
     cfg.operator.retry = vec![];

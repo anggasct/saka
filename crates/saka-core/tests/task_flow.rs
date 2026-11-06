@@ -25,8 +25,9 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::{
     BlockerAction, BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus,
     EnvironmentState, InterruptBy, MergeMethod, PermissionState, SessionState, SpecState, Stage,
-    StagePhase, StageRunState, Trigger, WorkItemState,
+    StagePhase, StageRunState, Trigger, WorkItemState, WorkflowPreset,
 };
+use saka_core::workflow::Workflow;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -182,7 +183,8 @@ impl World {
         self.deps = spec::approval_graph(&self.spec, &latest, &events, &[]).1;
         for e in &events {
             self.spec = spec::evolve(Some(self.spec.clone()), e, self.now).unwrap();
-            if let Some(t) = task::evolve(None, e, self.now) {
+            if let Some(mut t) = task::evolve(None, e, self.now) {
+                t.workflow = Workflow::of(WorkflowPreset::BuildOnly);
                 self.tasks.push(t);
             }
         }
@@ -1733,6 +1735,12 @@ fn the_primary_action_follows_the_code_and_carries_what_the_client_needs() {
     let w = blocked_with(BlockerCode::ChangeClosed, json!({ "number": 3 }));
     assert_eq!(primary(&w), (A::Cancel, json!({})));
     let w = blocked_with(BlockerCode::VerdictFailed, json!({}));
+    assert_eq!(
+        primary(&w).0,
+        A::Retry,
+        "a rejected verdict goes back to the agent"
+    );
+    let w = blocked_with(BlockerCode::ReviewRoundsExhausted, json!({}));
     assert_eq!(primary(&w).0, A::Cancel, "no retry path exists yet");
 }
 

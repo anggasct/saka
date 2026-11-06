@@ -874,9 +874,9 @@ fn the_review_action_asks_once_per_head_and_again_after_a_push() {
 }
 
 #[test]
-fn taking_an_existing_waiting_task_answers_ok_and_a_spec_task_is_not_an_outside_change() {
+fn taking_an_existing_waiting_task_answers_ok() {
     let mut api = outside_api(
-        "[workflow]\npreset = \"custom\"\nspec = true\n\n[workflow.change_request]\n\n[workflow.stages]\ndev = \"auto\"\nreview = \"manual\"\nmerge = \"manual\"\n",
+        "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nreview = \"manual\"\n",
     );
     let project = api.sim.project_id.0;
     let take = format!("/api/v1/projects/{project}/external-changes");
@@ -890,9 +890,17 @@ fn taking_an_existing_waiting_task_answers_ok_and_a_spec_task_is_not_an_outside_
         (r.status, &r.body["stage_phase"]),
         (StatusCode::OK, &json!("awaiting_review"))
     );
+}
 
+#[test]
+fn a_spec_task_is_not_an_outside_change() {
+    let mut api = outside_api(
+        "[workflow]\npreset = \"custom\"\nspec = true\n\n[workflow.change_request]\n\n[workflow.stages]\ndev = \"auto\"\nreview = \"auto\"\nmerge = \"manual\"\n",
+    );
+    let project = api.sim.project_id.0;
+    let take = format!("/api/v1/projects/{project}/external-changes");
     api.sim.approve();
-    assert!(api.sim.run_until(STEPS, |s| s.world.prs().len() >= 2));
+    assert!(api.sim.run_until(STEPS, |s| !s.world.prs().is_empty()));
     let own = s_own_number(&api);
     problem(
         &api.post(&take, &[], json!({ "repo": null, "number": own })),
@@ -2567,7 +2575,7 @@ fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
 fn accounts_usage_records_and_budgets_are_readable() {
     let mut api = Api::new(SimConfig {
         agent: hang_script(),
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     });
     let (item, sid) = running_session(&mut api);
     let work = api.get(&format!("/api/v1/work-items/{item}"));

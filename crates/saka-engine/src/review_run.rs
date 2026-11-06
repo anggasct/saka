@@ -2,7 +2,7 @@ use saka_core::ids::{EnvironmentId, StageRunId};
 use saka_core::model::Task;
 use saka_core::review;
 use saka_core::task::TaskInput;
-use saka_core::vocab::{ReviewEvent, ReviewOutcome, Stage, StagePhase};
+use saka_core::vocab::{ReviewEvent, ReviewOutcome, Stage, StagePhase, WorkItemOrigin};
 use saka_ports::{Checkout, PortError, PortResult, PrepareRequest, ReviewPost, clip_text};
 use saka_spec::SpecModel;
 use saka_store::read;
@@ -80,10 +80,13 @@ impl Engine {
         ) else {
             return Ok(Effect::Skipped);
         };
+        // The provider refuses an approval of a change opened by the same account.
+        let own = task.item.origin == WorkItemOrigin::SpecStep;
         let event = match review.outcome {
+            ReviewOutcome::SpecUnclear => return Ok(Effect::Skipped),
+            _ if own => ReviewEvent::Comment,
             ReviewOutcome::Approved => ReviewEvent::Approve,
             ReviewOutcome::ChangesRequested => ReviewEvent::RequestChanges,
-            ReviewOutcome::SpecUnclear => return Ok(Effect::Skipped),
         };
         let verdict = review::Verdict {
             outcome: review.outcome,
@@ -155,26 +158,56 @@ impl Engine {
     }
 
     fn review_basis_input(&self, task: &Task) -> crate::Result<ReviewBasisInput> {
-        let Some(link) = task.external.as_ref().and_then(|e| e.spec.as_ref()) else {
+        let link = task
+            .external
+            .as_ref()
+            .and_then(|e| e.spec.as_ref())
+            .map(|s| (s.spec_id, s.step_id.clone()))
+            .or_else(|| task.item.spec_id.map(|id| (id, task.item.step_id.clone())));
+        let Some((spec_id, step_id)) = link else {
             return Ok(ReviewBasisInput::None);
         };
-        let (spec, revision) = self.store.read(|c| {
-            let spec = read::load_spec(c, link.spec_id)?;
-            let revision = match &spec {
+        let (spec, current, pinned) = self.store.read(|c| {
+            let spec = read::load_spec(c, spec_id)?;
+            let current = match &spec {
                 Some(s) => {
                     read::load_revision(c, s.approved_revision_id.unwrap_or(s.latest_revision_id))?
                 }
                 None => None,
             };
-            Ok((spec, revision))
+            let pinned = match task.item.spec_revision_id {
+                Some(id) => read::load_revision(c, id)?,
+                None => None,
+            };
+            Ok((spec, current, pinned))
         })?;
-        let (Some(spec), Some(revision)) = (spec, revision) else {
+        let Some(spec) = spec else {
             return Ok(ReviewBasisInput::None);
         };
-        let model: SpecModel = serde_json::from_value(revision.model.clone())
-            .map_err(|e| EngineError::Internal(format!("revision model: {e}")))?;
-        let step = link
-            .step_id
+        // The latest approved text wins, so a clarified criterion is what the reviewer reads.
+        // A step that no longer exists there is judged against the revision the task was pinned to.
+        let models = [current, pinned].into_iter().flatten().map(|revision| {
+            serde_json::from_value::<SpecModel>(revision.model.clone())
+                .map(|model| (revision, model))
+                .map_err(|e| EngineError::Internal(format!("revision model: {e}")))
+        });
+        let mut first = None;
+        let mut found = None;
+        for entry in models {
+            let (revision, model) = entry?;
+            let has_step = step_id
+                .as_deref()
+                .is_some_and(|id| model.steps.iter().any(|s| s.id == id));
+            if has_step {
+                found = Some((revision, model));
+                break;
+            }
+            first.get_or_insert((revision, model));
+        }
+        let Some((revision, model)) = found.or(first) else {
+            return Ok(ReviewBasisInput::None);
+        };
+        let step = step_id
             .as_deref()
             .and_then(|id| model.steps.iter().find(|s| s.id == id));
         Ok(match step {
