@@ -21,6 +21,7 @@ import {
   succeededDraft,
   timeline,
 } from "@/test/draft-fixtures";
+import { decision } from "@/test/decision-fixtures";
 import { fakeApi, page, type Recorded, type Routes } from "@/test/fake-api";
 import { fakeStream } from "@/test/fake-stream";
 import { project, PROJECT_ID } from "@/test/fixtures";
@@ -110,6 +111,28 @@ describe("Draft page", () => {
     expect(screen.getByRole("button", { name: "Stop" })).toBeVisible();
     const sessions = api.requests.find((r) => r.path === "/api/v1/sessions");
     expect(sessions?.search.get("spec_draft_id")).toBe(DRAFT_ID);
+  });
+
+  it("shows the question the architect asked, with a form", async () => {
+    const { api } = show(draft(), {
+      "/api/v1/decision-requests": {
+        body: page([decision(1, { question: "Which delimiter?" })]),
+      },
+    });
+    await header();
+    const section = await screen.findByRole("region", {
+      name: "Questions from the agent",
+    });
+    expect(
+      within(section).getByRole("heading", { name: "Which delimiter?" }),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByRole("button", { name: "Send answer" }),
+    ).toBeInTheDocument();
+    const asked = api.requests.find(
+      (r) => r.path === "/api/v1/decision-requests",
+    );
+    expect(asked?.search.get("spec_draft_id")).toBe(DRAFT_ID);
   });
 
   it("picks among the sessions of the running attempt only", async () => {

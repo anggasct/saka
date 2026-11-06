@@ -10,6 +10,8 @@ import { fakeStream } from "@/test/fake-stream";
 import {
   approvalItem,
   BLOCKER_ID,
+  DECISION_ID,
+  decisionItem,
   mergeItem,
   permissionItem,
   REQUEST_ID,
@@ -134,6 +136,40 @@ describe("inbox page", () => {
     await waitFor(() => {
       expect(posts(requests).map((r) => r.body)).toEqual([
         { decision: "allow", message: null, remember: false },
+      ]);
+    });
+    expect(
+      await screen.findByText("Nothing is waiting for you"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a question with its options and answers it from the card", async () => {
+    let waiting = [decisionItem];
+    const { requests } = fakeApi(
+      routes(() => waiting, {
+        [`/api/v1/decision-requests/${DECISION_ID}/answer`]: () => {
+          waiting = [];
+          return { body: {} };
+        },
+      }),
+    );
+    renderApp("/");
+    const found = await card("tasks-done/s1");
+    expect(
+      within(found).getByText("Where do we store audio?"),
+    ).toBeInTheDocument();
+    expect(
+      within(found).getByText("The recorder needs a place to keep files."),
+    ).toBeInTheDocument();
+    expect(within(found).getAllByRole("radio")).toHaveLength(2);
+    expect(within(found).getAllByText("Recommended")).toHaveLength(1);
+    await userEvent.click(within(found).getByRole("radio", { name: /^R2/ }));
+    await userEvent.click(
+      within(found).getByRole("button", { name: "Send answer" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests).map((r) => r.body)).toEqual([
+        { option: 1, note: null },
       ]);
     });
     expect(

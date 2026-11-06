@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 
+import { DecisionForm } from "@/features/decisions/decision-form";
+import { optionsOf } from "@/features/decisions/text";
 import { useFormat } from "@/features/delivery/format";
 import { label, record, text } from "@/features/delivery/text";
 import { When } from "@/features/delivery/when";
@@ -28,7 +30,10 @@ export function InboxCard({
     }
   }, [focused]);
   const title = heading(t, item);
-  const summary = text(record(item.params).summary);
+  const params = record(item.params);
+  const summary = text(params.summary);
+  const decision = item.subject === "decision";
+  const context = text(params.context);
   return (
     <article
       ref={ref}
@@ -56,13 +61,24 @@ export function InboxCard({
         {title}
       </h2>
       <p className="break-words">{sentence(t, item, format.relative)}</p>
+      {decision && context !== "" && (
+        <p className="break-words whitespace-pre-wrap text-muted-foreground">
+          {context}
+        </p>
+      )}
+      {decision && (
+        <DecisionForm
+          id={text(record(item.action.params).decision_request_id)}
+          options={optionsOf(params.options)}
+        />
+      )}
       {item.subject === "permission" && summary !== "" && (
         <pre className="rounded bg-muted p-2 text-xs break-words whitespace-pre-wrap">
           {summary}
         </pre>
       )}
       <div className="flex flex-wrap gap-2">
-        <Primary item={item} />
+        {!decision && <Primary item={item} />}
         <Secondary item={item} />
       </div>
     </article>

@@ -112,6 +112,7 @@ export const QUERY_ROOTS = {
   specs: "specs",
   workItems: "work-items",
   permissions: "permission-requests",
+  decisions: "decision-requests",
   permissionRules: "permission-rules",
   sessions: "sessions",
   timeline: "timeline",
@@ -157,6 +158,7 @@ const AFFECTS: Record<string, readonly string[]> = {
     QUERY_ROOTS.inbox,
   ],
   decision_request: [
+    QUERY_ROOTS.decisions,
     QUERY_ROOTS.workItems,
     QUERY_ROOTS.specDrafts,
     QUERY_ROOTS.inbox,

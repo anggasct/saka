@@ -19,6 +19,8 @@ import {
   useWorkItems,
 } from "./queries";
 import { ReviewSection } from "./review-section";
+import { DecisionSection } from "@/features/decisions/decision-section";
+
 import { SessionSection } from "./session-section";
 import { StageRunsSection } from "./stage-runs-section";
 import { MergeQueueSection } from "./merge-queue-section";
@@ -107,6 +109,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       <StageRunsSection task={item} spec={spec.data} tasks={tasks} />
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />
+      <DecisionSection run={{ kind: "work_item", id: item.id }} />
       <SessionSection
         owner={{ kind: "work_item", id: item.id }}
         title={t("task.session.title")}
