@@ -1,4 +1,4 @@
-import { record } from "@/features/delivery/text";
+import { label, record } from "@/features/delivery/text";
 import { Section } from "@/features/delivery/section";
 import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
@@ -27,6 +27,7 @@ function sameScope(a: readonly string[], b: readonly string[]): boolean {
 
 function Binding({ repo }: { repo: ProjectRepo }) {
   const t = useT();
+  const { effective, requested: asked } = repo.autonomy;
   return (
     <li className="space-y-2 rounded-lg border border-border p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
@@ -59,6 +60,20 @@ function Binding({ repo }: { repo: ProjectRepo }) {
         <dt className="text-muted-foreground">{t("settings.repos.scope")}</dt>
         <dd>
           <Scope globs={repo.path_scope} />
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.repos.autonomy")}
+        </dt>
+        <dd className="break-words">
+          {label(t, "autonomy", effective)}
+          {asked !== undefined && asked !== null && asked !== effective && (
+            <span className="block text-muted-foreground">
+              {t("settings.repos.autonomyClipped", {
+                requested: label(t, "autonomy", asked),
+                allowed: label(t, "autonomy", repo.autonomy.allowed),
+              })}
+            </span>
+          )}
         </dd>
       </dl>
       {!sameScope(repo.path_scope, repo.effective_path_scope) && (

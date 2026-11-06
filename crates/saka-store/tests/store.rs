@@ -56,6 +56,7 @@ fn cfg() -> LoopConfig {
         budget_warn_percent: 80,
         rate_limit_pause: 0.9,
         account: "claude:default".into(),
+        autonomy: saka_core::autonomy::Ceilings::default(),
         ci_appear_timeout_ms: 600_000,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
@@ -126,6 +127,7 @@ impl World {
                 is_default: true,
                 base_branch: "main".into(),
                 path_scope: vec!["**".into()],
+                autonomy: None,
             }],
         };
         let repo: Repo = workspace::evolve_repo(None, &repo_event, now).unwrap();
@@ -1121,10 +1123,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27
+            25, 26, 27, 28
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(27));
+    assert_eq!(w.store.schema_version().unwrap(), Some(28));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

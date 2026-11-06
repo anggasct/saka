@@ -494,12 +494,11 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
     let config_error = p.config_error.as_ref().map(to_json).transpose()?;
     tx.execute(
         "INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, config_sha256,
-           config_error, autonomy, workflow, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+           config_error, workflow, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_branch = excluded.base_branch,
            config_commit = excluded.config_commit, config_sha256 = excluded.config_sha256,
-           config_error = excluded.config_error, autonomy = excluded.autonomy,
-           workflow = excluded.workflow, updated_at = excluded.updated_at",
+           config_error = excluded.config_error, workflow = excluded.workflow, updated_at = excluded.updated_at",
         params![
             p.id.to_string(),
             p.name,
@@ -509,7 +508,6 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
             p.config_commit,
             p.config_sha256,
             config_error,
-            p.autonomy.as_str(),
             to_json(&p.workflow)?,
             p.created_at.0,
             p.updated_at.0,
@@ -531,9 +529,9 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
         let repo_id = r.repo_id.to_string();
         let since = created.get(&repo_id).copied().unwrap_or(p.updated_at.0);
         tx.execute(
-            "INSERT INTO project_repo (project_id, repo_id, name, is_default, base_branch, path_scope, created_at,
-               updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO project_repo (project_id, repo_id, name, is_default, base_branch, path_scope, autonomy,
+               created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 p.id.to_string(),
                 repo_id,
@@ -541,6 +539,7 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
                 r.is_default,
                 r.base_branch,
                 to_json(&r.path_scope)?,
+                r.autonomy.map(saka_core::vocab::Autonomy::as_str),
                 since,
                 p.updated_at.0
             ],

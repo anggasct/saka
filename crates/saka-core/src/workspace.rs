@@ -7,7 +7,7 @@ use crate::ids::{ProjectId, RepoId, WorkItemId};
 use crate::model::{ConfigError, Project, ProjectRepo, Repo};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
-use crate::vocab::{Autonomy, ReloadTrigger, WorkItemState};
+use crate::vocab::{ReloadTrigger, WorkItemState};
 use crate::workflow::Workflow;
 
 pub const MAX_BINDINGS: usize = 16;
@@ -169,7 +169,6 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_commit: config_commit.clone(),
             config_sha256: config_sha256.clone(),
             config_error: None,
-            autonomy: Autonomy::Standard,
             workflow: workflow.clone(),
             repos: sorted(repos),
             created_at: project.as_ref().map_or(now, |p| p.created_at),

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use saka_core::scope::{PathScope, ScopeIssue};
+use saka_core::vocab::Autonomy;
 use saka_core::workflow::Workflow;
 use saka_core::workspace::MAX_BINDINGS;
 use serde::Serialize;
@@ -30,6 +31,7 @@ pub struct RepoEntry {
     pub is_default: bool,
     pub base_branch: Option<String>,
     pub path_scope: Vec<String>,
+    pub autonomy: Option<Autonomy>,
     pub line: usize,
     pub base_branch_line: Option<usize>,
 }
@@ -71,7 +73,14 @@ pub fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{hex}")
 }
 
-const REPO_KEYS: &[&str] = &["name", "url", "default", "base_branch", "path_scope"];
+const REPO_KEYS: &[&str] = &[
+    "name",
+    "url",
+    "default",
+    "base_branch",
+    "path_scope",
+    "autonomy",
+];
 
 fn line_of(text: &str, offset: usize) -> usize {
     text.get(..offset)
@@ -132,6 +141,18 @@ fn string(
             }
         },
     }
+}
+
+fn autonomy(c: &mut Collector<'_>, table: &DeTable<'_>, field: &str) -> Option<Autonomy> {
+    let v = get(table, "autonomy")?;
+    let parsed = v
+        .get_ref()
+        .as_str()
+        .and_then(|s| s.parse::<Autonomy>().ok());
+    if parsed.is_none() {
+        c.push("field_invalid", field, Some(v.span().start));
+    }
+    parsed
 }
 
 fn repo_name_ok(name: &str) -> bool {
@@ -196,6 +217,7 @@ fn repo(c: &mut Collector<'_>, i: usize, value: &Spanned<DeValue<'_>>) -> Option
         None => Some(vec![saka_core::scope::EVERYTHING.to_string()]),
         Some(v) => scope(c, &field("path_scope"), v),
     };
+    let requested = autonomy(c, table, &field("autonomy"));
     let ((name, name_at), (url, host, full_name, url_at), path_scope) = (name?, url?, path_scope?);
     Some(Raw {
         entry: RepoEntry {
@@ -208,6 +230,7 @@ fn repo(c: &mut Collector<'_>, i: usize, value: &Spanned<DeValue<'_>>) -> Option
             base_branch_line: base_branch.as_ref().map(|(_, b)| line_of(c.text, *b)),
             base_branch: base_branch.map(|(b, _)| b),
             path_scope,
+            autonomy: requested,
             line: line_of(c.text, at),
         },
         default,
@@ -251,7 +274,7 @@ fn scope(c: &mut Collector<'_>, field: &str, value: &Spanned<DeValue<'_>>) -> Op
     }
 }
 
-fn project_name(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Option<String> {
+fn project_name(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Option<(String, Option<Autonomy>)> {
     let Some(project) = get(doc, "project") else {
         c.issues.push(Issue {
             code: "field_missing",
@@ -265,10 +288,11 @@ fn project_name(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Option<String> {
         c.push("field_invalid", "project", Some(at));
         return None;
     };
-    c.unknown(table, "project.", &["name"]);
+    c.unknown(table, "project.", &["name", "autonomy"]);
+    let requested = autonomy(c, table, "project.autonomy");
     let (name, name_at) = string(c, table, "name", "project.name", at)?;
     if (1..=80).contains(&name.chars().count()) {
-        Some(name)
+        Some((name, requested))
     } else {
         c.push("field_invalid", "project.name", Some(name_at));
         None
@@ -387,8 +411,14 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
         issues: Vec::new(),
     };
     c.unknown(doc, "", &["project", "repo", "workflow"]);
-    let name = project_name(&mut c, doc);
-    let repos = repos(&mut c, doc);
+    let (name, project_autonomy) = match project_name(&mut c, doc) {
+        Some((name, requested)) => (Some(name), requested),
+        None => (None, None),
+    };
+    let mut repos = repos(&mut c, doc);
+    for repo in &mut repos {
+        repo.autonomy = repo.autonomy.or(project_autonomy);
+    }
     let workflow = workflow::parse(&mut c, doc);
     let mut issues = c.issues;
     issues.sort_by_key(|i| i.line.unwrap_or(0));
@@ -461,6 +491,41 @@ url = "https://github.com/acme/web"
         assert_eq!(web.base_branch, None);
         assert_eq!(web.path_scope, ["**"]);
         assert_eq!(web.line, 11);
+    }
+
+    #[test]
+    fn a_repo_asks_for_its_own_autonomy_or_takes_the_project_one() {
+        let text = TWO_REPOS
+            .replace(
+                "name = \"shop\"\n",
+                "name = \"shop\"\nautonomy = \"strict\"\n",
+            )
+            .replace(
+                "url = \"https://github.com/acme/web\"\n",
+                "url = \"https://github.com/acme/web\"\nautonomy = \"autonomous\"\n",
+            );
+        let cfg = parse(text.as_bytes()).unwrap();
+        let levels: Vec<_> = cfg.repos.iter().map(|r| r.autonomy).collect();
+        assert_eq!(
+            levels,
+            [Some(Autonomy::Strict), Some(Autonomy::Autonomous)],
+            "the project level is the default, a repo overrides it"
+        );
+        let none = parse(TWO_REPOS.as_bytes()).unwrap();
+        assert!(none.repos.iter().all(|r| r.autonomy.is_none()));
+    }
+
+    #[test]
+    fn an_unknown_autonomy_is_a_problem_at_its_line() {
+        assert_eq!(
+            codes(
+                "[project]\nname = \"x\"\nautonomy = \"reckless\"\n\n[[repo]]\nname = \"a\"\nurl = \"https://github.com/acme/a\"\nautonomy = 3\n"
+            ),
+            [
+                row("field_invalid", "project.autonomy", Some(3)),
+                row("field_invalid", "repo[0].autonomy", Some(8)),
+            ]
+        );
     }
 
     #[test]

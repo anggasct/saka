@@ -73,10 +73,6 @@ export function WorkflowSection({ project }: { project: Project }) {
         </dt>
         <dd>{label(t, "workflowPreset", workflow.preset)}</dd>
         <dt className="text-muted-foreground">
-          {t("settings.workflow.autonomy")}
-        </dt>
-        <dd>{label(t, "autonomy", project.autonomy)}</dd>
-        <dt className="text-muted-foreground">
           {t("settings.workflow.entries")}
         </dt>
         <dd>

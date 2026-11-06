@@ -82,6 +82,12 @@ export function TaskHeader({
         <dd className="break-all">
           <code>{task.branch}</code>
         </dd>
+        {task.autonomy !== null && task.autonomy !== undefined && (
+          <>
+            <dt className="font-medium">{t("task.autonomy")}</dt>
+            <dd>{label(t, "autonomy", task.autonomy)}</dd>
+          </>
+        )}
         {task.external && (
           <>
             <dt className="font-medium">{t("external.author")}</dt>

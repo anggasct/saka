@@ -24,6 +24,7 @@ pub struct ProjectView {
     pub repos: Vec<Repo>,
     pub warnings: Vec<ScopeWarning>,
     pub authorship_mode: saka_core::vocab::AuthorshipMode,
+    pub ceilings: saka_core::autonomy::Ceilings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +136,7 @@ pub struct DependencyView {
 pub struct TaskView {
     pub task: Task,
     pub repo_name: Option<String>,
+    pub autonomy: saka_core::vocab::Autonomy,
     pub merges: bool,
     pub waiting_on: Vec<Waiting>,
     pub merge_queue: Option<Position>,
@@ -173,6 +175,7 @@ pub struct PermissionView {
 pub struct TaskDetail {
     pub task: Task,
     pub repo_name: Option<String>,
+    pub autonomy: saka_core::vocab::Autonomy,
     pub merges: bool,
     pub stage_runs: Vec<StageRun>,
     pub waiting_on: Vec<Waiting>,
@@ -257,6 +260,7 @@ impl Engine {
             repos,
             warnings,
             authorship_mode: saka_core::authorship::mode_of(authorship.as_ref()),
+            ceilings: self.cfg.loop_cfg.autonomy.clone(),
         })
     }
 
@@ -644,6 +648,7 @@ impl Engine {
                 .map(
                     |(((task, waiting_on), (repo_name, merges)), merge_queue)| TaskView {
                         budget: self.budget_view(&task),
+                        autonomy: task.autonomy(&self.cfg.loop_cfg.autonomy),
                         task,
                         repo_name,
                         merges,
@@ -728,6 +733,7 @@ impl Engine {
         Ok(Some(TaskDetail {
             merge_queue,
             budget: self.budget_view(&task),
+            autonomy: task.autonomy(&self.cfg.loop_cfg.autonomy),
             task,
             repo_name,
             merges,

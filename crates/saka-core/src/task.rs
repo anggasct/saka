@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use crate::Ctx;
 use crate::authorship::CredentialBlock;
+use crate::autonomy::Ceilings;
 use crate::blocker::primary_action;
 use crate::event::{Event, Prompt};
 use crate::external;
@@ -45,6 +46,7 @@ pub struct LoopConfig {
     pub budget_warn_percent: u32,
     pub rate_limit_pause: f64,
     pub account: String,
+    pub autonomy: Ceilings,
 }
 
 pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";

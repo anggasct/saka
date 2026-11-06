@@ -242,6 +242,7 @@ impl Engine {
             is_default: entry.is_default,
             base_branch,
             path_scope: entry.path_scope.clone(),
+            autonomy: entry.autonomy,
         }))
     }
 

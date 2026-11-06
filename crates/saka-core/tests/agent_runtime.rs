@@ -64,6 +64,7 @@ fn cfg_with(dev: Budget) -> task::LoopConfig {
         budget_warn_percent: 80,
         rate_limit_pause: 0.9,
         account: "claude:default".into(),
+        autonomy: saka_core::autonomy::Ceilings::default(),
     }
 }
 

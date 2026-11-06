@@ -51,6 +51,7 @@ fn bindings(repo: RepoId) -> &'static [ProjectRepo] {
         is_default: true,
         base_branch: "main".into(),
         path_scope: vec!["**".into()],
+        autonomy: None,
     }]))
 }
 

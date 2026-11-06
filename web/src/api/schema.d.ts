@@ -1497,8 +1497,6 @@ export interface components {
       items: {
         /** @description `bot | user | user_pat`: who authors the agent's commits and opens its pull requests. */
         authorship_mode: string;
-        /** @description `standard` in this version. */
-        autonomy: string;
         config_commit: string;
         config_error?: components["schemas"]["ProjectConfigError"] | null;
         /** @description `sha256:<hex>` of the `saka.toml` content in force. */
@@ -1632,6 +1630,11 @@ export interface components {
     Page_WorkItem: {
       items: {
         admitted_at?: string | null;
+        /**
+         * @description `strict | standard | autonomous`: the level in force for the task's repo, the lowest of the
+         *     operator's ceiling and what `saka.toml` asks for. `null` in the answer to an action.
+         */
+        autonomy?: string | null;
         /** @description Subset of `merge`, `retry`, `cancel`, `review`. */
         available_actions: string[];
         blocker?: components["schemas"]["Blocker"] | null;
@@ -1779,8 +1782,6 @@ export interface components {
     Project: {
       /** @description `bot | user | user_pat`: who authors the agent's commits and opens its pull requests. */
       authorship_mode: string;
-      /** @description `standard` in this version. */
-      autonomy: string;
       config_commit: string;
       config_error?: components["schemas"]["ProjectConfigError"] | null;
       /** @description `sha256:<hex>` of the `saka.toml` content in force. */
@@ -1825,6 +1826,7 @@ export interface components {
       project: components["schemas"]["Project"];
     };
     ProjectRepo: {
+      autonomy: components["schemas"]["RepoAutonomy"];
       /** @description Branch this binding's worktrees, recipes, change requests, and merge checks use. */
       base_branch: string;
       default_branch: string;
@@ -1898,6 +1900,18 @@ export interface components {
       matches: boolean;
       /** @description `false` when the file does not exist at that commit. */
       present: boolean;
+    };
+    /**
+     * @description How much the loop may do on its own in this repo: the lowest of what the operator allows and what
+     *     `saka.toml` asks for.
+     */
+    RepoAutonomy: {
+      /** @description The operator's ceiling for this repo, from `[autonomy]` in `config.toml`. */
+      allowed: string;
+      /** @description The level in force. */
+      effective: string;
+      /** @description `strict | standard | autonomous`, or `null` when `saka.toml` asks for nothing. */
+      requested?: string | null;
     };
     RequiredReason: {
       reason: string;
@@ -2536,6 +2550,11 @@ export interface components {
         };
     WorkItem: {
       admitted_at?: string | null;
+      /**
+       * @description `strict | standard | autonomous`: the level in force for the task's repo, the lowest of the
+       *     operator's ceiling and what `saka.toml` asks for. `null` in the answer to an action.
+       */
+      autonomy?: string | null;
       /** @description Subset of `merge`, `retry`, `cancel`, `review`. */
       available_actions: string[];
       blocker?: components["schemas"]["Blocker"] | null;

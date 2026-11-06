@@ -61,6 +61,19 @@ pub struct ProjectRepo {
     pub path_scope: Vec<String>,
     /// `path_scope`, plus `<project_path>/**` for the workspace repo unless `project_path` is `.`.
     pub effective_path_scope: Vec<String>,
+    pub autonomy: RepoAutonomy,
+}
+
+/// How much the loop may do on its own in this repo: the lowest of what the operator allows and what
+/// `saka.toml` asks for.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RepoAutonomy {
+    /// `strict | standard | autonomous`, or `null` when `saka.toml` asks for nothing.
+    pub requested: Option<String>,
+    /// The operator's ceiling for this repo, from `[autonomy]` in `config.toml`.
+    pub allowed: String,
+    /// The level in force.
+    pub effective: String,
 }
 
 /// The last rejected reload of `saka.toml`; the previous config stays in force while it is set.
@@ -157,8 +170,6 @@ pub struct Project {
     pub workspace: Workspace,
     /// Bindings from `saka.toml`, the default first, then by `name`.
     pub repos: Vec<ProjectRepo>,
-    /// `standard` in this version.
-    pub autonomy: String,
     /// The workflow in force, from `[workflow]` in `saka.toml`.
     pub workflow: Workflow,
     /// `bot | user | user_pat`: who authors the agent's commits and opens its pull requests.
@@ -170,6 +181,16 @@ pub struct Project {
     pub warnings: Vec<ProjectWarning>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl RepoAutonomy {
+    fn of(l: &saka_core::autonomy::Levels) -> RepoAutonomy {
+        RepoAutonomy {
+            requested: l.requested.map(|a| a.as_str().to_string()),
+            allowed: l.allowed.as_str().to_string(),
+            effective: l.effective.as_str().to_string(),
+        }
+    }
 }
 
 impl Project {
@@ -203,10 +224,10 @@ impl Project {
                         is_workspace: pr.repo_id == p.workspace_repo_id,
                         path_scope: pr.path_scope.clone(),
                         effective_path_scope: p.effective_scope(pr),
+                        autonomy: RepoAutonomy::of(&v.ceilings.levels(&r.full_name, pr.autonomy)),
                     })
                 })
                 .collect(),
-            autonomy: p.autonomy.as_str().to_string(),
             workflow: Workflow::from(&p.workflow),
             authorship_mode: v.authorship_mode.as_str().to_string(),
             config_commit: p.config_commit.clone(),
@@ -801,6 +822,9 @@ pub struct WorkItem {
     /// Where the task's merge request stands in the queue of its target branch; `null` when it has
     /// none, and in the answer to an action.
     pub merge_queue: Option<MergeQueue>,
+    /// `strict | standard | autonomous`: the level in force for the task's repo, the lowest of the
+    /// operator's ceiling and what `saka.toml` asks for. `null` in the answer to an action.
+    pub autonomy: Option<String>,
     pub change_request: Option<ChangeRequest>,
     /// The docs pull request in the workspace repo, for a task in another repo; `null` when none
     /// was opened. Gates and merge readiness never read it.
@@ -1108,6 +1132,12 @@ impl WorkItem {
         )
         .merging(v.merges)
         .queued(v.merge_queue.as_ref())
+        .levelled(v.autonomy)
+    }
+
+    fn levelled(mut self, autonomy: saka_core::vocab::Autonomy) -> WorkItem {
+        self.autonomy = Some(autonomy.as_str().to_string());
+        self
     }
 
     fn queued(mut self, place: Option<&saka_core::queue::Position>) -> WorkItem {
@@ -1152,6 +1182,7 @@ impl WorkItem {
             priority: i.priority,
             waiting_on: waiting_on.iter().map(WaitingOn::from).collect(),
             merge_queue: None,
+            autonomy: None,
             change_request: t.change_request.as_ref().map(|c| ChangeRequest {
                 id: c.id.0,
                 number: c.number,
@@ -1279,7 +1310,8 @@ impl WorkItemDetail {
                 d.budget.as_ref(),
             )
             .merging(d.merges)
-            .queued(d.merge_queue.as_ref()),
+            .queued(d.merge_queue.as_ref())
+            .levelled(d.autonomy),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
             reviews: {
                 let mut all: Vec<&saka_core::model::Review> = d.task.reviews.iter().collect();
