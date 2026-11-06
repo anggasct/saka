@@ -77,6 +77,12 @@ pub enum Rejection {
     FileUnsupported { reason: FileUnsupported },
     #[error("the integration has no linked account")]
     UserLinkNotFound,
+    #[error("inbox item does not exist")]
+    InboxItemNotFound,
+    #[error("inbox item cannot be dismissed")]
+    InboxItemNotDismissible { subject: &'static str },
+    #[error("inbox item is closed")]
+    InboxItemClosed { state: &'static str },
     #[error("the integration has no OAuth client id for the device flow")]
     DeviceFlowUnconfigured { integration_id: String },
     #[error("the integration cannot author changes as a user")]
@@ -181,6 +187,9 @@ impl Rejection {
             Rejection::FilePushRejected { .. } => "file_push_rejected",
             Rejection::FileUnsupported { .. } => "file_unsupported",
             Rejection::UserLinkNotFound => "user_link_not_found",
+            Rejection::InboxItemNotFound => "inbox_item_not_found",
+            Rejection::InboxItemNotDismissible { .. } => "inbox_item_not_dismissible",
+            Rejection::InboxItemClosed { .. } => "inbox_item_closed",
             Rejection::DeviceFlowUnconfigured { .. } => "device_flow_unconfigured",
             Rejection::UserAuthorshipUnsupported { .. } => "user_authorship_unsupported",
             Rejection::UserLinkInUse { .. } => "user_link_in_use",
@@ -269,6 +278,8 @@ impl Rejection {
                 actual,
             } => json!({ "blocker_id": blocker_id, "expected": expected, "actual": actual }),
             Rejection::ActionNeedsInput { action } => json!({ "action": action }),
+            Rejection::InboxItemNotDismissible { subject } => json!({ "subject": subject }),
+            Rejection::InboxItemClosed { state } => json!({ "state": state }),
             Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
             Rejection::HookRunGated { work_item_id } => json!({ "work_item_id": work_item_id }),
             Rejection::FilePathConflict { path } => json!({ "path": path }),

@@ -9,6 +9,7 @@ pub mod external;
 pub mod gate;
 pub mod hook;
 pub mod ids;
+pub mod inbox;
 pub mod job;
 pub mod model;
 pub mod paths;

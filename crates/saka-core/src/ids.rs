@@ -48,4 +48,5 @@ id_type!(
     UserLinkAuthorizationId,
     HookRunId,
     ReviewId,
+    InboxItemId,
 );

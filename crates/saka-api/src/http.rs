@@ -39,6 +39,35 @@ pub fn ok<T: Serialize>(status: StatusCode, value: &T) -> Response {
     }
 }
 
+pub fn tagged<T: Serialize>(headers: &HeaderMap, value: &T) -> Response {
+    let Ok(body) = serde_json::to_value(value) else {
+        return ApiError::internal().into_response();
+    };
+    let digest = Sha256::digest(body.to_string().as_bytes());
+    let tag = format!("\"{}\"", hex_prefix(&digest));
+    let matches = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .map(str::trim)
+                .any(|t| t == "*" || t.strip_prefix("W/").unwrap_or(t) == tag)
+        });
+    let mut response = if matches {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        json_response(StatusCode::OK, &body)
+    };
+    if let Ok(value) = HeaderValue::from_str(&tag) {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    response
+}
+
+fn hex_prefix(digest: &[u8]) -> String {
+    digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
 fn etag(body: &Value) -> Option<HeaderValue> {
     if let Some(id) = body.pointer("/revision/id").and_then(Value::as_str) {
         return HeaderValue::from_str(&format!("\"{id}\"")).ok();

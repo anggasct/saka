@@ -27,6 +27,7 @@ pub enum Produced<'a> {
     Session(&'a Session),
     Rule(&'a PermissionRule),
     HookRun(&'a saka_core::hook::HookRun),
+    Inbox(&'a crate::InboxItem),
     Doc(&'a DocWriteView),
     UserLinkAuthorization(&'a crate::accounts::AuthorizationView),
     Authorship(&'a crate::authorship::AuthorshipView),

@@ -6,10 +6,10 @@ use crate::authorship::SessionAuthor;
 use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, HookRunId, PermissionRequestId,
-    PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId,
-    SpecId, SpecRevisionId, StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId,
-    WorkItemId,
+    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, HookRunId, InboxItemId,
+    PermissionRequestId, PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId,
+    SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
+    UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
@@ -21,10 +21,10 @@ use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, ExternalCause, GateOutcome,
-    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InterruptBy, LintOutcome,
-    MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason,
-    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase,
-    SupersedeReason, TokenInvalidCause, Trigger,
+    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, InterruptBy,
+    LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause,
+    ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage,
+    StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -735,6 +735,14 @@ pub enum Event {
         source_event_id: Uuid,
         rerun_of: Option<HookRunId>,
     },
+    #[serde(rename = "delivery.inbox_item.dismissed")]
+    InboxItemDismissed {
+        inbox_item_id: InboxItemId,
+        project_id: ProjectId,
+        subject: InboxSubject,
+        source_id: String,
+        reason: String,
+    },
     #[serde(rename = "delivery.hook_run.finished")]
     HookRunFinished {
         hook_run_id: HookRunId,
@@ -805,6 +813,7 @@ pub enum Stream {
     HookRun(HookRunId),
     UserLinkAuthorization(UserLinkAuthorizationId),
     UserLink(UserLinkId),
+    InboxItem(InboxItemId),
 }
 
 impl Stream {
@@ -821,6 +830,7 @@ impl Stream {
             Stream::HookRun(_) => "hook_run",
             Stream::UserLinkAuthorization(_) => "user_link_authorization",
             Stream::UserLink(_) => "user_link",
+            Stream::InboxItem(_) => "inbox_item",
         }
     }
 
@@ -837,6 +847,7 @@ impl Stream {
             Stream::HookRun(id) => id.0,
             Stream::UserLinkAuthorization(id) => id.0,
             Stream::UserLink(id) => id.0,
+            Stream::InboxItem(id) => id.0,
         }
     }
 }
@@ -978,6 +989,7 @@ impl Event {
             E::HookRunQueued { hook_run_id, .. } | E::HookRunFinished { hook_run_id, .. } => {
                 Stream::HookRun(*hook_run_id)
             }
+            E::InboxItemDismissed { inbox_item_id, .. } => Stream::InboxItem(*inbox_item_id),
         }
     }
 

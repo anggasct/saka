@@ -39,13 +39,13 @@ pub use state::{ApiConfig, AppState};
         routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
         routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
         routes::retry_spec_draft, routes::cancel_spec_draft,
-        routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::rerun_hook,
+        routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::list_inbox, routes::inbox_summary, routes::dismiss_inbox_item, routes::rerun_hook,
         routes::meta, routes::events, routes::diagnostics,
         ops::healthz, ops::readyz, ops::metrics,
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
-        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"), (name = "hooks"),
+        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"), (name = "hooks"), (name = "inbox"),
         (name = "spec-drafts"), (name = "system"), (name = "ops"),
     )
 )]
@@ -109,6 +109,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{project_id}/hooks",
             get(routes::list_project_hooks),
+        )
+        .route("/api/v1/inbox", get(routes::list_inbox))
+        .route("/api/v1/inbox/summary", get(routes::inbox_summary))
+        .route(
+            "/api/v1/inbox/{inbox_item_id}/dismiss",
+            post(routes::dismiss_inbox_item),
         )
         .route("/api/v1/hook-runs", get(routes::list_hook_runs))
         .route("/api/v1/hook-runs/{hook_run_id}", get(routes::get_hook_run))

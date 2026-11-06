@@ -144,6 +144,36 @@ vocab!(BlockerAction {
     SetUserToken => "set_user_token",
     EditSpec => "edit_spec",
 });
+vocab!(InboxKind {
+    Decision => "decision",
+    Approval => "approval",
+    Permission => "permission",
+    Blocker => "blocker",
+    SpecUnclear => "spec_unclear",
+});
+vocab!(InboxSubject {
+    Spec => "spec",
+    StepStart => "step_start",
+    Merge => "merge",
+    Permission => "permission",
+    Blocker => "blocker",
+    Decision => "decision",
+});
+vocab!(InboxState { Open => "open", Answered => "answered", Resolved => "resolved", Dismissed => "dismissed" });
+vocab!(InboxActionKind {
+    Retry => "retry",
+    Cancel => "cancel",
+    Takeover => "takeover",
+    SetSecret => "set_secret",
+    LinkAccount => "link_account",
+    SetUserToken => "set_user_token",
+    EditSpec => "edit_spec",
+    AnswerPermission => "answer_permission",
+    ApproveSpec => "approve_spec",
+    StartStep => "start_step",
+    Merge => "merge",
+    AnswerDecision => "answer_decision",
+});
 vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
 vocab!(ChangeRole { Code => "code", Docs => "docs" });
 vocab!(ScopeViolationReason { OutsideScope => "outside_scope", TooManyPaths => "too_many_paths" });

@@ -100,6 +100,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_inbox"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/summary": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["inbox_summary"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/{inbox_item_id}/dismiss": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["dismiss_inbox_item"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/meta": {
     parameters: {
       query?: never;
@@ -1399,6 +1447,78 @@ export interface components {
       /** @description The URL of a `webhook` hook without its query or fragment. */
       url?: string | null;
     };
+    InboxAction: {
+      /** @description A blocker action, or `answer_permission`, `approve_spec`, `start_step`, `merge`, or `answer_decision`. */
+      kind: string;
+      /** @description What the existing endpoint for the action needs: ids, a revision, or a task version. */
+      params: unknown;
+    };
+    InboxItem: {
+      /** @description The one primary action. It points at an endpoint that already exists; the inbox has none of its own. */
+      action: components["schemas"]["InboxAction"];
+      closed_at?: string | null;
+      /** @description Only a spec approval can be dismissed. */
+      dismissible: boolean;
+      /** Format: uuid */
+      id: string;
+      /** @description `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`. */
+      kind: string;
+      opened_at: string;
+      /** @description What the item is about. Never holds a secret value. */
+      params: unknown;
+      /** Format: uuid */
+      project_id: string;
+      project_name: string;
+      /** Format: uuid */
+      spec_id?: string | null;
+      /** @description `open`, `answered`, `resolved`, or `dismissed`. */
+      state: string;
+      /** @description `spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`. */
+      subject: string;
+      title: components["schemas"]["InboxTitle"];
+      /** Format: uuid */
+      work_item_id?: string | null;
+    };
+    InboxKinds: {
+      /** Format: int64 */
+      approval: number;
+      /** Format: int64 */
+      blocker: number;
+      /** Format: int64 */
+      decision: number;
+      /** Format: int64 */
+      permission: number;
+      /** Format: int64 */
+      spec_unclear: number;
+    };
+    InboxSummary: {
+      by_kind: components["schemas"]["InboxKinds"];
+      /**
+       * Format: int64
+       * @description Changes merged since midnight UTC.
+       */
+      merged_today: number;
+      /**
+       * Format: int64
+       * @description Items waiting for the operator.
+       */
+      open: number;
+      /**
+       * Format: int64
+       * @description Tasks that are in a stage now.
+       */
+      running: number;
+    };
+    InboxTitle: {
+      /** @description The path of the spec draft whose session asked, for a permission that belongs to a draft. */
+      draft_path?: string | null;
+      spec_slug?: string | null;
+      spec_title?: string | null;
+      /** @description The stage the task is at. */
+      stage?: string | null;
+      /** @description The task the item is about, when it is about one. */
+      task_key?: string | null;
+    };
     Lint: {
       issues: components["schemas"]["LintIssue"][];
       /** @description No issue with severity `error`. */
@@ -1480,6 +1600,36 @@ export interface components {
         task_key?: string | null;
         /** @description The event that triggered the run. */
         trigger: string;
+        /** Format: uuid */
+        work_item_id?: string | null;
+      }[];
+      next_cursor?: string | null;
+    };
+    /** @description A list page. */
+    Page_InboxItem: {
+      items: {
+        /** @description The one primary action. It points at an endpoint that already exists; the inbox has none of its own. */
+        action: components["schemas"]["InboxAction"];
+        closed_at?: string | null;
+        /** @description Only a spec approval can be dismissed. */
+        dismissible: boolean;
+        /** Format: uuid */
+        id: string;
+        /** @description `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`. */
+        kind: string;
+        opened_at: string;
+        /** @description What the item is about. Never holds a secret value. */
+        params: unknown;
+        /** Format: uuid */
+        project_id: string;
+        project_name: string;
+        /** Format: uuid */
+        spec_id?: string | null;
+        /** @description `open`, `answered`, `resolved`, or `dismissed`. */
+        state: string;
+        /** @description `spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`. */
+        subject: string;
+        title: components["schemas"]["InboxTitle"];
         /** Format: uuid */
         work_item_id?: string | null;
       }[];
@@ -2931,6 +3081,114 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HookRun"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_inbox: {
+    parameters: {
+      query?: {
+        project_id?: string;
+        /** @description `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`. */
+        kind?: string;
+        /** @description `open` (default) or `closed`. */
+        state?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          /** @description A digest of the page; send it back as If-None-Match */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_InboxItem"];
+        };
+      };
+      /** @description The page is unchanged */
+      304: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  inbox_summary: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          /** @description A digest of the summary; send it back as If-None-Match */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["InboxSummary"];
+        };
+      };
+      /** @description The summary is unchanged */
+      304: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  dismiss_inbox_item: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        inbox_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["InboxItem"];
         };
       };
       "4XX": {

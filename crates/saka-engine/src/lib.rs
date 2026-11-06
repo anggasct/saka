@@ -11,6 +11,7 @@ mod draft;
 mod fix_packet;
 mod hooks;
 mod hooks_run;
+mod inbox;
 mod intake;
 mod metrics;
 pub mod packet;
@@ -75,6 +76,7 @@ pub use reload::ReloadView;
 pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::hook_run::HookRunFilter;
+pub use saka_store::inbox::{InboxFilter, InboxItem, InboxSummary};
 pub use saka_store::list::{Key, Page, PermissionFilter, WorkItemFilter};
 pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
@@ -509,7 +511,8 @@ impl Engine {
     }
 
     fn commit(&self, batch: &Batch) -> Result<Vec<i64>> {
-        let seqs = self.store.commit(batch)?;
+        let inbox = self.inbox_syncs(batch);
+        let seqs = self.store.commit_synced(batch, &inbox)?;
         if !batch.events.is_empty()
             || !batch.jobs.is_empty()
             || batch.action.is_some()
