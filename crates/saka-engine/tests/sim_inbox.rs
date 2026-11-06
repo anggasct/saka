@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 use saka_core::autonomy::Ceilings;
+use saka_core::hook::{self, RawHook};
 use saka_core::inbox::{Source, desired};
 use saka_core::vocab::{
     Autonomy, InboxActionKind, InboxKind, InboxState, InboxSubject, SpecState, Stage, StagePhase,
@@ -299,6 +300,61 @@ fn a_dismissed_approval_stays_closed_for_its_revision_and_returns_for_the_next()
     let text = format!("{TWO_STEP_SPEC}\n\nRevised.\n");
     sim.register(TWO_STEP_PATH, &text);
     assert_eq!(open(&sim, InboxSubject::Spec).len(), 1);
+}
+
+fn notify_on_open() -> Vec<saka_core::hook::Hook> {
+    hook::parse_all(&[RawHook {
+        name: "needs-you".into(),
+        project: "tasks".into(),
+        on: "inbox_item_opened".into(),
+        action: "notify".into(),
+        channel: Some("ops".into()),
+        ..RawHook::default()
+    }])
+    .unwrap()
+}
+
+#[test]
+fn an_item_that_opens_tells_the_notifier_once_with_what_waits_and_nothing_secret() {
+    let mut sim = Sim::new(SimConfig {
+        agent: asking(),
+        operator: operator(true, true),
+        hooks: notify_on_open(),
+        ..SimConfig::default()
+    });
+    assert!(sim.run_until(STEPS, |s| s.hooks.notifications().len() == 1));
+    let first = sim.hooks.notifications().remove(0);
+    assert_eq!(first.code, "hook.event");
+    assert_eq!(first.params["event"], "inbox_item_opened");
+    assert_eq!(first.params["project"]["name"], "tasks");
+    assert_eq!(first.params["inbox"]["kind"], "approval");
+    assert_eq!(first.params["inbox"]["subject"], "spec");
+
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
+    assert!(sim.run_until(STEPS, |s| s.hooks.notifications().len() == 2));
+    let permission = sim.hooks.notifications().remove(1);
+    assert_eq!(permission.params["inbox"]["subject"], "permission");
+    assert_eq!(permission.params["task"]["key"], "tasks-done/s1");
+    let id = open(&sim, InboxSubject::Permission)[0].id.to_string();
+    assert_eq!(permission.params["inbox"]["id"], id);
+
+    for _ in 0..200 {
+        sim.step();
+    }
+    assert_eq!(
+        sim.hooks.notifications().len(),
+        2,
+        "later commits of the same task do not tell again"
+    );
+}
+
+#[test]
+fn without_a_hook_for_the_event_nothing_is_sent() {
+    let mut sim = Sim::new(SimConfig::default());
+    sim.approve();
+    assert!(sim.run_to_shipped(STEPS));
+    assert!(sim.hooks.notifications().is_empty());
 }
 
 fn wanted(sim: &Sim, ceilings: &Ceilings) -> BTreeSet<(String, String)> {

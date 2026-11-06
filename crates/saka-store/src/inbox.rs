@@ -20,6 +20,18 @@ pub struct InboxSync {
     pub desired: Vec<InboxDraft>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenedItem {
+    pub id: InboxItemId,
+    pub project_id: ProjectId,
+    pub kind: InboxKind,
+    pub subject: InboxSubject,
+    pub work_item_id: Option<WorkItemId>,
+    pub task_key: Option<String>,
+    pub spec_id: Option<SpecId>,
+    pub spec_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InboxDismissal {
     pub id: InboxItemId,
@@ -239,6 +251,30 @@ fn action_json(a: &InboxAction) -> Value {
     serde_json::json!({ "kind": a.kind, "params": a.params })
 }
 
+fn names(tx: &Transaction<'_>, d: &InboxDraft) -> Result<(Option<String>, Option<String>)> {
+    let task_key = match d.work_item_id {
+        Some(id) => tx
+            .query_row(
+                "SELECT task_key FROM work_item WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .ok(),
+        None => None,
+    };
+    let spec_path = match d.spec_id {
+        Some(id) => tx
+            .query_row(
+                "SELECT path FROM spec WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .ok(),
+        None => None,
+    };
+    Ok((task_key, spec_path))
+}
+
 fn item_id(subject: &str, source_id: &str, opened_at: Timestamp, ordinal: i64) -> Uuid {
     let mut hash = Sha256::new();
     hash.update(b"inbox_item\0");
@@ -254,7 +290,12 @@ fn item_id(subject: &str, source_id: &str, opened_at: Timestamp, ordinal: i64) -
     uuid::Builder::from_custom_bytes(bytes).into_uuid()
 }
 
-pub(crate) fn sync(tx: &Transaction<'_>, s: &InboxSync, now: Timestamp) -> Result<()> {
+pub(crate) fn sync(
+    tx: &Transaction<'_>,
+    s: &InboxSync,
+    now: Timestamp,
+    opened: &mut Vec<OpenedItem>,
+) -> Result<()> {
     let live = live_items(tx, s.scope)?;
     for item in &live {
         let wanted = s
@@ -314,6 +355,17 @@ pub(crate) fn sync(tx: &Transaction<'_>, s: &InboxSync, now: Timestamp) -> Resul
                 now.0,
             ],
         )?;
+        let (task_key, spec_path) = names(tx, d)?;
+        opened.push(OpenedItem {
+            id: InboxItemId(id),
+            project_id: d.project_id,
+            kind: d.kind,
+            subject: d.subject,
+            work_item_id: d.work_item_id,
+            task_key,
+            spec_id: d.spec_id,
+            spec_path,
+        });
     }
     Ok(())
 }

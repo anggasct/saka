@@ -48,6 +48,9 @@ fn text_at<'a>(params: &'a Value, path: &[&str]) -> Option<&'a str> {
 
 fn link(public_url: Option<&str>, params: &Value) -> Option<String> {
     let base = public_url?.trim_end_matches('/');
+    if let Some(id) = text_at(params, &["inbox", "id"]) {
+        return Some(format!("{base}/inbox/{}", clean(id, 64)));
+    }
     Some(match text_at(params, &["task", "id"]) {
         Some(id) => format!("{base}/delivery/tasks/{}", clean(id, 64)),
         None => format!("{base}/delivery"),
@@ -78,6 +81,7 @@ fn headline(lang: Lang, event: &str, subject: &str, project: &str) -> String {
         "change_opened" => ("Pull request opened", "Pull request dibuka"),
         "review_done" => ("Review done", "Review selesai"),
         "spec_shipped" => ("Spec shipped", "Spec selesai"),
+        "inbox_item_opened" => ("Needs you", "Butuh kamu"),
         _ => ("Saka event", "Event Saka"),
     };
     let word = lang.pick(en, id);
@@ -103,6 +107,16 @@ pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>)
                     "{}: {}",
                     lang.pick("Reason", "Penyebab"),
                     clean(code, 64)
+                ));
+            }
+            if event == "inbox_item_opened" {
+                let kind = text_at(params, &["inbox", "kind"]).unwrap_or("-");
+                let subject = text_at(params, &["inbox", "subject"]).unwrap_or("-");
+                lines.push(format!(
+                    "{}: {} / {}",
+                    lang.pick("Waiting", "Menunggu"),
+                    clean(kind, 32),
+                    clean(subject, 32)
                 ));
             }
             if event == "review_done"

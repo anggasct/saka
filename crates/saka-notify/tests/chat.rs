@@ -308,3 +308,22 @@ async fn an_unknown_channel_is_unconfigured() {
     assert!(!e.retryable);
     assert_eq!(e.params, json!({ "channel": "elsewhere" }));
 }
+
+#[test]
+fn an_opened_inbox_item_names_what_waits_and_links_to_it_only_with_a_public_url() {
+    let mut params = hook_event("inbox_item_opened");
+    params["inbox"] = json!({
+        "id": "0193f0c4-0000-7000-8000-000000000009",
+        "kind": "permission",
+        "subject": "permission"
+    });
+    let n = notification("ops", "hook.event", params);
+    assert_eq!(
+        render(Lang::En, &n, Some("https://saka.example.com/")),
+        "Needs you: tasks/s1 in tasks\nWaiting: permission / permission\nhttps://saka.example.com/inbox/0193f0c4-0000-7000-8000-000000000009"
+    );
+    assert_eq!(
+        render(Lang::Id, &n, None),
+        "Butuh kamu: tasks/s1 di tasks\nMenunggu: permission / permission"
+    );
+}

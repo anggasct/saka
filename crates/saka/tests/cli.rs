@@ -2181,3 +2181,40 @@ fn the_task_list_shows_where_a_merge_request_stands_in_the_queue() {
     ));
     assert_eq!(raw["items"][0]["merge_queue"]["size"], 1);
 }
+
+#[test]
+fn inbox_commands_list_what_waits_and_dismiss_a_spec_approval_with_documented_codes() {
+    let sim = Sim::new(SimConfig::default());
+    let server = serve(&sim);
+
+    let listed = saka(&server, &["inbox", "list"]);
+    assert_eq!(
+        code(&listed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let line = stdout(&listed);
+    assert!(
+        line.contains("approval/spec  tasks  tasks-done  approve_spec"),
+        "{line}"
+    );
+    let by_project = saka(&server, &["inbox", "list", "--project", "tasks"]);
+    assert_eq!(stdout(&by_project), line);
+    let other = saka(&server, &["inbox", "list", "--project", "nope"]);
+    assert_eq!(code(&other), 1, "404 for an unknown project");
+
+    let items = json(&saka(&server, &["--json", "inbox", "list"]));
+    let id = items["items"][0]["id"].as_str().unwrap().to_string();
+
+    let done = saka(
+        &server,
+        &["inbox", "dismiss", &id, "--reason", "I will write it first"],
+    );
+    assert_eq!(code(&done), 0, "{}", String::from_utf8_lossy(&done.stderr));
+    assert_eq!(stdout(&done).trim(), format!("{id} dismissed"));
+    let again = saka(&server, &["inbox", "dismiss", &id, "--reason", "twice"]);
+    assert_eq!(code(&again), 4, "409 inbox_item_closed");
+    assert!(String::from_utf8_lossy(&again.stderr).contains("inbox_item_closed"));
+    assert_eq!(stdout(&saka(&server, &["inbox", "list"])).trim(), "");
+}

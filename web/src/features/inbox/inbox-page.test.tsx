@@ -300,6 +300,28 @@ describe("inbox page", () => {
   });
 });
 
+describe("inbox deep link", () => {
+  it("opens the inbox with the linked item focused", async () => {
+    fakeApi(routes(() => [retryItem, permissionItem]));
+    renderApp(`/inbox/${permissionItem.id}`);
+    const linked = await screen.findAllByRole("article");
+    await waitFor(() => {
+      expect(linked[1]).toHaveFocus();
+    });
+    expect(linked[0]).not.toHaveFocus();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("says so when the linked item no longer waits", async () => {
+    fakeApi(routes(() => [retryItem]));
+    renderApp("/inbox/0193f0c4-1b2a-7c3d-9e8f-0011223399ff");
+    expect(
+      await screen.findByText("That item is no longer waiting for you."),
+    ).toBeInTheDocument();
+    expect(await screen.findAllByRole("article")).toHaveLength(1);
+  });
+});
+
 describe("inbox badge", () => {
   it("shows the number waiting and follows the event stream without a reload", async () => {
     let waiting = 2;

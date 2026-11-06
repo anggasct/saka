@@ -25,7 +25,7 @@ function Empty() {
   );
 }
 
-export function InboxPage() {
+export function InboxPage({ focus }: { focus?: string }) {
   const t = useT();
   const inbox = useInbox();
   const items = inbox.data ?? [];
@@ -39,6 +39,14 @@ export function InboxPage() {
           </p>
         )}
       </div>
+      {focus !== undefined &&
+        !inbox.isPending &&
+        inbox.error === null &&
+        !items.some((item) => item.id === focus) && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {t("inbox.gone")}
+          </p>
+        )}
       {inbox.error !== null ? (
         <PageError
           title="inbox.error.title"
@@ -63,7 +71,7 @@ export function InboxPage() {
         <ul className="space-y-3">
           {items.map((item) => (
             <li key={item.id}>
-              <InboxCard item={item} />
+              <InboxCard item={item} focused={item.id === focus} />
             </li>
           ))}
         </ul>

@@ -1,11 +1,15 @@
 use saka_core::event::Event;
+use saka_core::hook::{self, InboxRef, NamedRef, SpecRef, TaskRef};
 use saka_core::ids::InboxItemId;
 use saka_core::inbox::{self, Source};
 use saka_core::rejection::Rejection;
 use saka_core::time::Timestamp;
+use saka_core::vocab::HookEvent;
 use saka_core::vocab::InboxState;
 use saka_store::Batch;
-use saka_store::inbox::{InboxDismissal, InboxFilter, InboxItem, InboxSummary, InboxSync};
+use saka_store::inbox::{
+    InboxDismissal, InboxFilter, InboxItem, InboxSummary, InboxSync, OpenedItem,
+};
 use saka_store::list::Page;
 
 use crate::action::{Action, Produced};
@@ -30,6 +34,49 @@ impl Engine {
                 desired: inbox::desired(source, ceilings),
             })
             .collect()
+    }
+
+    pub(crate) fn plan_inbox_hooks(&self, opened: &[OpenedItem], now: Timestamp) -> Option<Batch> {
+        if !self
+            .cfg
+            .hooks
+            .iter()
+            .any(|h| h.on == HookEvent::InboxItemOpened)
+        {
+            return None;
+        }
+        let mut extra = Batch::new(now);
+        let cause = self.cause("system:inbox");
+        for item in opened {
+            let loaded = self
+                .store
+                .read(|c| saka_store::read::load_project(c, item.project_id))
+                .ok()
+                .flatten();
+            let Some(project) = loaded else {
+                continue;
+            };
+            let ctx = hook::inbox_context(
+                InboxRef {
+                    id: item.id,
+                    kind: item.kind,
+                    subject: item.subject,
+                },
+                NamedRef {
+                    id: project.id.0,
+                    name: project.name.clone(),
+                },
+                item.work_item_id
+                    .zip(item.task_key.clone())
+                    .map(|(id, key)| TaskRef { id, key }),
+                item.spec_id
+                    .zip(item.spec_path.clone())
+                    .map(|(id, path)| SpecRef { id, path }),
+                now,
+            );
+            self.queue_hooks(&mut extra, &ctx, &project.hook_skip, item.id.0, &cause, now);
+        }
+        (!extra.events.is_empty()).then_some(extra)
     }
 
     pub fn inbox(&self, filter: &InboxFilter, page: &Page) -> Result<Paged<InboxItem>> {

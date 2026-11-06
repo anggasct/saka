@@ -165,7 +165,7 @@ allowed_users = ["123456789"]      # required with actions: the chat user ids (d
 
 # Hooks run something when an event happens in a project's loop (the [hooks] table above is the
 # inbound webhook listener; these are outbound). Hooks live only here, never in saka.toml or the repo.
-# `on` is change_opened | review_done | merged | task_done | spec_shipped | blocked. A run is recorded for every
+# `on` is change_opened | review_done | merged | task_done | spec_shipped | blocked | inbox_item_opened. A run is recorded for every
 # match and kept as history; a failed run can be re-run from the API, the CLI, or Settings.
 
 [[hook]]
@@ -186,6 +186,10 @@ on = "blocked"
 action = "notify"
 channel = "ops"                    # a [[notify.channel]] name; start is refused if there is none
 codes = ["ci_red", "dod_failed"]   # optional, only with on = "blocked"
+
+# inbox_item_opened fires when something starts waiting for you (a permission, an approval, a blocker). It has no repo, so it takes
+# no `repos` or `branches` filter and cannot use `run`. The message carries the kind and subject and a link to /inbox/<id> when
+# [notify] public_url is set.
 
 # `run` executes the command in a throwaway environment checked out at the commit of the event
 # (spec_shipped: the tip of the named repo's base branch, so it needs exactly one `repos` entry),

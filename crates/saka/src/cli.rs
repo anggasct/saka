@@ -441,6 +441,50 @@ impl Client {
         }
     }
 
+    pub async fn inbox_list(&self, project: Option<&str>, limit: u32) -> ExitCode {
+        let mut path = format!("/api/v1/inbox?limit={limit}");
+        if let Some(project) = project {
+            match self.project_id(project).await {
+                Ok(id) => path.push_str(&format!("&project_id={id}")),
+                Err(code) => return code,
+            }
+        }
+        match self.get(&path).await {
+            Ok(a) => self.finish(&a, |body| {
+                lines(body, |i| {
+                    let what = i["title"]["task_key"]
+                        .as_str()
+                        .or_else(|| i["title"]["spec_slug"].as_str())
+                        .unwrap_or("-");
+                    format!(
+                        "{}  {}/{}  {}  {}  {}",
+                        text(&i["id"]),
+                        text(&i["kind"]),
+                        text(&i["subject"]),
+                        text(&i["project_name"]),
+                        what,
+                        text(&i["action"]["kind"])
+                    )
+                })
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn inbox_dismiss(&self, id: &str, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/inbox/{id}/dismiss"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
+    }
+
     pub async fn hook_list(&self, project: &str) -> ExitCode {
         let id = match self.project_id(project).await {
             Ok(id) => id,

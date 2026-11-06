@@ -109,6 +109,32 @@ enum Command {
     #[command(about = "Chat notification channels from the operator config")]
     #[command(subcommand)]
     Notify(NotifyCmd),
+    #[command(about = "What waits for you across projects: permissions, blockers, approvals")]
+    #[command(subcommand)]
+    Inbox(InboxCmd),
+}
+
+#[derive(Subcommand)]
+enum InboxCmd {
+    #[command(
+        about = "Lists what is waiting for you, newest first",
+        after_help = "Exit codes: 0 ok, 1 failed, 3 problems."
+    )]
+    List {
+        #[arg(help = "Only this project (id or name)", long)]
+        project: Option<String>,
+        #[arg(help = "How many items, 1 to 200", long, default_value_t = 50)]
+        limit: u32,
+    },
+    #[command(
+        about = "Dismisses a spec approval; it stays away until the spec has a new revision",
+        after_help = "Exit codes: 0 dismissed, 1 failed, 3 problems, 4 the item cannot be dismissed or is closed."
+    )]
+    Dismiss {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -660,6 +686,17 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .await
                     }
                     HookCmd::Rerun { id, reason } => client.hook_rerun(&id, &reason).await,
+                }
+            })
+        }
+        Command::Inbox(cmd) => {
+            let client = Client::new(&server(cli.server)?, cli.json);
+            current_thread()?.block_on(async {
+                match cmd {
+                    InboxCmd::List { project, limit } => {
+                        client.inbox_list(project.as_deref(), limit).await
+                    }
+                    InboxCmd::Dismiss { id, reason } => client.inbox_dismiss(&id, &reason).await,
                 }
             })
         }

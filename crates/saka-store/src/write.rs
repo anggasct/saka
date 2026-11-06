@@ -179,7 +179,7 @@ pub(crate) fn write(
     tx: &Transaction<'_>,
     b: &Batch,
     inbox: &[crate::inbox::InboxSync],
-) -> Result<Vec<i64>> {
+) -> Result<(Vec<i64>, Vec<crate::inbox::OpenedItem>)> {
     // Events are written before the rows they describe; foreign keys are checked at commit.
     tx.pragma_update(None, "defer_foreign_keys", "ON")?;
     if let Some(outcome) = &b.job_outcome {
@@ -422,13 +422,14 @@ pub(crate) fn write(
     for d in &b.inbox_dismissals {
         crate::inbox::dismiss(tx, d, b.now)?;
     }
+    let mut opened = Vec::new();
     for s in inbox {
-        crate::inbox::sync(tx, s, b.now)?;
+        crate::inbox::sync(tx, s, b.now, &mut opened)?;
     }
     for j in &b.jobs {
         enqueue(tx, j, b.now)?;
     }
-    Ok(seqs)
+    Ok((seqs, opened))
 }
 
 fn job_outcome(tx: &Transaction<'_>, outcome: &JobOutcome, now: Timestamp) -> Result<()> {
