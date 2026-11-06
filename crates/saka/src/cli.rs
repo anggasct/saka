@@ -17,6 +17,8 @@ pub struct NewDraft<'a> {
     pub idea: &'a str,
     pub context: &'a [String],
     pub locale: Option<&'a str>,
+    pub session: bool,
+    pub revise: bool,
     pub wait: bool,
 }
 
@@ -1304,6 +1306,8 @@ impl Client {
             "path": new.path,
             "context_paths": new.context,
             "locale": new.locale,
+            "mode": if new.session { "session" } else { "draft" },
+            "target_kind": if new.revise { "revise" } else { "new" },
         });
         let created = match self
             .post(&format!("/api/v1/projects/{id}/spec-drafts"), &body, None)
@@ -1326,6 +1330,14 @@ impl Client {
                 Err(code) => return code,
             };
             let state = text(&current["state"]);
+            if state == "awaiting_operator" {
+                if self.json {
+                    out(&current.to_string());
+                } else {
+                    out(&draft_summary(&current));
+                }
+                return ExitCode::SUCCESS;
+            }
             if matches!(state.as_str(), "succeeded" | "failed" | "cancelled") {
                 return self.drafted(&current);
             }
@@ -1431,6 +1443,23 @@ impl Client {
     pub async fn draft_session(&self, id: &str, action: &str, body: &Value) -> ExitCode {
         match self.session_at(&format!("/api/v1/spec-drafts/{id}")).await {
             Ok(session) => self.post_to_session(&session, action, body).await,
+            Err(code) => code,
+        }
+    }
+
+    pub async fn draft_operator(&self, id: &str, action: &str, body: &Value) -> ExitCode {
+        match self
+            .post(&format!("/api/v1/spec-drafts/{id}/{action}"), body, None)
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn draft_changes(&self, id: &str, diff: bool) -> ExitCode {
+        match self.get(&format!("/api/v1/spec-drafts/{id}/changes")).await {
+            Ok(a) => self.finish(&a, |b| changes_summary(b, diff)),
             Err(code) => code,
         }
     }
@@ -1674,6 +1703,32 @@ fn draft_line(d: &Value) -> String {
     )
     .trim_end()
     .to_string()
+}
+
+fn changes_summary(c: &Value, diff: bool) -> String {
+    let mut lines: Vec<String> = c["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| {
+            let head = format!("{} {}", text(&f["status"]), text(&f["path"]));
+            if diff {
+                format!("{head}\n{}", text(&f["diff"]))
+            } else {
+                head
+            }
+        })
+        .collect();
+    let lint = &c["lint"];
+    if lint["passed"] == true {
+        lines.push("lint passed".to_string());
+    } else {
+        lines.push("lint failed".to_string());
+    }
+    for issue in lint["findings"].as_array().into_iter().flatten() {
+        lines.push(issue_line(issue));
+    }
+    lines.join("\n")
 }
 
 fn draft_summary(d: &Value) -> String {

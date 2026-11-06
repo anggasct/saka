@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import { startEventStream } from "@/api/events";
 import {
+  awaitingDraft,
+  awaitingFailing,
   cancelledDraft,
+  changes,
   committingDraft,
   DRAFT,
   DRAFT_ID,
@@ -18,6 +21,7 @@ import {
   failedRetry,
   preparingDraft,
   queuedDraft,
+  SESSION_CHANGES,
   succeededDraft,
   timeline,
 } from "@/test/draft-fixtures";
@@ -373,6 +377,162 @@ describe("Draft page", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+});
+
+describe("Draft page in session mode", () => {
+  const conversation = (item: SpecDraft, extra: Routes = {}) =>
+    show(item, { [SESSION_CHANGES]: { body: changes }, ...extra });
+
+  it("waits for the operator with the changed files, their diffs, and the lint result", async () => {
+    conversation(awaitingDraft);
+    await header();
+    expect(screen.getByText("Waiting for you")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Your turn" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("The spec passes the lint.")).toBeVisible();
+    expect(screen.getByText("docs/notes/avatar.md")).toBeInTheDocument();
+    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(screen.getByText("Modified")).toBeInTheDocument();
+    expect(screen.getByText("The diff is cut at 256 KiB.")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Changes to docs/notes/avatar.md"),
+    ).toHaveTextContent("+# Notes");
+    expect(screen.getByRole("button", { name: "Commit" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Discard" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Cancel draft" })).toBeNull();
+  });
+
+  it("does not offer a commit while the lint fails", async () => {
+    conversation(awaitingFailing, {
+      [SESSION_CHANGES]: {
+        body: {
+          ...changes,
+          lint: {
+            passed: false,
+            findings: [
+              { code: "ac_section_missing", severity: "error", line: 3 },
+            ],
+          },
+        },
+      },
+    });
+    await header();
+    expect(
+      await screen.findByText("The spec does not pass the lint: 1 issue."),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Commit" })).toBeNull();
+    expect(
+      screen.getByText(
+        "You can commit once the spec passes the lint and no question is open.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Discard" })).toBeVisible();
+  });
+
+  it("sends a reply to the architect and clears the field", async () => {
+    const { api } = conversation(awaitingDraft, {
+      [`${DRAFT}/message`]: {
+        status: 202,
+        body: { ...awaitingDraft, state: "drafting" },
+      },
+    });
+    await header();
+    const user = userEvent.setup();
+    const field = await screen.findByRole("textbox", { name: "Your message" });
+    expect(screen.getByRole("button", { name: "Send reply" })).toBeDisabled();
+    await user.type(field, "Add an example.");
+    await user.click(screen.getByRole("button", { name: "Send reply" }));
+    await waitFor(() => {
+      expect(
+        api.requests.find((r) => r.path === `${DRAFT}/message`)?.body,
+      ).toEqual({ text: "Add an example." });
+    });
+    await waitFor(() => {
+      expect(field).toHaveValue("");
+    });
+  });
+
+  it("commits with an optional message", async () => {
+    const { api } = conversation(awaitingDraft, {
+      [`${DRAFT}/commit`]: {
+        status: 202,
+        body: { ...awaitingDraft, state: "committing" },
+      },
+    });
+    await header();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Commit" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Commit the changes",
+    });
+    await user.type(
+      within(dialog).getByRole("textbox", {
+        name: "Commit message (optional)",
+      }),
+      "docs: add the avatar spec",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Commit" }));
+    await waitFor(() => {
+      expect(
+        api.requests.find((r) => r.path === `${DRAFT}/commit`)?.body,
+      ).toEqual({ message: "docs: add the avatar spec" });
+    });
+  });
+
+  it("explains a commit the server refuses because a file moved", async () => {
+    conversation(awaitingDraft, {
+      [`${DRAFT}/commit`]: {
+        status: 409,
+        body: {
+          code: "draft_base_moved",
+          params: { paths: ["docs/prd.md"] },
+          status: 409,
+        },
+      },
+    });
+    await header();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Commit" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Commit the changes",
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Commit" }));
+    expect(
+      await within(dialog).findByText(
+        "docs/prd.md changed on the base branch while you worked. Discard this conversation and start again from the new version.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("discards with a reason", async () => {
+    const { api } = conversation(awaitingDraft, {
+      [`${DRAFT}/discard`]: { status: 202, body: cancelledDraft },
+    });
+    await header();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Discard this conversation",
+    });
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Reason" }),
+      "wrong direction",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    await waitFor(() => {
+      expect(
+        api.requests.find((r) => r.path === `${DRAFT}/discard`)?.body,
+      ).toEqual({ reason: "wrong direction" });
+    });
+  });
+
+  it("shows no conversation controls for a plain draft", async () => {
+    show(draft());
+    await header();
+    expect(screen.queryByRole("heading", { name: "Changed files" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Your message" })).toBeNull();
   });
 });
 

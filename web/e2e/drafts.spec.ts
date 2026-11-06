@@ -81,6 +81,8 @@ function draft(state: string, extra: object = {}) {
     slug: "avatar-upload-for-every-user-profile",
     idea: "Let users upload an avatar.",
     locale: "en",
+    mode: "draft",
+    target_kind: "new",
     context_paths: ["docs/architecture.md"],
     state,
     attempt,
@@ -179,7 +181,54 @@ type Server = {
   state: string;
   created: unknown[];
   events: string[];
+  posts?: { path: string; body: unknown }[];
 };
+
+const CHANGES = {
+  files: [
+    {
+      path: "docs/notes/avatar-sizes.md",
+      status: "added",
+      diff: "--- /dev/null\n+++ b/docs/notes/avatar-sizes.md\n+# Avatar sizes\n",
+      truncated: false,
+    },
+    {
+      path: PATH,
+      status: "added",
+      diff: "--- /dev/null\n+++ b/" + PATH + "\n+# Avatar upload\n",
+      truncated: false,
+    },
+  ],
+  lint: { passed: true, findings: [] },
+};
+
+function conversation(state: string) {
+  return draft(state, {
+    mode: "session",
+    available_actions:
+      state === "awaiting_operator"
+        ? ["message", "commit", "discard", "cancel"]
+        : ["cancel"],
+    last_round: {
+      attempt: 1,
+      round: 2,
+      outcome: "passed",
+      bytes: 2140,
+      content_hash: "sha256:" + "1a2b".padEnd(64, "0"),
+      decisions_open: 0,
+      parser_version: 4,
+      issues: [],
+      created_at: AT,
+    },
+    session: {
+      id: SESSION_ID,
+      state: state === "awaiting_operator" ? "idle" : "running",
+      cli: "claude",
+      started_at: AT,
+      ended_at: null,
+    },
+  });
+}
 
 async function mockApi(page: Page, server: Server) {
   await page.route("**/api/v1/**", async (route) => {
@@ -242,6 +291,24 @@ async function mockApi(page: Page, server: Server) {
         items: [{ ...draft("drafting"), idea: null }, failedDraft],
         next_cursor: null,
       });
+    } else if (
+      server.posts !== undefined &&
+      request.method() === "POST" &&
+      path.startsWith(`/api/v1/spec-drafts/${DRAFT_ID}/`)
+    ) {
+      server.posts.push({ path, body: request.postDataJSON() });
+      server.state = path.endsWith("/message") ? "drafting" : "committing";
+      await json(conversation(server.state), 202);
+    } else if (
+      server.posts !== undefined &&
+      path === `/api/v1/spec-drafts/${DRAFT_ID}/changes`
+    ) {
+      await json(CHANGES);
+    } else if (
+      server.posts !== undefined &&
+      path === `/api/v1/spec-drafts/${DRAFT_ID}`
+    ) {
+      await json(conversation(server.state));
     } else if (path === `/api/v1/spec-drafts/${DRAFT_ID}`) {
       if (server.state === "queued") {
         server.state = "drafting";
@@ -354,6 +421,8 @@ for (const width of [375, 1280]) {
         path: PATH,
         context_paths: ["docs/prd.md"],
         locale: "en",
+        mode: "draft",
+        target_kind: "new",
       },
     ]);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(PATH);
@@ -417,3 +486,94 @@ for (const width of [375, 1280]) {
     await expect(retry).toBeHidden();
   });
 }
+
+for (const width of [375, 1280]) {
+  test(`operator holds a conversation with the architect at ${width} px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const server: Server = {
+      state: "awaiting_operator",
+      created: [],
+      events: [],
+      posts: [],
+    };
+    await mockApi(page, server);
+
+    await page.goto(`/docs/${PROJECT_ID}/drafts/${DRAFT_ID}`);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(PATH);
+    await expect(page.getByText("Waiting for you").first()).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Changed files" }),
+    ).toBeVisible();
+    await expect(page.getByText("The spec passes the lint.")).toBeVisible();
+    await page.getByText("docs/notes/avatar-sizes.md", { exact: true }).click();
+    await expect(
+      page.getByLabel("Changes to docs/notes/avatar-sizes.md"),
+    ).toContainText("+# Avatar sizes");
+    await noOverflow(page);
+    await touchable(page.getByRole("button"));
+    await touchable(page.getByRole("textbox"));
+    await accessible(page);
+
+    await page
+      .getByRole("textbox", { name: "Your message" })
+      .fill("Add the avatar sizes.");
+    await page.getByRole("button", { name: "Send reply" }).click();
+    await expect.poll(() => server.posts?.length).toBe(1);
+    expect(server.posts?.[0]).toEqual({
+      path: `/api/v1/spec-drafts/${DRAFT_ID}/message`,
+      body: { text: "Add the avatar sizes." },
+    });
+
+    server.state = "awaiting_operator";
+    server.events.push(
+      `event: spec.draft.awaiting_operator.v1\ndata: ${JSON.stringify({
+        seq: 30,
+        stream_type: "spec_draft",
+      })}\n\n`,
+    );
+    await page.getByRole("button", { name: "Commit" }).click();
+    const dialog = page.getByRole("dialog", { name: "Commit the changes" });
+    await expect(dialog).toBeVisible();
+    await touchable(dialog.getByRole("button"));
+    await accessible(page);
+    await dialog
+      .getByRole("textbox", { name: "Commit message (optional)" })
+      .fill("docs: add the avatar spec");
+    await dialog.getByRole("button", { name: "Commit" }).click();
+    await expect.poll(() => server.posts?.length).toBe(2);
+    expect(server.posts?.[1]).toEqual({
+      path: `/api/v1/spec-drafts/${DRAFT_ID}/commit`,
+      body: { message: "docs: add the avatar spec" },
+    });
+  });
+}
+
+test("the conversation follows the chosen language", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 });
+  await mockApi(page, {
+    state: "awaiting_operator",
+    created: [],
+    events: [],
+    posts: [],
+  });
+  await page.goto(`/docs/${PROJECT_ID}/drafts/${DRAFT_ID}`);
+  await expect(page.getByText("Waiting for you").first()).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Language" })
+    .selectOption("Bahasa Indonesia");
+  await expect(page.locator("html")).toHaveAttribute("lang", "id");
+  await expect(
+    page.getByRole("heading", { name: "Giliran Anda" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "File yang berubah" }),
+  ).toBeVisible();
+  await expect(page.getByText("Spec lolos lint.")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Kirim balasan" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Buang" })).toBeVisible();
+  await accessible(page);
+});

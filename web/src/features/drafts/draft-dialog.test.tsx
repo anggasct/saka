@@ -106,7 +106,7 @@ describe("Draft with architect dialog", () => {
 
     await user.clear(path);
     await user.type(path, "docs/specs/avatar-upload");
-    const boxes = within(dialog).getAllByRole("checkbox");
+    const boxes = within(dialog).getAllByRole("checkbox", { name: /\.md$/ });
     for (const box of boxes.slice(0, 17)) {
       await user.click(box);
     }
@@ -177,10 +177,65 @@ describe("Draft with architect dialog", () => {
       path: "docs/specs/avatar-upload.md",
       context_paths: ["docs/architecture.md"],
       locale: "id",
+      mode: "draft",
+      target_kind: "new",
     });
     const key = sent[1]?.headers.get("Idempotency-Key") ?? "";
     expect(key).not.toBe("");
     expect(sent[0]?.headers.get("Idempotency-Key")).toBe(key);
+  });
+
+  it("starts a conversation that revises an existing spec", async () => {
+    const api = fakeApi(
+      routes({
+        [DRAFTS]: (request: Recorded) =>
+          request.method === "POST"
+            ? { status: 201, body: draft({ state: "queued", attempt: null }) }
+            : { body: page([]) },
+        [`/api/v1/spec-drafts/${draft().id}`]: { body: draft() },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp(DOCS);
+    const dialog = await openDialog(user);
+    expect(
+      within(dialog).queryByRole("checkbox", {
+        name: "Revise an existing spec",
+      }),
+    ).toBeNull();
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Work as a conversation" }),
+    );
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Revise an existing spec" }),
+    );
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Idea" }),
+      "Add a CSV export.",
+    );
+    const start = within(dialog).getByRole("button", {
+      name: "Start drafting",
+    });
+    await user.click(start);
+    expect(
+      within(dialog).getByText("Choose the spec to revise."),
+    ).toBeInTheDocument();
+    expect(posts(api.requests)).toEqual([]);
+    await user.selectOptions(
+      within(dialog).getByRole("combobox", { name: "Spec to revise" }),
+      "docs/specs/tasks-done.md",
+    );
+    await user.click(start);
+    await waitFor(() => {
+      expect(posts(api.requests)[0]?.body).toEqual({
+        idea: "Add a CSV export.",
+        path: "docs/specs/tasks-done.md",
+        context_paths: [],
+        locale: "en",
+        mode: "session",
+        target_kind: "revise",
+      });
+    });
   });
 
   it("defaults the language to the UI locale and uses a new key per intent", async () => {

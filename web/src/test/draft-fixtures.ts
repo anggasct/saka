@@ -147,6 +147,46 @@ export const preparingDraft = draft({
   attempt: { ...attempt, rounds: 0 },
 });
 
+export const SESSION_CHANGES = `${DRAFT}/changes`;
+
+export const awaitingDraft = draft({
+  mode: "session",
+  state: "awaiting_operator",
+  last_round: { ...failedRound, round: 2, outcome: "passed", issues: [] },
+  session: {
+    id: DRAFT_SESSION_ID,
+    state: "idle",
+    cli: "claude",
+    started_at: AT,
+    ended_at: null,
+  },
+  available_actions: ["message", "commit", "discard", "cancel"],
+});
+
+export const awaitingFailing = draft({
+  ...awaitingDraft,
+  last_round: failedRound,
+  available_actions: ["message", "discard", "cancel"],
+});
+
+export const changes = {
+  files: [
+    {
+      path: "docs/notes/avatar.md",
+      status: "added",
+      diff: "--- /dev/null\n+++ b/docs/notes/avatar.md\n+# Notes\n",
+      truncated: false,
+    },
+    {
+      path: DRAFT_PATH,
+      status: "modified",
+      diff: "--- a/x\n+++ b/x\n-Old line\n+New line\n",
+      truncated: true,
+    },
+  ],
+  lint: { passed: true, findings: [] },
+};
+
 export const committingDraft = draft({
   state: "committing",
   available_actions: [],

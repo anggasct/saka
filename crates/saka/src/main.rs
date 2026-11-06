@@ -468,6 +468,43 @@ enum SpecCmd {
         #[arg(help = "Wait until the draft succeeds, fails, or is cancelled", long)]
         wait: bool,
     },
+    #[command(
+        about = "Starts a conversation with the architect about a spec; prints the draft id",
+        after_help = "With --wait the command returns when the architect waits for your reply (0), or the draft fails (1, 3 on lint) or is cancelled (4). Reply with `saka draft message`, then `saka draft commit` or `saka draft discard`."
+    )]
+    Session {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "Path of the spec file from the repo root")]
+        path: String,
+        #[arg(
+            help = "The idea, in your own words",
+            long,
+            required_unless_present = "idea_file",
+            conflicts_with = "idea_file"
+        )]
+        idea: Option<String>,
+        #[arg(help = "Read the idea from this file", long)]
+        idea_file: Option<PathBuf>,
+        #[arg(
+            help = "A doc in the project folder the architect reads first (repeatable, up to 16)",
+            long = "context"
+        )]
+        context: Vec<String>,
+        #[arg(
+            help = "Language of the spec: en or id (default en)",
+            long,
+            value_parser = ["en", "id"]
+        )]
+        locale: Option<String>,
+        #[arg(
+            help = "Revise the spec file that already exists at the path instead of writing a new one",
+            long
+        )]
+        revise: bool,
+        #[arg(help = "Wait until the architect waits for your reply", long)]
+        wait: bool,
+    },
     #[command(about = "Prints a spec template that passes lint")]
     Template {
         #[arg(long, default_value = "en", help = "Template language: en or id")]
@@ -574,6 +611,28 @@ enum DraftCmd {
         id: String,
         #[arg(long)]
         reason: String,
+    },
+    #[command(about = "Replies to the architect of a conversation that waits for you")]
+    Message { id: String, text: String },
+    #[command(about = "Commits the files of a conversation in one commit and registers the spec")]
+    Commit {
+        id: String,
+        #[arg(help = "The commit message (1 to 200 characters)", long)]
+        message: Option<String>,
+    },
+    #[command(about = "Discards a conversation that waits for you")]
+    Discard {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    #[command(
+        about = "Lists the files a conversation changed with their diffs and the lint result"
+    )]
+    Changes {
+        id: String,
+        #[arg(help = "Print the diff of every file", long)]
+        diff: bool,
     },
     #[command(about = "Starts a new attempt of a failed draft")]
     Retry {
@@ -923,6 +982,36 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 idea: &idea,
                 context: &context,
                 locale: locale.as_deref(),
+                session: false,
+                revise: false,
+                wait,
+            };
+            current_thread()?.block_on(client.spec_draft(&new))
+        }
+        Command::Spec(SpecCmd::Session {
+            project,
+            path,
+            idea,
+            idea_file,
+            context,
+            locale,
+            revise,
+            wait,
+        }) => {
+            let idea = match (idea, idea_file) {
+                (Some(text), _) => text,
+                (None, Some(file)) => cli::read_idea(&file)?,
+                (None, None) => String::new(),
+            };
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            let new = cli::NewDraft {
+                project: &project,
+                path: &path,
+                idea: &idea,
+                context: &context,
+                locale: locale.as_deref(),
+                session: true,
+                revise,
                 wait,
             };
             current_thread()?.block_on(client.spec_draft(&new))
@@ -949,6 +1038,30 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .draft_session(&id, "stop", &serde_json::json!({ "reason": reason }))
                             .await
                     }
+                    DraftCmd::Message { id, text } => {
+                        client
+                            .draft_operator(&id, "message", &serde_json::json!({ "text": text }))
+                            .await
+                    }
+                    DraftCmd::Commit { id, message } => {
+                        client
+                            .draft_operator(
+                                &id,
+                                "commit",
+                                &serde_json::json!({ "message": message }),
+                            )
+                            .await
+                    }
+                    DraftCmd::Discard { id, reason } => {
+                        client
+                            .draft_operator(
+                                &id,
+                                "discard",
+                                &serde_json::json!({ "reason": reason }),
+                            )
+                            .await
+                    }
+                    DraftCmd::Changes { id, diff } => client.draft_changes(&id, diff).await,
                     DraftCmd::Retry { id, reason, note } => {
                         client
                             .draft_action(
