@@ -4993,11 +4993,11 @@ fn a_task_is_taken_over_and_handed_back_through_the_actions() {
     let back = format!("/api/v1/work-items/{id}/actions/return");
     let bad = api.post(&back, &[], json!({ "stage": "sync", "reason": "x" }));
     problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
-    let unsupported = api.post(&back, &[], json!({ "stage": "review", "reason": "x" }));
+    let nothing = api.post(&back, &[], json!({ "stage": "fix", "reason": "x" }));
     problem(
-        &unsupported,
+        &nothing,
         StatusCode::UNPROCESSABLE_ENTITY,
-        "validation_failed",
+        "return_target_invalid",
     );
     let r = api.post(&back, &[], json!({ "stage": "merge", "reason": "done" }));
     assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);

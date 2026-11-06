@@ -1878,7 +1878,7 @@ export interface components {
     ReturnBody: {
       /** @description 1 to 500 characters. */
       reason: string;
-      /** @description `dev` or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`. */
+      /** @description `dev`, `review`, `fix`, or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`. */
       stage?: string | null;
     };
     /** @description Request body of a review request; no fields. */

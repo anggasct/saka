@@ -109,14 +109,14 @@ fn a_single_task_on_an_unmoved_base_merges_without_a_rebase_or_a_push() {
 }
 
 #[test]
-fn a_conflict_between_two_tasks_goes_back_to_the_agent_with_the_paths() {
+fn a_conflict_in_a_workflow_without_fix_goes_back_to_the_agent_with_the_paths() {
     let mut pair = Pair::new(
         SimConfig {
             operator: Operator {
                 retry: vec![BlockerCode::MergeConflict],
                 ..Operator::default()
             },
-            ..SimConfig::default()
+            ..SimConfig::without_fix()
         },
         vec![
             edit("shared.txt", "one\n"),
@@ -148,6 +148,47 @@ fn a_conflict_between_two_tasks_goes_back_to_the_agent_with_the_paths() {
         "the agent is told which paths conflict"
     );
     assert_eq!(pair.sim.stats().merges, 2);
+}
+
+#[test]
+fn a_conflict_between_two_tasks_is_fixed_by_a_round_that_carries_the_paths() {
+    let mut pair = Pair::new(
+        SimConfig::default(),
+        vec![
+            edit("shared.txt", "one\n"),
+            edit("shared.txt", "two\n"),
+            edit("shared.txt", "resolved\n"),
+        ],
+    );
+    let mut blocked = false;
+    assert!(pair.run(|s| {
+        blocked |= s.all_tasks().iter().any(|t| {
+            t.open_blocker()
+                .is_some_and(|b| b.code == BlockerCode::MergeConflict)
+        });
+    }));
+    assert!(
+        !blocked,
+        "the fix round takes the conflict before anyone is asked"
+    );
+    let rounds: Vec<_> = pair
+        .specs
+        .iter()
+        .flat_map(|id| pair.sim.tasks_of(*id))
+        .map(|t| t.fix_rounds_used())
+        .filter(|n| *n > 0)
+        .collect();
+    assert_eq!(rounds, [1], "only the second task conflicts");
+    assert!(
+        pair.sim
+            .world
+            .prompts()
+            .iter()
+            .any(|p| p.contains("conflicts with `origin/main` in: shared.txt")),
+        "the agent is told which paths conflict"
+    );
+    assert_eq!(pair.sim.stats().merges, 2);
+    assert_eq!(pair.sim.events_of("delivery.merge.dequeued").len(), 1);
 }
 
 #[test]

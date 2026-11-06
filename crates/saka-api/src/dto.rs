@@ -2158,7 +2158,7 @@ pub struct RequiredReason {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReturnBody {
-    /// `dev` or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`.
+    /// `dev`, `review`, `fix`, or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`.
     #[serde(default)]
     pub stage: Option<String>,
     /// 1 to 500 characters.
