@@ -711,6 +711,15 @@ impl FakeWorld {
         }
     }
 
+    pub fn finish_turn(&self, id: SessionId) {
+        let at = self.clock.now();
+        let mut s = self.state();
+        let open = s.sessions.get(&id).and_then(|fs| fs.open_turn);
+        if let Some(turn) = open {
+            s.work(id, turn, at);
+        }
+    }
+
     pub fn swap_runner_version(&self, id: SessionId) {
         if let Some(fs) = self.state().sessions.get_mut(&id) {
             fs.other_version = true;
