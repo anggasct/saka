@@ -234,6 +234,7 @@ describe("settings events", () => {
       ["docs"],
       ["secrets"],
       ["authorship"],
+      ["permission-rules"],
     ]);
     invalidate.mockClear();
     fake.emit("scm.user_link.linked.v1", { seq: 2, stream_type: "user_link" });

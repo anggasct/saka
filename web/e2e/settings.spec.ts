@@ -210,6 +210,10 @@ async function mockApi(page: Page, server: Server) {
           next_cursor: null,
         },
       });
+    } else if (path === `/api/v1/projects/${PROJECT_ID}/permission-rules`) {
+      await route.fulfill({ json: { items: [], operator_rules: [] } });
+    } else if (path === "/api/v1/permission-requests") {
+      await route.fulfill({ json: { items: [], next_cursor: null } });
     } else if (path === "/api/v1/diagnostics") {
       await route.fulfill({ json: report });
     } else {

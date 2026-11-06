@@ -11,6 +11,7 @@ import { AuthorshipSection } from "./authorship-section";
 import { ConfigSection } from "./config-section";
 import { DiagnosticsSection } from "./diagnostics-section";
 import { HooksSection } from "./hooks-section";
+import { PermissionsSection } from "./permissions-section";
 import { ReposSection } from "./repos-section";
 import { SecretsSection } from "./secrets-section";
 import { WorkflowSection } from "./workflow-section";
@@ -34,6 +35,7 @@ export function SettingsPage({ projectId }: { projectId: string }) {
             projectId={project.data.id}
             skipped={project.data.hooks_skipped}
           />
+          <PermissionsSection projectId={project.data.id} />
           <SecretsSection projectId={project.data.id} />
           <AuthorshipSection projectId={project.data.id} />
           <DiagnosticsSection projectId={project.data.id} />
