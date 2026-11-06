@@ -25,6 +25,7 @@ pub mod rule;
 pub mod scope;
 pub mod secret;
 pub mod session;
+pub mod shell;
 pub mod spec;
 pub mod task;
 pub mod time;

@@ -2661,7 +2661,7 @@ fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
     let project = api.sim.project_id.to_string();
     let rules = api.get(&format!("/api/v1/projects/{project}/permission-rules"));
     let items = rules.body["items"].as_array().unwrap().clone();
-    assert_eq!(items.len(), 1);
+    assert_eq!(items.len(), 2, "one rule per part");
     assert_eq!(
         (
             &items[0]["tool"],
@@ -2670,10 +2670,11 @@ fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
         ),
         (
             &json!("Bash"),
-            &json!("make deploy && echo ok"),
+            &json!("make deploy"),
             &json!("human:operator:local")
         )
     );
+    assert_eq!(items[1]["command"], json!("echo ok"));
     let rule = items[0]["id"].as_str().unwrap().to_string();
     let revoke = format!("/api/v1/permission-rules/{rule}/revoke");
     problem(
@@ -2689,13 +2690,12 @@ fn a_remembered_answer_makes_a_project_rule_that_can_be_revoked() {
         StatusCode::CONFLICT,
         "invalid_state",
     );
-    assert!(
-        api.get(&format!("/api/v1/projects/{project}/permission-rules"))
-            .body["items"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    let left = api
+        .get(&format!("/api/v1/projects/{project}/permission-rules"))
+        .body["items"]
+        .clone();
+    assert_eq!(left.as_array().unwrap().len(), 1);
+    assert_eq!(left[0]["command"], json!("echo ok"));
     problem(
         &api.get(&format!(
             "/api/v1/projects/{}/permission-rules",

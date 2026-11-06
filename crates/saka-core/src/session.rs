@@ -112,6 +112,7 @@ pub enum SessionInput {
         actor: String,
         remember: bool,
         active_rules: Vec<PermissionRule>,
+        allowed_parts: Vec<String>,
     },
     PermissionDelivered {
         permission_request_id: PermissionRequestId,
@@ -252,12 +253,13 @@ pub fn decide(
             actor,
             remember,
             active_rules,
+            allowed_parts,
         } => SessionOutcome::events(d.answer_permission(
             permission_request_id,
             allow,
             message,
             &actor,
-            remember.then_some(active_rules.as_slice()),
+            remember.then_some((active_rules.as_slice(), allowed_parts.as_slice())),
             ctx,
         )?),
         I::PermissionDelivered {
@@ -651,7 +653,7 @@ impl Decider<'_, '_> {
         allow: bool,
         message: Option<String>,
         actor: &str,
-        remember: Option<&[PermissionRule]>,
+        remember: Option<(&[PermissionRule], &[String])>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Vec<Event>, Rejection> {
         let Some(request) = self.view.permissions.iter().find(|p| p.id == id) else {
@@ -661,22 +663,24 @@ impl Decider<'_, '_> {
             return Err(Rejection::PermissionAlreadyAnswered);
         }
         let project_id = self.view.project_id;
-        let rule = match remember {
+        let rules: Vec<Event> = match remember {
             Some(_) if !allow => {
                 return Err(Rejection::Invalid {
                     field: "remember",
                     code: "allow_only",
                 });
             }
-            Some(active) => {
-                let (tool, command) = crate::rule::remembered(request)?;
-                let exists = active.iter().any(|r| {
-                    r.revoked_at.is_none()
-                        && r.project_id == project_id
-                        && r.tool == tool
-                        && r.command == command
-                });
-                (!exists).then(|| Event::PermissionRuleAdded {
+            Some((active, allowed_parts)) => crate::rule::remembered(request, allowed_parts)?
+                .into_iter()
+                .filter(|(tool, command)| {
+                    !active.iter().any(|r| {
+                        r.revoked_at.is_none()
+                            && r.project_id == project_id
+                            && &r.tool == tool
+                            && &r.command == command
+                    })
+                })
+                .map(|(tool, command)| Event::PermissionRuleAdded {
                     rule_id: PermissionRuleId::new(ctx.ids),
                     project_id,
                     owner: request.owner,
@@ -685,8 +689,8 @@ impl Decider<'_, '_> {
                     permission_request_id: id,
                     created_by: format!("human:{actor}"),
                 })
-            }
-            None => None,
+                .collect(),
+            None => Vec::new(),
         };
         let mut events = vec![Event::PermissionAnswered {
             owner: request.owner,
@@ -719,7 +723,7 @@ impl Decider<'_, '_> {
                 running_ms: session.running_ms,
             });
         }
-        events.extend(rule);
+        events.extend(rules);
         Ok(events)
     }
 

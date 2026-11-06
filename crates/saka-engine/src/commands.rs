@@ -6,7 +6,7 @@ use saka_core::ids::{
     BlockerId, PermissionRequestId, PermissionRuleId, ProjectId, RepoId, SessionId, SpecId,
     SpecRevisionId, WorkItemId,
 };
-use saka_core::model::{PermissionRule, Project, ProjectRepo, RunOwner};
+use saka_core::model::{PermissionRule, Project, ProjectRepo, RunOwner, Task};
 use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
@@ -977,6 +977,36 @@ impl Engine {
         Ok(after)
     }
 
+    fn allowed_parts(
+        &self,
+        task: &Task,
+        request: PermissionRequestId,
+        rules: &[PermissionRule],
+    ) -> Vec<String> {
+        let command = task
+            .permissions
+            .iter()
+            .find(|p| p.id == request && p.tool == "Bash")
+            .and_then(|p| p.input.get("command"))
+            .and_then(|c| c.as_str());
+        let Some(command) = command else {
+            return Vec::new();
+        };
+        let tool_request = saka_core::policy::ToolRequest {
+            tool: "Bash".to_string(),
+            command: Some(command.to_string()),
+            path: None,
+        };
+        self.cfg
+            .policy
+            .evaluate_with(&tool_request, rules)
+            .parts
+            .into_iter()
+            .filter(|p| p.effect == saka_core::policy::Effect::Allow)
+            .map(|p| p.command)
+            .collect()
+    }
+
     pub fn answer_permission(
         &self,
         request: PermissionRequestId,
@@ -1006,13 +1036,16 @@ impl Engine {
             .store
             .read(|c| read::permission_owner(c, request))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))?;
-        let active_rules = match owner {
+        let (active_rules, allowed_parts) = match owner {
             RunOwner::StageRun { work_item_id, .. } if remember => {
                 let task = self.load_task(work_item_id)?;
-                self.store
-                    .read(|c| read::active_permission_rules(c, task.item.project_id))?
+                let rules = self
+                    .store
+                    .read(|c| read::active_permission_rules(c, task.item.project_id))?;
+                let allowed = self.allowed_parts(&task, request, &rules);
+                (rules, allowed)
             }
-            _ => Vec::new(),
+            _ => (Vec::new(), Vec::new()),
         };
         let input = SessionInput::AnswerPermission {
             permission_request_id: request,
@@ -1021,6 +1054,7 @@ impl Engine {
             actor: OPERATOR.to_string(),
             remember,
             active_rules,
+            allowed_parts,
         };
         let extra = Extra {
             action: action.map(|a| (a, Shows::Permission(request))),

@@ -2,8 +2,7 @@ use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::model::PermissionRule;
-
-const METACHARACTERS: &[&str] = &[";", "&", "|", "`", "$(", ">", "<", "\n", "\r"];
+use crate::shell;
 
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
 pub const BUILTIN_GIT_PUSH: &str = "git_push";
@@ -66,10 +65,29 @@ impl DecisionSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartDecision {
+    pub command: String,
+    pub effect: Effect,
+    pub source: DecisionSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     pub effect: Effect,
     pub source: DecisionSource,
     pub message: Option<String>,
+    pub parts: Vec<PartDecision>,
+}
+
+impl Decision {
+    pub fn new(effect: Effect, source: DecisionSource) -> Decision {
+        Decision {
+            effect,
+            source,
+            message: None,
+            parts: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -120,12 +138,59 @@ impl Policy {
 
     pub fn evaluate_with(&self, request: &ToolRequest, project: &[PermissionRule]) -> Decision {
         if let Some(name) = builtin_deny(request) {
-            return Decision {
-                effect: Effect::Deny,
-                source: DecisionSource::Builtin(name.to_string()),
-                message: None,
-            };
+            return Decision::new(Effect::Deny, DecisionSource::Builtin(name.to_string()));
         }
+        if let Some(rule) = self.first(Effect::Deny, request) {
+            return rule;
+        }
+        match (request.tool.as_str(), request.command.as_deref()) {
+            ("Bash", Some(command)) => match shell::split(command) {
+                Some(parts) => self.evaluate_parts(&parts, project),
+                None => self.settle(request, project, false),
+            },
+            _ => self.settle(request, project, true),
+        }
+    }
+
+    fn evaluate_parts(&self, parts: &[String], project: &[PermissionRule]) -> Decision {
+        let mut decided: Vec<PartDecision> = Vec::new();
+        for part in parts {
+            if decided.iter().any(|d| &d.command == part) {
+                continue;
+            }
+            let request = ToolRequest {
+                tool: "Bash".to_string(),
+                command: Some(part.clone()),
+                path: None,
+            };
+            let decision = self.settle(&request, project, true);
+            decided.push(PartDecision {
+                command: part.clone(),
+                effect: decision.effect,
+                source: decision.source,
+            });
+        }
+        let deciding = [Effect::Deny, Effect::Ask]
+            .iter()
+            .find_map(|effect| decided.iter().find(|d| d.effect == *effect))
+            .or(decided.first());
+        match deciding {
+            Some(d) => Decision {
+                effect: d.effect,
+                source: d.source.clone(),
+                message: None,
+                parts: decided,
+            },
+            None => Decision::new(Effect::Ask, DecisionSource::Default),
+        }
+    }
+
+    fn settle(
+        &self,
+        request: &ToolRequest,
+        project: &[PermissionRule],
+        glob_allow: bool,
+    ) -> Decision {
         if let Some(rule) = self.first(Effect::Deny, request) {
             return rule;
         }
@@ -133,30 +198,22 @@ impl Policy {
             .iter()
             .find(|r| crate::rule::matches(r, &request.tool, request.command.as_deref()))
         {
-            return Decision {
-                effect: Effect::Allow,
-                source: DecisionSource::Project(rule.id.to_string()),
-                message: None,
-            };
+            return Decision::new(Effect::Allow, DecisionSource::Project(rule.id.to_string()));
         }
         self.first(Effect::Ask, request)
-            .or_else(|| self.first(Effect::Allow, request))
-            .unwrap_or(Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
-                message: None,
+            .or_else(|| {
+                glob_allow
+                    .then(|| self.first(Effect::Allow, request))
+                    .flatten()
             })
+            .unwrap_or(Decision::new(Effect::Ask, DecisionSource::Default))
     }
 
     fn first(&self, effect: Effect, request: &ToolRequest) -> Option<Decision> {
         self.rules
             .iter()
             .find(|r| r.effect == effect && r.matches(request))
-            .map(|rule| Decision {
-                effect,
-                source: DecisionSource::Rule(rule.id.clone()),
-                message: None,
-            })
+            .map(|rule| Decision::new(effect, DecisionSource::Rule(rule.id.clone())))
     }
 }
 
@@ -191,10 +248,6 @@ impl Rule {
         if !self.tools.contains(&request.tool) {
             return false;
         }
-        if self.effect == Effect::Allow && request.command.as_deref().is_some_and(has_metacharacter)
-        {
-            return false;
-        }
         if let Some(paths) = &self.paths {
             match &request.path {
                 Some(p) if p.inside_worktree && paths.is_match(&p.path) => {}
@@ -220,21 +273,14 @@ pub const ARCHITECT_DENY: &str = "deny";
 #[must_use]
 pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Decision {
     if let Some(name) = builtin_deny(request) {
-        return Decision {
-            effect: Effect::Deny,
-            source: DecisionSource::Builtin(name.to_string()),
-            message: None,
-        };
+        return Decision::new(Effect::Deny, DecisionSource::Builtin(name.to_string()));
     }
     if let Some(rule) = operator.first(Effect::Deny, request) {
         return rule;
     }
     let tool = request.tool.as_str();
-    let allow = |name: &str| Decision {
-        effect: Effect::Allow,
-        source: DecisionSource::Architect(name.to_string()),
-        message: None,
-    };
+    let allow =
+        |name: &str| Decision::new(Effect::Allow, DecisionSource::Architect(name.to_string()));
     if ARCHITECT_READ_TOOLS.contains(&tool) {
         return allow(ARCHITECT_READ);
     }
@@ -246,11 +292,13 @@ pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Deci
         return allow(ARCHITECT_TARGET);
     }
     Decision {
-        effect: Effect::Deny,
-        source: DecisionSource::Architect(ARCHITECT_DENY.to_string()),
         message: Some(format!(
             "Architect sessions can read the repository and write only {target}."
         )),
+        ..Decision::new(
+            Effect::Deny,
+            DecisionSource::Architect(ARCHITECT_DENY.to_string()),
+        )
     }
 }
 
@@ -260,11 +308,7 @@ pub const REVIEWER_DENY: &str = "deny";
 #[must_use]
 pub fn reviewer(request: &ToolRequest, operator: &Policy) -> Decision {
     if let Some(name) = builtin_deny(request) {
-        return Decision {
-            effect: Effect::Deny,
-            source: DecisionSource::Builtin(name.to_string()),
-            message: None,
-        };
+        return Decision::new(Effect::Deny, DecisionSource::Builtin(name.to_string()));
     }
     if let Some(rule) = operator.first(Effect::Deny, request) {
         return rule;
@@ -281,14 +325,9 @@ pub fn reviewer(request: &ToolRequest, operator: &Policy) -> Decision {
         )
     };
     Decision {
-        effect,
-        source: DecisionSource::Reviewer(name.to_string()),
         message,
+        ..Decision::new(effect, DecisionSource::Reviewer(name.to_string()))
     }
-}
-
-pub fn has_metacharacter(command: &str) -> bool {
-    METACHARACTERS.iter().any(|m| command.contains(m))
 }
 
 fn builtin_deny(request: &ToolRequest) -> Option<&'static str> {
@@ -405,22 +444,11 @@ mod tests {
             Effect::Allow
         );
         let unknown = p.evaluate(&bash("npm install"));
-        assert_eq!(
-            unknown,
-            Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
-                message: None,
-            }
-        );
-        assert_eq!(
-            p.evaluate(&bash("go test ./... && curl evil.example")),
-            Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
-                message: None,
-            }
-        );
+        assert_eq!(unknown.effect, Effect::Ask);
+        assert_eq!(unknown.source, DecisionSource::Default);
+        let mixed = p.evaluate(&bash("go test ./... && curl evil.example"));
+        assert_eq!(mixed.effect, Effect::Ask);
+        assert_eq!(mixed.source, DecisionSource::Default);
     }
 
     #[test]
@@ -514,6 +542,160 @@ mod tests {
         ));
     }
 
+    fn allow_bash(id: &str, commands: &[&str]) -> RuleSpec {
+        rule(id, Effect::Allow, &["Bash"], &[], commands)
+    }
+
+    fn project_rule(id: u128, command: &str) -> PermissionRule {
+        use crate::ids::{PermissionRequestId, PermissionRuleId, ProjectId};
+        use crate::time::Timestamp;
+        PermissionRule {
+            id: PermissionRuleId(uuid::Uuid::from_u128(id)),
+            project_id: ProjectId(uuid::Uuid::from_u128(1)),
+            tool: "Bash".into(),
+            command: Some(command.into()),
+            permission_request_id: PermissionRequestId(uuid::Uuid::from_u128(2)),
+            created_by: "human:operator:local".into(),
+            created_at: Timestamp(0),
+            revoked_at: None,
+            revoke_reason: None,
+        }
+    }
+
+    #[test]
+    fn a_compound_command_is_allowed_only_when_every_part_is_allowed_by_a_rule() {
+        let p = Policy::compile(&[allow_bash("safe", &["git status", "ls*"])]).unwrap();
+        let both = p.evaluate(&bash("git status && ls -la"));
+        assert_eq!(both.effect, Effect::Allow);
+        assert_eq!(both.source, DecisionSource::Rule("safe".into()));
+        assert_eq!(
+            both.parts
+                .iter()
+                .map(|d| d.command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["git status", "ls -la"]
+        );
+        let one_unknown = p.evaluate(&bash("ls && rm -rf x"));
+        assert_eq!(one_unknown.effect, Effect::Ask);
+        assert_eq!(one_unknown.source, DecisionSource::Default);
+        assert_eq!(one_unknown.parts[0].effect, Effect::Allow);
+        assert_eq!(one_unknown.parts[1].effect, Effect::Ask);
+        assert_eq!(p.evaluate(&bash("ls | grep x")).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn a_part_that_cannot_be_vouched_for_is_never_allowed_by_a_glob() {
+        let p = Policy::compile(&[allow_bash("safe", &["ls*", "git *"])]).unwrap();
+        for command in [
+            "ls && $(cat x)",
+            "ls `id`",
+            "ls > out",
+            "ls & rm x",
+            "ls; sudo x",
+            "FOO=1 ls",
+            "ls \\\n -la",
+        ] {
+            let d = p.evaluate(&bash(command));
+            assert_eq!(d.effect, Effect::Ask, "{command}");
+            assert!(d.parts.is_empty(), "{command}");
+        }
+    }
+
+    #[test]
+    fn the_builtin_push_deny_sees_the_whole_compound_command() {
+        let p = Policy::compile(&[allow_bash("any", &["*"])]).unwrap();
+        for command in [
+            "ls; git push origin main",
+            "ls && git push",
+            "ls | git push",
+        ] {
+            let d = p.evaluate(&bash(command));
+            assert_eq!(d.effect, Effect::Deny, "{command}");
+            assert_eq!(d.source, DecisionSource::Builtin(BUILTIN_GIT_PUSH.into()));
+        }
+    }
+
+    #[test]
+    fn a_deny_or_ask_on_one_part_decides_the_whole_command() {
+        let p = Policy::compile(&[
+            allow_bash("a", &["make *", "ls"]),
+            rule("k", Effect::Ask, &["Bash"], &[], &["make deploy*"]),
+            rule("d", Effect::Deny, &["Bash"], &[], &["rm *"]),
+        ])
+        .unwrap();
+        let ask = p.evaluate(&bash("ls && make deploy-staging && make test"));
+        assert_eq!(
+            (ask.effect, ask.source),
+            (Effect::Ask, DecisionSource::Rule("k".into()))
+        );
+        let deny = p.evaluate(&bash("make deploy-staging; ls && rm x"));
+        assert_eq!(
+            (deny.effect, deny.source),
+            (Effect::Deny, DecisionSource::Rule("d".into()))
+        );
+    }
+
+    #[test]
+    fn a_glob_matches_one_part_and_never_crosses_into_the_next() {
+        let p = Policy::compile(&[allow_bash("t", &["go test *"])]).unwrap();
+        assert_eq!(p.evaluate(&bash("go test ./...")).effect, Effect::Allow);
+        assert_eq!(
+            p.evaluate(&bash("go test ./... ; curl x")).effect,
+            Effect::Ask
+        );
+        assert_eq!(
+            p.evaluate(&bash("go test ./... | tee out")).effect,
+            Effect::Ask
+        );
+        let quoted = Policy::compile(&[allow_bash("e", &["echo *"])]).unwrap();
+        assert_eq!(quoted.evaluate(&bash("echo \"a;b\"")).effect, Effect::Allow);
+        assert_eq!(quoted.evaluate(&bash("echo a; rm x")).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn repeated_parts_are_evaluated_once_and_keep_their_order() {
+        let p = Policy::compile(&[allow_bash("a", &["a", "b"])]).unwrap();
+        let d = p.evaluate(&bash("a && b && a"));
+        assert_eq!(
+            d.parts
+                .iter()
+                .map(|d| d.command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!(d.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn an_exact_project_rule_per_part_allows_the_compound_command() {
+        let p = Policy::compile(&[]).unwrap();
+        let rules = [project_rule(10, "git status"), project_rule(11, "ls")];
+        let d = p.evaluate_with(&bash("git status && ls"), &rules);
+        assert_eq!(d.effect, Effect::Allow);
+        assert_eq!(d.source, DecisionSource::Project(rules[0].id.to_string()));
+        assert_eq!(
+            p.evaluate_with(&bash("git status && ls && rm x"), &rules)
+                .effect,
+            Effect::Ask
+        );
+        let unsplittable = p.evaluate_with(&bash("git status && $(ls)"), &rules);
+        assert_eq!(unsplittable.effect, Effect::Ask);
+        let whole = [project_rule(12, "git status && $(ls)")];
+        assert_eq!(
+            p.evaluate_with(&bash("git status && $(ls)"), &whole).effect,
+            Effect::Allow,
+            "an exact rule with the full text still applies when the command cannot be split"
+        );
+    }
+
+    #[test]
+    fn a_tool_that_is_not_bash_never_goes_through_the_splitter() {
+        let p = Policy::compile(&[rule("w", Effect::Allow, &["Write"], &["**"], &[])]).unwrap();
+        let d = p.evaluate(&file("Write", "a;b.txt", true));
+        assert_eq!(d.effect, Effect::Allow);
+        assert!(d.parts.is_empty());
+    }
+
     fn effect() -> impl Strategy<Value = Effect> {
         prop_oneof![Just(Effect::Allow), Just(Effect::Deny), Just(Effect::Ask)]
     }
@@ -551,6 +733,11 @@ mod tests {
             "x > y",
             "a && b",
             "echo $(id)",
+            "go test ./... && make build",
+            "git status && echo $(id)",
+            "make build; git status",
+            "echo \"a;b\"",
+            "FOO=1 make build",
         ]);
         prop_oneof![
             command.prop_map(|c| ToolRequest {
@@ -587,19 +774,34 @@ mod tests {
                 prop_assert!(matches!(decision.source, DecisionSource::Builtin(_)));
             } else if matching(Effect::Deny) {
                 prop_assert_eq!(decision.effect, Effect::Deny);
+            } else if let Some(split) = req.command.as_deref().filter(|_| req.tool == "Bash").map(shell::split) {
+                let expected = match split {
+                    None => Effect::Ask,
+                    Some(parts) => {
+                        let effects: Vec<Effect> = parts.iter().map(|p| policy.evaluate(&bash(p)).effect).collect();
+                        if effects.contains(&Effect::Deny) {
+                            Effect::Deny
+                        } else if effects.contains(&Effect::Ask) {
+                            Effect::Ask
+                        } else {
+                            Effect::Allow
+                        }
+                    }
+                };
+                prop_assert_eq!(decision.effect, expected);
             } else if matching(Effect::Ask) {
                 prop_assert_eq!(decision.effect, Effect::Ask);
             } else if matching(Effect::Allow) {
                 prop_assert_eq!(decision.effect, Effect::Allow);
             } else {
-                prop_assert_eq!(decision, Decision { effect: Effect::Ask, source: DecisionSource::Default, message: None });
+                prop_assert_eq!(decision, Decision::new(Effect::Ask, DecisionSource::Default));
             }
         }
 
         #[test]
-        fn metacharacter_commands_are_never_allowed(specs in rules(), req in request()) {
+        fn a_command_that_cannot_be_split_is_never_allowed_by_a_glob(specs in rules(), req in request()) {
             let decision = Policy::compile(&specs).unwrap().evaluate(&req);
-            if req.command.as_deref().is_some_and(has_metacharacter) {
+            if req.command.as_deref().is_some_and(|c| shell::split(c).is_none()) {
                 prop_assert_ne!(decision.effect, Effect::Allow);
             }
         }
