@@ -6,6 +6,7 @@ import { AUTHORSHIP, botAuthorship, LINK } from "@/test/authorship-fixtures";
 import { fakeApi, page } from "@/test/fake-api";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID, spec } from "@/test/fixtures";
+import { REQUESTS, RULES } from "@/test/permission-fixtures";
 import { HOOK_RUNS, HOOKS } from "@/test/hooks-fixtures";
 import { renderApp } from "@/test/render";
 import {
@@ -30,6 +31,8 @@ function routes(extra: Routes = {}): Routes {
     [SECRETS]: { body: { items: [] } },
     [HOOKS]: { body: { items: [] } },
     [HOOK_RUNS]: { body: page([]) },
+    [RULES]: { body: { items: [], operator_rules: [] } },
+    [REQUESTS]: { body: page([]) },
     [AUTHORSHIP]: { body: botAuthorship },
     [LINK]: problemBody(404, "user_link_not_found"),
     ...extra,

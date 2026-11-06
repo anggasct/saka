@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { api, ApiError, unwrap } from "@/api/client";
@@ -16,12 +16,24 @@ export type UserLink = components["schemas"]["UserLink"];
 export type Hook = components["schemas"]["Hook"];
 export type HookRun = components["schemas"]["HookRun"];
 
+export type PermissionRule = components["schemas"]["PermissionRule"];
+export type OperatorRule = components["schemas"]["OperatorPermissionRule"];
+export type NewRule = components["schemas"]["NewPermissionRule"];
+export type RulePreview = components["schemas"]["PermissionPreview"];
+export type PermissionHistoryItem = components["schemas"]["PermissionRequest"];
+export type AnsweredBy = "policy" | "human";
+
+export const HISTORY_PAGE = 10;
 export const HOOK_RUNS_SHOWN = 20;
 export type Authorization = components["schemas"]["UserLinkAuthorization"];
 
 export const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
 export const settingsKeys = {
+  permissionRules: (projectId: string) =>
+    [QUERY_ROOTS.permissionRules, projectId] as const,
+  permissionHistory: (projectId: string, source: AnsweredBy | "all") =>
+    [QUERY_ROOTS.permissions, "history", projectId, source] as const,
   hooks: (projectId: string) => [QUERY_ROOTS.hooks, projectId] as const,
   hookRuns: (projectId: string) => [QUERY_ROOTS.hookRuns, projectId] as const,
   secrets: (projectId: string) => [QUERY_ROOTS.secrets, projectId] as const,
@@ -308,4 +320,86 @@ export function useDiagnostics(projectId: string) {
         }),
       ),
   });
+}
+
+export function usePermissionRules(projectId: string) {
+  return useQuery({
+    queryKey: settingsKeys.permissionRules(projectId),
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/v1/projects/{project_id}/permission-rules", {
+          params: { path: { project_id: projectId } },
+          signal,
+        }),
+      ),
+  });
+}
+
+export function usePermissionHistory(
+  projectId: string,
+  source: AnsweredBy | "all",
+) {
+  return useInfiniteQuery({
+    queryKey: settingsKeys.permissionHistory(projectId, source),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam, signal }) =>
+      unwrap(
+        await api.GET("/api/v1/permission-requests", {
+          params: {
+            query: {
+              project_id: projectId,
+              limit: HISTORY_PAGE,
+              ...(source === "all" ? {} : { source }),
+              ...(pageParam === undefined ? {} : { cursor: pageParam }),
+            },
+          },
+          signal,
+        }),
+      ),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+}
+
+export async function previewRule(
+  projectId: string,
+  rule: NewRule,
+): Promise<RulePreview> {
+  return unwrap(
+    await api.POST("/api/v1/projects/{project_id}/permission-rules/preview", {
+      params: { path: { project_id: projectId } },
+      body: rule,
+    }),
+  );
+}
+
+export async function addRule(
+  projectId: string,
+  rule: NewRule,
+  idempotencyKey: string,
+): Promise<PermissionRule> {
+  return unwrap(
+    await api.POST("/api/v1/projects/{project_id}/permission-rules", {
+      params: {
+        path: { project_id: projectId },
+        header: headers(idempotencyKey),
+      },
+      body: rule,
+    }),
+  );
+}
+
+export async function revokeRule(
+  ruleId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<PermissionRule> {
+  return unwrap(
+    await api.POST("/api/v1/permission-rules/{rule_id}/revoke", {
+      params: {
+        path: { rule_id: ruleId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
 }
