@@ -47,7 +47,6 @@ pub async fn serve(State(state): State<AppState>, method: Method, uri: Uri) -> R
         && !relative.split('/').any(|s| s == ".." || s.is_empty())
         && let Some(asset) = assets.get(relative)
     {
-        // Vite puts content-hashed files under `assets/`.
         let cache = if relative.starts_with("assets/") {
             IMMUTABLE
         } else {
