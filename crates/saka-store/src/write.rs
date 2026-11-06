@@ -167,6 +167,11 @@ pub struct Batch {
     pub new_devices: Vec<crate::identity::NewDevice>,
     pub revoked_devices: Vec<saka_core::ids::DeviceId>,
     pub new_pairings: Vec<crate::identity::NewPairing>,
+    pub new_credentials: Vec<crate::identity::NewCredential>,
+    pub credential_logins: Vec<crate::identity::CredentialLogin>,
+    pub revoked_credentials: Vec<saka_core::ids::CredentialId>,
+    pub new_sessions: Vec<crate::identity::NewSession>,
+    pub revoked_sessions: Vec<saka_core::ids::LoginSessionId>,
 }
 
 impl Batch {
@@ -405,6 +410,21 @@ pub(crate) fn write(
     }
     for id in &b.revoked_devices {
         crate::identity::revoke_device(tx, *id, b.now)?;
+    }
+    for c in &b.new_credentials {
+        crate::identity::insert_credential(tx, c)?;
+    }
+    for l in &b.credential_logins {
+        crate::identity::record_login(tx, l)?;
+    }
+    for id in &b.revoked_credentials {
+        crate::identity::revoke_credential(tx, *id, b.now)?;
+    }
+    for s in &b.new_sessions {
+        crate::identity::insert_session(tx, s, b.now)?;
+    }
+    for id in &b.revoked_sessions {
+        crate::identity::revoke_session(tx, *id, b.now)?;
     }
     for (project, a) in &b.activities {
         tx.execute(

@@ -191,10 +191,14 @@ enum AuthCmd {
     #[command(about = "Lists paired devices and passkeys")]
     Devices,
     #[command(
-        about = "Revokes a paired device; its token stops working at once",
-        after_help = "Exit codes: 0 revoked, 1 failed, 4 the local CLI token cannot be revoked."
+        about = "Revokes a paired device or, with --passkey, a passkey and its sessions; it stops working at once",
+        after_help = "Exit codes: 0 revoked, 1 failed, 4 the local CLI token or the last passkey cannot be revoked."
     )]
-    Revoke { id: String },
+    Revoke {
+        id: String,
+        #[arg(help = "The id is a passkey, not a device", long)]
+        passkey: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -754,7 +758,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                         client.auth_redeem(&code, &name, out.as_deref()).await
                     }
                     AuthCmd::Devices => client.auth_devices().await,
-                    AuthCmd::Revoke { id } => client.auth_revoke(&id).await,
+                    AuthCmd::Revoke { id, passkey } => client.auth_revoke(&id, passkey).await,
                 }
             })
         }

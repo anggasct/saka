@@ -2438,3 +2438,103 @@ fn serve_exits_2_when_the_cli_token_cannot_be_written() {
     assert_eq!(code(&out), 2, "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stderr).contains("cli_token_unwritable"));
 }
+
+#[test]
+fn auth_revoke_with_passkey_ends_one_passkey_and_exits_4_for_the_last() {
+    use saka_api::{AuthSettings, Authenticator};
+    let sim = Sim::new(SimConfig::default());
+    let mut cfg = ApiConfig::new("0.1.0-test");
+    cfg.auth = Some(
+        Authenticator::new(AuthSettings {
+            origin: saka_core::identity::parse_origin("https://saka.example.com").unwrap(),
+            rp_id: "example.com".into(),
+            rp_name: "Saka".into(),
+            session_hours: 168,
+        })
+        .unwrap(),
+    );
+    let state = AppState::new(cfg);
+    state.set_engine(sim.engine());
+    let app = saka_api::router(state);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(listener.local_addr().unwrap()).unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+    });
+    let server = format!("http://{}", rx.recv().unwrap());
+    for id in [
+        "00000000-0000-0000-0000-0000000000a1",
+        "00000000-0000-0000-0000-0000000000a2",
+    ] {
+        sim.engine()
+            .store()
+            .transact(|tx| {
+                tx.execute(
+                    "INSERT INTO credential (id, name, passkey, created_at) VALUES (?1, 'key', '{}', 1)",
+                    [id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let token_file = dir.path().join("token");
+    let token = sim.engine().issue_local_cli_token().unwrap();
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&token_file)
+            .unwrap();
+        file.write_all(token.expose().as_bytes()).unwrap();
+    }
+    let run = |args: &[&str]| {
+        let mut full = vec!["--token-file", token_file.to_str().unwrap()];
+        full.extend_from_slice(args);
+        saka(&server, &full)
+    };
+    let listed = run(&["auth", "devices"]);
+    assert_eq!(
+        code(&listed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    assert_eq!(stdout(&listed).matches("passkey\t").count(), 2);
+    let first = run(&[
+        "auth",
+        "revoke",
+        "--passkey",
+        "00000000-0000-0000-0000-0000000000a1",
+    ]);
+    assert_eq!(
+        code(&first),
+        0,
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(stdout(&first).starts_with("passkey "));
+    let last = run(&[
+        "auth",
+        "revoke",
+        "--passkey",
+        "00000000-0000-0000-0000-0000000000a2",
+    ]);
+    assert_eq!(code(&last), 4);
+    assert!(String::from_utf8_lossy(&last.stderr).contains("last_credential"));
+}

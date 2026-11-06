@@ -9,7 +9,9 @@ unmaintained = "all"
 unsound = "all"
 unused-ignored-advisory = "deny"
 maximum-db-staleness = "P7D"
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa (via crypto-glue, used by webauthn-rs) leaks private-key timing; Saka only verifies RSA passkey and attestation signatures with public keys and never signs or decrypts with RSA. No patched version exists; this entry fails the check as soon as the advisory is withdrawn or rsa leaves the tree" },
+]
 
 [licenses]
 allow = ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0", "CC0-1.0", "ISC", "MIT", "MIT-0", "Unicode-3.0", "Unicode-DFS-2016", "Unlicense", "Zlib"]
@@ -20,6 +22,14 @@ unused-license-exception = "deny"
 exceptions = [
     # Mozilla CA certificate data, not code; permissive data licence.
     { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+    # WebAuthn verification (passkeys) is audited library code that we do not write ourselves.
+    # MPL-2.0 is file-level copyleft: it covers these crates' own files and does not reach Saka's code.
+    { crate = "webauthn-rs", allow = ["MPL-2.0"] },
+    { crate = "webauthn-rs-core", allow = ["MPL-2.0"] },
+    { crate = "webauthn-rs-proto", allow = ["MPL-2.0"] },
+    { crate = "webauthn-attestation-ca", allow = ["MPL-2.0"] },
+    # The RustCrypto glue webauthn-rs-core builds on; same terms.
+    { crate = "crypto-glue", allow = ["MPL-2.0"] },
 ]
 
 [licenses.private]
@@ -41,6 +51,16 @@ skip = [
     { crate = "getrandom@0.2.17", reason = "jsonwebtoken 11.1 still depends on getrandom 0.2" },
     { crate = "syn@2.0.119", reason = "jiff-static, jni-macros, rust-embed-impl, tracing-attributes and zeroize_derive are still on syn 2" },
     { crate = "untrusted@0.7.1", reason = "aws-lc-rs 1.19 still depends on untrusted 0.7" },
+    { crate = "base64@0.21.7", reason = "webauthn-rs-core and webauthn-rs-proto 0.6 still depend on base64 0.21" },
+    { crate = "thiserror@1.0.69", reason = "webauthn-rs-core 0.6 still depends on thiserror 1" },
+    { crate = "thiserror-impl@1.0.69", reason = "thiserror 1.0.69, which webauthn-rs-core 0.6 still depends on" },
+    { crate = "block-buffer@0.10.4", reason = "digest 0.10, which blake2 0.10 (argon2 0.5, via crypto-glue) still depends on" },
+    { crate = "crypto-common@0.1.7", reason = "digest 0.10, which blake2 0.10 (argon2 0.5, via crypto-glue) still depends on" },
+    { crate = "digest@0.10.7", reason = "blake2 0.10, which argon2 0.5 (via crypto-glue) still depends on" },
+    { crate = "cpufeatures@0.2.17", reason = "argon2 0.5 (via crypto-glue) still depends on cpufeatures 0.2" },
+    { crate = "rand_core@0.6.4", reason = "password-hash 0.5, which argon2 0.5 (via crypto-glue) still depends on" },
+    { crate = "signature@2.2.0", reason = "jsonwebtoken 11.1 still depends on signature 2" },
+    { crate = "synstructure@0.13.2", reason = "asn1-rs-derive 0.6 (x509-parser, via webauthn-rs-core) still depends on synstructure 0.13" },
 ]
 
 [bans.workspace-dependencies]

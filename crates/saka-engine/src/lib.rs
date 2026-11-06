@@ -72,7 +72,7 @@ pub use draft::{
     NewSpecDraft,
 };
 pub use hooks::HookReport;
-pub use identity::{DeviceIssued, PairingIssued, Principal, digest};
+pub use identity::{DeviceIssued, PairingIssued, Principal, Registered, SessionIssued, digest};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use permission_check::{PREVIEW_SCAN, PreviewChange, PreviewView};
 pub use register::{AddProject, Integration, MAX_CONFIG_BYTES, branch_ok, parse_repo_url};

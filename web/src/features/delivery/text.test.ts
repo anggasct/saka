@@ -763,6 +763,10 @@ const ERRORS = [
   "host_not_allowed",
   "setup_code_host_only",
   "auth_disabled",
+  "ceremony_invalid",
+  "passkey_rejected",
+  "setup_required",
+  "session_required",
 ];
 
 describe("catalog coverage", () => {

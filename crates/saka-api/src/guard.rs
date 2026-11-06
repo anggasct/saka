@@ -88,6 +88,7 @@ fn local_admission(state: &AppState, req: &Request) -> Result<Admitted, ApiError
         principal: Some(Principal {
             actor: Actor::Local,
             device_kind: None,
+            session: None,
         }),
         limit: None,
     })

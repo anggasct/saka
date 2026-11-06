@@ -572,6 +572,8 @@ not json
         }
     }
 
+    const FILE_LEVEL_COPYLEFT: &[&str] = &["MPL-2.0"];
+
     #[test]
     fn only_permissive_non_copyleft_licences_are_allowed_for_shipped_crates() {
         let policy = policy();
@@ -593,7 +595,10 @@ not json
             for id in strings(&exception["allow"]) {
                 let license =
                     spdx::license_id(id).unwrap_or_else(|| panic!("{id} is not an SPDX id"));
-                assert!(!license.is_copyleft(), "{exception}");
+                assert!(
+                    !license.is_copyleft() || FILE_LEVEL_COPYLEFT.contains(&id),
+                    "{exception}"
+                );
             }
         }
     }

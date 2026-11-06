@@ -6,10 +6,10 @@ use crate::authorship::SessionAuthor;
 use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
-    BlockerId, ChangeRequestId, DeviceId, EnvironmentId, GateResultId, HookRunId, InboxItemId,
-    PairingId, PermissionRequestId, PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId,
-    SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
-    UserLinkAuthorizationId, UserLinkId, WorkItemId,
+    BlockerId, ChangeRequestId, CredentialId, DeviceId, EnvironmentId, GateResultId, HookRunId,
+    InboxItemId, LoginSessionId, PairingId, PermissionRequestId, PermissionRuleId, ProjectId,
+    RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
+    StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
@@ -764,6 +764,25 @@ pub enum Event {
     },
     #[serde(rename = "identity.device.revoked")]
     DeviceRevoked { device_id: DeviceId },
+    #[serde(rename = "identity.credential.registered")]
+    CredentialRegistered {
+        credential_id: CredentialId,
+        name: String,
+        pairing_id: Option<PairingId>,
+    },
+    #[serde(rename = "identity.credential.revoked")]
+    CredentialRevoked { credential_id: CredentialId },
+    #[serde(rename = "identity.session.opened")]
+    LoginSessionOpened {
+        session_id: LoginSessionId,
+        credential_id: CredentialId,
+        expires_at: Timestamp,
+    },
+    #[serde(rename = "identity.session.closed")]
+    LoginSessionClosed {
+        session_id: LoginSessionId,
+        credential_id: CredentialId,
+    },
     #[serde(rename = "delivery.hook_run.finished")]
     HookRunFinished {
         hook_run_id: HookRunId,
@@ -837,6 +856,7 @@ pub enum Stream {
     InboxItem(InboxItemId),
     Pairing(PairingId),
     Device(DeviceId),
+    Credential(CredentialId),
 }
 
 impl Stream {
@@ -856,6 +876,7 @@ impl Stream {
             Stream::InboxItem(_) => "inbox_item",
             Stream::Pairing(_) => "pairing",
             Stream::Device(_) => "device",
+            Stream::Credential(_) => "credential",
         }
     }
 
@@ -875,6 +896,7 @@ impl Stream {
             Stream::InboxItem(id) => id.0,
             Stream::Pairing(id) => id.0,
             Stream::Device(id) => id.0,
+            Stream::Credential(id) => id.0,
         }
     }
 }
@@ -1021,6 +1043,10 @@ impl Event {
             E::DevicePaired { device_id, .. } | E::DeviceRevoked { device_id } => {
                 Stream::Device(*device_id)
             }
+            E::CredentialRegistered { credential_id, .. }
+            | E::CredentialRevoked { credential_id }
+            | E::LoginSessionOpened { credential_id, .. }
+            | E::LoginSessionClosed { credential_id, .. } => Stream::Credential(*credential_id),
         }
     }
 

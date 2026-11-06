@@ -751,7 +751,17 @@ async fn run(
     };
     let mut api_cfg = ApiConfig::new(VERSION);
     api_cfg.allowed_origins = cfg.server.allowed_origins.clone();
-    api_cfg.auth = cfg.auth_settings().map(saka_api::Authenticator::new);
+    match cfg
+        .auth_settings()
+        .map(saka_api::Authenticator::new)
+        .transpose()
+    {
+        Ok(auth) => api_cfg.auth = auth,
+        Err(detail) => {
+            tracing::error!(code = "config_auth_invalid", detail = %detail, "auth refused");
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    }
     let state = AppState::new(api_cfg);
     if let Some(assets) = saka_api::spa::embedded() {
         state.set_assets(assets);
