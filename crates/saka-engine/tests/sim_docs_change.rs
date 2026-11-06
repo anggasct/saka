@@ -25,6 +25,7 @@ fn config(merge: bool, outcome: AgentOutcome) -> SimConfig {
     let mut cfg = SimConfig {
         max_active_tasks: 1,
         operator: Operator {
+            start: true,
             merge,
             ..Operator::default()
         },

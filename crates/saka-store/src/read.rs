@@ -74,7 +74,7 @@ impl RunOf {
 }
 
 const WORK_ITEM_COLUMNS: &str = "id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key,
-    work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at";
+    work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at";
 
 pub(crate) fn ts(row: &Row<'_>, col: &str) -> Result<Timestamp> {
     Ok(Timestamp(row.get(col)?))
@@ -109,6 +109,7 @@ fn work_item(row: &Row<'_>) -> Result<WorkItem> {
         version: u64_col(row, "version")?,
         admitted_at: opt_ts(row, "admitted_at")?,
         done_at: opt_ts(row, "done_at")?,
+        start_approved_at: opt_ts(row, "start_approved_at")?,
         created_at: ts(row, "created_at")?,
         updated_at: ts(row, "updated_at")?,
     })

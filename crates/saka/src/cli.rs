@@ -856,6 +856,20 @@ impl Client {
     }
 
     pub async fn task_merge(&self, id: &str, reason: Option<&str>) -> ExitCode {
+        self.task_versioned(id, "merge", reason, "merging").await
+    }
+
+    pub async fn task_start(&self, id: &str) -> ExitCode {
+        self.task_versioned(id, "start", None, "starting").await
+    }
+
+    async fn task_versioned(
+        &self,
+        id: &str,
+        action: &str,
+        reason: Option<&str>,
+        verb: &str,
+    ) -> ExitCode {
         let current = match self.get(&format!("/api/v1/work-items/{id}")).await {
             Ok(a) if a.ok() => a,
             Ok(a) => return fail(&a),
@@ -867,13 +881,13 @@ impl Client {
             .unwrap_or_else(|| format!("W/\"{}\"", current.body["version"]));
         match self
             .post(
-                &format!("/api/v1/work-items/{id}/actions/merge"),
+                &format!("/api/v1/work-items/{id}/actions/{action}"),
                 &json!({ "reason": reason }),
                 Some(&tag),
             )
             .await
         {
-            Ok(a) => self.finish(&a, |b| format!("merging {}", text(&b["task_key"]))),
+            Ok(a) => self.finish(&a, |b| format!("{verb} {}", text(&b["task_key"]))),
             Err(code) => code,
         }
     }

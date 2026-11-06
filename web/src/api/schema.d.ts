@@ -868,6 +868,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/start": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["start"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/takeover": {
     parameters: {
       query?: never;
@@ -4950,6 +4966,44 @@ export interface operations {
         };
         content: {
           "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  start: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+        /** @description W/"<version>" */
+        "If-Match": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OptionalReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
         };
       };
       "4XX": {

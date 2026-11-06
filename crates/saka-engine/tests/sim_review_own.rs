@@ -16,6 +16,7 @@ const STEPS: usize = 20_000;
 fn hand_merge() -> SimConfig {
     SimConfig {
         operator: Operator {
+            start: true,
             merge: false,
             retry: vec![],
             answer: None,

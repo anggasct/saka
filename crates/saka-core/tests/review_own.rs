@@ -124,6 +124,7 @@ fn task_at_merge(workflow: Workflow) -> Task {
         version: 1,
         admitted_at: None,
         done_at: None,
+        start_approved_at: None,
         created_at: NOW,
         updated_at: NOW,
     });

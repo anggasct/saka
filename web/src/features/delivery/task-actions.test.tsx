@@ -160,6 +160,33 @@ describe("task actions", () => {
     });
   });
 
+  it("offers Start on a step that waits and sends the version it shows", async () => {
+    const waiting = {
+      ...ready,
+      state: "awaiting_start",
+      stage: null,
+      stage_phase: null,
+      available_actions: ["start", "cancel"],
+    };
+    const { requests } = fakeApi(
+      routes(() => detail(waiting), { [`${DETAIL}/actions/start`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    expect(
+      await screen.findByText("Waiting for you to start this step."),
+    ).toBeInTheDocument();
+    const dialog = await open("Start");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Start step" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    const [sent] = posts(requests, "start");
+    expect(sent?.headers.get("If-Match")).toBe('W/"7"');
+    expect(sent?.body).toEqual({});
+  });
+
   it("reloads a stale task and keeps the merge dialog open", async () => {
     let version = 7;
     const { requests } = fakeApi(

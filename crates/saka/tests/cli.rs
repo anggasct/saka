@@ -148,6 +148,11 @@ fn operator_commands_call_the_api_and_exit_with_documented_codes() {
         "merge_not_ready / invalid_state"
     );
     assert_eq!(
+        code(&saka(&server, &["task", "start", &id])),
+        4,
+        "only a step that waits for its start can be started"
+    );
+    assert_eq!(
         code(&saka(&server, &["task", "retry", &id, "--reason", "again"])),
         4
     );

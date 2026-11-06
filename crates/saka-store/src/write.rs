@@ -622,12 +622,13 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     let i = &t.item;
     tx.execute(
         "INSERT INTO work_item (id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key, work,
-           repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+           repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT (id) DO UPDATE SET spec_revision_id = excluded.spec_revision_id,
            step_index = excluded.step_index, work = excluded.work, repo_id = excluded.repo_id, state = excluded.state, stage = excluded.stage,
            stage_phase = excluded.stage_phase, priority = excluded.priority, version = excluded.version,
-           admitted_at = excluded.admitted_at, done_at = excluded.done_at, updated_at = excluded.updated_at",
+           admitted_at = excluded.admitted_at, done_at = excluded.done_at,
+           start_approved_at = excluded.start_approved_at, updated_at = excluded.updated_at",
         params![
             i.id.to_string(),
             i.project_id.to_string(),
@@ -647,6 +648,7 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
             i64_of(i.version)?,
             i.admitted_at.map(|t| t.0),
             i.done_at.map(|t| t.0),
+            i.start_approved_at.map(|t| t.0),
             i.created_at.0,
             i.updated_at.0,
         ],

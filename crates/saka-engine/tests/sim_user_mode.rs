@@ -23,6 +23,7 @@ const STEPS: usize = 5_000;
 fn sim() -> Sim {
     Sim::new(SimConfig {
         operator: Operator {
+            start: true,
             retry: vec![],
             ..Operator::default()
         },

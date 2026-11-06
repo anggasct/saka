@@ -37,6 +37,8 @@ export const EVENT_KINDS = [
   "delivery.work_item.repinned",
   "delivery.work_item.superseded",
   "delivery.work_item.admitted",
+  "delivery.work_item.awaiting_start",
+  "delivery.work_item.start_approved",
   "delivery.external_change.accepted",
   "delivery.stage_run.created",
   "delivery.stage_run.cancelled",

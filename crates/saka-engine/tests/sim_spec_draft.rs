@@ -80,6 +80,7 @@ fn write(bytes: Vec<u8>) -> DraftTurn {
 fn sim(tune: impl FnOnce(&mut SimConfig)) -> Sim {
     let mut cfg = SimConfig {
         operator: Operator {
+            start: true,
             merge: true,
             retry: vec![],
             answer: None,

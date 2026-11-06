@@ -55,6 +55,7 @@ fn home_repo() -> NewRepo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operator {
+    pub start: bool,
     pub merge: bool,
     pub retry: Vec<BlockerCode>,
     pub answer: Option<bool>,
@@ -63,6 +64,7 @@ pub struct Operator {
 impl Default for Operator {
     fn default() -> Self {
         Operator {
+            start: true,
             merge: true,
             retry: vec![BlockerCode::SessionLost],
             answer: None,
@@ -607,6 +609,7 @@ impl Sim {
             version: 1,
             admitted_at: None,
             done_at: None,
+            start_approved_at: None,
             created_at: now,
             updated_at: now,
         }));
@@ -805,6 +808,9 @@ impl Sim {
         let cause = engine.cause("human:operator:local");
         for task in self.all_tasks() {
             let id = task.item.id;
+            if self.cfg.operator.start && task.item.state == WorkItemState::AwaitingStart {
+                let _ = engine.start_step_with(id, task.item.version, &cause, None);
+            }
             if self.cfg.operator.merge && task.is_at(Stage::Merge, StagePhase::AwaitingMerge) {
                 let _ = engine.request_merge(id, task.item.version, None, &cause);
             }

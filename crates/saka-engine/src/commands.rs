@@ -803,6 +803,25 @@ impl Engine {
         )
     }
 
+    pub fn start_step_with(
+        &self,
+        id: WorkItemId,
+        expected_version: u64,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        self.decide(
+            id,
+            Some(TaskInput::ApproveStart { expected_version }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+
     pub fn request_merge(
         &self,
         id: WorkItemId,

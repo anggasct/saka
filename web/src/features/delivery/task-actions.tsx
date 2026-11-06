@@ -16,6 +16,7 @@ import {
   retryTask,
   returnTask,
   runPrimaryAction,
+  startTask,
   takeoverTask,
 } from "./queries";
 import { blockerText, label, record, sha } from "./text";
@@ -45,6 +46,21 @@ function useAfterAction() {
     }
     await refresh();
   };
+}
+
+function StartDialog({ task }: { task: WorkItem }) {
+  const t = useT();
+  const after = useAfterAction();
+  return (
+    <ActionDialog
+      trigger={t("task.start.trigger")}
+      triggerVariant="default"
+      title={t("task.start.title")}
+      description={t("task.start.description")}
+      submit={t("task.start.submit")}
+      onSubmit={(_, key) => after(() => startTask(task.id, task.version, key))}
+    />
+  );
 }
 
 function MergeDialog({ task }: { task: WorkItem }) {
@@ -321,6 +337,7 @@ export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
   }
   return (
     <div className="flex flex-wrap gap-2">
+      {actions.includes("start") && <StartDialog task={task} />}
       {actions.includes("review") && <ReviewDialog task={task} />}
       {actions.includes("fix") && <FixDialog task={task} />}
       {actions.includes("merge") && <MergeDialog task={task} />}

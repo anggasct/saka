@@ -17,6 +17,7 @@ fn sim(agent: AgentScript) -> Sim {
     let mut sim = Sim::new(SimConfig {
         agent,
         operator: Operator {
+            start: true,
             merge: true,
             retry: vec![],
             answer: Some(true),
@@ -192,6 +193,7 @@ fn budgeted(agent: AgentScript, budget: Budget, retry: Vec<BlockerCode>) -> Sim 
     let mut cfg = SimConfig {
         agent,
         operator: Operator {
+            start: true,
             merge: true,
             retry,
             answer: Some(true),

@@ -1018,6 +1018,7 @@ pub async fn get_work_packet(State(s): State<AppState>, Path(id): Path<String>) 
 
 #[derive(Clone, Copy)]
 enum TaskAction {
+    Start,
     Merge,
     Retry,
     Cancel,
@@ -1043,7 +1044,7 @@ async fn task_action(
     let mut expected = None;
     let mut return_stage = None;
     let (version, reason) = match which {
-        TaskAction::Merge => {
+        TaskAction::Merge | TaskAction::Start => {
             let tag = tri!(if_match(&headers));
             let req: dto::OptionalReason = tri!(body(&raw));
             let version = tag
@@ -1093,6 +1094,7 @@ async fn task_action(
         _ => unexpected(),
     };
     let name = match which {
+        TaskAction::Start => "work_item.start",
         TaskAction::Merge => "work_item.merge",
         TaskAction::Retry => "work_item.retry",
         TaskAction::Cancel => "work_item.cancel",
@@ -1116,6 +1118,12 @@ async fn task_action(
         &respond,
         |cause, action| async move {
             let result = match which {
+                TaskAction::Start => match version.flatten() {
+                    Some(v) => engine.start_step_with(item, v, &cause, Some(&action)),
+                    None => Err(EngineError::Rejected(
+                        saka_core::rejection::Rejection::VersionStale,
+                    )),
+                },
                 TaskAction::Merge => match version.flatten() {
                     Some(v) => {
                         engine.request_merge_with(item, v, reason.as_deref(), &cause, Some(&action))
@@ -1171,6 +1179,23 @@ async fn task_action(
         },
     )
     .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/start", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters"), ("If-Match" = String, Header, description = "W/\"<version>\"")),
+    request_body = dto::OptionalReason,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn start(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::Start).await
 }
 
 #[utoipa::path(

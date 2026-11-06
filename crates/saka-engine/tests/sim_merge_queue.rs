@@ -113,6 +113,7 @@ fn a_conflict_in_a_workflow_without_fix_goes_back_to_the_agent_with_the_paths() 
     let mut pair = Pair::new(
         SimConfig {
             operator: Operator {
+                start: true,
                 retry: vec![BlockerCode::MergeConflict],
                 ..Operator::default()
             },

@@ -34,6 +34,7 @@ fn task() -> Task {
         version: 1,
         admitted_at: None,
         done_at: None,
+        start_approved_at: None,
         created_at: Timestamp(1),
         updated_at: Timestamp(1),
     });

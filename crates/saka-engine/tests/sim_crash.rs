@@ -32,6 +32,7 @@ fn a_restart_reattaches_live_sessions_and_the_task_keeps_its_session() {
     let mut sim = Sim::new(SimConfig {
         agent: waiting_script(),
         operator: Operator {
+            start: true,
             merge: true,
             retry: vec![],
             answer: None,
@@ -62,6 +63,7 @@ fn a_restart_reattaches_live_sessions_and_the_task_keeps_its_session() {
 fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second_effect() {
     let mut sim = Sim::new(SimConfig {
         operator: Operator {
+            start: true,
             merge: false,
             ..Operator::default()
         },
@@ -137,6 +139,7 @@ fn crash_config() -> SimConfig {
 fn a_crash_while_checking_the_merge_does_not_block_the_task() {
     let mut sim = Sim::new(SimConfig {
         operator: Operator {
+            start: true,
             merge: true,
             retry: vec![],
             answer: None,
