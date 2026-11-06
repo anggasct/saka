@@ -199,7 +199,6 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     let b = bind.as_slice();
 
     let mut history: BTreeMap<WorkItemId, Vec<(Stage, Trigger, Option<String>)>> = BTreeMap::new();
-    let mut previous: HashMap<WorkItemId, StageRunId> = HashMap::new();
     for run in rows(
         conn,
         "SELECT * FROM stage_run",
@@ -219,7 +218,6 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             if t.stage_run.is_none() {
                 t.stage_run = Some(run);
             } else {
-                previous.entry(run.work_item_id).or_insert(run.id);
                 t.retired_runs.push(run);
             }
         }
@@ -328,24 +326,21 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             .stage_run
             .as_ref()
             .is_some_and(|r| r.stage == Stage::Sync && r.head_sha.is_none());
-        let owner = if carried {
-            previous.get(&g.work_item_id).copied()
-        } else {
-            t.stage_run.as_ref().map(|r| r.id)
-        };
+        let owner = t.stage_run.as_ref().map(|r| r.id);
         let merged_head = t.change_request.as_ref().map(|c| c.head_sha.as_str());
-        // A review, and the merge that follows its approval, stand on the gates of the head they judged.
-        let judged = t.stage_run.as_ref().is_some_and(|r| {
-            r.stage == Stage::Review
-                || (r.stage == Stage::Merge && r.entry_phase == StagePhase::AwaitingMerge)
-        }) && merged_head == Some(g.head_sha.as_str());
+        // A review, the merge after its approval, and the sync after that merge stand on the
+        // gates of the head they judged, whichever run recorded them.
+        let judged = (carried
+            || t.stage_run.as_ref().is_some_and(|r| {
+                r.stage == Stage::Review
+                    || (r.stage == Stage::Merge && r.entry_phase == StagePhase::AwaitingMerge)
+            }))
+            && merged_head == Some(g.head_sha.as_str());
         if (owner != Some(g.stage_run_id) && !judged) || !seen.insert((g.work_item_id, g.source)) {
             continue;
         }
-        if !carried || merged_head == Some(g.head_sha.as_str()) {
-            let at = t.gates.partition_point(|x| x.source < g.source);
-            t.gates.insert(at, g);
-        }
+        let at = t.gates.partition_point(|x| x.source < g.source);
+        t.gates.insert(at, g);
     }
     for g in rows(
         conn,

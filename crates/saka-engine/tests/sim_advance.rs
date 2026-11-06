@@ -192,6 +192,21 @@ impl std::io::Write for Buffer {
 }
 
 #[test]
+fn a_reviewed_change_needs_no_checks_on_its_merge_commit_to_admit_the_next_step() {
+    let mut sim = Sim::new(SimConfig {
+        ci: CiScript::Pass,
+        ..SimConfig::default()
+    });
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| s.task(2).item.admitted_at.is_some()));
+
+    let merged_at = sim.task(1).change_request.unwrap().merged_at.unwrap();
+    let admitted_at = sim.task(2).item.admitted_at.unwrap();
+    let waited = admitted_at.since(merged_at);
+    assert!(waited < 60_000, "waited {waited} ms after the merge");
+}
+
+#[test]
 fn the_time_from_merge_to_the_next_admission_is_measured() {
     let buffer = Buffer::default();
     let out = buffer.clone();

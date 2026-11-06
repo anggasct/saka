@@ -3392,7 +3392,6 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             ..
         } => {
             count_retry(&mut t.retries, *stage, *trigger, reason.as_deref());
-            let retired = t.stage_run.as_ref().map(|r| r.id);
             if let Some(mut old) = t.stage_run.take() {
                 if old.stage == Stage::Review && old.state == StageRunState::Pending {
                     old.state = StageRunState::Cancelled;
@@ -3434,12 +3433,9 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             t.attempts.insert(*stage, *attempt);
             let merged_head = t.change_request.as_ref().map(|c| c.head_sha.clone());
             match (*stage, *entry_phase) {
-                (Stage::Sync, _) => t.gates.retain(|g| {
-                    Some(g.stage_run_id) == retired && Some(&g.head_sha) == merged_head.as_ref()
-                }),
-                // The review judges the head the gates passed on, and the merge that follows it
-                // needs those gates unchanged.
-                (Stage::Review, _) | (Stage::Merge, StagePhase::AwaitingMerge) => {
+                // The review judges the head the gates passed on, and the merge and the sync that
+                // follow it need those gates unchanged, whichever run recorded them.
+                (Stage::Sync | Stage::Review, _) | (Stage::Merge, StagePhase::AwaitingMerge) => {
                     t.gates
                         .retain(|g| Some(&g.head_sha) == merged_head.as_ref());
                 }

@@ -105,10 +105,7 @@ fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second
         }
     }
     assert!(ran_at.unwrap().since(crashed_at) >= saka_store::LEASE_MS);
-    assert!(
-        sim.task(1).is_at(Stage::Sync, StagePhase::Verifying)
-            || sim.task(1).item.stage == Some(Stage::Sync)
-    );
+    assert_ne!(sim.task(1).item.stage, Some(Stage::Merge));
     assert_eq!(
         sim.stats().merges,
         1,
@@ -129,9 +126,6 @@ fn crash_config() -> SimConfig {
         BlockerCode::ScmUnavailable,
         BlockerCode::DodFailed,
     ];
-    // After a merge the loop polls the base commit every 15 s until checks appear or this
-    // window ends. Three polls reach the same states as forty, so a run stays short.
-    cfg.loop_cfg.ci_appear_timeout_ms = 45_000;
     cfg
 }
 
