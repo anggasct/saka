@@ -170,7 +170,7 @@ async function mockApi(page: Page, empty: boolean) {
             status: 404,
             json: { code: "not_found", params: {} },
           })
-        : json({ ...found, stage_runs: [] }));
+        : json({ ...found, stage_runs: [], reviews: [] }));
     } else if (path === `/api/v1/specs/${SPEC_ID}`) {
       await json(spec);
     } else if (path === `/api/v1/projects/${PROJECT_ID}`) {

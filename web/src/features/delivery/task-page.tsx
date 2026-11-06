@@ -17,6 +17,7 @@ import {
   useWorkItem,
   useWorkItems,
 } from "./queries";
+import { ReviewSection } from "./review-section";
 import { SessionSection } from "./session-section";
 import { StageRunsSection } from "./stage-runs-section";
 import { TakenOverBanner } from "./taken-over-banner";
@@ -98,6 +99,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       <WaitingSection task={item} tasks={tasks} />
       <ChangeSection task={item} />
       <GatesSection task={item} />
+      <ReviewSection task={item} />
       <StageRunsSection task={item} spec={spec.data} tasks={tasks} />
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />

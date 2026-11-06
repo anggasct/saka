@@ -27,6 +27,7 @@ export function BlockerCard({
   const params = record(blocker.params);
   const checks = list(params.checks);
   const missing = list(params.missing);
+  const questions = list(params.questions);
   const command = text(params.command);
   const tail = text(params.log_tail);
   const log = text(params.log);
@@ -79,6 +80,18 @@ export function BlockerCard({
             {missing.map((name) => (
               <li key={name} className="break-words">
                 {name}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {questions.length > 0 && (
+        <div className="space-y-1 text-sm">
+          <h3 className="font-medium">{t("task.blocker.questions")}</h3>
+          <ul className="list-disc pl-5">
+            {questions.map((question) => (
+              <li key={question} className="break-words">
+                {question}
               </li>
             ))}
           </ul>

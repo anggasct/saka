@@ -37,6 +37,7 @@ const task = {
   admitted_at: AT,
   done_at: null,
   stage_runs: [],
+  reviews: [],
 };
 
 const session = {

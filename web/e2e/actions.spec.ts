@@ -102,6 +102,7 @@ function task(step: number, extra: Record<string, unknown>) {
     admitted_at: AT,
     done_at: null,
     stage_runs: [],
+    reviews: [],
     ...extra,
   };
 }
