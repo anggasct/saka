@@ -59,6 +59,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "saka-engine",
         ],
     ),
+    ("saka-desktop", &[]),
     ("xtask", &[]),
 ];
 
@@ -196,7 +197,7 @@ fn allowed(krate: &str) -> Option<&'static [&'static str]> {
 
 pub fn check(meta: &Value) -> Vec<Violation> {
     let graph = Graph::new(meta);
-    let product: BTreeSet<String> = metadata::product_packages(meta)
+    let product: BTreeSet<String> = metadata::governed_packages(meta)
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -432,5 +433,30 @@ mod tests {
             &[("saka-core", "tokio", Some("dev"))],
         );
         assert_eq!(check(&m), vec![]);
+    }
+
+    #[test]
+    fn the_desktop_shell_may_not_depend_on_another_workspace_crate() {
+        let m = meta(
+            &["saka-desktop", "saka-core"],
+            &[],
+            &[("saka-desktop", "saka-core", None)],
+        );
+        assert_eq!(
+            check(&m),
+            vec![Violation::Edge {
+                from: "saka-desktop".into(),
+                to: "saka-core".into(),
+                dev: false
+            }]
+        );
+        assert!(
+            check(&meta(
+                &["saka-desktop"],
+                &["tauri"],
+                &[("saka-desktop", "tauri", None)]
+            ))
+            .is_empty()
+        );
     }
 }

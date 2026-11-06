@@ -15,3 +15,5 @@ AGENTS.md
 
 # Product docs live in docs/; keep them even when a global ignore excludes docs
 !docs/
+
+/desktop/src-tauri/gen/

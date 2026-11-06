@@ -3,13 +3,17 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps e2e supply-chain test-systemd test-claude-memory test-claude-mcp
+.PHONY: check deps desktop-check e2e supply-chain test-systemd test-claude-memory test-claude-mcp
 
 check:
 	$(LIMITED) cargo xtask check
 
 deps:
 	$(LIMITED) cargo xtask deps
+
+# Builds the desktop shell (needs the WebKit and GTK system libraries); not part of `make check`.
+desktop-check:
+	$(LIMITED) cargo xtask desktop-check
 
 # Advisories, licences, bans, sources and unused dependencies; needs network.
 supply-chain:

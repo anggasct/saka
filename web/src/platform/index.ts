@@ -1,4 +1,6 @@
+import { tauriPlatform } from "./tauri";
 import { webPlatform } from "./web";
+import { isTauri } from "@tauri-apps/api/core";
 
 export type EventStream = {
   addEventListener: (
@@ -39,7 +41,29 @@ export type Notice = {
   route: string;
 };
 
+export type SavedConnection = {
+  id: string;
+  name: string;
+  url: string;
+  active: boolean;
+};
+
+export type NewConnection = {
+  name: string;
+  url: string;
+  pairingCode: string;
+};
+
+export type Connections = {
+  hasActive: () => boolean;
+  list: () => Promise<SavedConnection[]>;
+  add: (input: NewConnection) => Promise<SavedConnection>;
+  remove: (id: string) => Promise<void>;
+  select: (id: string) => Promise<void>;
+};
+
 export type Platform = {
+  connections: () => Connections | null;
   ready: () => Promise<void>;
   info: () => PlatformInfo;
   apiBaseUrl: () => string;
@@ -58,4 +82,4 @@ export type Platform = {
   navigateTo: (path: string) => void;
 };
 
-export const platform: Platform = webPlatform;
+export const platform: Platform = isTauri() ? tauriPlatform : webPlatform;

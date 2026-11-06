@@ -11,6 +11,11 @@ unused-ignored-advisory = "deny"
 maximum-db-staleness = "P7D"
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa (via crypto-glue, used by webauthn-rs) leaks private-key timing; Saka only verifies RSA passkey and attestation signatures with public keys and never signs or decrypts with RSA. No patched version exists; this entry fails the check as soon as the advisory is withdrawn or rsa leaves the tree" },
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 (gtk3-rs, pulled in by Tauri's WebKitGTK webview on Linux) has an unsound VariantStrIter; Saka never touches GVariant and the fix needs glib 0.20, which wry has not moved to. This entry fails the check as soon as glib leaves the tree" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is a build-time macro helper of gtk3-macros (Tauri on Linux); it never runs in the shipped binary. This entry fails the check as soon as it leaves the tree" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant was folded into zbus 6; zbus 5 reaches the desktop shell through keyring's Secret Service store and tauri-plugin-single-instance, which have not moved to zbus 6. Only the D-Bus wire code is affected by the notice. This entry fails the check as soon as zvariant leaves the tree" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names was folded into zbus 6; same dependents and status as RUSTSEC-2026-0370. This entry fails the check as soon as zbus_names leaves the tree" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive was folded into zbus 6; same dependents and status as RUSTSEC-2026-0370. This entry fails the check as soon as zvariant_derive leaves the tree" },
 ]
 
 [licenses]
@@ -30,6 +35,14 @@ exceptions = [
     { crate = "webauthn-attestation-ca", allow = ["MPL-2.0"] },
     # The RustCrypto glue webauthn-rs-core builds on; same terms.
     { crate = "crypto-glue", allow = ["MPL-2.0"] },
+    # The desktop shell (Tauri) parses CSS and finds the user directory with these MPL-2.0 crates; the licence is file-level and covers only their own files.
+    { crate = "cssparser", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+    { crate = "dtoa-short", allow = ["MPL-2.0"] },
+    { crate = "selectors", allow = ["MPL-2.0"] },
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+    # Build-time helper of the GTK bindings that Tauri uses on Linux; the LLVM exception only loosens Apache-2.0.
+    { crate = "target-lexicon", allow = ["Apache-2.0 WITH LLVM-exception"] },
 ]
 
 [licenses.private]
@@ -61,6 +74,29 @@ skip = [
     { crate = "rand_core@0.6.4", reason = "password-hash 0.5, which argon2 0.5 (via crypto-glue) still depends on" },
     { crate = "signature@2.2.0", reason = "jsonwebtoken 11.1 still depends on signature 2" },
     { crate = "synstructure@0.13.2", reason = "asn1-rs-derive 0.6 (x509-parser, via webauthn-rs-core) still depends on synstructure 0.13" },
+    { crate = "bitflags@1.3.2", reason = "javascriptcore-rs and webkit2gtk (Tauri on Linux) still depend on bitflags 1" },
+    { crate = "getrandom@0.3.4", reason = "tauri 2.12 still depends on getrandom 0.3" },
+    { crate = "hashbrown@0.12.3", reason = "indexmap 1.9, which schemars 0.8 (tauri-utils, tauri-build) still depends on" },
+    { crate = "indexmap@1.9.3", reason = "schemars 0.8, which tauri-utils and tauri-build still depend on" },
+    { crate = "heck@0.4.1", reason = "glib-macros 0.18 (gtk3-rs, Tauri on Linux) still depends on heck 0.4" },
+    { crate = "miniz_oxide@0.8.9", reason = "png 0.18 (tauri, tray-icon) still depends on miniz_oxide 0.8" },
+    { crate = "phf@0.13.1", reason = "tauri-utils, selectors and web_atoms still depend on phf 0.13" },
+    { crate = "phf_codegen@0.13.1", reason = "selectors and web_atoms build scripts still depend on phf_codegen 0.13" },
+    { crate = "phf_generator@0.13.1", reason = "phf 0.13, which tauri-utils, selectors and web_atoms still depend on" },
+    { crate = "phf_shared@0.13.1", reason = "phf 0.13, which tauri-utils, selectors and web_atoms still depend on" },
+    { crate = "proc-macro-crate@1.3.1", reason = "gtk3-macros 0.18 (Tauri on Linux) still depends on proc-macro-crate 1" },
+    { crate = "proc-macro-crate@2.0.2", reason = "glib-macros 0.18 (Tauri on Linux) still depends on proc-macro-crate 2" },
+    { crate = "toml@0.8.2", reason = "system-deps 6, which the GTK bindings behind Tauri's Linux webview still depend on" },
+    { crate = "toml_edit@0.19.15", reason = "proc-macro-crate 1.3, which gtk3-macros 0.18 still depends on" },
+    { crate = "toml_edit@0.20.2", reason = "proc-macro-crate 2.0 and toml 0.8, which glib-macros 0.18 and system-deps 6 still depend on" },
+    { crate = "toml_datetime@0.6.3", reason = "toml 0.8 and toml_edit 0.19 and 0.20, which the GTK bindings behind Tauri still depend on" },
+    { crate = "serde_spanned@0.6.9", reason = "toml 0.8 and toml_edit 0.20, which the GTK bindings behind Tauri still depend on" },
+    { crate = "winnow@0.5.40", reason = "toml_edit 0.19 and 0.20, which the GTK bindings behind Tauri still depend on" },
+    { crate = "schemars@0.8.22", reason = "tauri-utils and tauri-build still depend on schemars 0.8" },
+    { crate = "schemars_derive@0.8.22", reason = "schemars 0.8, which tauri-utils and tauri-build still depend on" },
+    { crate = "serde_derive_internals@0.29.1", reason = "schemars_derive 0.8, which tauri-utils and tauri-build still depend on" },
+    { crate = "sha2@0.10.9", reason = "tauri-codegen 2.7 still depends on sha2 0.10" },
+    { crate = "syn@1.0.109", reason = "proc-macro-error 1, which gtk3-macros (Tauri on Linux) still depends on" },
 ]
 
 [bans.workspace-dependencies]

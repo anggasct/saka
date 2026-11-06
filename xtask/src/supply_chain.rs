@@ -592,7 +592,16 @@ not json
             );
         }
         for exception in licenses["exceptions"].as_array().unwrap() {
-            for id in strings(&exception["allow"]) {
+            for expression in strings(&exception["allow"]) {
+                let (id, with) = expression
+                    .split_once(" WITH ")
+                    .map_or((expression, None), |(id, with)| (id, Some(with)));
+                if let Some(with) = with {
+                    assert!(
+                        spdx::exception_id(with).is_some(),
+                        "{with} is not an SPDX exception"
+                    );
+                }
                 let license =
                     spdx::license_id(id).unwrap_or_else(|| panic!("{id} is not an SPDX id"));
                 assert!(

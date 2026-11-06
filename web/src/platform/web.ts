@@ -2,6 +2,7 @@ import { webCredentials } from "./credentials";
 import type { EventStream, Platform } from "./index";
 
 export const webPlatform: Platform = {
+  connections: () => null,
   ready: () => Promise.resolve(),
   info: () => ({ kind: "web", os: navigator.platform }),
   apiBaseUrl: () => location.origin,

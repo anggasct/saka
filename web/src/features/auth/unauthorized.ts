@@ -1,7 +1,8 @@
 import { ApiError } from "@/api/client";
+import { platform } from "@/platform";
 
 const SIGN_IN_CODES = ["auth_required", "auth_invalid"];
-const AUTH_PATHS = ["/login", "/setup"];
+const AUTH_PATHS = ["/login", "/setup", "/connections"];
 
 export function needsSignIn(error: unknown): boolean {
   return (
@@ -18,10 +19,11 @@ export function returnPathFor(href: string): string | null {
 
 export type SignInRouter = {
   state: { location: { href: string } };
-  navigate: (options: {
-    to: "/login";
-    search: { next: string };
-  }) => Promise<void>;
+  navigate: (
+    options:
+      | { to: "/login"; search: { next: string } }
+      | { to: "/connections"; search: { reauth: true } },
+  ) => Promise<void>;
 };
 
 export function signInAgain(router: SignInRouter): (error: unknown) => void {
@@ -30,7 +32,12 @@ export function signInAgain(router: SignInRouter): (error: unknown) => void {
       return;
     }
     const next = returnPathFor(router.state.location.href);
-    if (next !== null) {
+    if (next === null) {
+      return;
+    }
+    if (platform.connections() !== null) {
+      void router.navigate({ to: "/connections", search: { reauth: true } });
+    } else {
       void router.navigate({ to: "/login", search: { next } });
     }
   };

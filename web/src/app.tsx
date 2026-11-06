@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { startEventStream } from "@/api/events";
 import { checkServer } from "@/api/meta";
 import { signInAgain } from "@/features/auth/unauthorized";
+import { ConnectionsPage } from "@/features/connections/connections-page";
 import { IncompatiblePage } from "@/features/connection/incompatible-page";
 import { initialLocale } from "@/i18n/locale";
 import { platform } from "@/platform";
@@ -41,6 +42,17 @@ function watchSignIn() {
 export async function start() {
   const root = platform.rootElement();
   if (root === null) {
+    return;
+  }
+  const shell = platform.connections();
+  if (shell !== null && !shell.hasActive()) {
+    createRoot(root).render(
+      <StrictMode>
+        <Providers queryClient={queryClient} locale={initialLocale()}>
+          <ConnectionsPage mode="setup" />
+        </Providers>
+      </StrictMode>,
+    );
     return;
   }
   const server = await checkServer();

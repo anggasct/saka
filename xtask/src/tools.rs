@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn the_workspace_pins_every_supply_chain_tool() {
         let meta = metadata::load().unwrap();
-        for tool in ["cargo-deny", "cargo-shear"] {
+        for tool in ["cargo-deny", "cargo-shear", "tauri-cli"] {
             assert!(pinned(&meta, tool).is_ok(), "{tool}");
         }
     }
