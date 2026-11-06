@@ -23,6 +23,6 @@ test-systemd:
 test-claude-memory:
 	$(LIMITED) cargo xtask test-claude-memory
 
-# Opt-in: a real loop against a test repository with real credentials (see README).
+# Opt-in: a real loop against a test repository with real credentials (see docs/guide.md).
 e2e: test-systemd test-claude-memory
 	$(LIMITED) cargo xtask e2e
