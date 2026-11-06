@@ -257,7 +257,8 @@ pub fn render(input: &PacketInput) -> Packet {
     }
     text.push_str(
         "- Commit all your changes with a Conventional Commits message before you finish.\n\
-         - Do not push. Saka pushes the branch and opens the pull request.\n",
+         - Do not push. Saka pushes the branch and opens the pull request.\n\
+         - If the spec and the docs leave open a choice that only the operator can make (a data store, a public interface, a dependency, anything costly to undo), call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The operator's answer arrives as your next message. Never ask what the spec, the docs, or the code already answer. One question waits at a time, and a step may ask five at most.\n",
     );
     let sha256 = content_hash(text.as_bytes());
     Packet {
@@ -522,6 +523,7 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
          - Write the spec only to {target}. Every other write is refused.\n\
          - Follow document 2 exactly and start from document 1.\n\
          - For each material technical decision the docs do not settle, add a question under \"## Decisions\" with two or three options, the recommended option first and marked \"(recommended)\". Leave every option unchecked; the operator answers.\n\
+         - If you cannot write the spec without the operator's answer to a question about the idea itself, call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The answer arrives as your next message: write it into the spec as the checked option under \"## Decisions\", and carry on. Never ask what the docs or the idea already answer.\n\
          - Do not commit. When the file is complete, end your turn. Saka checks it and tells you what to fix.\n",
         target = input.target
     );

@@ -10,6 +10,7 @@ import { useFormat } from "@/features/delivery/format";
 import { codeOf, PageError } from "@/features/delivery/page-error";
 import { useProject } from "@/features/delivery/queries";
 import { Section } from "@/features/delivery/section";
+import { DecisionSection } from "@/features/decisions/decision-section";
 import { SessionSection } from "@/features/delivery/session-section";
 import { label, record, sha } from "@/features/delivery/text";
 import { When } from "@/features/delivery/when";
@@ -464,6 +465,7 @@ export function DraftPage({
         </Card>
       )}
       <LintReport draft={item} />
+      <DecisionSection run={{ kind: "spec_draft", id: item.id }} />
       {item.attempt && (
         <SessionSection
           owner={{ kind: "spec_draft", id: item.id }}

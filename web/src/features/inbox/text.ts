@@ -32,6 +32,8 @@ export function sentence(t: T, item: InboxItem, relative: Relative): string {
       return t("inbox.item.step_start");
     case "merge":
       return t("inbox.item.merge");
+    case "decision":
+      return text(params.question) || t("inbox.item.decision");
     default:
       return t("inbox.item.decision");
   }

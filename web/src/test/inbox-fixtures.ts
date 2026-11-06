@@ -113,3 +113,25 @@ export function summary(
     ...extra,
   };
 }
+
+export const DECISION_ID = "0193f0c4-1b2a-7c3d-9e8f-0011223344d1";
+
+export const decisionOptions = [
+  { label: "Local disk", detail: "Simple, no cost" },
+  { label: "R2", detail: null },
+];
+
+export const decisionItem = inboxItem({
+  kind: "decision",
+  subject: "decision",
+  params: {
+    question: "Where do we store audio?",
+    context: "The recorder needs a place to keep files.",
+    options: decisionOptions,
+    expires_at: "2026-11-09T10:00:00.000Z",
+  },
+  action: {
+    kind: "answer_decision",
+    params: { decision_request_id: DECISION_ID },
+  },
+});

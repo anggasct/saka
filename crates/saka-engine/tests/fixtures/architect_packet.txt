@@ -198,4 +198,5 @@ Rules:
 - Write the spec only to docs/specs/export.md. Every other write is refused.
 - Follow document 2 exactly and start from document 1.
 - For each material technical decision the docs do not settle, add a question under "## Decisions" with two or three options, the recommended option first and marked "(recommended)". Leave every option unchecked; the operator answers.
+- If you cannot write the spec without the operator's answer to a question about the idea itself, call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The answer arrives as your next message: write it into the spec as the checked option under "## Decisions", and carry on. Never ask what the docs or the idea already answer.
 - Do not commit. When the file is complete, end your turn. Saka checks it and tells you what to fix.

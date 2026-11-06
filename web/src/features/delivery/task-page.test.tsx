@@ -12,6 +12,7 @@ import {
   specWithSteps,
   task,
 } from "@/test/fixtures";
+import { decision } from "@/test/decision-fixtures";
 import { renderWithProviders } from "@/test/render";
 
 import type { WorkItem, WorkItemDetail } from "./queries";
@@ -198,6 +199,42 @@ describe("TaskPage", () => {
         name: "See the hook runs in project settings",
       }),
     ).toHaveAttribute("href", `/settings/${PROJECT_ID}`);
+  });
+
+  it("shows the questions the agent asked, with a form for the open one", async () => {
+    const asking = detail(task(1, { state: "in_stage", stage: "dev" }));
+    const { requests } = fakeApi(
+      routes(asking, [asking], {
+        "/api/v1/decision-requests": {
+          body: page([
+            decision(1),
+            decision(2, {
+              state: "delivered",
+              question: "Which format?",
+              answer: {
+                option: 0,
+                note: null,
+                answered_by: "operator:local",
+                answered_at: "2026-11-06T11:00:00.000Z",
+              },
+            }),
+          ]),
+        },
+      }),
+    );
+    renderWithProviders(<TaskPage workItemId={asking.id} />);
+    const section = await screen.findByRole("region", {
+      name: "Questions from the agent",
+    });
+    expect(
+      within(section).getByRole("button", { name: "Send answer" }),
+    ).toBeInTheDocument();
+    expect(within(section).getAllByRole("article")).toHaveLength(2);
+    expect(
+      requests
+        .find((r) => r.path === "/api/v1/decision-requests")
+        ?.search.get("work_item_id"),
+    ).toBe(asking.id);
   });
 
   it("names the autonomy level the task runs at", async () => {
