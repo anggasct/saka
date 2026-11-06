@@ -289,7 +289,21 @@ fn doctor(host: &Host, server: &str, args: &[&str]) -> Output {
 
 #[test]
 fn doctor_exit_codes_follow_failures_warnings_and_flags() {
-    let sim = Sim::new(SimConfig::default());
+    let sim = Sim::new(SimConfig {
+        auth_enabled: true,
+        ..SimConfig::default()
+    });
+    sim.engine()
+        .store()
+        .transact(|tx| {
+            tx.execute(
+                "INSERT INTO credential (id, name, passkey, created_at)
+                 VALUES ('00000000-0000-0000-0000-0000000000c1', 'Laptop', '{}', 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     let server = serve_running(&sim);
     let host = Host::new();
 
@@ -320,6 +334,7 @@ fn doctor_exit_codes_follow_failures_warnings_and_flags() {
             "agent.quota",
             "toolchain.cache",
             "toolchain.sources",
+            "auth.config",
             "scm.app",
             "scm.app",
             "scm.installation",
@@ -430,6 +445,7 @@ fn doctor_runs_the_local_checks_read_only_when_the_server_is_down() {
         "server.ready",
         "agent.quota",
         "toolchain.sources",
+        "auth.config",
         "scm.app",
         "scm.installation",
         "scm.webhook",

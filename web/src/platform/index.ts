@@ -23,6 +23,11 @@ export type Credentials = {
   get: (options: unknown) => Promise<CredentialResult>;
 };
 
+export type Connection = {
+  online: () => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
 export type Platform = {
   apiBaseUrl: () => string;
   preferredLocales: () => readonly string[];
@@ -33,6 +38,8 @@ export type Platform = {
   copyText: (text: string) => Promise<boolean>;
   observeVisible: (element: Element, onVisible: () => void) => () => void;
   credentials: Credentials;
+  connection: Connection;
+  registerServiceWorker: (url: string) => void;
   navigateTo: (path: string) => void;
 };
 

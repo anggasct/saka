@@ -88,6 +88,7 @@ pub struct SimConfig {
     pub config_poll_secs: u32,
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
+    pub auth_enabled: bool,
     pub workflow: saka_core::workflow::Workflow,
     pub autonomy_request: Option<saka_core::vocab::Autonomy>,
 }
@@ -206,6 +207,7 @@ impl Default for SimConfig {
             config_poll_secs: 0,
             diagnostics: DiagnosticLimits::default(),
             hooks: Vec::new(),
+            auth_enabled: false,
             workflow: saka_core::workflow::Workflow::default(),
             autonomy_request: None,
         }
@@ -441,6 +443,7 @@ impl Sim {
             config_poll_secs: self.cfg.config_poll_secs,
             diagnostics: self.cfg.diagnostics,
             hooks: self.cfg.hooks.clone(),
+            auth_enabled: self.cfg.auth_enabled,
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

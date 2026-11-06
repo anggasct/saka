@@ -363,3 +363,29 @@ test("sign-in and Devices follow the chosen language", async ({ page }) => {
   await expect(page.getByRole("region", { name: "Passkey" })).toBeVisible();
   await accessible(page);
 });
+
+test("the app opens offline from the service worker and says it is disconnected", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 375, height: 900 });
+  const mock = newMock();
+  mock.hasPasskey = true;
+  mock.signedIn = true;
+  await mockApi(page, mock);
+  await page.goto(`${ORIGIN}/`);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Inbox" }),
+  ).toBeVisible();
+  await expect(page.getByText("You are offline")).toHaveCount(0);
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+
+  await context.setOffline(true);
+  await page.reload();
+  await expect(page.getByText("You are offline")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+  await accessible(page);
+
+  await context.setOffline(false);
+  await expect(page.getByText("You are offline")).toHaveCount(0);
+});

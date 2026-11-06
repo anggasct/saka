@@ -259,6 +259,7 @@ impl World {
                 config_poll_secs: 0,
                 diagnostics: DiagnosticLimits::default(),
                 hooks: Vec::new(),
+                auth_enabled: false,
             },
         );
         let cause = engine.cause("human:operator:local");

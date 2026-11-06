@@ -35,6 +35,22 @@ export const webPlatform: Platform = {
     }
   },
   credentials: webCredentials,
+  connection: {
+    online: () => navigator.onLine,
+    subscribe: (listener) => {
+      window.addEventListener("online", listener);
+      window.addEventListener("offline", listener);
+      return () => {
+        window.removeEventListener("online", listener);
+        window.removeEventListener("offline", listener);
+      };
+    },
+  },
+  registerServiceWorker: (url) => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register(url).catch(() => undefined);
+    }
+  },
   navigateTo: (path) => {
     location.assign(path);
   },

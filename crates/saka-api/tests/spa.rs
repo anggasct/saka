@@ -131,3 +131,34 @@ fn the_embedded_build_is_served() {
     state.set_assets(assets);
     check(&state, &format!("/{script}"));
 }
+
+#[cfg(feature = "embed-web")]
+#[test]
+fn the_embedded_build_serves_the_manifest_the_icons_and_a_worker_that_is_never_cached() {
+    let state = AppState::new(ApiConfig::new("0.1.0-test"));
+    state.set_assets(saka_api::spa::embedded().expect("built with embed-web"));
+    for (path, kind) in [
+        ("/manifest.webmanifest", "json"),
+        ("/sw.js", "javascript"),
+        ("/precache.json", "json"),
+        ("/icons/icon-192.png", "image/png"),
+        ("/icons/icon-512.png", "image/png"),
+    ] {
+        let got = get(&state, path);
+        assert_eq!(got.status, StatusCode::OK, "{path}");
+        assert!(
+            got.content_type.contains(kind),
+            "{path}: {}",
+            got.content_type
+        );
+        assert_eq!(got.cache, "no-cache", "{path}");
+    }
+    let manifest: serde_json::Value =
+        serde_json::from_str(&get(&state, "/manifest.webmanifest").body).unwrap();
+    assert_eq!(manifest["display"], "standalone");
+    let listed: Vec<String> = serde_json::from_str(&get(&state, "/precache.json").body).unwrap();
+    assert!(!listed.is_empty());
+    for file in listed {
+        assert_eq!(get(&state, &file).status, StatusCode::OK, "{file}");
+    }
+}

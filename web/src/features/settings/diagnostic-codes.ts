@@ -18,6 +18,7 @@ export const DIAGNOSTIC_CODES = {
     "user_token_active",
     "project_config_ok",
     "toolchains_pinned",
+    "auth_ready",
   ],
   warn: [
     "quota_paused",
@@ -32,6 +33,7 @@ export const DIAGNOSTIC_CODES = {
     "toolchain_drift",
     "host_toolchain_mismatch",
     "host_toolchain_missing",
+    "auth_off",
   ],
   fail: [
     "config_invalid",
@@ -57,6 +59,7 @@ export const DIAGNOSTIC_CODES = {
     "user_token_invalid",
     "project_config_rejected",
     "toolchain_unpinned",
+    "auth_no_passkey",
     "check_timed_out",
     "check_failed",
   ],
@@ -79,6 +82,7 @@ export const DIAGNOSTIC_CODES = {
     "enable_systemd_user",
     "install_agent_cli",
     "run_agent_login",
+    "run_auth_setup",
     "upgrade_agent_cli",
     "check_toolchain_mirror",
     "check_app_credentials",
