@@ -6,6 +6,7 @@ import type { components } from "@/api/schema";
 
 export type SpecDraft = components["schemas"]["SpecDraft"];
 export type SpecDraftContent = components["schemas"]["SpecDraftContent"];
+export type SpecDraftChanges = components["schemas"]["SpecDraftChanges"];
 export type CreateSpecDraftBody = components["schemas"]["CreateSpecDraftBody"];
 
 export type DraftFilter = "active" | "all";
@@ -17,6 +18,7 @@ export const draftKeys = {
     [QUERY_ROOTS.specDrafts, "project", projectId, filter] as const,
   detail: (id: string) => [QUERY_ROOTS.specDrafts, "detail", id] as const,
   content: (id: string) => [QUERY_ROOTS.specDrafts, "content", id] as const,
+  changes: (id: string) => [QUERY_ROOTS.specDrafts, "changes", id] as const,
 };
 
 export function useProjectDrafts(projectId: string, filter: DraftFilter) {
@@ -65,6 +67,20 @@ export function useDraftContent(id: string, enabled: boolean) {
   });
 }
 
+export function useDraftChanges(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: draftKeys.changes(id),
+    enabled,
+    queryFn: async ({ signal }) =>
+      unwrap(
+        await api.GET("/api/v1/spec-drafts/{spec_draft_id}/changes", {
+          params: { path: { spec_draft_id: id } },
+          signal,
+        }),
+      ),
+  });
+}
+
 export async function createDraft(
   projectId: string,
   body: CreateSpecDraftBody,
@@ -105,6 +121,54 @@ export async function cancelDraft(
 ): Promise<void> {
   unwrap(
     await api.POST("/api/v1/spec-drafts/{spec_draft_id}/actions/cancel", {
+      params: {
+        path: { spec_draft_id: id },
+        header: { "Idempotency-Key": idempotencyKey },
+      },
+      body: { reason },
+    }),
+  );
+}
+
+export async function messageDraft(
+  id: string,
+  text: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/spec-drafts/{spec_draft_id}/message", {
+      params: {
+        path: { spec_draft_id: id },
+        header: { "Idempotency-Key": idempotencyKey },
+      },
+      body: { text },
+    }),
+  );
+}
+
+export async function commitDraft(
+  id: string,
+  message: string | null,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/spec-drafts/{spec_draft_id}/commit", {
+      params: {
+        path: { spec_draft_id: id },
+        header: { "Idempotency-Key": idempotencyKey },
+      },
+      body: { message },
+    }),
+  );
+}
+
+export async function discardDraft(
+  id: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/spec-drafts/{spec_draft_id}/discard", {
       params: {
         path: { spec_draft_id: id },
         header: { "Idempotency-Key": idempotencyKey },

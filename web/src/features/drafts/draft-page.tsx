@@ -21,6 +21,7 @@ import { Skeleton } from "@/ui/skeleton";
 import { lintMessage } from "@/wasm/diagnostics";
 import type { LintIssue } from "@/wasm/spec-tools";
 
+import { ConversationSection, WaitingCard } from "./conversation";
 import { cancelDraft, retryDraft, useDraft, type SpecDraft } from "./queries";
 import {
   failureText,
@@ -216,6 +217,8 @@ function StateCard({
   switch (draft.state) {
     case "failed":
       return <FailureCard draft={draft} projectId={projectId} />;
+    case "awaiting_operator":
+      return <WaitingCard draft={draft} />;
     case "queued":
       return (
         <Card className="space-y-2 p-4">
@@ -339,6 +342,12 @@ function Header({ draft, projectId }: { draft: SpecDraft; projectId: string }) {
             <dd>{round}</dd>
           </>
         )}
+        <dt className="font-medium">{t("draft.mode.label")}</dt>
+        <dd>
+          {draft.target_kind === "revise" && draft.mode === "session"
+            ? t("draft.mode.revise")
+            : label(t, "draft.mode", draft.mode)}
+        </dd>
         <dt className="font-medium">{t("draft.new.language")}</dt>
         <dd>{label(t, "language", draft.locale)}</dd>
         <dt className="font-medium">{t("draft.new.context")}</dt>
@@ -371,6 +380,7 @@ function Header({ draft, projectId }: { draft: SpecDraft; projectId: string }) {
         </details>
       )}
       {draft.state !== "failed" &&
+        !draft.available_actions.includes("discard") &&
         draft.available_actions.includes("cancel") && (
           <div className="flex flex-wrap gap-2">
             <CancelDraftDialog draft={draft} />
@@ -465,6 +475,7 @@ export function DraftPage({
         </Card>
       )}
       <LintReport draft={item} />
+      {item.mode === "session" && <ConversationSection draft={item} />}
       <DecisionSection run={{ kind: "spec_draft", id: item.id }} />
       {item.attempt && (
         <SessionSection

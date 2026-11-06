@@ -2644,3 +2644,174 @@ fn decision_commands_show_numbered_options_and_answer_with_documented_codes() {
     assert!(String::from_utf8_lossy(&again.stderr).contains("decision_already_answered"));
     assert_eq!(stdout(&saka(&server, &["decision", "list"])).trim(), "");
 }
+
+#[test]
+fn spec_session_and_draft_message_commit_and_discard_run_a_conversation() {
+    use saka_core::vocab::{SessionState, SpecDraftState};
+    use saka_testkit::DraftTurn;
+
+    let mut sim = Sim::new(SimConfig::default());
+    sim.world.put_doc("docs/prd.md", b"# PRD v1\n");
+    let server = serve(&sim);
+    let err = |o: &Output| String::from_utf8_lossy(&o.stderr).into_owned();
+    let turn = DraftTurn::WriteAll(vec![
+        (DRAFT_PATH.into(), draft_spec(true)),
+        ("docs/notes.md".into(), b"# Notes\n".to_vec()),
+    ]);
+    sim.world.script_draft(vec![turn.clone()]);
+    let awaiting = |id: saka_core::ids::SpecDraftId, rounds: u32| {
+        move |s: &Sim| {
+            let d = s.draft(id);
+            d.draft.state == SpecDraftState::AwaitingOperator
+                && d.attempt.as_ref().is_some_and(|a| a.rounds == rounds)
+                && d.session
+                    .as_ref()
+                    .is_some_and(|x| x.state == SessionState::Idle)
+        }
+    };
+
+    let created = saka(
+        &server,
+        &[
+            "spec",
+            "session",
+            "tasks",
+            DRAFT_PATH,
+            "--idea",
+            "Export tasks.",
+        ],
+    );
+    assert_eq!(code(&created), 0, "{}", err(&created));
+    let id = saka_core::ids::SpecDraftId(stdout(&created).trim().parse().unwrap());
+    assert_eq!(sim.draft(id).draft.mode.as_str(), "session");
+    let arg = id.0.to_string();
+    let early = saka(&server, &["draft", "message", &arg, "hello"]);
+    assert_eq!(code(&early), 4, "409 draft_not_waiting");
+    assert!(err(&early).contains("draft_not_waiting"), "{}", err(&early));
+
+    drive(&mut sim, awaiting(id, 1));
+    let shown = saka(&server, &["draft", "show", &arg]);
+    assert!(
+        stdout(&shown).contains("awaiting_operator"),
+        "{}",
+        stdout(&shown)
+    );
+    assert!(
+        stdout(&shown).contains("actions message,commit,discard,cancel"),
+        "{}",
+        stdout(&shown)
+    );
+    let changes = saka(&server, &["draft", "changes", &arg]);
+    assert_eq!(code(&changes), 0, "{}", err(&changes));
+    assert_eq!(
+        stdout(&changes).lines().collect::<Vec<_>>(),
+        [
+            "added docs/notes.md".to_string(),
+            format!("added {DRAFT_PATH}"),
+            "lint passed".to_string()
+        ]
+    );
+    let diff = saka(&server, &["draft", "changes", &arg, "--diff"]);
+    assert!(stdout(&diff).contains("+# Notes"), "{}", stdout(&diff));
+    let raw = saka(&server, &["--json", "draft", "changes", &arg]);
+    assert_eq!(json(&raw)["files"].as_array().unwrap().len(), 2);
+
+    let sent = saka(&server, &["draft", "message", &arg, "Add an example."]);
+    assert_eq!(code(&sent), 0, "{}", err(&sent));
+    assert_eq!(stdout(&sent).trim(), format!("{arg} drafting"));
+    drive(&mut sim, awaiting(id, 2));
+    let committed = saka(
+        &server,
+        &[
+            "draft",
+            "commit",
+            &arg,
+            "--message",
+            "docs: add the export spec",
+        ],
+    );
+    assert_eq!(code(&committed), 0, "{}", err(&committed));
+    drive(&mut sim, |s| {
+        draft_state(s, id) == SpecDraftState::Succeeded
+    });
+    assert_eq!(
+        sim.world.doc_commits()[0].message.as_deref(),
+        Some("docs: add the export spec")
+    );
+    assert_eq!(
+        code(&saka(&server, &["draft", "commit", &arg])),
+        4,
+        "committing again"
+    );
+
+    sim.world.put_doc("docs/specs/there.md", &draft_spec(true));
+    sim.world.script_draft(vec![DraftTurn::Write {
+        path: "docs/specs/there.md".into(),
+        bytes: [draft_spec(true), b"\n- `make lint`\n".to_vec()].concat(),
+    }]);
+    let missing = saka(
+        &server,
+        &[
+            "spec",
+            "session",
+            "tasks",
+            "docs/specs/none.md",
+            "--idea",
+            "x",
+            "--revise",
+        ],
+    );
+    assert_eq!(code(&missing), 1, "404 file_not_found");
+    assert!(
+        err(&missing).contains("file_not_found"),
+        "{}",
+        err(&missing)
+    );
+    let waiting = {
+        use std::io::BufRead;
+        let mut child = Command::new(SAKA)
+            .arg("--server")
+            .arg(&server)
+            .args([
+                "spec",
+                "session",
+                "tasks",
+                "docs/specs/there.md",
+                "--idea",
+                "Add lint.",
+                "--revise",
+                "--wait",
+            ])
+            .env_remove("SAKA_CONFIG")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.as_mut().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        Waiting {
+            id: saka_core::ids::SpecDraftId(line.trim().parse().unwrap()),
+            child,
+        }
+    };
+    let revise_id = waiting.id;
+    drive(&mut sim, awaiting(revise_id, 1));
+    let (c, out, e) = finished(waiting);
+    assert_eq!(c, 0, "{e}");
+    assert!(out.contains("awaiting_operator"), "{out}");
+    assert_eq!(sim.draft(revise_id).draft.target_kind.as_str(), "revise");
+    let discarded = saka(
+        &server,
+        &[
+            "draft",
+            "discard",
+            &revise_id.0.to_string(),
+            "--reason",
+            "no",
+        ],
+    );
+    assert_eq!(code(&discarded), 0, "{}", err(&discarded));
+    assert_eq!(draft_state(&sim, revise_id), SpecDraftState::Cancelled);
+}

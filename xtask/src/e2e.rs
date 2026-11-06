@@ -24,6 +24,7 @@ const READY_LIMIT: Duration = Duration::from_secs(60);
 const CLEANUP_LIMIT: Duration = Duration::from_secs(3 * 60);
 const STOP_LIMIT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_secs(1);
+const CONVERSATION_LIMIT: Duration = Duration::from_secs(600);
 const DEFAULT_MODEL: &str = "haiku";
 const SLOW_COMMAND: &str = "sleep 30";
 const ADVANCE_LIMIT: Duration = Duration::from_secs(5 * 60);
@@ -813,7 +814,8 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
     verify(github, &run.base)?;
     gate::check(&api, &cli, github, &spec_id)?;
     outside::review_only(&api, &cli, run)?;
-    draft(&api, &cli, github, &project_id, run)
+    draft(&api, &cli, github, &project_id, run)?;
+    conversation(&api, &cli, github, &project_id, run)
 }
 
 fn draft(api: &Api, cli: &Cli<'_>, github: &GitHub, project: &str, run: &Run<'_>) -> Result<()> {
@@ -837,10 +839,16 @@ fn draft(api: &Api, cli: &Cli<'_>, github: &GitHub, project: &str, run: &Run<'_>
             run.base
         );
     }
-    let sessions = api.get(&format!(
-        "/api/v1/sessions?spec_draft_id={}",
-        text(&draft["id"])
-    ))?;
+    let tools = architect_tools(api, text(&draft["id"]))?;
+    println!(
+        "  draft succeeded in {} round(s), commit {commit}, tools {tools:?}",
+        draft["last_round"]["round"]
+    );
+    Ok(())
+}
+
+fn architect_tools(api: &Api, draft: &str) -> Result<BTreeSet<String>> {
+    let sessions = api.get(&format!("/api/v1/sessions?spec_draft_id={draft}"))?;
     let mut tools = BTreeSet::new();
     for s in sessions["items"].as_array().into_iter().flatten() {
         let mut after = String::new();
@@ -867,10 +875,89 @@ fn draft(api: &Api, cli: &Cli<'_>, github: &GitHub, project: &str, run: &Run<'_>
     if !outside.is_empty() {
         bail!("the architect session used tools outside its allow-list: {outside:?}");
     }
-    println!(
-        "  draft succeeded in {} round(s), commit {commit}, tools {tools:?}",
-        draft["last_round"]["round"]
+    Ok(tools)
+}
+
+fn wait_for_draft(api: &Api, draft: &str, state: &str, rounds: u64) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        let current = api.get(&format!("/api/v1/spec-drafts/{draft}"))?;
+        let now = text(&current["state"]);
+        if now == state && current["attempt"]["rounds"].as_u64() >= Some(rounds) {
+            return Ok(current);
+        }
+        if matches!(now, "failed" | "cancelled") {
+            bail!("the conversation ended as {now}: {current}");
+        }
+        if started.elapsed() > CONVERSATION_LIMIT {
+            bail!("the conversation did not reach {state} (round {rounds}): {current}");
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+fn conversation(
+    api: &Api,
+    cli: &Cli<'_>,
+    github: &GitHub,
+    project: &str,
+    run: &Run<'_>,
+) -> Result<()> {
+    let path = format!("docs/specs/e2e-session-{}.md", run.run_id);
+    let notes = format!("docs/e2e-notes-{}.md", run.run_id);
+    println!("  architect converses about {path}");
+    let started = cli.run(&[
+        "spec", "session", project, &path, "--idea", DRAFT_IDEA, "--wait",
+    ])?;
+    let id = text(&started["id"]).to_string();
+    if text(&started["state"]) != "awaiting_operator" {
+        bail!("the conversation did not wait for the operator: {started}");
+    }
+    let reply = format!(
+        "Thanks. Also write a short note on how the counts are meant to be read to {notes}: a markdown file of a few lines. Keep the spec as it is, then end your turn."
     );
+    cli.run(&["draft", "message", &id, &reply])?;
+    wait_for_draft(api, &id, "awaiting_operator", 2)?;
+    let changes = api.get(&format!("/api/v1/spec-drafts/{id}/changes"))?;
+    let changed: Vec<&str> = changes["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| text(&f["path"]))
+        .collect();
+    if !changed.contains(&path.as_str()) || !changed.contains(&notes.as_str()) {
+        bail!("the conversation did not change both files: {changes}");
+    }
+    if changes["lint"]["passed"] != true {
+        bail!("the conversation's spec does not pass the lint: {changes}");
+    }
+    let committed = cli.run(&[
+        "draft",
+        "commit",
+        &id,
+        "--message",
+        "docs: add the counts spec and its note",
+    ])?;
+    if text(&committed["state"]) != "committing" {
+        bail!("the commit did not start: {committed}");
+    }
+    let done = wait_for_draft(api, &id, "succeeded", 2)?;
+    let commit = text(&done["commit"]);
+    for file in [&path, &notes] {
+        let tip = github.last_commit_touching(&run.base, file)?;
+        if tip.as_deref() != Some(commit) {
+            bail!(
+                "{file} on {} was last changed by {tip:?}, not by the conversation commit {commit}",
+                run.base
+            );
+        }
+    }
+    let spec = api.get(&format!("/api/v1/specs/{}", text(&done["spec_id"])))?;
+    if spec["origin"] != "architect" || spec["path"] != path.as_str() {
+        bail!("the conversation's spec is not registered from the architect: {spec}");
+    }
+    let tools = architect_tools(api, &id)?;
+    println!("  conversation committed {commit} with both files, tools {tools:?}");
     Ok(())
 }
 

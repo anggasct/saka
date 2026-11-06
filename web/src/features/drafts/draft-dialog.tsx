@@ -27,7 +27,7 @@ export const CONTEXT_MAX = 16;
 
 type Problems = {
   idea: "empty" | "too_long" | null;
-  path: "empty" | "invalid" | "exists" | null;
+  path: "empty" | "invalid" | "exists" | "revise" | null;
   context: boolean;
 };
 
@@ -68,6 +68,8 @@ export function DraftDialog({
   const [path, setPath] = useState(folder);
   const [context, setContext] = useState<readonly string[]>([]);
   const [locale, setLocale] = useState<Locale>(uiLocale);
+  const [conversation, setConversation] = useState(false);
+  const [revise, setRevise] = useState(false);
   const [problems, setProblems] = useState<Problems>(NO_PROBLEMS);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -82,7 +84,13 @@ export function DraftDialog({
   const contextHelpId = useId();
   const contextErrorId = useId();
   const localeId = useId();
+  const conversationId = useId();
+  const conversationHelpId = useId();
+  const reviseId = useId();
+  const reviseFileId = useId();
   const markdown = files.filter((f) => f.toLowerCase().endsWith(".md"));
+  const revisable = markdown.filter((f) => f.startsWith(folder));
+  const revising = conversation && revise;
 
   const change = (next: boolean) => {
     if (next) {
@@ -90,6 +98,8 @@ export function DraftDialog({
       setPath(folder);
       setContext([]);
       setLocale(uiLocale);
+      setConversation(false);
+      setRevise(false);
       setProblems(NO_PROBLEMS);
       setError(null);
       retained.current = null;
@@ -98,7 +108,8 @@ export function DraftDialog({
   };
 
   const submit = async () => {
-    const target = withExtension(path.trim(), folder);
+    const revising = conversation && revise;
+    const target = revising ? path.trim() : withExtension(path.trim(), folder);
     const found: Problems = {
       idea:
         idea.trim() === ""
@@ -106,7 +117,11 @@ export function DraftDialog({
           : idea.length > IDEA_MAX
             ? "too_long"
             : null,
-      path: checkNewPath(target, folder, existing),
+      path: revising
+        ? existing.has(target)
+          ? null
+          : "revise"
+        : checkNewPath(target, folder, existing),
       context: context.length > CONTEXT_MAX,
     };
     setProblems(found);
@@ -118,6 +133,8 @@ export function DraftDialog({
       path: target,
       context_paths: [...context],
       locale,
+      mode: conversation ? "session" : "draft",
+      target_kind: revising ? "revise" : "new",
     };
     const kept = retained.current;
     // The server stores every answer under its key, so only a request that never
@@ -169,7 +186,9 @@ export function DraftDialog({
         ? t("docs.new.invalid", { folder })
         : problems.path === "exists"
           ? t("docs.new.exists", { path: withExtension(path.trim(), folder) })
-          : null;
+          : problems.path === "revise"
+            ? t("draft.new.reviseEmpty")
+            : null;
 
   return (
     <Dialog open={open} onOpenChange={change}>
@@ -225,22 +244,95 @@ export function DraftDialog({
               </p>
             )}
           </div>
+          <div className="space-y-2">
+            <div className="flex min-h-11 items-center gap-2">
+              <input
+                id={conversationId}
+                type="checkbox"
+                className="size-6 shrink-0"
+                checked={conversation}
+                aria-describedby={conversationHelpId}
+                onChange={(event) => {
+                  setConversation(event.target.checked);
+                  setRevise(false);
+                  setPath(folder);
+                  setProblems((current) => ({ ...current, path: null }));
+                }}
+              />
+              <label htmlFor={conversationId} className="text-sm font-medium">
+                {t("draft.new.conversation")}
+              </label>
+            </div>
+            <p
+              id={conversationHelpId}
+              className="text-xs text-muted-foreground"
+            >
+              {t("draft.new.conversationHelp")}
+            </p>
+            {conversation && (
+              <div className="flex min-h-11 items-center gap-2">
+                <input
+                  id={reviseId}
+                  type="checkbox"
+                  className="size-6 shrink-0"
+                  checked={revise}
+                  onChange={(event) => {
+                    setRevise(event.target.checked);
+                    setPath(event.target.checked ? "" : folder);
+                    setProblems((current) => ({ ...current, path: null }));
+                  }}
+                />
+                <label htmlFor={reviseId} className="text-sm font-medium">
+                  {t("draft.new.revise")}
+                </label>
+              </div>
+            )}
+          </div>
           <div className="space-y-1">
-            <label htmlFor={pathId} className="text-sm font-medium">
-              {t("docs.new.path")}
+            <label
+              htmlFor={revising ? reviseFileId : pathId}
+              className="text-sm font-medium"
+            >
+              {revising ? t("draft.new.reviseFile") : t("docs.new.path")}
             </label>
-            <input
-              id={pathId}
-              value={path}
-              required
-              aria-invalid={pathMessage !== null}
-              aria-describedby={pathMessage === null ? undefined : pathErrorId}
-              onChange={(event) => {
-                setPath(event.target.value);
-                setProblems((current) => ({ ...current, path: null }));
-              }}
-              className="min-h-11 w-full rounded-md border border-border bg-background px-2 font-mono text-sm"
-            />
+            {revising ? (
+              <select
+                id={reviseFileId}
+                value={path}
+                required
+                aria-invalid={pathMessage !== null}
+                aria-describedby={
+                  pathMessage === null ? undefined : pathErrorId
+                }
+                onChange={(event) => {
+                  setPath(event.target.value);
+                  setProblems((current) => ({ ...current, path: null }));
+                }}
+                className="block min-h-11 w-full rounded-md border border-border bg-background px-2 font-mono text-sm"
+              >
+                <option value="">{t("draft.new.reviseNone")}</option>
+                {revisable.map((file) => (
+                  <option key={file} value={file}>
+                    {file}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id={pathId}
+                value={path}
+                required
+                aria-invalid={pathMessage !== null}
+                aria-describedby={
+                  pathMessage === null ? undefined : pathErrorId
+                }
+                onChange={(event) => {
+                  setPath(event.target.value);
+                  setProblems((current) => ({ ...current, path: null }));
+                }}
+                className="min-h-11 w-full rounded-md border border-border bg-background px-2 font-mono text-sm"
+              />
+            )}
             {pathMessage !== null && (
               <p
                 id={pathErrorId}
