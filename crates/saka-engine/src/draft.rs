@@ -11,7 +11,7 @@ use saka_core::model::{
 use saka_core::paths::{self, MAX_DOC_BYTES};
 use saka_core::rejection::{FileUnsupported, Rejection, TargetTakenBy};
 use saka_core::vocab::{
-    DraftFailureCode, DraftLocale, LintOutcome, PrimaryAction, SessionState, SpecDraftState,
+    DraftFailureCode, DraftLocale, DraftMode, LintOutcome, PrimaryAction, SpecDraftState,
     SpecOrigin,
 };
 use saka_ports::{
@@ -35,6 +35,8 @@ use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
 pub const ARCHITECT_ACTOR: &str = "system:architect";
 pub const IDEA_MAX: usize = 8000;
 pub const NOTE_MAX: usize = 4000;
+pub const MESSAGE_MAX: usize = 4000;
+pub const COMMIT_MESSAGE_MAX: usize = 200;
 pub const MAX_CONTEXT_PATHS: usize = 16;
 pub const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
 pub const MAX_ROUND_BYTES: u64 = 256 * 1024;
@@ -44,6 +46,7 @@ pub struct NewSpecDraft {
     pub path: String,
     pub idea: String,
     pub locale: DraftLocale,
+    pub mode: DraftMode,
     pub context_paths: Vec<String>,
 }
 
@@ -95,6 +98,15 @@ type Previous = (PreviousAttempt, Option<Vec<u8>>);
 
 fn owner_of(d: &Draft) -> Option<RunOwner> {
     d.running_attempt().and_then(|_| d.run_owner())
+}
+
+fn bounded(value: &str, max: usize, field: &'static str) -> Result<String> {
+    let trimmed = value.trim();
+    let len = trimmed.chars().count();
+    if len == 0 || len > max {
+        return Err(invalid(field, "length"));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn cwd_of(project_path: &str) -> String {
@@ -585,6 +597,7 @@ impl Engine {
             slug,
             idea: new.idea,
             locale: new.locale,
+            mode: new.mode,
             context_paths: new.context_paths,
         });
         let mut after = core::evolve(None, &event, now)
@@ -649,6 +662,68 @@ impl Engine {
         self.decide_draft(
             id,
             Some(DraftInput::Retry { reason, note }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Draft)),
+                ..Extra::default()
+            },
+        )
+    }
+
+    pub fn message_spec_draft(
+        &self,
+        id: SpecDraftId,
+        text: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let text = bounded(text, MESSAGE_MAX, "text")?;
+        self.decide_draft(
+            id,
+            Some(DraftInput::Message { text }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Draft)),
+                ..Extra::default()
+            },
+        )
+    }
+
+    pub fn commit_spec_draft(
+        &self,
+        id: SpecDraftId,
+        message: Option<&str>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let message = message
+            .map(|m| bounded(m, COMMIT_MESSAGE_MAX, "message"))
+            .transpose()?;
+        self.decide_draft(
+            id,
+            Some(DraftInput::Commit { message }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Draft)),
+                ..Extra::default()
+            },
+        )
+    }
+
+    pub fn discard_spec_draft(
+        &self,
+        id: SpecDraftId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let reason = reason(why)?;
+        self.decide_draft(
+            id,
+            Some(DraftInput::Discard { reason }),
             Mode::Command,
             cause,
             Extra {
@@ -757,7 +832,10 @@ impl Engine {
                 self.draft_lint(&d, attempt, field(p, "session_id")?, field(p, "turn")?)
                     .await
             }
-            K::DraftCommit => self.draft_commit(&d, attempt).await,
+            K::DraftCommit => {
+                let message = p.get("message").and_then(Value::as_str).map(str::to_string);
+                self.draft_commit(&d, attempt, message).await
+            }
             K::EnvTeardown => self.draft_teardown(&d, field(p, "environment_id")?).await,
             K::EnvInspectWorktree
             | K::EnvPrepareReview
@@ -952,6 +1030,7 @@ impl Engine {
             project_path: project.project_path.clone(),
             base_sha: base_sha.to_string(),
             locale: d.draft.locale,
+            mode: d.draft.mode,
             idea: d.draft.idea.clone(),
             target: d.draft.path.clone(),
             selected,
@@ -1093,12 +1172,8 @@ impl Engine {
             return Ok(Effect::Skipped);
         };
         let fresh = d.draft.state == SpecDraftState::Drafting
-            && d.live_session().is_some_and(|s| {
-                s.id == session_id
-                    && s.turns == turn
-                    && s.state == SessionState::Idle
-                    && s.interrupt_requested.is_none()
-            });
+            && d.live_session()
+                .is_some_and(|s| s.id == session_id && s.turns == turn && core::turn_settled(d, s));
         let seen = d
             .last_round
             .is_some_and(|m| m.session_id == session_id && m.turn >= turn);
@@ -1205,7 +1280,12 @@ impl Engine {
         })
     }
 
-    async fn draft_commit(&self, d: &Draft, attempt_id: SpecDraftAttemptId) -> Execution {
+    async fn draft_commit(
+        &self,
+        d: &Draft,
+        attempt_id: SpecDraftAttemptId,
+        message: Option<String>,
+    ) -> Execution {
         let current = d.running_attempt().is_some_and(|a| a.id == attempt_id);
         if !current || d.draft.state != SpecDraftState::Committing {
             return Ok(Effect::Skipped);
@@ -1231,7 +1311,14 @@ impl Engine {
             })
         };
         let written = match self
-            .commit_doc(&project, &repo, &path, bytes.clone(), Precondition::Absent)
+            .commit_doc(
+                &project,
+                &repo,
+                &path,
+                bytes.clone(),
+                Precondition::Absent,
+                message,
+            )
             .await
         {
             Ok(w) => w,

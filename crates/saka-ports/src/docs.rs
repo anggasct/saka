@@ -55,6 +55,7 @@ pub struct DocCommit {
     pub path: String,
     pub bytes: Vec<u8>,
     pub expect: DocExpect,
+    pub message: Option<String>,
     pub author: GitIdentity,
     pub at: Timestamp,
 }

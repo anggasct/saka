@@ -16,7 +16,8 @@ use saka_core::rejection::Rejection;
 use saka_core::session::{SessionConfig, SessionInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    DraftFailureCode, DraftLocale, LintOutcome, PrimaryAction, SessionState, SpecDraftState,
+    DraftFailureCode, DraftLocale, DraftMode, LintOutcome, PrimaryAction, SessionState,
+    SpecDraftState,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -36,6 +37,7 @@ fn cfg() -> DraftConfig {
     DraftConfig {
         max_active: 1,
         lint_rounds: 4,
+        session_idle_ms: 72 * 3_600_000,
         budget: Budget {
             running_minutes: 30,
             turns: 6,
@@ -68,6 +70,14 @@ impl World {
     }
 
     fn with(cfg: DraftConfig) -> World {
+        World::in_mode(cfg, DraftMode::Draft)
+    }
+
+    fn session() -> World {
+        World::in_mode(cfg(), DraftMode::Session)
+    }
+
+    fn in_mode(cfg: DraftConfig, mode: DraftMode) -> World {
         let event = draft::request(NewDraft {
             spec_draft_id: SpecDraftId(Uuid::from_u128(1)),
             project_id: ProjectId(Uuid::from_u128(2)),
@@ -75,6 +85,7 @@ impl World {
             slug: "avatar".into(),
             idea: "Let users upload an avatar".into(),
             locale: DraftLocale::En,
+            mode,
             context_paths: vec![],
         });
         let d = draft::evolve(None, &event, T0).unwrap();
@@ -853,4 +864,154 @@ proptest! {
             prop_assert!(w.d.draft.attempt <= draft::MANUAL_RETRY_LIMIT + 1);
         }
     }
+}
+
+#[test]
+fn a_session_turn_ends_awaiting_the_operator_without_a_feedback_turn_or_a_commit() {
+    let mut w = World::session();
+    w.drafting();
+    w.take_jobs();
+    let events = w.lint(LintOutcome::Failed);
+    assert_eq!(
+        kinds(&events),
+        ["spec.draft.linted", "spec.draft.awaiting_operator"]
+    );
+    assert_eq!(w.state(), SpecDraftState::AwaitingOperator);
+    assert!(w.d.draft.awaiting_since.is_some());
+    assert!(w.take_jobs().is_empty());
+    assert!(w.d.live_session().is_some());
+}
+
+#[test]
+fn a_passing_session_round_waits_for_the_operator_instead_of_committing() {
+    let mut w = World::session();
+    w.drafting();
+    w.lint(LintOutcome::Passed);
+    assert_eq!(w.state(), SpecDraftState::AwaitingOperator);
+    assert_eq!(
+        draft::available_actions(&w.d),
+        ["message", "commit", "discard", "cancel"]
+    );
+}
+
+#[test]
+fn a_message_starts_a_turn_and_only_an_awaiting_draft_takes_one() {
+    let mut w = World::session();
+    w.drafting();
+    assert_eq!(
+        w.go(DraftInput::Message { text: "x".into() }),
+        Err(Rejection::DraftNotWaiting)
+    );
+    w.lint(LintOutcome::Passed);
+    w.take_jobs();
+    let events = w.ok(DraftInput::Message {
+        text: "tighten the steps".into(),
+    });
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::SessionTurnRequested {
+            prompt: Prompt::Steer { .. },
+            ..
+        }
+    )));
+    assert_eq!(w.state(), SpecDraftState::Drafting);
+    assert!(w.d.draft.awaiting_since.is_none());
+    assert!(w.take_jobs().contains(&JobKind::SessionSendTurn));
+    assert_eq!(
+        w.go(DraftInput::Message {
+            text: "again".into()
+        }),
+        Err(Rejection::DraftNotWaiting)
+    );
+    w.finish_turn();
+    assert!(w.take_jobs().contains(&JobKind::DraftLint));
+    w.lint(LintOutcome::Passed);
+    assert_eq!(w.state(), SpecDraftState::AwaitingOperator);
+    assert_eq!(w.d.attempt.as_ref().unwrap().rounds, 2);
+}
+
+#[test]
+fn commit_needs_a_passing_lint_and_then_hands_the_message_to_the_commit_job() {
+    let mut w = World::session();
+    assert_eq!(
+        w.go(DraftInput::Commit { message: None }),
+        Err(Rejection::DraftNotWaiting)
+    );
+    w.drafting();
+    w.lint(LintOutcome::Failed);
+    assert_eq!(
+        w.go(DraftInput::Commit { message: None }),
+        Err(Rejection::DraftLintFailed)
+    );
+    assert!(!draft::available_actions(&w.d).contains(&"commit"));
+    w.ok(DraftInput::Message {
+        text: "fix it".into(),
+    });
+    w.finish_turn();
+    w.lint(LintOutcome::Passed);
+    w.take_jobs();
+    w.jobs.clear();
+    let events = w.ok(DraftInput::Commit {
+        message: Some("docs: add the export spec".into()),
+    });
+    assert_eq!(
+        kinds(&events)[..2],
+        ["spec.draft.committing", "runtime.session.ended"]
+    );
+    assert_eq!(w.state(), SpecDraftState::Committing);
+    let commit = w
+        .jobs
+        .iter()
+        .find(|j| j.kind == JobKind::DraftCommit)
+        .unwrap();
+    assert_eq!(commit.payload["message"], "docs: add the export spec");
+}
+
+#[test]
+fn discard_cancels_only_while_awaiting() {
+    let mut w = World::session();
+    w.drafting();
+    assert_eq!(
+        w.go(DraftInput::Discard {
+            reason: "no".into()
+        }),
+        Err(Rejection::DraftNotWaiting)
+    );
+    w.lint(LintOutcome::Passed);
+    w.take_jobs();
+    w.ok(DraftInput::Discard {
+        reason: "no".into(),
+    });
+    assert_eq!(w.state(), SpecDraftState::Cancelled);
+    let jobs = w.take_jobs();
+    assert!(jobs.contains(&JobKind::SessionStop) && jobs.contains(&JobKind::EnvTeardown));
+}
+
+#[test]
+fn an_awaiting_draft_fails_when_the_operator_stays_away_past_the_idle_limit() {
+    let mut w = World::session();
+    w.drafting();
+    w.lint(LintOutcome::Passed);
+    w.now = w.now.plus_ms(72 * 3_600_000 - 1);
+    assert!(w.ok(DraftInput::Tick).is_empty());
+    w.now = w.now.plus_ms(1);
+    w.ok(DraftInput::Tick);
+    assert_eq!(w.state(), SpecDraftState::Failed);
+    let failure = w.d.draft.failure.clone().unwrap();
+    assert_eq!(failure.code, "session_idle_expired");
+    assert_eq!(failure.params, json!({ "hours": 72 }));
+    assert!(!draft::can_retry(&w.d));
+}
+
+#[test]
+fn a_session_lost_while_awaiting_goes_back_to_work_so_it_resumes() {
+    let mut w = World::session();
+    w.drafting();
+    w.lint(LintOutcome::Passed);
+    w.ok(DraftInput::Session(SessionInput::Gone {
+        cause: "runner_silent".into(),
+    }));
+    assert_eq!(w.state(), SpecDraftState::Drafting);
+    let jobs = draft::phase_jobs(&w.d, w.now);
+    assert!(jobs.iter().any(|j| j.kind == JobKind::SessionStart));
 }

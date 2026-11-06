@@ -28,6 +28,7 @@ export const EVENT_KINDS = [
   "spec.draft.attempt_started",
   "spec.draft.packet_rendered",
   "spec.draft.linted",
+  "spec.draft.awaiting_operator",
   "spec.draft.committing",
   "spec.draft.succeeded",
   "spec.draft.failed",

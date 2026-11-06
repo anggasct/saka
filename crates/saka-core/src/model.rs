@@ -15,7 +15,7 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
-    ContextOrigin, DecisionState, DocsMode, DraftAttemptState, DraftLocale, Effect,
+    ContextOrigin, DecisionState, DocsMode, DraftAttemptState, DraftLocale, DraftMode, Effect,
     EnvironmentState, ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind,
     PacketOrigin, PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome,
     SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool,
@@ -850,12 +850,14 @@ pub struct SpecDraft {
     pub slug: String,
     pub idea: String,
     pub locale: DraftLocale,
+    pub mode: DraftMode,
     pub context_paths: Vec<String>,
     pub state: SpecDraftState,
     pub attempt: u32,
     pub current_attempt_id: Option<SpecDraftAttemptId>,
     pub retries: u32,
     pub queued_at: Timestamp,
+    pub awaiting_since: Option<Timestamp>,
     pub failure: Option<Coded>,
     pub spec_id: Option<SpecId>,
     pub commit_sha: Option<String>,

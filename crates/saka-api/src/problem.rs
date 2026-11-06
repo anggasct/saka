@@ -118,6 +118,10 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::DecisionAlreadyAnswered
         | R::DecisionOnePerSession
         | R::DecisionLimitReached
+        | R::DraftNotWaiting
+        | R::DraftLintFailed
+        | R::DraftDecisionOpen
+        | R::DraftNoChanges
         | R::RuleDuplicate { .. }
         | R::ProjectExists { .. }
         | R::ProjectRepoInUse { .. }

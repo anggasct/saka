@@ -815,13 +815,13 @@ fn run(tx: &Transaction<'_>, project: ProjectId, rows: RunRows<'_>) -> Result<()
 fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String)]) -> Result<()> {
     let x = &d.draft;
     tx.execute(
-        "INSERT INTO spec_draft (id, project_id, path, slug, idea, locale, context_paths, state, attempt,
-           current_attempt_id, retries, queued_at, failure, spec_id, commit_sha, version, created_by, created_at,
-           updated_at, finished_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+        "INSERT INTO spec_draft (id, project_id, path, slug, idea, locale, mode, context_paths, state, attempt,
+           current_attempt_id, retries, queued_at, awaiting_since, failure, spec_id, commit_sha, version, created_by,
+           created_at, updated_at, finished_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, attempt = excluded.attempt,
            current_attempt_id = excluded.current_attempt_id, retries = excluded.retries,
-           queued_at = excluded.queued_at, failure = excluded.failure, spec_id = excluded.spec_id,
+           queued_at = excluded.queued_at, awaiting_since = excluded.awaiting_since, failure = excluded.failure, spec_id = excluded.spec_id,
            commit_sha = excluded.commit_sha, version = excluded.version, updated_at = excluded.updated_at,
            finished_at = excluded.finished_at",
         params![
@@ -831,12 +831,14 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
             x.slug,
             x.idea,
             x.locale.as_str(),
+            x.mode.as_str(),
             to_json(&x.context_paths)?,
             x.state.as_str(),
             x.attempt,
             x.current_attempt_id.map(|id| id.to_string()),
             x.retries,
             x.queued_at.0,
+            x.awaiting_since.map(|t| t.0),
             x.failure.as_ref().map(to_json).transpose()?,
             x.spec_id.map(|id| id.to_string()),
             x.commit_sha,

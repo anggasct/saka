@@ -136,7 +136,7 @@ impl Engine {
         paths::check_doc_path(&project.project_path, path)
             .map_err(|issue| invalid("path", path_code(issue)))?;
         let written = self
-            .commit_doc(&project, &repo, path, bytes, precondition)
+            .commit_doc(&project, &repo, path, bytes, precondition, None)
             .await?;
         let (spec, spec_problem) = self
             .register_saved(
@@ -184,6 +184,7 @@ impl Engine {
         path: &str,
         bytes: Vec<u8>,
         precondition: Precondition,
+        message: Option<String>,
     ) -> Result<WrittenDoc> {
         let request = DocCommit {
             repo: repo.clone(),
@@ -195,6 +196,7 @@ impl Engine {
                 Precondition::Exists => DocExpect::Exists,
                 Precondition::Absent => DocExpect::Absent,
             },
+            message,
             author: self.cfg.git_identity.clone(),
             at: self.now(),
         };

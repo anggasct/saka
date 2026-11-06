@@ -1345,8 +1345,10 @@ pub struct SpecDraft {
     pub idea: Option<String>,
     /// `en | id`
     pub locale: String,
+    /// `draft` (the architect works alone and Saka commits the first passing file) or `session` (a conversation the operator commits).
+    pub mode: String,
     pub context_paths: Vec<String>,
-    /// `queued | preparing | drafting | committing | succeeded | failed | cancelled`
+    /// `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`
     pub state: String,
     /// The latest attempt; `null` before the first admission.
     pub attempt: Option<SpecDraftAttempt>,
@@ -1362,7 +1364,7 @@ pub struct SpecDraft {
     pub failure: Option<Failure>,
     /// `retry | open_written | open_file`; `null` unless `failed`.
     pub primary_action: Option<String>,
-    /// Subset of `retry`, `cancel`.
+    /// Subset of `retry`, `cancel`, and, while `awaiting_operator`, `message`, `commit` (only when the lint passes and no question is open) and `discard`.
     pub available_actions: Vec<String>,
     /// Manual retries so far, at most 3.
     pub retries: u32,
@@ -1574,6 +1576,7 @@ impl SpecDraft {
             slug: d.slug.clone(),
             idea: full.then(|| d.idea.clone()),
             locale: d.locale.as_str().to_string(),
+            mode: d.mode.as_str().to_string(),
             context_paths: d.context_paths.clone(),
             state: d.state.as_str().to_string(),
             attempt: v
@@ -2678,6 +2681,24 @@ pub struct CreateSpecDraftBody {
     /// `en` (default) or `id`: the template and the language of the prose.
     #[serde(default)]
     pub locale: Option<String>,
+    /// `draft` (default) or `session`.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MessageSpecDraftBody {
+    /// 1 to 4000 characters; sent to the architect as the next turn.
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CommitSpecDraftBody {
+    /// 1 to 200 characters; the docs commit message. Defaults to the usual one.
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

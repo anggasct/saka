@@ -900,6 +900,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/spec-drafts/{spec_draft_id}/commit": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["commit_spec_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/spec-drafts/{spec_draft_id}/content": {
     parameters: {
       query?: never;
@@ -916,6 +932,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/spec-drafts/{spec_draft_id}/discard": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["discard_spec_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds": {
     parameters: {
       query?: never;
@@ -926,6 +958,22 @@ export interface paths {
     get: operations["list_spec_draft_rounds"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/spec-drafts/{spec_draft_id}/message": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["message_spec_draft"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1442,6 +1490,10 @@ export interface components {
       full_name: string;
       integration_id: string;
     };
+    CommitSpecDraftBody: {
+      /** @description 1 to 200 characters; the docs commit message. Defaults to the usual one. */
+      message?: string | null;
+    };
     /** @description Result of checking a `saka.toml` without registering it. */
     ConfigCheck: {
       /** @description `sha256:<hex>` of `content`. */
@@ -1484,6 +1536,8 @@ export interface components {
       idea: string;
       /** @description `en` (default) or `id`: the template and the language of the prose. */
       locale?: string | null;
+      /** @description `draft` (default) or `session`. */
+      mode?: string | null;
       /** @description The new spec file from the repo root, inside the project folder, ending in `.md`. */
       path: string;
     };
@@ -1927,6 +1981,10 @@ export interface components {
        */
       size: number;
     };
+    MessageSpecDraftBody: {
+      /** @description 1 to 4000 characters; sent to the architect as the next turn. */
+      text: string;
+    };
     Meta: {
       api_version: string;
       capabilities: string[];
@@ -2137,7 +2195,7 @@ export interface components {
     Page_SpecDraft: {
       items: {
         attempt?: components["schemas"]["SpecDraftAttempt"] | null;
-        /** @description Subset of `retry`, `cancel`. */
+        /** @description Subset of `retry`, `cancel`, and, while `awaiting_operator`, `message`, `commit` (only when the lint passes and no question is open) and `discard`. */
         available_actions: string[];
         budget?: components["schemas"]["SpecDraftBudget"] | null;
         /** @description The docs commit once `succeeded`, and for `failed` with `register_failed`. */
@@ -2153,6 +2211,8 @@ export interface components {
         last_round?: components["schemas"]["SpecDraftLastRound"] | null;
         /** @description `en | id` */
         locale: string;
+        /** @description `draft` (the architect works alone and Saka commits the first passing file) or `session` (a conversation the operator commits). */
+        mode: string;
         /** @description The new spec file, from the repo root. */
         path: string;
         /** @description `retry | open_written | open_file`; `null` unless `failed`. */
@@ -2172,7 +2232,7 @@ export interface components {
          * @description The registered spec once `succeeded`.
          */
         spec_id?: string | null;
-        /** @description `queued | preparing | drafting | committing | succeeded | failed | cancelled` */
+        /** @description `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled` */
         state: string;
         updated_at: string;
         /** Format: int64 */
@@ -2876,7 +2936,7 @@ export interface components {
     /** @description A spec that the architect drafts from an idea, until Saka's lint passes and the file is committed. */
     SpecDraft: {
       attempt?: components["schemas"]["SpecDraftAttempt"] | null;
-      /** @description Subset of `retry`, `cancel`. */
+      /** @description Subset of `retry`, `cancel`, and, while `awaiting_operator`, `message`, `commit` (only when the lint passes and no question is open) and `discard`. */
       available_actions: string[];
       budget?: components["schemas"]["SpecDraftBudget"] | null;
       /** @description The docs commit once `succeeded`, and for `failed` with `register_failed`. */
@@ -2892,6 +2952,8 @@ export interface components {
       last_round?: components["schemas"]["SpecDraftLastRound"] | null;
       /** @description `en | id` */
       locale: string;
+      /** @description `draft` (the architect works alone and Saka commits the first passing file) or `session` (a conversation the operator commits). */
+      mode: string;
       /** @description The new spec file, from the repo root. */
       path: string;
       /** @description `retry | open_written | open_file`; `null` unless `failed`. */
@@ -2911,7 +2973,7 @@ export interface components {
        * @description The registered spec once `succeeded`.
        */
       spec_id?: string | null;
-      /** @description `queued | preparing | drafting | committing | succeeded | failed | cancelled` */
+      /** @description `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled` */
       state: string;
       updated_at: string;
       /** Format: int64 */
@@ -5704,6 +5766,42 @@ export interface operations {
       };
     };
   };
+  commit_spec_draft: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CommitSpecDraftBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   get_spec_draft_content: {
     parameters: {
       query?: never;
@@ -5741,6 +5839,42 @@ export interface operations {
       };
     };
   };
+  discard_spec_draft: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   list_spec_draft_rounds: {
     parameters: {
       query?: never;
@@ -5761,6 +5895,42 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  message_spec_draft: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MessageSpecDraftBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

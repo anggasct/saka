@@ -16,18 +16,21 @@ use crate::resume;
 use crate::session::{self, RunRetry, RunView, SessionConfig, SessionInput, SessionOutcome};
 use crate::time::Timestamp;
 use crate::vocab::{
-    DecisionState, DraftAttemptState, DraftFailureCode, DraftLocale, EnvironmentState, LintOutcome,
-    PermissionState, PrimaryAction, ResumeCause, SessionState, SpecDraftState, Trigger,
+    DecisionState, DraftAttemptState, DraftFailureCode, DraftLocale, DraftMode, EnvironmentState,
+    LintOutcome, PermissionState, PrimaryAction, ResumeCause, SessionState, SpecDraftState,
+    Trigger,
 };
 
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
 pub const LINT_PASSED: &str = "lint_passed";
+pub const OPERATOR_COMMIT: &str = "operator_commit";
 const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DraftConfig {
     pub max_active: usize,
     pub lint_rounds: u32,
+    pub session_idle_ms: i64,
     pub budget: Budget,
     pub session: SessionConfig,
 }
@@ -83,6 +86,15 @@ pub enum DraftInput {
     Cancel {
         reason: String,
     },
+    Message {
+        text: String,
+    },
+    Commit {
+        message: Option<String>,
+    },
+    Discard {
+        reason: String,
+    },
     JobExhausted {
         kind: JobKind,
         error: Coded,
@@ -98,6 +110,7 @@ pub struct NewDraft {
     pub slug: String,
     pub idea: String,
     pub locale: DraftLocale,
+    pub mode: DraftMode,
     pub context_paths: Vec<String>,
 }
 
@@ -110,6 +123,7 @@ pub fn request(new: NewDraft) -> Event {
         slug: new.slug,
         idea: new.idea,
         locale: new.locale,
+        mode: new.mode,
         context_paths: new.context_paths,
     }
 }
@@ -196,6 +210,9 @@ pub fn decide(
         } => d.teardown_failed(environment_id, error),
         I::Retry { reason, note } => return d.retry(reason, note),
         I::Cancel { reason } => return d.cancel(reason),
+        I::Message { text } => return d.message(text, ctx),
+        I::Commit { message } => return d.commit(message),
+        I::Discard { reason } => return d.discard(reason),
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
         I::Tick => d.tick(ctx),
     })
@@ -214,6 +231,26 @@ impl Decider<'_> {
 
     fn is(&self, state: SpecDraftState) -> bool {
         self.d.draft.state == state
+    }
+
+    fn working(&self) -> bool {
+        self.is(SpecDraftState::Drafting) || self.is(SpecDraftState::AwaitingOperator)
+    }
+
+    fn conversation(&self) -> bool {
+        self.d.draft.mode == DraftMode::Session
+    }
+
+    fn waiting(&self) -> Result<(), Rejection> {
+        if self.is(SpecDraftState::AwaitingOperator) {
+            Ok(())
+        } else {
+            Err(Rejection::DraftNotWaiting)
+        }
+    }
+
+    fn question_open(&self) -> bool {
+        run_view(self.d).is_some_and(|v| v.asked_decision().is_some())
     }
 
     fn state_rejection(&self) -> Rejection {
@@ -347,7 +384,7 @@ impl Decider<'_> {
     fn settle(&self, outcome: SessionOutcome) -> Vec<Event> {
         let mut events = outcome.events;
         if let Some(session::SessionSignal::Stopped { code, params }) = outcome.signal
-            && self.is(SpecDraftState::Drafting)
+            && self.working()
         {
             let code =
                 DraftFailureCode::from_blocker(code).unwrap_or(DraftFailureCode::SessionFailed);
@@ -366,8 +403,7 @@ impl Decider<'_> {
         let fresh = session.id == round.session_id
             && session.turns == round.turn
             && session.recorded_turn == round.turn
-            && session.state == SessionState::Idle
-            && session.interrupt_requested.is_none();
+            && turn_settled(self.d, session);
         let seen = self
             .d
             .last_round
@@ -377,7 +413,7 @@ impl Decider<'_> {
         }
         let number = attempt.rounds + 1;
         let max_rounds = self.cfg.lint_rounds;
-        if number > max_rounds {
+        if number > max_rounds && !self.conversation() {
             return vec![];
         }
         let mut events = vec![Event::SpecDraftLinted {
@@ -392,12 +428,21 @@ impl Decider<'_> {
             issue_codes: issue_codes(&round.issues),
             decisions_open: round.decisions_open,
         }];
+        if self.conversation() {
+            events.push(Event::SpecDraftAwaitingOperator {
+                spec_draft_id: self.id(),
+                attempt_id: attempt.id,
+                round: number,
+            });
+            return events;
+        }
         match round.outcome {
             LintOutcome::Passed => {
                 events.push(Event::SpecDraftCommitting {
                     spec_draft_id: self.id(),
                     attempt_id: attempt.id,
                     round: number,
+                    message: None,
                 });
                 events.extend(self.end_session(LINT_PASSED, json!({ "round": number })));
             }
@@ -514,6 +559,48 @@ impl Decider<'_> {
         Ok(events)
     }
 
+    fn message(&self, text: String, ctx: &mut Ctx<'_>) -> Result<Vec<Event>, Rejection> {
+        self.waiting()?;
+        if self.question_open() {
+            return Err(Rejection::DraftDecisionOpen);
+        }
+        let view = run_view(self.d).ok_or_else(|| self.state_rejection())?;
+        let session = view.live_session().ok_or_else(|| self.state_rejection())?;
+        let input = SessionInput::Steer {
+            session_id: session.id,
+            text,
+        };
+        let outcome = session::decide(&view, input, &self.cfg.session, ctx)?;
+        Ok(self.settle(outcome))
+    }
+
+    fn commit(&self, message: Option<String>) -> Result<Vec<Event>, Rejection> {
+        self.waiting()?;
+        if self.question_open() {
+            return Err(Rejection::DraftDecisionOpen);
+        }
+        let attempt = self
+            .d
+            .running_attempt()
+            .ok_or_else(|| self.state_rejection())?;
+        if self.d.last_round.map(|m| m.outcome) != Some(LintOutcome::Passed) {
+            return Err(Rejection::DraftLintFailed);
+        }
+        let mut events = vec![Event::SpecDraftCommitting {
+            spec_draft_id: self.id(),
+            attempt_id: attempt.id,
+            round: attempt.rounds,
+            message,
+        }];
+        events.extend(self.end_session(OPERATOR_COMMIT, json!({ "round": attempt.rounds })));
+        Ok(events)
+    }
+
+    fn discard(&self, reason: String) -> Result<Vec<Event>, Rejection> {
+        self.waiting()?;
+        self.cancel(reason)
+    }
+
     fn job_exhausted(&self, kind: JobKind, error: Coded, ctx: &mut Ctx<'_>) -> Vec<Event> {
         if kind == JobKind::EnvTeardown {
             // A teardown job names its environment; the worker reports it as `TeardownFailed`.
@@ -579,7 +666,28 @@ impl Decider<'_> {
         if self.d.live_session().is_none() {
             return vec![];
         }
-        self.session(SessionInput::Tick, ctx).unwrap_or_default()
+        let idle = self
+            .d
+            .draft
+            .awaiting_since
+            .is_some_and(|t| self.now.since(t) >= self.cfg.session_idle_ms);
+        if self.is(SpecDraftState::AwaitingOperator) && idle {
+            return self.fail(
+                DraftFailureCode::SessionIdleExpired,
+                json!({ "hours": self.cfg.session_idle_ms / 3_600_000 }),
+                None,
+            );
+        }
+        let Some(view) = run_view(self.d) else {
+            return vec![];
+        };
+        let mut cfg = self.cfg.session.clone();
+        if self.is(SpecDraftState::AwaitingOperator) {
+            cfg.idle_ms = i64::MAX;
+        }
+        session::decide(&view, SessionInput::Tick, &cfg, ctx)
+            .map(|outcome| self.settle(outcome))
+            .unwrap_or_default()
     }
 }
 
@@ -600,8 +708,23 @@ fn cancellable(state: SpecDraftState) -> bool {
         SpecDraftState::Queued
             | SpecDraftState::Preparing
             | SpecDraftState::Drafting
+            | SpecDraftState::AwaitingOperator
             | SpecDraftState::Failed
     )
+}
+
+pub fn turn_settled(d: &Draft, s: &crate::model::Session) -> bool {
+    if s.interrupt_requested.is_some() {
+        return false;
+    }
+    match s.state {
+        SessionState::Idle => true,
+        SessionState::Waiting => {
+            d.draft.mode == DraftMode::Session
+                && run_view(d).is_some_and(|v| v.asked_decision().is_some())
+        }
+        _ => false,
+    }
 }
 
 pub fn can_retry(d: &Draft) -> bool {
@@ -610,10 +733,23 @@ pub fn can_retry(d: &Draft) -> bool {
         && d.draft.retries < MANUAL_RETRY_LIMIT
 }
 
+pub fn can_commit(d: &Draft) -> bool {
+    d.draft.state == SpecDraftState::AwaitingOperator
+        && d.last_round.map(|m| m.outcome) == Some(LintOutcome::Passed)
+        && !run_view(d).is_some_and(|v| v.asked_decision().is_some())
+}
+
 pub fn available_actions(d: &Draft) -> Vec<&'static str> {
     let mut actions = Vec::new();
     if can_retry(d) {
         actions.push("retry");
+    }
+    if d.draft.state == SpecDraftState::AwaitingOperator {
+        actions.push("message");
+        if can_commit(d) {
+            actions.push("commit");
+        }
+        actions.push("discard");
     }
     if cancellable(d.draft.state) {
         actions.push("cancel");
@@ -643,6 +779,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
         slug,
         idea,
         locale,
+        mode,
         context_paths,
     } = event
     {
@@ -653,12 +790,14 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
             slug: slug.clone(),
             idea: idea.clone(),
             locale: *locale,
+            mode: *mode,
             context_paths: context_paths.clone(),
             state: SpecDraftState::Queued,
             attempt: 0,
             current_attempt_id: None,
             retries: 0,
             queued_at: now,
+            awaiting_since: None,
             failure: None,
             spec_id: None,
             commit_sha: None,
@@ -683,6 +822,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
 
 fn finish(d: &mut Draft, state: SpecDraftState, attempt: DraftAttemptState, now: Timestamp) {
     d.draft.state = state;
+    d.draft.awaiting_since = None;
     d.draft.finished_at = Some(now);
     if let Some(a) = d
         .attempt
@@ -700,8 +840,21 @@ fn current<'a>(d: &'a mut Draft, owner: &RunOwner) -> Option<&'a mut SpecDraftAt
         .filter(|a| owner.attempt_id() == Some(a.id))
 }
 
+fn resume_work(d: &mut Draft) {
+    d.draft.state = SpecDraftState::Drafting;
+    d.draft.awaiting_since = None;
+    d.draft.version += 1;
+}
+
 fn apply(d: &mut Draft, event: &Event, now: Timestamp) {
     use Event as E;
+    if matches!(
+        event,
+        E::SessionTurnRequested { .. } | E::SessionLost { .. }
+    ) && d.draft.state == SpecDraftState::AwaitingOperator
+    {
+        resume_work(d);
+    }
     match event {
         E::SpecDraftAttemptStarted {
             attempt_id,
@@ -771,7 +924,14 @@ fn apply(d: &mut Draft, event: &Event, now: Timestamp) {
             });
             d.has_content |= content_hash.is_some();
         }
-        E::SpecDraftCommitting { .. } => d.draft.state = SpecDraftState::Committing,
+        E::SpecDraftAwaitingOperator { .. } => {
+            d.draft.state = SpecDraftState::AwaitingOperator;
+            d.draft.awaiting_since = Some(now);
+        }
+        E::SpecDraftCommitting { .. } => {
+            d.draft.state = SpecDraftState::Committing;
+            d.draft.awaiting_since = None;
+        }
         E::SpecDraftSucceeded {
             spec_id, commit, ..
         } => {
@@ -883,10 +1043,17 @@ pub fn react(d: &Draft, event: &Event, now: Timestamp) -> Vec<Job> {
     match event {
         E::SpecDraftAttemptStarted { .. }
         | E::SpecDraftPacketRendered { .. }
-        | E::SpecDraftCommitting { .. }
+        | E::SpecDraftAwaitingOperator { .. }
         | E::SpecDraftSucceeded { .. }
         | E::SpecDraftFailed { .. }
         | E::SpecDraftCancelled { .. } => phase_jobs(d, now),
+        E::SpecDraftCommitting { message, .. } => {
+            let mut jobs = phase_jobs(d, now);
+            for j in jobs.iter_mut().filter(|j| j.kind == JobKind::DraftCommit) {
+                j.payload["message"] = json!(message);
+            }
+            jobs
+        }
         E::SessionTurnEnded {
             owner,
             session_id,
@@ -897,7 +1064,8 @@ pub fn react(d: &Draft, event: &Event, now: Timestamp) -> Vec<Job> {
             && d.is_drafting()
             && d.live_session()
                 .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none())
-            && !run_view(d).is_some_and(|v| v.run_decisions().any(|r| r.is_open())) =>
+            && (d.draft.mode == DraftMode::Session
+                || !run_view(d).is_some_and(|v| v.run_decisions().any(|r| r.is_open()))) =>
         {
             vec![lint_job(*owner, *session_id, *turn, now)]
         }
@@ -919,6 +1087,10 @@ fn lint_job(owner: RunOwner, session_id: crate::ids::SessionId, turn: u32, now: 
 impl Draft {
     fn is_drafting(&self) -> bool {
         self.draft.state == SpecDraftState::Drafting
+    }
+
+    fn is_working(&self) -> bool {
+        self.is_drafting() || self.draft.state == SpecDraftState::AwaitingOperator
     }
 }
 
@@ -955,7 +1127,7 @@ pub fn phase_jobs(d: &Draft, now: Timestamp) -> Vec<Job> {
     }
     if let Some(s) = d
         .live_session()
-        .filter(|s| owner != Some(s.owner) || !d.is_drafting())
+        .filter(|s| owner != Some(s.owner) || !d.is_working())
     {
         jobs.push(session::stop_job(s, now));
     }
@@ -974,8 +1146,10 @@ pub fn phase_jobs(d: &Draft, now: Timestamp) -> Vec<Job> {
                 now,
             ));
         }
-        SpecDraftState::Drafting => {
-            if let Some(view) = run_view(d).filter(|v| resume::wants_session(v)) {
+        SpecDraftState::Drafting | SpecDraftState::AwaitingOperator => {
+            if d.is_drafting()
+                && let Some(view) = run_view(d).filter(|v| resume::wants_session(v))
+            {
                 let plan = resume::plan(&view);
                 let key = match plan.as_ref().filter(|p| p.cause == ResumeCause::Lost) {
                     Some(p) => format!("{}:{}", attempt.id, p.from),
@@ -1010,15 +1184,16 @@ pub fn phase_jobs(d: &Draft, now: Timestamp) -> Vec<Job> {
                         .map(|r| session::deliver_decision_job(r, now)),
                 );
             }
-            if let Some(s) = d.live_session().filter(|s| {
-                s.owner == owner
-                    && s.state == SessionState::Idle
-                    && s.interrupt_requested.is_none()
-                    && s.turns > 0
-                    && s.recorded_turn == s.turns
-            }) && !d
-                .last_round
-                .is_some_and(|m| m.session_id == s.id && m.turn >= s.turns)
+            if d.is_drafting()
+                && let Some(s) = d.live_session().filter(|s| {
+                    s.owner == owner
+                        && s.turns > 0
+                        && s.recorded_turn == s.turns
+                        && turn_settled(d, s)
+                })
+                && !d
+                    .last_round
+                    .is_some_and(|m| m.session_id == s.id && m.turn >= s.turns)
             {
                 jobs.push(lint_job(owner, s.id, s.turns, now));
             }

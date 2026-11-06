@@ -35,12 +35,14 @@ fn spec_draft(row: &Row<'_>) -> Result<SpecDraft> {
         slug: row.get("slug")?,
         idea: row.get("idea")?,
         locale: vocab(row, "locale")?,
+        mode: vocab(row, "mode")?,
         context_paths: json(row, "context_paths")?,
         state: vocab(row, "state")?,
         attempt: u32_col(row, "attempt")?,
         current_attempt_id: opt_uuid(row, "current_attempt_id")?.map(SpecDraftAttemptId),
         retries: u32_col(row, "retries")?,
         queued_at: ts(row, "queued_at")?,
+        awaiting_since: opt_ts(row, "awaiting_since")?,
         failure: opt_json(row, "failure")?,
         spec_id: opt_uuid(row, "spec_id")?.map(SpecId),
         commit_sha: row.get("commit_sha")?,
@@ -421,7 +423,7 @@ pub fn live_draft_at(
     one(
         conn,
         "SELECT id FROM spec_draft WHERE project_id = ?1 AND path = ?2
-           AND state IN ('queued', 'preparing', 'drafting', 'committing', 'failed')",
+           AND state IN ('queued', 'preparing', 'drafting', 'awaiting_operator', 'committing', 'failed')",
         params![project.0.to_string(), path],
         |row| Ok(SpecDraftId(uuid(row, "id")?)),
     )

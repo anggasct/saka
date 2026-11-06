@@ -11,7 +11,7 @@ use saka_core::task::LoopConfig;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
-use saka_core::vocab::{ReloadTrigger, SpecOrigin, WorkItemOrigin};
+use saka_core::vocab::{DraftMode, ReloadTrigger, SpecOrigin, WorkItemOrigin};
 use saka_engine::{
     AddProject, DiagnosticLimits, Engine, EngineConfig, EngineError, EnvConfig, Integration,
     JobReport, NewBinding, NewProject, NewRepo, NewSpecDraft, Ports, ProjectView, RegisteredSpec,
@@ -112,6 +112,7 @@ pub fn draft_config() -> DraftConfig {
     DraftConfig {
         max_active: 1,
         lint_rounds: 4,
+        session_idle_ms: 72 * 3_600_000,
         budget: saka_core::model::Budget {
             running_minutes: 30,
             turns: 6,
@@ -651,6 +652,25 @@ impl Sim {
         idea: &str,
         context_paths: &[&str],
     ) -> Result<Draft, EngineError> {
+        self.create_draft_as(DraftMode::Draft, path, idea, context_paths)
+    }
+
+    pub fn create_session(
+        &self,
+        path: &str,
+        idea: &str,
+        context_paths: &[&str],
+    ) -> Result<Draft, EngineError> {
+        self.create_draft_as(DraftMode::Session, path, idea, context_paths)
+    }
+
+    fn create_draft_as(
+        &self,
+        mode: DraftMode,
+        path: &str,
+        idea: &str,
+        context_paths: &[&str],
+    ) -> Result<Draft, EngineError> {
         let engine = self.engine();
         let cause = engine.cause("human:operator:local");
         self.rt.block_on(engine.create_spec_draft(
@@ -659,6 +679,7 @@ impl Sim {
                 path: path.into(),
                 idea: idea.into(),
                 locale: saka_core::vocab::DraftLocale::En,
+                mode,
                 context_paths: context_paths.iter().map(|p| (*p).to_string()).collect(),
             },
             &cause,

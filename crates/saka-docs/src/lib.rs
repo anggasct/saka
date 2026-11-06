@@ -92,7 +92,10 @@ impl GitDocs {
                 path: request.path.clone(),
                 mode: mode.to_string(),
                 blob: blob.to_string(),
-                message: format!("docs: {verb} {}", request.path),
+                message: request
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| format!("docs: {verb} {}", request.path)),
                 author: request.author.clone(),
                 at: request.at,
             })
@@ -495,6 +498,7 @@ mod tests {
             path: path.into(),
             bytes: bytes.to_vec(),
             expect,
+            message: None,
             author: GitIdentity {
                 name: "Saka Agent".into(),
                 email: "agent@saka.invalid".into(),

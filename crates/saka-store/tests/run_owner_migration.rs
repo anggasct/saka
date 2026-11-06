@@ -159,7 +159,7 @@ fn the_run_owner_migration_keeps_every_task_row_and_guards_the_owner_arc() {
         store.migration().applied,
         vec![
             11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-            33, 34, 35
+            33, 34, 35, 36
         ]
     );
     assert!(store.migration().backup.is_some());
@@ -394,7 +394,7 @@ fn the_draft_tables_check_their_own_rows() {
         format!(
             "INSERT INTO spec_draft_lint_round (attempt_id, round, spec_draft_id, project_id, session_id, turn,
                  outcome, bytes, content, content_hash, parser_version, issues, created_at)
-               VALUES ('a1', 11, 'd1', 'p1', 'a1', 3, 'failed', 1, X'00', '{hash}', 4, '[]', 9)"
+               VALUES ('a1', 0, 'd1', 'p1', 'a1', 3, 'failed', 1, X'00', '{hash}', 4, '[]', 9)"
         ),
         "INSERT INTO spec_draft_lint_round (attempt_id, round, spec_draft_id, project_id, session_id, turn,
              outcome, bytes, content, content_hash, parser_version, issues, created_at)

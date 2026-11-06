@@ -70,6 +70,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (33, include_str!("../migrations/0033_hook_inbox_event.sql")),
     (34, include_str!("../migrations/0034_identity.sql")),
     (35, include_str!("../migrations/0035_decision_request.sql")),
+    (36, include_str!("../migrations/0036_architect_session.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {

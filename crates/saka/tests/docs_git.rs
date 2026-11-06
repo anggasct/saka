@@ -223,6 +223,7 @@ impl World {
             path: path.into(),
             bytes: bytes.to_vec(),
             expect,
+            message: None,
             author: GitIdentity {
                 name: "Saka Agent".into(),
                 email: "agent@saka.invalid".into(),

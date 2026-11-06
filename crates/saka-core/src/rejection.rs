@@ -46,6 +46,14 @@ pub enum Rejection {
     DecisionOnePerSession,
     #[error("the run asked its last question")]
     DecisionLimitReached,
+    #[error("the draft is not waiting for the operator")]
+    DraftNotWaiting,
+    #[error("the draft does not pass lint")]
+    DraftLintFailed,
+    #[error("the architect has a question waiting")]
+    DraftDecisionOpen,
+    #[error("the draft has no changes to commit")]
+    DraftNoChanges,
     #[error("not found")]
     NotFound,
     #[error("project is already registered")]
@@ -198,6 +206,10 @@ impl Rejection {
             Rejection::DecisionAnswerInvalid => "decision_answer_invalid",
             Rejection::DecisionOnePerSession => "decision_one_per_session",
             Rejection::DecisionLimitReached => "decision_limit_reached",
+            Rejection::DraftNotWaiting => "draft_not_waiting",
+            Rejection::DraftLintFailed => "draft_lint_failed",
+            Rejection::DraftDecisionOpen => "draft_decision_open",
+            Rejection::DraftNoChanges => "draft_no_changes",
             Rejection::NotFound => "not_found",
             Rejection::ProjectExists { .. } => "project_exists",
             Rejection::SpecSlugConflict { .. } => "spec_slug_conflict",
