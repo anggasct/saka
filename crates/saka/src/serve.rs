@@ -567,6 +567,7 @@ fn draft_config(cfg: &Config) -> saka_core::draft::DraftConfig {
     saka_core::draft::DraftConfig {
         max_active: cfg.architect.max_active,
         lint_rounds: cfg.architect.lint_rounds,
+        session_idle_ms: cfg.architect.session_idle_hours * 3_600_000,
         budget: Budget {
             running_minutes: budget.running_minutes,
             turns: budget.turns,

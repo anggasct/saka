@@ -22,6 +22,7 @@ export const ACTIVE_STATES = [
   "queued",
   "preparing",
   "drafting",
+  "awaiting_operator",
   "committing",
   "failed",
 ] as const;

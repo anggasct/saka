@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use saka_core::model::{ContextRef, DraftDocument};
-use saka_core::vocab::{ContextOrigin, DocsMode, DraftLocale, PacketOrigin, Tool};
+use saka_core::vocab::{ContextOrigin, DocsMode, DraftLocale, DraftMode, PacketOrigin, Tool};
 
 use saka_spec::content_hash;
 
@@ -288,6 +288,7 @@ pub struct ArchitectInput {
     pub project_path: String,
     pub base_sha: String,
     pub locale: DraftLocale,
+    pub mode: DraftMode,
     pub idea: String,
     pub target: String,
     pub selected: Vec<(String, Vec<u8>)>,
@@ -439,10 +440,16 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     omitted.extend(input.unreadable.iter().map(String::as_str));
     text.push_str("</documents>\n\n");
 
+    let conversation = input.mode == DraftMode::Session;
     let _ = writeln!(
         text,
-        "You are the architect for project \"{}\". Write one new spec in this repository from the idea below.",
-        input.project_name
+        "You are the architect for project \"{}\". Write one new spec in this repository from the idea below.{}",
+        input.project_name,
+        if conversation {
+            " The operator reads your work after every turn and replies, so this is a conversation."
+        } else {
+            ""
+        }
     );
     text.push_str(
         "Document 1 is the spec template and document 2 is the spec format and its lint rules.",
@@ -516,6 +523,11 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     if let Some(note) = &input.note {
         let _ = write!(text, "Operator note:\n{}\n\n", note.trim_end_matches('\n'));
     }
+    let ending = if conversation {
+        "- Do not commit. End your turn when you have done what the operator asked. Saka checks the file after every turn and shows the operator the result; the operator answers with a message or commits. Keep the file complete at the end of every turn.\n"
+    } else {
+        "- Do not commit. When the file is complete, end your turn. Saka checks it and tells you what to fix.\n"
+    };
     let _ = write!(
         text,
         "Rules:\n\
@@ -524,7 +536,7 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
          - Follow document 2 exactly and start from document 1.\n\
          - For each material technical decision the docs do not settle, add a question under \"## Decisions\" with two or three options, the recommended option first and marked \"(recommended)\". Leave every option unchecked; the operator answers.\n\
          - If you cannot write the spec without the operator's answer to a question about the idea itself, call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The answer arrives as your next message: write it into the spec as the checked option under \"## Decisions\", and carry on. Never ask what the docs or the idea already answer.\n\
-         - Do not commit. When the file is complete, end your turn. Saka checks it and tells you what to fix.\n",
+         {ending}",
         target = input.target
     );
     let sha256 = content_hash(text.as_bytes())

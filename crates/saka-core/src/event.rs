@@ -22,7 +22,7 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, Effect,
+    ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect,
     ExternalCause, GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState,
     InboxSubject, InterruptBy, LintOutcome, MatchKind, MergeMethod, PairingPurpose,
     PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis,
@@ -184,6 +184,7 @@ pub enum Event {
         slug: String,
         idea: String,
         locale: DraftLocale,
+        mode: DraftMode,
         context_paths: Vec<String>,
     },
     #[serde(rename = "spec.draft.attempt_started")]
@@ -217,11 +218,18 @@ pub enum Event {
         issue_codes: Vec<String>,
         decisions_open: u32,
     },
+    #[serde(rename = "spec.draft.awaiting_operator")]
+    SpecDraftAwaitingOperator {
+        spec_draft_id: SpecDraftId,
+        attempt_id: SpecDraftAttemptId,
+        round: u32,
+    },
     #[serde(rename = "spec.draft.committing")]
     SpecDraftCommitting {
         spec_draft_id: SpecDraftId,
         attempt_id: SpecDraftAttemptId,
         round: u32,
+        message: Option<String>,
     },
     #[serde(rename = "spec.draft.succeeded")]
     SpecDraftSucceeded {
@@ -992,6 +1000,7 @@ impl Event {
             | E::SpecDraftAttemptStarted { spec_draft_id, .. }
             | E::SpecDraftPacketRendered { spec_draft_id, .. }
             | E::SpecDraftLinted { spec_draft_id, .. }
+            | E::SpecDraftAwaitingOperator { spec_draft_id, .. }
             | E::SpecDraftCommitting { spec_draft_id, .. }
             | E::SpecDraftSucceeded { spec_draft_id, .. }
             | E::SpecDraftFailed { spec_draft_id, .. }

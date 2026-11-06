@@ -98,6 +98,7 @@ cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
 [architect]
 max_active = 1                     # 1..=4; drafts preparing, drafting, or committing at once
 lint_rounds = 4                    # 1..=10; lint checks per attempt (the first after the first turn)
+session_idle_hours = 72            # 1..=168; a session-mode draft waiting for the operator this long fails
 model = ""                         # empty = agent.model
 
 [env]

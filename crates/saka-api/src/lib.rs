@@ -42,7 +42,8 @@ pub use state::{ApiConfig, AppState};
         routes::list_usage_records,
         routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
         routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
-        routes::retry_spec_draft, routes::cancel_spec_draft,
+        routes::retry_spec_draft, routes::cancel_spec_draft, routes::message_spec_draft,
+        routes::commit_spec_draft, routes::discard_spec_draft,
         routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::list_inbox, routes::inbox_summary, routes::dismiss_inbox_item, routes::rerun_hook,
         auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
         auth_routes::register_start, auth_routes::register_finish, auth_routes::login_start, auth_routes::login_finish, auth_routes::logout, auth_routes::revoke_credential,
@@ -254,6 +255,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel",
             post(routes::cancel_spec_draft),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/message",
+            post(routes::message_spec_draft),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/commit",
+            post(routes::commit_spec_draft),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/discard",
+            post(routes::discard_spec_draft),
         )
         .route(
             "/api/v1/scm/{integration_id}/user-link/authorizations",

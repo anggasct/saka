@@ -3491,6 +3491,64 @@
         }
       }
     },
+    "/api/v1/spec-drafts/{spec_draft_id}/commit": {
+      "post": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "commit_spec_draft",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitSpecDraftBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/spec-drafts/{spec_draft_id}/content": {
       "get": {
         "tags": [
@@ -3539,6 +3597,64 @@
         }
       }
     },
+    "/api/v1/spec-drafts/{spec_draft_id}/discard": {
+      "post": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "discard_spec_draft",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds": {
       "get": {
         "tags": [
@@ -3567,6 +3683,64 @@
             }
           },
           "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/spec-drafts/{spec_draft_id}/message": {
+      "post": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "message_spec_draft",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageSpecDraftBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5274,6 +5448,19 @@
           }
         }
       },
+      "CommitSpecDraftBody": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 200 characters; the docs commit message. Defaults to the usual one."
+          }
+        },
+        "additionalProperties": false
+      },
       "ConfigCheck": {
         "type": "object",
         "description": "Result of checking a `saka.toml` without registering it.",
@@ -5415,6 +5602,13 @@
               "null"
             ],
             "description": "`en` (default) or `id`: the template and the language of the prose."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`draft` (default) or `session`."
           },
           "path": {
             "type": "string",
@@ -6801,6 +6995,19 @@
           }
         }
       },
+      "MessageSpecDraftBody": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "1 to 4000 characters; sent to the architect as the next turn."
+          }
+        },
+        "additionalProperties": false
+      },
       "Meta": {
         "type": "object",
         "required": [
@@ -7579,6 +7786,7 @@
                 "path",
                 "slug",
                 "locale",
+                "mode",
                 "context_paths",
                 "state",
                 "waiting_on",
@@ -7605,7 +7813,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "Subset of `retry`, `cancel`."
+                  "description": "Subset of `retry`, `cancel`, and, while `awaiting_operator`, `message`, `commit` (only when the lint passes and no question is open) and `discard`."
                 },
                 "budget": {
                   "oneOf": [
@@ -7677,6 +7885,10 @@
                   "type": "string",
                   "description": "`en | id`"
                 },
+                "mode": {
+                  "type": "string",
+                  "description": "`draft` (the architect works alone and Saka commits the first passing file) or `session` (a conversation the operator commits)."
+                },
                 "path": {
                   "type": "string",
                   "description": "The new spec file, from the repo root."
@@ -7723,7 +7935,7 @@
                 },
                 "state": {
                   "type": "string",
-                  "description": "`queued | preparing | drafting | committing | succeeded | failed | cancelled`"
+                  "description": "`queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`"
                 },
                 "updated_at": {
                   "type": "string"
@@ -10022,6 +10234,7 @@
           "path",
           "slug",
           "locale",
+          "mode",
           "context_paths",
           "state",
           "waiting_on",
@@ -10048,7 +10261,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Subset of `retry`, `cancel`."
+            "description": "Subset of `retry`, `cancel`, and, while `awaiting_operator`, `message`, `commit` (only when the lint passes and no question is open) and `discard`."
           },
           "budget": {
             "oneOf": [
@@ -10120,6 +10333,10 @@
             "type": "string",
             "description": "`en | id`"
           },
+          "mode": {
+            "type": "string",
+            "description": "`draft` (the architect works alone and Saka commits the first passing file) or `session` (a conversation the operator commits)."
+          },
           "path": {
             "type": "string",
             "description": "The new spec file, from the repo root."
@@ -10166,7 +10383,7 @@
           },
           "state": {
             "type": "string",
-            "description": "`queued | preparing | drafting | committing | succeeded | failed | cancelled`"
+            "description": "`queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`"
           },
           "updated_at": {
             "type": "string"

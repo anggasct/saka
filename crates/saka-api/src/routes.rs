@@ -16,7 +16,8 @@ use saka_core::ids::{
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode, Stage,
+    AuthorshipMode, BlockerAction, CheckId, DraftLocale, DraftMode, ReloadTrigger, ReportMode,
+    Stage,
 };
 use saka_engine::{
     AddProject, AnswerKind, CheckConfig, DecisionFilter, DiagnosticFilter, EngineError,
@@ -2261,7 +2262,14 @@ pub async fn api_not_found() -> Response {
     ApiError::not_found().into_response()
 }
 
-const DRAFT_ACTIVE: &[&str] = &["queued", "preparing", "drafting", "committing", "failed"];
+const DRAFT_ACTIVE: &[&str] = &[
+    "queued",
+    "preparing",
+    "drafting",
+    "awaiting_operator",
+    "committing",
+    "failed",
+];
 const DRAFT_FINISHED: &[&str] = &["succeeded", "cancelled"];
 
 #[utoipa::path(
@@ -2289,6 +2297,13 @@ pub async fn create_spec_draft(
         Some(l) => tri!(
             l.parse::<DraftLocale>()
                 .map_err(|_| ApiError::validation("locale", "invalid"))
+        ),
+    };
+    let mode = match req.mode.as_deref() {
+        None => DraftMode::Draft,
+        Some(m) => tri!(
+            m.parse::<DraftMode>()
+                .map_err(|_| ApiError::validation("mode", "invalid"))
         ),
     };
     let project = ProjectId(tri!(path_id(&project)));
@@ -2320,6 +2335,7 @@ pub async fn create_spec_draft(
                 path: req.path,
                 idea: req.idea,
                 locale,
+                mode,
                 context_paths: req.context_paths,
             };
             engine
@@ -2438,6 +2454,9 @@ pub async fn get_spec_draft_packet(State(s): State<AppState>, Path(id): Path<Str
 enum DraftAction {
     Retry,
     Cancel,
+    Message,
+    Commit,
+    Discard,
 }
 
 async fn draft_action(
@@ -2448,14 +2467,22 @@ async fn draft_action(
 ) -> Response {
     let key = tri!(require_key(&headers));
     let draft = SpecDraftId(tri!(path_id(&id)));
-    let (reason, note) = match which {
+    let (reason, text) = match which {
         DraftAction::Retry => {
             let req: dto::RetrySpecDraftBody = tri!(body(&raw));
-            (req.reason, req.note)
+            (Some(req.reason), req.note)
         }
-        DraftAction::Cancel => {
+        DraftAction::Cancel | DraftAction::Discard => {
             let req: dto::RequiredReason = tri!(body(&raw));
-            (req.reason, None)
+            (Some(req.reason), None)
+        }
+        DraftAction::Message => {
+            let req: dto::MessageSpecDraftBody = tri!(body(&raw));
+            (None, Some(req.text))
+        }
+        DraftAction::Commit => {
+            let req: dto::CommitSpecDraftBody = tri!(body(&raw));
+            (None, req.message)
         }
     };
     let engine = tri!(s.engine().cloned());
@@ -2478,10 +2505,13 @@ async fn draft_action(
         name: match which {
             DraftAction::Retry => "spec_draft.retry",
             DraftAction::Cancel => "spec_draft.cancel",
+            DraftAction::Message => "spec_draft.message",
+            DraftAction::Commit => "spec_draft.commit",
+            DraftAction::Discard => "spec_draft.discard",
         },
         target_type: "spec_draft",
         target_id: Some(draft.0),
-        reason: Some(reason.clone()),
+        reason: reason.clone(),
     };
     mutate(
         &s,
@@ -2492,12 +2522,23 @@ async fn draft_action(
         m,
         &respond,
         |cause, action| async move {
+            let why = reason.unwrap_or_default();
             let result = match which {
                 DraftAction::Retry => {
-                    engine.retry_spec_draft(draft, &reason, note, &cause, Some(&action))
+                    engine.retry_spec_draft(draft, &why, text, &cause, Some(&action))
                 }
-                DraftAction::Cancel => {
-                    engine.cancel_spec_draft(draft, &reason, &cause, Some(&action))
+                DraftAction::Cancel => engine.cancel_spec_draft(draft, &why, &cause, Some(&action)),
+                DraftAction::Discard => {
+                    engine.discard_spec_draft(draft, &why, &cause, Some(&action))
+                }
+                DraftAction::Message => engine.message_spec_draft(
+                    draft,
+                    text.as_deref().unwrap_or_default(),
+                    &cause,
+                    Some(&action),
+                ),
+                DraftAction::Commit => {
+                    engine.commit_spec_draft(draft, text.as_deref(), &cause, Some(&action))
                 }
             };
             result.map(|_| project).map_err(|e| (e, project))
@@ -2538,6 +2579,57 @@ pub async fn cancel_spec_draft(
     raw: Bytes,
 ) -> Response {
     draft_action(s, id, (method, uri, headers, raw), DraftAction::Cancel).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/spec-drafts/{spec_draft_id}/message", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::MessageSpecDraftBody,
+    responses((status = 202, body = dto::SpecDraft), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn message_spec_draft(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    draft_action(s, id, (method, uri, headers, raw), DraftAction::Message).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/spec-drafts/{spec_draft_id}/commit", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::CommitSpecDraftBody,
+    responses((status = 202, body = dto::SpecDraft), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn commit_spec_draft(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    draft_action(s, id, (method, uri, headers, raw), DraftAction::Commit).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/spec-drafts/{spec_draft_id}/discard", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::SpecDraft), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn discard_spec_draft(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    draft_action(s, id, (method, uri, headers, raw), DraftAction::Discard).await
 }
 
 #[utoipa::path(

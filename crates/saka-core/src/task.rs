@@ -3789,6 +3789,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SpecDraftAttemptStarted { .. }
         | E::SpecDraftPacketRendered { .. }
         | E::SpecDraftLinted { .. }
+        | E::SpecDraftAwaitingOperator { .. }
         | E::SpecDraftCommitting { .. }
         | E::SpecDraftSucceeded { .. }
         | E::SpecDraftFailed { .. }

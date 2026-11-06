@@ -93,6 +93,7 @@ export function draft(extra: Partial<SpecDraft> = {}): SpecDraft {
     slug: "avatar-upload",
     idea: "Let users upload an avatar.",
     locale: "en",
+    mode: "draft",
     context_paths: ["docs/architecture.md"],
     state: "drafting",
     attempt,

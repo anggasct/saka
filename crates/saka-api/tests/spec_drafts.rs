@@ -793,3 +793,94 @@ fn active_sessions_list_a_draft_beside_a_task_newest_first_and_page_by_cursor() 
     assert_eq!(second.body["items"][0]["id"], items[1]["id"]);
     assert_eq!(second.body["next_cursor"], Value::Null);
 }
+
+#[test]
+fn a_session_draft_is_a_conversation_the_operator_commits() {
+    let mut api = Api::new();
+    api.sim.world.script_draft(vec![write(good())]);
+    let created = api.create(json!({ "idea": IDEA, "path": PATH, "mode": "session" }));
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    assert_eq!(created.body["mode"], "session");
+    let id = id_of(&created.body);
+    let message = format!("/api/v1/spec-drafts/{}/message", id.0);
+    let commit = format!("/api/v1/spec-drafts/{}/commit", id.0);
+    let discard = format!("/api/v1/spec-drafts/{}/discard", id.0);
+
+    let early = api.post(&message, &json!({ "text": "hello" }));
+    assert_eq!(early.status, StatusCode::CONFLICT);
+    assert_eq!(early.code(), "draft_not_waiting");
+
+    api.run_to_state(id, SpecDraftState::AwaitingOperator);
+    let waiting = api.get(&format!("/api/v1/spec-drafts/{}", id.0));
+    assert_eq!(waiting.body["state"], "awaiting_operator");
+    assert_eq!(
+        waiting.body["available_actions"],
+        json!(["message", "commit", "discard", "cancel"])
+    );
+    assert_eq!(waiting.body["last_round"]["outcome"], "passed");
+
+    for body in [json!({ "text": "" }), json!({ "text": "x".repeat(4001) })] {
+        let r = api.post(&message, &body);
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(r.error().0, "text");
+    }
+    let long = api.post(&commit, &json!({ "message": "m".repeat(201) }));
+    assert_eq!(long.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(long.error().0, "message");
+    let blank = api.post(&discard, &json!({ "reason": "" }));
+    assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let sent = api.post_keyed(&message, "msg-1", &json!({ "text": "Add examples." }));
+    assert_eq!(sent.status, StatusCode::ACCEPTED, "{}", sent.body);
+    assert_eq!(sent.body["state"], "drafting");
+    let replay = api.post_keyed(&message, "msg-1", &json!({ "text": "Add examples." }));
+    assert_eq!(replay.body, sent.body);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    api.run_to(id, |d| {
+        d.draft.state == SpecDraftState::AwaitingOperator
+            && d.attempt.as_ref().is_some_and(|a| a.rounds == 2)
+    });
+    assert_eq!(api.sim.world.prompts().len(), 2);
+
+    let done = api.post(&commit, &json!({ "message": "docs: add the export spec" }));
+    assert_eq!(done.status, StatusCode::ACCEPTED, "{}", done.body);
+    assert_eq!(done.body["state"], "committing");
+    let again = api.post(&commit, &json!({}));
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    assert_eq!(again.code(), "draft_not_waiting");
+    api.run_to_state(id, SpecDraftState::Succeeded);
+    assert_eq!(api.sim.world.doc_commits().len(), 1);
+}
+
+#[test]
+fn a_session_draft_that_does_not_lint_cannot_be_committed_and_can_be_discarded() {
+    let mut api = Api::new();
+    api.sim.world.script_draft(vec![write(bad_crlf())]);
+    let created = api.create(json!({ "idea": IDEA, "path": PATH, "mode": "session" }));
+    let id = id_of(&created.body);
+    api.run_to_state(id, SpecDraftState::AwaitingOperator);
+    let waiting = api.get(&format!("/api/v1/spec-drafts/{}", id.0));
+    assert_eq!(
+        waiting.body["available_actions"],
+        json!(["message", "discard", "cancel"])
+    );
+    let refused = api.post(&format!("/api/v1/spec-drafts/{}/commit", id.0), &json!({}));
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    assert_eq!(refused.code(), "draft_lint_failed");
+    let discarded = api.post(
+        &format!("/api/v1/spec-drafts/{}/discard", id.0),
+        &json!({ "reason": "wrong direction" }),
+    );
+    assert_eq!(discarded.status, StatusCode::ACCEPTED, "{}", discarded.body);
+    assert_eq!(discarded.body["state"], "cancelled");
+}
+
+#[test]
+fn the_mode_of_a_new_draft_is_checked() {
+    let mut api = Api::new();
+    let bad = api.create(json!({ "idea": IDEA, "path": PATH, "mode": "chat" }));
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(bad.error(), ("mode".into(), "invalid".into()));
+    let plain = api.create(json!({ "idea": IDEA, "path": PATH }));
+    assert_eq!(plain.body["mode"], "draft");
+}

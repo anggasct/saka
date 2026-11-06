@@ -468,6 +468,8 @@ pub struct Architect {
     pub max_active: usize,
     #[serde(default = "four")]
     pub lint_rounds: u32,
+    #[serde(default = "seventy_two")]
+    pub session_idle_hours: i64,
     #[serde(default)]
     pub model: String,
 }
@@ -477,6 +479,7 @@ impl Default for Architect {
         Architect {
             max_active: one_usize(),
             lint_rounds: four(),
+            session_idle_hours: seventy_two(),
             model: String::new(),
         }
     }
@@ -1030,7 +1033,7 @@ impl Config {
         }
         let r = &self.architect;
         let ab = &b.architect;
-        let architect: [(bool, &str); 7] = [
+        let architect: [(bool, &str); 8] = [
             (
                 (1..=4).contains(&r.max_active),
                 "architect.max_active must be 1..=4",
@@ -1038,6 +1041,10 @@ impl Config {
             (
                 (1..=10).contains(&r.lint_rounds),
                 "architect.lint_rounds must be 1..=10",
+            ),
+            (
+                (1..=168).contains(&r.session_idle_hours),
+                "architect.session_idle_hours must be 1..=168",
             ),
             (
                 (1..=1440).contains(&ab.running_minutes),
@@ -1261,6 +1268,7 @@ mod tests {
             (cfg.architect.max_active, cfg.architect.lint_rounds),
             (1, 4)
         );
+        assert_eq!(cfg.architect.session_idle_hours, 72);
         assert!(cfg.architect.model.is_empty());
         let b = &cfg.budget.architect;
         assert_eq!((b.running_minutes, b.turns, b.tokens), (30, 6, 0));
@@ -1271,6 +1279,14 @@ mod tests {
             ("[architect]\nlint_rounds = 0\n", "architect.lint_rounds"),
             ("[architect]\nlint_rounds = 8\n", "budget.architect.turns"),
             ("[architect]\nmax_active = 9\n", "architect.max_active"),
+            (
+                "[architect]\nsession_idle_hours = 0\n",
+                "architect.session_idle_hours",
+            ),
+            (
+                "[architect]\nsession_idle_hours = 169\n",
+                "architect.session_idle_hours",
+            ),
         ] {
             let e = Config::parse(bad).unwrap_err();
             assert_eq!(e.code, "config_invalid");
@@ -1360,6 +1376,7 @@ mod tests {
             "[architect]\nmax_active = 0\n",
             "[architect]\nmax_active = 5\n",
             "[architect]\nlint_rounds = 11\n",
+            "[architect]\nsession_idle_hours = 169\n",
             "[budget.architect]\nrunning_minutes = 0\n",
             "[budget.architect]\nturns = 101\n",
             "[budget.architect]\nturns = 3\n",
@@ -1619,6 +1636,7 @@ mod tests {
     fn the_example_config_parses_with_every_field_set() {
         let cfg = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
         assert_eq!(cfg.scm.len(), 2);
+        assert_eq!(cfg.architect.session_idle_hours, 72);
         assert_eq!(cfg.scm[0].app_id, Some(123456));
         let gitlab = &cfg.scm[1];
         assert_eq!(gitlab.provider, "gitlab");
@@ -1629,6 +1647,7 @@ mod tests {
         assert_eq!(gitlab.api_url, "https://git.example.com/api/v4");
         assert_eq!(gitlab.merge_method, MergeMethod::Merge);
         assert_eq!(cfg.agent.limits.cpu_quota, "200%");
+        assert_eq!(cfg.architect.session_idle_hours, 72);
         assert_eq!(cfg.agent.decision_wait_hours, 72);
         assert_eq!(cfg.budget.review.running_minutes, 20);
         assert_eq!(cfg.budget.fix.running_minutes, 30);
