@@ -18,6 +18,7 @@ pub const OPEN: &str = "open";
 pub const INBOX: &str = "inbox";
 pub const START: &str = "start";
 pub const STOP: &str = "stop";
+pub const UPDATE: &str = "update";
 pub const QUIT: &str = "quit";
 pub const STATUS: &str = "status";
 
@@ -29,7 +30,7 @@ fn entry(id: &'static str, label: impl Into<String>, enabled: bool) -> Entry {
     }
 }
 
-pub fn menu(mode: Mode, open: Option<i64>, labels: Labels) -> Vec<Entry> {
+pub fn menu(mode: Mode, open: Option<i64>, update: Option<&str>, labels: Labels) -> Vec<Entry> {
     let mut entries = Vec::new();
     if let Mode::Local(phase) = mode {
         let status = match phase {
@@ -46,6 +47,9 @@ pub fn menu(mode: Mode, open: Option<i64>, labels: Labels) -> Vec<Entry> {
         let running = matches!(phase, Phase::Running | Phase::Starting);
         entries.push(entry(START, labels.start_local(), !running));
         entries.push(entry(STOP, labels.stop_local(), running));
+    }
+    if let Some(version) = update {
+        entries.push(entry(UPDATE, labels.install_update(version), true));
     }
     entries.push(entry(QUIT, labels.quit(), true));
     entries
@@ -72,14 +76,14 @@ mod tests {
 
     #[test]
     fn a_remote_connection_has_no_local_controls() {
-        let entries = menu(Mode::Remote, Some(3), Labels::En);
+        let entries = menu(Mode::Remote, Some(3), None, Labels::En);
         assert_eq!(ids(&entries), [OPEN, INBOX, QUIT]);
         assert_eq!(entries[1].label, "Open inbox (3)");
     }
 
     #[test]
     fn a_running_local_saka_can_be_stopped_but_not_started() {
-        let entries = menu(Mode::Local(Phase::Running), None, Labels::En);
+        let entries = menu(Mode::Local(Phase::Running), None, None, Labels::En);
         assert_eq!(ids(&entries), [STATUS, OPEN, INBOX, START, STOP, QUIT]);
         assert!(!enabled(&entries, START));
         assert!(enabled(&entries, STOP));
@@ -89,14 +93,14 @@ mod tests {
 
     #[test]
     fn a_local_saka_that_died_shows_disconnected_and_offers_to_start_again() {
-        let entries = menu(Mode::Local(Phase::Exited), None, Labels::En);
+        let entries = menu(Mode::Local(Phase::Exited), None, None, Labels::En);
         assert_eq!(
             entries[0].label,
             "Disconnected: local Saka stopped unexpectedly"
         );
         assert!(enabled(&entries, START));
         assert!(!enabled(&entries, STOP));
-        let stopped = menu(Mode::Local(Phase::Stopped), None, Labels::Id);
+        let stopped = menu(Mode::Local(Phase::Stopped), None, None, Labels::Id);
         assert!(enabled(&stopped, START));
     }
 
@@ -108,5 +112,12 @@ mod tests {
         );
         assert_eq!(tooltip(Some(0), Labels::En), "Saka");
         assert_eq!(tooltip(None, Labels::Id), "Saka");
+    }
+
+    #[test]
+    fn an_available_update_adds_an_install_entry_before_quit() {
+        let entries = menu(Mode::Remote, None, Some("0.2.0"), Labels::En);
+        assert_eq!(ids(&entries), [OPEN, INBOX, UPDATE, QUIT]);
+        assert_eq!(entries[2].label, "Install Saka 0.2.0 and restart");
     }
 }

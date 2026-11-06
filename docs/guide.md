@@ -143,18 +143,39 @@ Saka is installable as an app (a PWA): choose Install or Add to Home Screen in t
 
 A pairing code is ten characters of Crockford base32 (`I`, `L`, `O` and `U` are never used; typing them as `1` or `0` works), is stored only as a hash, and works once. Five wrong guesses void every live code of the same kind. After ten failed attempts in a minute from the same address, the sign-in endpoints answer `429` with `Retry-After`; the address is the direct peer, so `X-Forwarded-For` is ignored. A token, a code, and a cookie are never written to logs, events, or error messages.
 
+## Desktop app
+
+The desktop app is the same web app in a native window (Tauri 2), with a tray icon, OS notifications, and a list of servers to switch between. There is no release yet: build it, or take the installers from the Desktop workflow.
+
+**Install.** In GitHub, open Actions, choose the `desktop` workflow, and run it. It builds on Linux (`.deb` and `.AppImage`) and macOS (`.dmg`) and attaches the files to the run; it publishes nothing. The installers are not signed or notarized, so macOS asks you to confirm opening the app (right-click, Open). On Linux the app needs WebKitGTK 4.1 and a Secret Service keyring (GNOME Keyring or KWallet) to keep tokens.
+
+**Build it yourself.** `make desktop-check` builds the shell and runs its tests; it needs the WebKit and GTK development libraries, so `make check` does not build it. `make desktop-bundle` builds the installers for the current system.
+
+**Servers.** The first start shows the Servers page. Two kinds of server:
+
+- *This computer* starts the bundled `saka serve` on a loopback port the app keeps, with its own config and data under the app data folder, no sign-in, and `tauri://localhost` as an allowed origin. It stops when you quit the app, and the tray offers Start and Stop; a server that dies is shown as disconnected until you start it again. Its log is `saka.log` in the `local` folder of the app data folder. Jobs and sessions use the same machinery as any Saka server, so the usual requirements (git, an agent CLI, systemd for runners) apply.
+- A *remote server* is any Saka with `[auth]` on, reached over `https`; plain `http` is accepted only for `127.0.0.1`, `localhost` and `::1`. Add its address (no path), a name, and a pairing code from its Settings, Devices and sign-in page or `saka auth pair`. The app exchanges the code for a device token and keeps the token in the system keychain, never in a file. The remote server must list the app's origin: add `tauri://localhost` to `server.allowed_origins` in its config. If the token is revoked, the app asks for a new code.
+
+The app talks to one server at a time and restarts when you switch, because the content security policy it runs under allows network access to the active server only. The app refuses a server whose API version is more than one behind its own, or that needs a newer app, and says so before making any other call.
+
+**Notifications and tray.** The app checks the inbox every 30 seconds. When the number of waiting items goes up and the window is not focused, it raises a notification; focusing the window afterwards opens the new item (or the inbox when several arrived). Closing the window hides it to the tray; Quit in the tray menu exits.
+
+**Updates.** The updater is off. It turns on only in a build made with a public key: set the repository variables `SAKA_UPDATER_PUBKEY` and `SAKA_UPDATER_ENDPOINT` (an `https` URL) and the secret `TAURI_SIGNING_PRIVATE_KEY` before running the workflow. No key is generated or stored by Saka, and without them the app never looks for updates.
+
 ## Development
 
 | Path | Contents |
 |---|---|
 | `crates/` | The product crates; the allowed dependencies between them are checked by `cargo xtask deps` |
 | `web/` | The web app (Vite, React), embedded in the binary with `--features embed-web` |
-| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `wasm`, `test-systemd`, `test-claude-memory`, `test-claude-mcp`, `e2e` |
+| `desktop/` | The desktop shell (Tauri 2), outside the default workspace members; see Desktop app |
+| `xtask/` | Repository tasks: `check`, `deps`, `desktop-check`, `desktop-bundle`, `hygiene`, `wasm`, `test-systemd`, `test-claude-memory`, `test-claude-mcp`, `e2e` |
 | `spikes/` | Research experiments, excluded from every check |
 
 ```sh
 make check               # format, lint, tests, saka-wasm bindings, dependency direction, source hygiene, API drift, web checks
 cargo xtask wasm         # builds the spec lint for the browser into web/src/wasm/pkg (needed before pnpm dev, test, or build)
+make desktop-check       # builds and tests the desktop shell (needs WebKitGTK and GTK headers)
 make test-systemd        # the session supervisor in a real user systemd unit
 make test-claude-memory  # the installed claude CLI loads instructions only from the session worktree
 make test-claude-mcp     # the installed claude CLI sees and calls the `request_decision` tool of `saka mcp`

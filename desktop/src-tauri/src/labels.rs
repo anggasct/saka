@@ -90,6 +90,20 @@ impl Labels {
         }
     }
 
+    pub fn update_available(self, version: &str) -> String {
+        match self {
+            Labels::En => format!("Saka {version} is available"),
+            Labels::Id => format!("Saka {version} tersedia"),
+        }
+    }
+
+    pub fn install_update(self, version: &str) -> String {
+        match self {
+            Labels::En => format!("Install Saka {version} and restart"),
+            Labels::Id => format!("Pasang Saka {version} dan mulai ulang"),
+        }
+    }
+
     pub fn quit(self) -> &'static str {
         match self {
             Labels::En => "Quit",

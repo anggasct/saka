@@ -19,6 +19,11 @@ fn main() -> ExitCode {
         Some("check") => check::run(),
         Some("deps") => deps::run(),
         Some("desktop-check") => desktop::run(),
+        Some("desktop-bundle") => match &args[1..] {
+            [] => desktop::bundle(false),
+            [flag] if flag == "--debug" => desktop::bundle(true),
+            _ => return usage(),
+        },
         Some("e2e") => e2e::run(),
         Some("hygiene") => metadata::workspace_root().and_then(|root| hygiene::run(&root)),
         Some("supply-chain") => match &args[1..] {
@@ -43,7 +48,7 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cargo xtask <check|deps|desktop-check|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|test-claude-mcp|wasm>"
+        "usage: cargo xtask <check|deps|desktop-check|desktop-bundle [--debug]|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|test-claude-mcp|wasm>"
     );
     ExitCode::from(2)
 }

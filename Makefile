@@ -3,7 +3,7 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps desktop-check e2e supply-chain test-systemd test-claude-memory test-claude-mcp
+.PHONY: check deps desktop-bundle desktop-check e2e supply-chain test-systemd test-claude-memory test-claude-mcp
 
 check:
 	$(LIMITED) cargo xtask check
@@ -14,6 +14,10 @@ deps:
 # Builds the desktop shell (needs the WebKit and GTK system libraries); not part of `make check`.
 desktop-check:
 	$(LIMITED) cargo xtask desktop-check
+
+# Builds the Linux or macOS installers of the desktop app (unsigned); the Desktop workflow runs it.
+desktop-bundle:
+	$(LIMITED) cargo xtask desktop-bundle
 
 # Advisories, licences, bans, sources and unused dependencies; needs network.
 supply-chain:

@@ -11,6 +11,7 @@ mod shell;
 mod sidecar;
 mod store;
 mod tray;
+mod updater;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -60,11 +61,15 @@ pub fn run() {
     let active = manager.active_origin();
     context.config_mut().app.security.csp = Some(Csp::Policy(csp::policy(active.as_deref())));
 
-    let built = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             shell::show_main(app);
         }))
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    if updater::configured(context.config()) {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    let built = builder
         .manage(manager)
         .manage(Ui::new(Labels::detect()))
         .setup(|app| {
@@ -73,6 +78,7 @@ pub fn run() {
                 tracing::warn!(error = %e, "no tray icon; closing the window quits the app");
             }
             shell::spawn_background(handle);
+            updater::spawn_checks(handle);
             Ok(())
         })
         .on_window_event(|window, event| match event {

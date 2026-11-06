@@ -16,6 +16,7 @@ keyring = "4.2.0"
 tauri = { version = "2.12.5", default-features = false, features = ["common-controls-v6", "compression", "dynamic-acl", "tray-icon", "wry"] }
 tauri-plugin-notification = "2.8.0"
 tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-updater = "2.14.1"
 tauri-build = { version = "2.7.4", features = [] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "query", "tokio", "tracing"] }
 async-trait = "0.1.92"
