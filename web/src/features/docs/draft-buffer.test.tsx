@@ -136,12 +136,9 @@ describe("Buffer from a draft", () => {
     expect(
       await within(panel).findByText("1 error · 0 warnings · 1 open decision"),
     ).toBeInTheDocument();
-    await waitFor(
-      () => {
-        expect(messages(view)).toContain(OPEN_DECISION);
-      },
-      { timeout: 2000 },
-    );
+    await waitFor(() => {
+      expect(messages(view)).toContain(OPEN_DECISION);
+    });
 
     const before = view.state.sliceDoc();
     const boxes = view.dom.querySelectorAll<HTMLInputElement>("input.cm-task");
@@ -158,12 +155,9 @@ describe("Buffer from a draft", () => {
     expect(after.slice(at - 1, at + 2)).toBe("[x]");
     expect(before.slice(at - 1, at + 2)).toBe("[ ]");
 
-    await waitFor(
-      () => {
-        expect(messages(view)).not.toContain(OPEN_DECISION);
-      },
-      { timeout: 2000 },
-    );
+    await waitFor(() => {
+      expect(messages(view)).not.toContain(OPEN_DECISION);
+    });
     expect(await within(panel).findByText("Ready")).toBeInTheDocument();
   });
 });
