@@ -74,7 +74,14 @@ struct Requested {
 
 struct Seen {
     command: Option<Requested>,
+    fix: Option<Requested>,
     cursor: ChangeCursorRow,
+}
+
+#[derive(Clone, Copy)]
+struct Wanted {
+    review: bool,
+    fix: bool,
 }
 
 fn is_new(signal: &ChangeSignal, cursor: Option<&ChangeCursorRow>) -> bool {
@@ -179,6 +186,7 @@ impl Engine {
             }
             let manual_entry = known.is_none() && entry.trigger == Trigger::Manual;
             let manual_review = known.is_some() && review == Some(Trigger::Manual);
+            let fixes = known.is_some() && project.workflow.has_stage(Stage::Fix);
             if known.is_none() {
                 let candidate = Candidate {
                     labels: &change.labels,
@@ -201,13 +209,19 @@ impl Engine {
                 }
             }
             let mut command = None;
-            if manual_entry || manual_review {
+            let mut fix = None;
+            if manual_entry || manual_review || fixes {
                 let cursor = cursors.iter().find(|c| c.number == change.number);
+                let wanted = Wanted {
+                    review: manual_entry || manual_review,
+                    fix: fixes,
+                };
                 let seen = self
-                    .read_commands(&repo, change, &entry, cursor, &mut writers)
+                    .read_commands(&repo, change, &entry, cursor, &mut writers, wanted)
                     .await?;
                 if let Some(seen) = seen {
                     command = seen.command;
+                    fix = seen.fix;
                     written.change_cursors.push(seen.cursor);
                 }
                 if manual_entry && command.is_none() {
@@ -256,6 +270,9 @@ impl Engine {
                     }
                 }
                 Some(t) => {
+                    if let Some(asked) = &fix {
+                        self.fix_on_command(&repo, change.number, t.work_item_id, asked);
+                    }
                     let Some(command) = command else { continue };
                     let events = self.decide(
                         t.work_item_id,
@@ -313,6 +330,7 @@ impl Engine {
         entry: &ChangeEntry,
         cursor: Option<&ChangeCursorRow>,
         writers: &mut BTreeMap<String, bool>,
+        wanted: Wanted,
     ) -> Result<Option<Seen>> {
         if cursor.is_some_and(|c| c.updated_at >= change.updated_at) {
             return Ok(None);
@@ -325,11 +343,12 @@ impl Engine {
             .await?;
         let fresh: Vec<&ChangeSignal> = signals.iter().filter(|s| is_new(s, cursor)).collect();
         let mut command = None;
+        let mut fix = None;
         for signal in &fresh {
-            let (cause, wanted) = match &signal.kind {
+            let (cause, asks_review, asks_fix) = match &signal.kind {
                 SignalKind::Comment { body } => {
                     let commands = external::parse_commands(body);
-                    for other in commands.iter().filter(|c| **c != Command::Review) {
+                    for other in commands.iter().filter(|c| **c == Command::Merge) {
                         tracing::info!(
                             repo = %repo.full_name,
                             number = change.number,
@@ -337,14 +356,21 @@ impl Engine {
                             "intake.command.unavailable"
                         );
                     }
-                    (ExternalCause::Comment, commands.contains(&Command::Review))
+                    (
+                        ExternalCause::Comment,
+                        commands.contains(&Command::Review),
+                        commands.contains(&Command::Fix),
+                    )
                 }
                 SignalKind::Label { name } => (
                     ExternalCause::Label,
                     name.eq_ignore_ascii_case(&entry.trigger_label),
+                    false,
                 ),
             };
-            if !wanted || command.is_some() {
+            let asks_review = asks_review && wanted.review && command.is_none();
+            let asks_fix = asks_fix && wanted.fix && fix.is_none();
+            if !asks_review && !asks_fix {
                 continue;
             }
             let writes = match writers.get(&signal.actor) {
@@ -356,10 +382,16 @@ impl Engine {
                 }
             };
             if writes {
-                command = Some(Requested {
+                let asked = || Requested {
                     cause,
                     actor: signal.actor.clone(),
-                });
+                };
+                if asks_review {
+                    command = Some(asked());
+                }
+                if asks_fix {
+                    fix = Some(asked());
+                }
             } else {
                 self.counters.intake_change("command_denied");
                 tracing::info!(
@@ -388,6 +420,7 @@ impl Engine {
         }
         Ok(Some(Seen {
             command,
+            fix,
             cursor: ChangeCursorRow {
                 repo_id: repo.repo_id,
                 number: change.number,
@@ -553,6 +586,37 @@ impl Engine {
         self.counters
             .review_request(ExternalCause::Operator.as_str());
         Ok(events)
+    }
+
+    fn fix_on_command(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        id: saka_core::ids::WorkItemId,
+        asked: &Requested,
+    ) {
+        let outcome = self.decide(
+            id,
+            Some(TaskInput::FixRequested {
+                cause: asked.cause,
+                actor: Some(asked.actor.clone()),
+            }),
+            Mode::Command,
+            &self.cause(SCAN_ACTOR),
+            Extra::default(),
+        );
+        match outcome {
+            Ok(_) => {
+                tracing::info!(repo = %repo.full_name, number, actor = %asked.actor, "intake.fix.requested")
+            }
+            Err(EngineError::Rejected(Rejection::FixNotAvailable { reason })) => {
+                self.counters.intake_change("command_denied");
+                tracing::info!(repo = %repo.full_name, number, actor = %asked.actor, reason, "intake.command.denied");
+            }
+            Err(e) => {
+                tracing::warn!(repo = %repo.full_name, number, error = %e, "intake.fix.failed")
+            }
+        }
     }
 
     pub async fn request_fix_with(

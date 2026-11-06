@@ -18,6 +18,7 @@ const FIX_MANUAL: &str =
     "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nfix = \"manual\"\n";
 const ONE_ROUND: &str =
     "[workflow]\npreset = \"review_only\"\nfix_rounds = 1\n\n[workflow.stages]\nfix = \"auto\"\n";
+const FORKS_MANUAL: &str = "[workflow]\npreset = \"review_only\"\n\n[workflow.change_request]\ninclude_forks = true\n\n[workflow.stages]\nfix = \"manual\"\n";
 const WITH_FORKS: &str = "[workflow]\npreset = \"review_only\"\n\n[workflow.change_request]\ninclude_forks = true\n\n[workflow.stages]\nfix = \"auto\"\n";
 
 fn sim(workflow: &str) -> Sim {
@@ -259,4 +260,71 @@ fn a_push_by_hand_while_the_fix_runs_drops_the_round_and_reviews_the_new_head() 
         .unwrap();
     assert_eq!(fix.state, StageRunState::Cancelled);
     assert_eq!(sim.stats().pushes, 0, "Saka never pushed over theirs");
+}
+
+#[test]
+fn a_comment_from_someone_who_can_write_starts_the_round_once() {
+    let mut sim = sim(FIX_MANUAL);
+    sim.world.script_reviews(vec![
+        ReviewReply::request_changes("Cover the empty list."),
+        ReviewReply::approve(),
+    ]);
+    let number = open(&sim);
+    assert!(sim.run_until(STEPS, |s| reviews(s, 1)));
+
+    sim.world.set_write_access("bob", true);
+    sim.world
+        .comment_on_change(SHOP_REPO, number, "bob", "Looks fixable.\n/saka fix\n");
+    assert!(sim.run_until(STEPS, |s| reviews(s, 2)));
+    assert_eq!(stages(&sim), ["review", "fix", "review"]);
+    let fix = only(&sim)
+        .retired_runs
+        .into_iter()
+        .find(|r| r.stage == Stage::Fix)
+        .unwrap();
+    assert_eq!(fix.reason.as_deref(), Some("comment by bob"));
+    sim.run_until(300, |_| false);
+    assert_eq!(stages(&sim).len(), 3, "the comment is not read twice");
+}
+
+#[test]
+fn a_comment_from_someone_who_cannot_write_or_on_a_fork_starts_nothing() {
+    let mut sim = sim(FORKS_MANUAL);
+    sim.world.script_reviews(vec![
+        ReviewReply::request_changes("Cover the empty list."),
+        ReviewReply::request_changes("Cover the empty list."),
+    ]);
+    let number = open(&sim);
+    let mut fork = ChangeSpec::new("From a fork", "mallory", "patch-1");
+    fork.fork = true;
+    let forked = sim.world.open_external_change(SHOP_REPO, fork);
+    assert!(sim.run_until(STEPS, |s| {
+        s.externals().len() == 2
+            && s.externals()
+                .iter()
+                .all(|t| t.is_at(Stage::Review, StagePhase::Reviewed))
+    }));
+    sim.world.set_write_access("bob", true);
+    sim.world
+        .comment_on_change(SHOP_REPO, number, "stranger", "/saka fix");
+    sim.world
+        .comment_on_change(SHOP_REPO, forked, "bob", "/saka fix");
+    sim.run_until(600, |_| false);
+
+    assert!(
+        sim.externals()
+            .iter()
+            .all(|t| t.stage_run.as_ref().unwrap().stage == Stage::Review),
+        "neither comment started a round"
+    );
+    assert_eq!(sim.stats().pushes, 0);
+    let denied = sim
+        .engine()
+        .metrics()
+        .unwrap()
+        .intake_changes
+        .into_iter()
+        .find(|(outcome, _)| outcome == "command_denied")
+        .map_or(0, |(_, n)| n);
+    assert_eq!(denied, 2, "both comments were counted as refused");
 }

@@ -937,6 +937,22 @@ impl Client {
         }
     }
 
+    pub async fn task_fix(&self, id: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/work-items/{id}/actions/fix"),
+                &json!({}),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                format!("fix started {} {}", text(&b["task_key"]), text(&b["state"]))
+            }),
+            Err(code) => code,
+        }
+    }
+
     pub async fn task_return(&self, id: &str, stage: Option<&str>, reason: &str) -> ExitCode {
         match self
             .post(

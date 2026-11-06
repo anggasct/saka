@@ -433,6 +433,11 @@ enum TaskCmd {
         #[arg(long)]
         reason: String,
     },
+    #[command(
+        about = "Starts a fix round on a pull request from outside Saka whose review asked for changes",
+        after_help = "Exit codes: 0 started, 1 failed, 4 refused (a fork, no findings at the current head, rounds spent, not in the workflow, or a task of a spec step)."
+    )]
+    Fix { id: String },
     #[command(about = "Sends a message to the task's running or idle agent session")]
     Steer { id: String, text: String },
     #[command(about = "Stops the agent's current turn; the session waits for a steer")]
@@ -769,6 +774,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     TaskCmd::Merge { id, reason } => {
                         client.task_merge(&id, reason.as_deref()).await
                     }
+                    TaskCmd::Fix { id } => client.task_fix(&id).await,
                     TaskCmd::Retry { id, reason } => {
                         client.task_action(&id, "retry", &reason).await
                     }
