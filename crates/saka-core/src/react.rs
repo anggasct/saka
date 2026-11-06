@@ -133,6 +133,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
             && task.external.is_some()
             && !task.is_at(Stage::Review, StagePhase::PreparingEnvironment)
             && !task.is_at(Stage::Review, StagePhase::RunningSession)
+            && !task.is_at_stage(Stage::Fix)
     }) {
         jobs.push(Job::new(
             JobKind::EnvTeardown,

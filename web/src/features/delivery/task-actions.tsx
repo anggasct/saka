@@ -11,6 +11,7 @@ import type { WorkItem, WorkItemDetail } from "./queries";
 import {
   cancelTask,
   mergeTask,
+  requestFix,
   requestReview,
   retryTask,
   returnTask,
@@ -285,6 +286,33 @@ function ReviewDialog({ task }: { task: WorkItem }) {
   );
 }
 
+function FixDialog({ task }: { task: WorkItem }) {
+  const t = useT();
+  const after = useAfterAction();
+  const change = task.change_request;
+  return (
+    <ActionDialog
+      trigger={t("task.fixAction.trigger")}
+      triggerVariant="default"
+      title={t("task.fixAction.title")}
+      description={t("task.fixAction.description")}
+      submit={t("task.fixAction.submit")}
+      onSubmit={(_, key) => after(() => requestFix(task.id, key))}
+    >
+      {change && (
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+          <dt className="font-medium">{t("task.change.title")}</dt>
+          <dd>{t("task.change", { number: change.number })}</dd>
+          <dt className="font-medium">{t("task.head")}</dt>
+          <dd>
+            <code>{sha(change.head_sha)}</code>
+          </dd>
+        </dl>
+      )}
+    </ActionDialog>
+  );
+}
+
 export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
   const primary = task.blocker?.primary_action.kind;
   const actions = task.available_actions.filter((a) => a !== primary);
@@ -294,6 +322,7 @@ export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
   return (
     <div className="flex flex-wrap gap-2">
       {actions.includes("review") && <ReviewDialog task={task} />}
+      {actions.includes("fix") && <FixDialog task={task} />}
       {actions.includes("merge") && <MergeDialog task={task} />}
       {actions.includes("retry") && <RetryDialog task={task} />}
       {actions.includes("return") && <ReturnDialog task={task} />}

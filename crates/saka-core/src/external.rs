@@ -115,7 +115,7 @@ fn clipped_title(title: &str) -> String {
     }
 }
 
-fn reason(cause: ExternalCause, actor: Option<&str>) -> Option<String> {
+pub(crate) fn reason(cause: ExternalCause, actor: Option<&str>) -> Option<String> {
     let who = actor.unwrap_or("unknown");
     match cause {
         ExternalCause::Auto => None,
@@ -125,7 +125,7 @@ fn reason(cause: ExternalCause, actor: Option<&str>) -> Option<String> {
     }
 }
 
-fn review_run(
+pub(crate) fn review_run(
     task_id: WorkItemId,
     attempt: u32,
     head_sha: &str,
@@ -204,7 +204,7 @@ fn open_run(task: &Task) -> Option<StageRunId> {
     task.stage_run
         .as_ref()
         .filter(|r| {
-            r.stage == Stage::Review
+            matches!(r.stage, Stage::Review | Stage::Fix)
                 && matches!(r.state, StageRunState::Pending | StageRunState::Running)
         })
         .map(|r| r.id)
@@ -223,7 +223,7 @@ fn cancel_open(task: &Task, reason: &str, now: crate::time::Timestamp) -> Vec<Ev
     if task
         .stage_run
         .as_ref()
-        .is_some_and(|r| r.stage == Stage::Review)
+        .is_some_and(|r| matches!(r.stage, Stage::Review | Stage::Fix))
         && let Some(view) = crate::task::run_view(task)
     {
         events.extend(crate::session::end(
@@ -262,7 +262,11 @@ fn request(
     let Some(external) = &task.external else {
         return Err(Rejection::Unsupported);
     };
-    if !task.is_at_stage(Stage::Review) {
+    let fixing = task
+        .stage_run
+        .as_ref()
+        .is_some_and(|r| r.stage == Stage::Fix && task.item.state != WorkItemState::Blocked);
+    if !task.is_at_stage(Stage::Review) && !fixing {
         return Err(Rejection::InvalidState {
             state: task.item.state.as_str().to_string(),
         });
@@ -419,6 +423,34 @@ pub fn decide(task: &Task, input: TaskInput, ctx: &mut Ctx<'_>) -> Result<Vec<Ev
         } => request(task, &head_sha, cause, actor.as_deref(), ctx),
         _ => Err(Rejection::Unsupported),
     }
+}
+
+// Why a rejected change cannot be fixed now, or `None` when a round may start.
+pub fn fix_blocker(task: &Task) -> Option<&'static str> {
+    let external = task.external.as_ref()?;
+    if external.from_fork {
+        return Some("fork");
+    }
+    if !task.workflow.has_stage(Stage::Fix) {
+        return Some("not_in_workflow");
+    }
+    let rejected = task
+        .change_request
+        .as_ref()
+        .is_some_and(|cr| task.rejected_at(&cr.head_sha).is_some());
+    if !task.is_at(Stage::Review, StagePhase::Reviewed) || !rejected {
+        return Some("no_findings");
+    }
+    (!task.fix_rounds_left()).then_some("rounds_exhausted")
+}
+
+pub fn fix_available(task: &Task) -> bool {
+    task.external.is_some()
+        && task
+            .change_request
+            .as_ref()
+            .is_some_and(|c| c.state == ChangeState::Open)
+        && fix_blocker(task).is_none()
 }
 
 pub fn awaiting_request(task: &Task) -> bool {

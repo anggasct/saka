@@ -823,6 +823,75 @@ fn an_operator_takes_a_pull_request_by_number_and_every_refusal_has_its_code() {
 }
 
 #[test]
+fn the_fix_action_starts_a_round_once_and_says_why_it_cannot() {
+    let mut api = outside_api(
+        "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nfix = \"manual\"\n",
+    );
+    api.sim
+        .world
+        .script_reviews(vec![saka_testkit::ReviewReply::request_changes(
+            "Cover the empty list.",
+        )]);
+    api.sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.externals()
+            .iter()
+            .any(|t| t.is_at(Stage::Review, StagePhase::Reviewed))
+    }));
+    let id = api.sim.externals()[0].item.id.0;
+    let fix = format!("/api/v1/work-items/{id}/actions/fix");
+    let shown = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(shown.body["available_actions"], json!(["cancel", "fix"]));
+
+    problem(
+        &api.post(&fix, &[], json!({ "extra": true })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let r = api.post(&fix, &[], json!({}));
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(
+        r.body["stage"],
+        Value::Null,
+        "the environment is being made"
+    );
+    assert_eq!(r.body["available_actions"], json!(["cancel"]));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["stage_runs"][1],
+        json!({
+            "id": detail.body["stage_runs"][1]["id"], "stage": "fix", "attempt": 1,
+            "state": "pending", "trigger": "manual", "reason": "operator",
+            "head_sha": null, "round": 1, "failure": null,
+            "started_at": null, "ended_at": null,
+        })
+    );
+    let again = api.post(&fix, &[], json!({}));
+    problem(&again, StatusCode::CONFLICT, "fix_not_available");
+    assert_eq!(again.body["params"]["reason"], "no_findings");
+}
+
+#[test]
+fn the_fix_action_refuses_a_task_made_from_a_spec_step() {
+    let mut api = takeover_api();
+    let id = api.sim.task(1).item.id.0;
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    problem(
+        &api.post(
+            &format!("/api/v1/work-items/{id}/actions/fix"),
+            &[],
+            json!({}),
+        ),
+        StatusCode::CONFLICT,
+        "unsupported_in_this_version",
+    );
+}
+
+#[test]
 fn the_review_action_asks_once_per_head_and_again_after_a_push() {
     let mut api = outside_api(
         "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nreview = \"manual\"\n",

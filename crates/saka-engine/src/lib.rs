@@ -8,6 +8,7 @@ mod context;
 pub mod diagnostics;
 mod docs;
 mod draft;
+mod fix_packet;
 mod hooks;
 mod hooks_run;
 mod intake;

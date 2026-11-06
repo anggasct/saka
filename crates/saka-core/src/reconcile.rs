@@ -45,7 +45,14 @@ fn holds_port_block(task: &Task) -> bool {
 fn holds_review_slot(task: &Task) -> bool {
     task.external.is_some()
         && (task.is_at(Stage::Review, StagePhase::PreparingEnvironment)
-            || task.is_at(Stage::Review, StagePhase::RunningSession))
+            || task.is_at(Stage::Review, StagePhase::RunningSession)
+            || (matches!(
+                task.item.state,
+                WorkItemState::Admitted | WorkItemState::InStage
+            ) && task.stage_run.as_ref().is_some_and(|r| {
+                r.stage == Stage::Fix
+                    && matches!(r.state, StageRunState::Pending | StageRunState::Running)
+            })))
 }
 
 fn review_waiting(task: &Task) -> Option<Timestamp> {
