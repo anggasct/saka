@@ -184,6 +184,18 @@ pub enum MergeOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnqueueOutcome {
+    Queued,
+    Merged {
+        merge_commit_sha: String,
+        merged_at: Option<Timestamp>,
+    },
+    Rejected {
+        reason: String,
+    },
+}
+
 #[async_trait]
 pub trait Scm: Send + Sync {
     async fn repository(&self, integration_id: &str, full_name: &str) -> PortResult<RepoInfo>;
@@ -236,6 +248,12 @@ pub trait Scm: Send + Sync {
     async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview>;
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
+
+    async fn merge_queue(&self, repo: &RepoRef, base_branch: &str) -> PortResult<bool>;
+
+    async fn enqueue(&self, request: &MergeRequest) -> PortResult<EnqueueOutcome>;
+
+    async fn in_merge_queue(&self, repo: &RepoRef, number: u64) -> PortResult<bool>;
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()>;
 
@@ -393,6 +411,7 @@ pub struct ScmCapabilities {
     pub draft_change_requests: bool,
     pub delete_branch_after_merge: bool,
     pub commit_status: bool,
+    pub merge_queue: bool,
     pub user_authorship: bool,
     pub change_head_ref: &'static str,
     pub diagnostics: Option<saka_core::diagnostics::AppRequirements>,

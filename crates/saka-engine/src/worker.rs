@@ -21,10 +21,10 @@ use saka_core::vocab::{
     Stage, StagePhase, TokenInvalidCause, UserLinkCause, UserTokenCause, WorkItemOrigin,
 };
 use saka_ports::{
-    ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnvRef, ExtraDir, LaunchProfile,
-    MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult, PrepareRequest,
-    PushOutcome, PushRequest, Rebase, RecipeCommand, RecipePhase, RepoRef, SessionLaunch,
-    SessionRef, StatusReport, StatusState,
+    ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnqueueOutcome, EnvRef, ExtraDir,
+    LaunchProfile, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
+    PrepareRequest, PushOutcome, PushRequest, Rebase, RecipeCommand, RecipePhase, RepoRef,
+    SessionLaunch, SessionRef, StatusReport, StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
@@ -1947,6 +1947,14 @@ impl Engine {
                 "delivery.docs_change.discarded"
             );
         }
+        let native = task.is_at(Stage::Merge, StagePhase::Merging)
+            && task.stage_run.as_ref().is_some_and(|r| r.queue_native);
+        if native && snapshot.state == ChangeState::Open {
+            let repo = self.repo_ref(task)?;
+            if !self.ports.scm.in_merge_queue(&repo, change.number).await? {
+                return Ok(Effect::Fact(TaskInput::QueueLeft));
+            }
+        }
         Ok(Effect::Fact(TaskInput::ChangeObserved {
             role: ChangeRole::Code,
             state: snapshot.state,
@@ -2010,6 +2018,20 @@ impl Engine {
                 json!({ "work_item_id": task.item.id }),
             ));
         };
+        let repo = self.repo_ref(task)?;
+        let native = self
+            .ports
+            .scm
+            .capabilities(&repo.integration_id)
+            .is_some_and(|c| c.merge_queue)
+            && self
+                .ports
+                .scm
+                .merge_queue(&repo, &change.base_branch)
+                .await?;
+        if native {
+            return self.enqueue(task, repo).await;
+        }
         let env_ref = self.env_ref(task, env)?;
         let head = change.head_sha.clone();
         let (outcome, label) = match self
@@ -2076,6 +2098,85 @@ impl Engine {
             "delivery.merge.integrated"
         );
         Ok(Effect::Fact(TaskInput::Integrated(outcome)))
+    }
+
+    async fn enqueue(&self, task: &Task, repo: RepoRef) -> Execution {
+        let Some(change) = task.change_request.as_ref() else {
+            return Ok(Effect::Skipped);
+        };
+        let head = change.head_sha.clone();
+        let fact = |outcome| Ok(Effect::Fact(TaskInput::Integrated(outcome)));
+        let enqueued = Integration::Enqueued {
+            head_sha: head.clone(),
+        };
+        if self.ports.scm.in_merge_queue(&repo, change.number).await? {
+            return fact(enqueued);
+        }
+        let snapshot = self.ports.scm.change_request(&repo, change.number).await?;
+        match snapshot.state {
+            ChangeState::Merged => {
+                if let Some(merge_commit_sha) = snapshot.merge_commit_sha {
+                    return fact(Integration::Merged {
+                        merge_commit_sha,
+                        merged_at: snapshot.merged_at,
+                    });
+                }
+            }
+            ChangeState::Closed => {
+                return Ok(Effect::Fact(TaskInput::ChangeObserved {
+                    role: saka_core::vocab::ChangeRole::Code,
+                    state: snapshot.state,
+                    head_sha: snapshot.head_sha,
+                    merge_commit_sha: None,
+                    merged_at: None,
+                    checks: snapshot.checks,
+                }));
+            }
+            ChangeState::Open => {}
+        }
+        let base = format!("refs/remotes/origin/{}", change.base_branch);
+        if let Some(violation) = self
+            .scope_violation(task, &base, &head, true, ScopeStage::Merge)
+            .await?
+        {
+            return Ok(Effect::Fact(TaskInput::PathScopeViolated {
+                role: saka_core::vocab::ChangeRole::Code,
+                head_sha: head,
+                violation,
+            }));
+        }
+        let outcome = self
+            .ports
+            .scm
+            .enqueue(&MergeRequest {
+                repo,
+                number: change.number,
+                head_sha: head,
+                method: self.cfg.loop_cfg.merge_method,
+                commit_title: format!(
+                    "{} (#{})",
+                    text::change_title(&task.item.work),
+                    change.number
+                ),
+            })
+            .await?;
+        self.counters.merge_turn("native");
+        tracing::info!(
+            work_item_id = %task.item.id,
+            base_branch = change.base_branch,
+            "delivery.merge.enqueued"
+        );
+        fact(match outcome {
+            EnqueueOutcome::Queued => enqueued,
+            EnqueueOutcome::Merged {
+                merge_commit_sha,
+                merged_at,
+            } => Integration::Merged {
+                merge_commit_sha,
+                merged_at,
+            },
+            EnqueueOutcome::Rejected { reason } => Integration::Rejected { reason },
+        })
     }
 
     async fn merge(&self, task: &Task, head_sha: String) -> Execution {

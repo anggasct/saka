@@ -99,6 +99,16 @@ pub enum Integration {
     Unclean {
         head_sha: String,
     },
+    Enqueued {
+        head_sha: String,
+    },
+    Merged {
+        merge_commit_sha: String,
+        merged_at: Option<Timestamp>,
+    },
+    Rejected {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -234,6 +244,7 @@ pub enum TaskInput {
     StartReview,
     MergeTurn,
     Integrated(Integration),
+    QueueLeft,
     ReviewEnvironmentPrepared {
         environment_id: EnvironmentId,
         root_path: String,
@@ -343,7 +354,9 @@ pub fn decide(
             head_sha,
             violation,
         } => {
-            if task.is_at(Stage::Merge, StagePhase::Merging) {
+            if task.is_at(Stage::Merge, StagePhase::Merging)
+                || task.is_at(Stage::Merge, StagePhase::Integrating)
+            {
                 d.block(
                     BlockerCode::PathScopeViolation,
                     violation.params(ScopeStage::Merge, &head_sha),
@@ -496,6 +509,7 @@ pub fn decide(
         I::StartReview => d.start_review(),
         I::MergeTurn => d.merge_turn(),
         I::Integrated(outcome) => d.integrated(outcome, ctx),
+        I::QueueLeft => d.queue_left(ctx),
         I::ReviewEnvironmentPrepared {
             environment_id,
             root_path,
@@ -1852,6 +1866,21 @@ impl Decider<'_> {
         events
     }
 
+    fn queue_left(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let native = self.task.stage_run.as_ref().is_some_and(|r| r.queue_native);
+        let Some(cr) = self.task.change_request.as_ref().filter(|_| native) else {
+            return vec![];
+        };
+        if !self.task.is_at(Stage::Merge, StagePhase::Merging) || cr.state != ChangeState::Open {
+            return vec![];
+        }
+        self.block(
+            BlockerCode::MergeConflict,
+            json!({ "reason": "removed_from_queue", "head_sha": cr.head_sha }),
+            ctx,
+        )
+    }
+
     fn leave_queue(&self, head_sha: String) -> Vec<Event> {
         let Some(cr) = &self.task.change_request else {
             return vec![];
@@ -1902,6 +1931,26 @@ impl Decider<'_> {
                     ctx,
                 )
             }
+            Integration::Enqueued { head_sha } => {
+                if cr.head_sha != head_sha {
+                    return self.leave_queue(cr.head_sha.clone());
+                }
+                let mut events = vec![Event::MergeEnqueued {
+                    work_item_id: self.item().id,
+                    head_sha: head_sha.clone(),
+                }];
+                events.extend(self.phase(StagePhase::Merging, Some(head_sha)));
+                events
+            }
+            Integration::Merged {
+                merge_commit_sha,
+                merged_at,
+            } => self.merged(merge_commit_sha, merged_at, true, ctx),
+            Integration::Rejected { reason } => self.block(
+                BlockerCode::MergeConflict,
+                json!({ "reason": reason, "head_sha": cr.head_sha }),
+                ctx,
+            ),
             Integration::Unclean { head_sha } => self.block(
                 BlockerCode::MergeConflict,
                 json!({ "reason": "worktree_unclean", "head_sha": head_sha }),
@@ -2868,6 +2917,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 head_sha: head_sha.clone(),
                 docs_head_sha: None,
                 queued_at: None,
+                queue_native: false,
                 failure: None,
                 budget: *budget,
                 budget_warnings: Vec::new(),
@@ -2991,6 +3041,11 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::MergeRebased { .. } => {}
+        E::MergeEnqueued { .. } => {
+            if let Some(run) = &mut t.stage_run {
+                run.queue_native = true;
+            }
+        }
         E::MergeDequeued { .. } => {
             if let Some(run) = &mut t.stage_run {
                 run.queued_at = None;
@@ -3426,6 +3481,8 @@ pub fn watches_change(task: &Task) -> bool {
                 || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
                 || task.is_at(Stage::Merge, StagePhase::Queued)
                 || task.is_at(Stage::Merge, StagePhase::Integrating)
+                || (task.is_at(Stage::Merge, StagePhase::Merging)
+                    && task.stage_run.as_ref().is_some_and(|r| r.queue_native))
         }
         _ => false,
     }

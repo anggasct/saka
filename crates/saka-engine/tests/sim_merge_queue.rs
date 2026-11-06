@@ -3,7 +3,8 @@
 use saka_core::ids::SpecId;
 use saka_core::queue;
 use saka_core::vocab::{BlockerCode, SpecState, Stage, StagePhase, WorkItemOrigin, WorkItemState};
-use saka_testkit::{Operator, Sim, SimConfig, one_step_spec};
+use saka_ports::ScmCapabilities;
+use saka_testkit::{FAKE_CAPABILITIES, Operator, Sim, SimConfig, one_step_spec};
 
 const STEPS: usize = 12_000;
 const FIRST: &str = "docs/specs/first.md";
@@ -212,5 +213,118 @@ fn a_crash_in_the_middle_of_a_rebase_converges_on_the_same_head() {
             .iter()
             .all(|t| t.item.origin == WorkItemOrigin::SpecStep
                 && t.item.state == WorkItemState::Done)
+    );
+}
+
+fn native(pair: &Pair) {
+    pair.sim.world.set_capabilities(ScmCapabilities {
+        merge_queue: true,
+        ..FAKE_CAPABILITIES
+    });
+    pair.sim.world.set_native_queue(true);
+}
+
+fn native_pair() -> Pair {
+    let pair = Pair::new(
+        SimConfig::default(),
+        vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
+    );
+    native(&pair);
+    pair
+}
+
+fn both_native(s: &Sim) -> bool {
+    let tasks = s.all_tasks();
+    tasks.len() == 2
+        && tasks.iter().all(|t| {
+            t.is_at(Stage::Merge, StagePhase::Merging)
+                && t.stage_run.as_ref().is_some_and(|r| r.queue_native)
+        })
+}
+
+#[test]
+fn a_provider_with_a_queue_gets_the_change_without_a_rebase_and_without_taking_saka_s_turn() {
+    let mut pair = native_pair();
+    pair.sim.world.hold_native_queue(true);
+    assert!(pair.sim.run_until(STEPS, both_native));
+    let sim = &pair.sim;
+    assert_eq!(sim.world.enqueue_calls().len(), 2);
+    assert!(sim.world.rebases().is_empty());
+    assert!(sim.world.merge_calls().is_empty());
+    assert!(sim.all_tasks().iter().all(|t| !queue::holds(t)));
+    assert_eq!(sim.stats().pushes, 2);
+    assert_eq!(sim.events_of("delivery.merge.enqueued").len(), 2);
+
+    pair.sim.world.hold_native_queue(false);
+    assert!(pair.run(|_| {}));
+    assert_eq!(pair.sim.stats().merges, 2);
+    assert!(pair.sim.world.merge_calls().is_empty());
+}
+
+#[test]
+fn without_the_capability_or_a_queue_on_the_branch_saka_keeps_its_own_queue() {
+    let mut pair = Pair::new(
+        SimConfig::default(),
+        vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
+    );
+    pair.sim.world.set_native_queue(true);
+    assert!(pair.run(|_| {}));
+    assert!(pair.sim.world.enqueue_calls().is_empty());
+    assert_eq!(pair.sim.world.rebases().len(), 2);
+
+    let mut pair = native_pair();
+    pair.sim.world.set_native_queue(false);
+    assert!(pair.run(|_| {}));
+    assert!(pair.sim.world.enqueue_calls().is_empty());
+    assert_eq!(pair.sim.world.rebases().len(), 2);
+}
+
+#[test]
+fn a_change_the_provider_drops_from_its_queue_blocks_instead_of_waiting_forever() {
+    let mut pair = native_pair();
+    pair.sim.world.hold_native_queue(true);
+    assert!(pair.sim.run_until(STEPS, both_native));
+    let number = pair.sim.all_tasks()[0]
+        .change_request
+        .as_ref()
+        .unwrap()
+        .number;
+    pair.sim.world.eject_from_queue(number);
+    assert!(pair.sim.run_until(STEPS, |s| {
+        s.all_tasks().iter().any(|t| {
+            t.open_blocker()
+                .is_some_and(|b| b.code == BlockerCode::MergeConflict)
+        })
+    }));
+    let blocked = pair
+        .sim
+        .all_tasks()
+        .into_iter()
+        .find(|t| t.open_blocker().is_some())
+        .unwrap();
+    let params = blocked.open_blocker().unwrap().params.clone();
+    assert_eq!(params["reason"], "removed_from_queue");
+    assert_eq!(blocked.change_request.as_ref().unwrap().number, number);
+}
+
+#[test]
+fn a_refused_enqueue_blocks_with_the_providers_reason() {
+    let mut pair = native_pair();
+    pair.sim.world.refuse_enqueues(vec!["not_mergeable"]);
+    assert!(pair.sim.run_until(STEPS, |s| {
+        s.all_tasks().iter().any(|t| {
+            t.open_blocker()
+                .is_some_and(|b| b.code == BlockerCode::MergeConflict)
+        })
+    }));
+    let blocked = pair
+        .sim
+        .all_tasks()
+        .into_iter()
+        .find(|t| t.open_blocker().is_some())
+        .unwrap();
+    assert_eq!(
+        blocked.open_blocker().unwrap().params["reason"],
+        "not_mergeable"
     );
 }

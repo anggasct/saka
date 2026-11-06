@@ -3,6 +3,7 @@ pub mod ci;
 mod diagnose;
 mod intake;
 pub mod manifest;
+mod queue;
 pub mod requirements;
 pub mod user;
 mod webhook;
@@ -17,10 +18,10 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod, ReviewEvent};
 use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
-    DevicePoll, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange,
-    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
-    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh, WebhookDelivery,
-    WebhookSignature,
+    DevicePoll, EnqueueOutcome, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest,
+    OpenedChange, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
+    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
+    WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -36,6 +37,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     draft_change_requests: true,
     delete_branch_after_merge: true,
     commit_status: true,
+    merge_queue: true,
     user_authorship: true,
     change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(requirements::APP),
@@ -402,6 +404,18 @@ impl Scm for GitHub {
             StatusCode::NOT_FOUND => Err(inaccessible(&request.repo.full_name, 404)),
             _ => Err(self.app.unexpected("merge", &reply)),
         }
+    }
+
+    async fn merge_queue(&self, repo: &RepoRef, base_branch: &str) -> PortResult<bool> {
+        self.queue_enabled(repo, base_branch).await
+    }
+
+    async fn enqueue(&self, request: &MergeRequest) -> PortResult<EnqueueOutcome> {
+        self.enqueue_change(request).await
+    }
+
+    async fn in_merge_queue(&self, repo: &RepoRef, number: u64) -> PortResult<bool> {
+        self.queue_member(repo, number).await
     }
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {

@@ -2684,3 +2684,67 @@ fn a_queued_task_knows_its_place_in_line() {
         None
     );
 }
+
+#[test]
+fn a_change_handed_to_the_provider_queue_leaves_sakas_line_and_is_watched_until_it_lands() {
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    let head = w.task(1).change_request.as_ref().unwrap().head_sha.clone();
+    let events = w.decide(
+        1,
+        TaskInput::Integrated(Integration::Enqueued { head_sha: head }),
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::MergeEnqueued { .. }))
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::Merging));
+    assert!(w.task(1).stage_run.as_ref().unwrap().queue_native);
+    assert!(!saka_core::queue::holds(w.task(1)));
+    assert_eq!(
+        saka_core::queue::position(&w.tasks, w.task(1).item.id),
+        None
+    );
+    let jobs = w.take_jobs();
+    assert!(!jobs.contains(&JobKind::ScmMerge));
+    assert_eq!(polls(&w), 1, "the provider queue is watched");
+
+    w.decide(1, TaskInput::QueueLeft);
+    let blocker = w.task(1).open_blocker().unwrap().clone();
+    assert_eq!(blocker.code, BlockerCode::MergeConflict);
+    assert_eq!(blocker.params["reason"], json!("removed_from_queue"));
+    w.decide(
+        1,
+        TaskInput::Retry {
+            reason: "again".into(),
+        },
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingCi));
+}
+
+#[test]
+fn a_provider_merge_in_one_call_finishes_the_change_and_a_refusal_blocks() {
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Merged {
+            merge_commit_sha: sha('f'),
+            merged_at: None,
+        }),
+    );
+    assert_eq!(w.task(1).item.stage, Some(Stage::Sync));
+
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Rejected {
+            reason: "head_changed".into(),
+        }),
+    );
+    let blocker = w.task(1).open_blocker().unwrap().clone();
+    assert_eq!(blocker.params["reason"], json!("head_changed"));
+    assert!(task::auto_retryable(blocker.code, &blocker.params));
+}

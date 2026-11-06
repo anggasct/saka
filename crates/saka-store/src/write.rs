@@ -948,10 +948,11 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
     tx.execute(
         "INSERT INTO stage_run (id, work_item_id, project_id, stage, attempt, state, trigger, reason, entry_phase,
            head_sha, failure, started_at, ended_at, created_at, updated_at, budget, budget_warnings,
-           docs_head_sha, queued_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+           docs_head_sha, queued_at, queue_native)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, head_sha = excluded.head_sha,
            docs_head_sha = excluded.docs_head_sha, queued_at = excluded.queued_at,
+           queue_native = excluded.queue_native,
            failure = excluded.failure, started_at = excluded.started_at, ended_at = excluded.ended_at,
            updated_at = excluded.updated_at, budget_warnings = excluded.budget_warnings",
         params![
@@ -974,6 +975,7 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
             to_json(&r.budget_warnings)?,
             r.docs_head_sha,
             r.queued_at.map(|x| x.0),
+            i64::from(r.queue_native),
         ],
     )?;
     Ok(())

@@ -13,14 +13,16 @@ use saka_core::vocab::{
     ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod, ReviewEvent,
 };
 use saka_ports::{
-    ChangeCredential, ChangeOpening, MergeOutcome, MergeRequest, OpenChangeRequest, RepoRef,
-    ReviewPost, Scm, ScmCapabilities, SignalKind, WebhookTarget,
+    ChangeCredential, ChangeOpening, EnqueueOutcome, MergeOutcome, MergeRequest, OpenChangeRequest,
+    RepoRef, ReviewPost, Scm, ScmCapabilities, SignalKind, WebhookTarget,
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
 use support::gitlab::{self, GitLabWorld, TOKEN};
 use support::{HEAD, MERGED, NOW_MS, World, pr};
-use wiremock::matchers::{body_json, body_partial_json, header, method, path, query_param};
+use wiremock::matchers::{
+    body_json, body_partial_json, body_string_contains, header, method, path, query_param,
+};
 use wiremock::{Mock, ResponseTemplate};
 
 const SECRET: &[u8] = b"conformance-secret-0123456789abcdef";
@@ -36,6 +38,13 @@ enum MergeAnswer {
     Merged,
     HeadChanged,
     NotMergeable,
+}
+
+enum Enqueue {
+    Queued,
+    HeadChanged,
+    Merged,
+    Refused,
 }
 
 enum Signing {
@@ -97,6 +106,9 @@ trait Harness: Sync {
     }
     async fn checks_at(&self, sha: &str, checks: &[Check], pending_status: &str);
     async fn merge_answers(&self, number: u64, answer: MergeAnswer);
+    async fn queue_state(&self, enabled: bool);
+    async fn enqueue_answers(&self, number: u64, answer: Enqueue);
+    async fn queue_member(&self, number: u64, member: bool);
     async fn open_changes(&self, changes: &[Listed]);
     async fn change_files(&self, number: u64, files: &[&str]);
     async fn signals(&self, number: u64, comments: &[Commented], labels: &[Labeled]);
@@ -155,6 +167,7 @@ impl Harness for GitHubHarness {
             draft_change_requests: true,
             delete_branch_after_merge: true,
             commit_status: true,
+            merge_queue: true,
             user_authorship: true,
             change_head_ref: "refs/pull/{number}/head",
             diagnostics: Some(saka_scm::github::requirements::APP),
@@ -277,6 +290,96 @@ impl Harness for GitHubHarness {
                 "commit_title": format!("Add the first step (#{number})"),
             })))
             .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn queue_state(&self, enabled: bool) {
+        let queue = if enabled {
+            json!({ "id": "MQ_1" })
+        } else {
+            Value::Null
+        };
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("mergeQueue(branch"))
+            .and(body_partial_json(
+                json!({ "variables": { "owner": "acme", "name": "app", "branch": "main" } }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "data": { "repository": { "mergeQueue": queue } } })),
+            )
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn enqueue_answers(&self, number: u64, answer: Enqueue) {
+        let merged = matches!(answer, Enqueue::Merged);
+        let head = if matches!(answer, Enqueue::HeadChanged) {
+            "3333333333333333333333333333333333333333"
+        } else {
+            HEAD
+        };
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/acme/app/pulls/{number}").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "node_id": format!("PR_{number}"),
+                "state": if merged { "closed" } else { "open" },
+                "merged": merged,
+                "merged_at": if merged { json!("2026-01-01T00:10:00Z") } else { Value::Null },
+                "head": { "sha": head },
+            })))
+            .mount(&self.w.server)
+            .await;
+        if merged {
+            Mock::given(method("GET"))
+                .and(path(
+                    format!("/repos/acme/app/issues/{number}/events").as_str(),
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!([{ "event": "merged", "commit_id": MERGED }])),
+                )
+                .mount(&self.w.server)
+                .await;
+        }
+        let reply = match answer {
+            Enqueue::Queued => Some(json!({
+                "data": { "enqueuePullRequest": { "mergeQueueEntry": { "id": "E_1" } } }
+            })),
+            Enqueue::Refused => Some(json!({
+                "data": { "enqueuePullRequest": null },
+                "errors": [{ "message": "Pull request is not eligible for the merge queue" }],
+            })),
+            Enqueue::HeadChanged | Enqueue::Merged => None,
+        };
+        if let Some(reply) = reply {
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .and(body_string_contains("enqueuePullRequest"))
+                .and(body_partial_json(json!({
+                    "variables": { "id": format!("PR_{number}"), "oid": HEAD }
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(reply))
+                .expect(1)
+                .mount(&self.w.server)
+                .await;
+        }
+    }
+
+    async fn queue_member(&self, number: u64, member: bool) {
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("isInMergeQueue"))
+            .and(body_partial_json(
+                json!({ "variables": { "number": number } }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "repository": { "pullRequest": { "isInMergeQueue": member } } }
+            })))
             .expect(1)
             .mount(&self.w.server)
             .await;
@@ -512,6 +615,7 @@ impl Harness for GitLabHarness {
             draft_change_requests: true,
             delete_branch_after_merge: true,
             commit_status: true,
+            merge_queue: true,
             user_authorship: false,
             change_head_ref: "refs/merge-requests/{number}/head",
             diagnostics: None,
@@ -622,6 +726,59 @@ impl Harness for GitLabHarness {
                 "merge_commit_message": title, "squash_commit_message": title,
             })))
             .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn queue_state(&self, enabled: bool) {
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "path_with_namespace": "acme/app", "default_branch": "main",
+                "merge_pipelines_enabled": enabled, "merge_trains_enabled": enabled,
+            })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn enqueue_answers(&self, number: u64, answer: Enqueue) {
+        let (status, body) = match answer {
+            Enqueue::Queued => {
+                let mut mr = gitlab::mr(number, "opened");
+                mr["merge_when_pipeline_succeeds"] = json!(true);
+                (200, mr)
+            }
+            Enqueue::HeadChanged => (
+                409,
+                json!({ "message": "SHA does not match HEAD of source branch" }),
+            ),
+            Enqueue::Merged => (200, gitlab::mr(number, "merged")),
+            Enqueue::Refused => (422, json!({ "message": "Branch cannot be merged" })),
+        };
+        Mock::given(method("PUT"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/merge").as_str(),
+            ))
+            .and(body_json(json!({
+                "sha": HEAD, "auto_merge": true, "merge_when_pipeline_succeeds": true,
+                "should_remove_source_branch": false,
+            })))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn queue_member(&self, number: u64, member: bool) {
+        let mut mr = gitlab::mr(number, "opened");
+        mr["merge_when_pipeline_succeeds"] = json!(member);
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr))
             .expect(1)
             .mount(&self.w.server)
             .await;
@@ -1336,6 +1493,49 @@ async fn capabilities_match_the_declared_matrix(h: &dyn Harness) {
     assert_eq!(h.scm().capabilities(h.integration()), Some(h.declared()));
 }
 
+async fn the_merge_queue_is_declared_and_found_only_where_the_branch_has_one(h: &dyn Harness) {
+    assert!(h.declared().merge_queue);
+    h.queue_state(true).await;
+    assert!(h.scm().merge_queue(&h.repo(), "main").await.unwrap());
+}
+
+async fn a_branch_without_a_merge_queue_reports_none(h: &dyn Harness) {
+    h.queue_state(false).await;
+    assert!(!h.scm().merge_queue(&h.repo(), "main").await.unwrap());
+}
+
+async fn enqueue_names_the_head_and_reports_its_outcomes(h: &dyn Harness) {
+    h.enqueue_answers(1, Enqueue::Queued).await;
+    assert_eq!(
+        h.scm().enqueue(&merge_request(h, 1)).await.unwrap(),
+        EnqueueOutcome::Queued
+    );
+    h.enqueue_answers(2, Enqueue::HeadChanged).await;
+    assert_eq!(
+        h.scm().enqueue(&merge_request(h, 2)).await.unwrap(),
+        EnqueueOutcome::Rejected {
+            reason: "head_changed".into()
+        }
+    );
+    h.enqueue_answers(3, Enqueue::Merged).await;
+    assert!(matches!(
+        h.scm().enqueue(&merge_request(h, 3)).await.unwrap(),
+        EnqueueOutcome::Merged { merge_commit_sha, .. } if merge_commit_sha == MERGED
+    ));
+    h.enqueue_answers(4, Enqueue::Refused).await;
+    assert!(matches!(
+        h.scm().enqueue(&merge_request(h, 4)).await.unwrap(),
+        EnqueueOutcome::Rejected { .. }
+    ));
+}
+
+async fn queue_membership_follows_the_provider(h: &dyn Harness) {
+    h.queue_member(1, true).await;
+    assert!(h.scm().in_merge_queue(&h.repo(), 1).await.unwrap());
+    h.queue_member(2, false).await;
+    assert!(!h.scm().in_merge_queue(&h.repo(), 2).await.unwrap());
+}
+
 macro_rules! conformance {
     ($module:ident, $harness:ident: $($case:ident),* $(,)?) => {
         mod $module {
@@ -1375,6 +1575,10 @@ conformance!(github_conformance, GitHubHarness:
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
     capabilities_match_the_declared_matrix,
+    the_merge_queue_is_declared_and_found_only_where_the_branch_has_one,
+    a_branch_without_a_merge_queue_reports_none,
+    enqueue_names_the_head_and_reports_its_outcomes,
+    queue_membership_follows_the_provider,
 );
 
 conformance!(gitlab_conformance, GitLabHarness:
@@ -1401,4 +1605,8 @@ conformance!(gitlab_conformance, GitLabHarness:
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
     capabilities_match_the_declared_matrix,
+    the_merge_queue_is_declared_and_found_only_where_the_branch_has_one,
+    a_branch_without_a_merge_queue_reports_none,
+    enqueue_names_the_head_and_reports_its_outcomes,
+    queue_membership_follows_the_provider,
 );
