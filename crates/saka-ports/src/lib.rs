@@ -22,16 +22,18 @@ pub use agent::{
 pub use chat::{ChatAction, ChatActionKind, ChatActions, ChatOutcome};
 pub use decisions::{AskRefusal, Asked, Decisions};
 pub use docs::{
-    DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite,
+    DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocFileCommitted, DocFileWrite,
+    DocFilesCommit, DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite,
 };
 pub use env::{
     ChangeDiff, ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest, EnvRef,
     Environments, ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest, PreparedDocs,
     PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome, RecipePhase, Release,
-    ReleaseIndex, WorktreeFile, WorktreeState, output_tail,
+    ReleaseIndex, WorktreeChange, WorktreeFile, WorktreeState, output_tail,
 };
 pub use git::{
-    Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,
+    Blob, CommitFile, CommitFiles, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos,
+    TreeEntry,
 };
 pub use hook::{
     HostCommand, HostCommands, HostOutcome, Notification, Notifier, WebhookPost, WebhookReceipt,

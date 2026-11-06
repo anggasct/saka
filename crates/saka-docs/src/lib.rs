@@ -3,9 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use saka_core::paths::{is_doc_file_name, is_inside_project};
 use saka_ports::{
-    Blob, CommitOne, CommitPush, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened,
-    DocSource, DocTree, DocWrite, EntryKind, PortError, PortResult, PushCommit, RepoRef, Repos,
-    TreeEntry,
+    Blob, CommitFile, CommitFiles, CommitPush, DocBlob, DocCommit, DocEntry, DocExpect, DocFile,
+    DocFileCommitted, DocFileWrite, DocFilesCommit, DocFilesWrite, DocOpened, DocSource, DocStale,
+    DocTree, DocWrite, EntryKind, PortError, PortResult, PushCommit, RepoRef, Repos, TreeEntry,
 };
 use serde_json::json;
 
@@ -42,60 +42,94 @@ impl GitDocs {
         })
     }
 
-    async fn attempt(&self, request: &DocCommit, tip: String, blob: &str) -> PortResult<Attempt> {
-        let wanted = ancestors_and_self(&request.path);
+    async fn attempt(
+        &self,
+        request: &DocFilesCommit,
+        tip: String,
+        blobs: &[String],
+    ) -> PortResult<Attempt> {
+        let mut wanted: Vec<String> = Vec::new();
+        for file in &request.files {
+            for path in ancestors_and_self(&file.path) {
+                if !wanted.contains(&path) {
+                    wanted.push(path);
+                }
+            }
+        }
         let entries = self.repos.entries(&request.repo, &tip, &wanted).await?;
         let find = |path: &str| entries.iter().find(|e| e.path == path);
-        for ancestor in &wanted[..wanted.len() - 1] {
-            if find(ancestor).is_some_and(|e| e.kind != EntryKind::Tree) {
-                return Ok(Attempt::Done(DocWrite::PathConflict {
-                    path: ancestor.clone(),
-                }));
+        let mut changed = Vec::new();
+        let mut stale = Vec::new();
+        for (file, blob) in request.files.iter().zip(blobs) {
+            let parts = ancestors_and_self(&file.path);
+            for ancestor in &parts[..parts.len() - 1] {
+                if find(ancestor).is_some_and(|e| e.kind != EntryKind::Tree) {
+                    return Ok(Attempt::Done(DocFilesWrite::PathConflict {
+                        path: ancestor.clone(),
+                    }));
+                }
             }
+            let current = find(&file.path);
+            match current {
+                Some(e) if e.kind == EntryKind::Tree => {
+                    return Ok(Attempt::Done(DocFilesWrite::PathConflict {
+                        path: file.path.clone(),
+                    }));
+                }
+                Some(e) if !e.is_regular_file() => {
+                    return Ok(Attempt::Done(DocFilesWrite::NotRegular));
+                }
+                Some(e) if &e.object == blob => continue,
+                _ => {}
+            }
+            let current_blob = current.map(|e| e.object.clone());
+            let holds = match &file.expect {
+                DocExpect::Absent => current.is_none(),
+                DocExpect::Exists => current.is_some(),
+                DocExpect::Blob(expected) => current_blob.as_deref() == Some(expected.as_str()),
+            };
+            if !holds {
+                stale.push(DocStale {
+                    path: file.path.clone(),
+                    blob: current_blob,
+                });
+                continue;
+            }
+            changed.push((
+                CommitFile {
+                    path: file.path.clone(),
+                    mode: current
+                        .map_or(TreeEntry::REGULAR, |e| e.mode.as_str())
+                        .to_string(),
+                    blob: blob.clone(),
+                },
+                current.is_none(),
+            ));
         }
-        let current = find(&request.path);
-        match current {
-            Some(e) if e.kind == EntryKind::Tree => {
-                return Ok(Attempt::Done(DocWrite::PathConflict {
-                    path: request.path.clone(),
-                }));
-            }
-            Some(e) if !e.is_regular_file() => return Ok(Attempt::Done(DocWrite::NotRegular)),
-            Some(e) if e.object == blob => {
-                return Ok(Attempt::Done(DocWrite::Unchanged {
-                    commit: tip,
-                    blob: blob.to_string(),
-                }));
-            }
-            _ => {}
+        if !stale.is_empty() {
+            return Ok(Attempt::Done(DocFilesWrite::Stale { commit: tip, stale }));
         }
-        let current_blob = current.map(|e| e.object.clone());
-        let holds = match &request.expect {
-            DocExpect::Absent => current.is_none(),
-            DocExpect::Exists => current.is_some(),
-            DocExpect::Blob(expected) => current_blob.as_deref() == Some(expected.as_str()),
+        let Some((first, first_created)) = changed.first() else {
+            return Ok(Attempt::Done(DocFilesWrite::Unchanged { commit: tip }));
         };
-        if !holds {
-            return Ok(Attempt::Done(DocWrite::Stale {
-                commit: tip,
-                blob: current_blob,
-            }));
-        }
-        let created = current.is_none();
-        let mode = current.map_or(TreeEntry::REGULAR, |e| e.mode.as_str());
-        let verb = if created { "add" } else { "update" };
+        let message = request
+            .message
+            .clone()
+            .unwrap_or_else(|| match changed.len() {
+                1 => format!(
+                    "docs: {} {}",
+                    if *first_created { "add" } else { "update" },
+                    first.path
+                ),
+                n => format!("docs: update {n} files"),
+            });
         let commit = self
             .repos
-            .commit_one(&CommitOne {
+            .commit_files(&CommitFiles {
                 repo: request.repo.clone(),
                 parent: tip.clone(),
-                path: request.path.clone(),
-                mode: mode.to_string(),
-                blob: blob.to_string(),
-                message: request
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| format!("docs: {verb} {}", request.path)),
+                files: changed.iter().map(|(file, _)| file.clone()).collect(),
+                message,
                 author: request.author.clone(),
                 at: request.at,
             })
@@ -110,21 +144,27 @@ impl GitDocs {
             })
             .await?;
         Ok(match pushed {
-            CommitPush::Pushed => Attempt::Done(DocWrite::Committed {
+            CommitPush::Pushed => Attempt::Done(DocFilesWrite::Committed {
                 commit,
                 parent: tip,
-                blob: blob.to_string(),
-                created,
+                files: changed
+                    .into_iter()
+                    .map(|(file, created)| DocFileCommitted {
+                        path: file.path,
+                        blob: file.blob,
+                        created,
+                    })
+                    .collect(),
                 attempts: 0,
             }),
             CommitPush::Moved { .. } => Attempt::Moved,
-            CommitPush::Rejected => Attempt::Done(DocWrite::Rejected),
+            CommitPush::Rejected => Attempt::Done(DocFilesWrite::Rejected),
         })
     }
 }
 
 enum Attempt {
-    Done(DocWrite),
+    Done(DocFilesWrite),
     Moved,
 }
 
@@ -266,26 +306,75 @@ impl DocSource for GitDocs {
     }
 
     async fn commit_file(&self, request: &DocCommit) -> PortResult<DocWrite> {
-        let mut blob = None;
-        for attempt in 1..=COMMIT_ATTEMPTS {
-            let tip = self.fetched_tip(&request.repo, &request.branch).await?;
-            let blob = match &blob {
-                Some(blob) => blob,
-                None => blob.insert(self.repos.write_blob(&request.repo, &request.bytes).await?),
-            };
-            match self.attempt(request, tip, blob).await? {
-                Attempt::Done(DocWrite::Committed {
+        let out = self
+            .commit_files(&DocFilesCommit {
+                repo: request.repo.clone(),
+                branch: request.branch.clone(),
+                files: vec![DocFileWrite {
+                    path: request.path.clone(),
+                    bytes: request.bytes.clone(),
+                    expect: request.expect.clone(),
+                }],
+                message: request.message.clone(),
+                author: request.author.clone(),
+                at: request.at,
+            })
+            .await?;
+        Ok(match out {
+            DocFilesWrite::Committed {
+                commit,
+                parent,
+                files,
+                attempts,
+            } => {
+                let file = files.into_iter().next().ok_or_else(|| {
+                    PortError::permanent("commit_without_file", json!({ "path": request.path }))
+                })?;
+                DocWrite::Committed {
                     commit,
                     parent,
-                    blob,
-                    created,
+                    blob: file.blob,
+                    created: file.created,
+                    attempts,
+                }
+            }
+            DocFilesWrite::Unchanged { commit } => DocWrite::Unchanged {
+                commit,
+                blob: self.repos.write_blob(&request.repo, &request.bytes).await?,
+            },
+            DocFilesWrite::Stale { commit, stale } => DocWrite::Stale {
+                commit,
+                blob: stale.into_iter().next().and_then(|s| s.blob),
+            },
+            DocFilesWrite::PathConflict { path } => DocWrite::PathConflict { path },
+            DocFilesWrite::NotRegular => DocWrite::NotRegular,
+            DocFilesWrite::Rejected => DocWrite::Rejected,
+        })
+    }
+
+    async fn commit_files(&self, request: &DocFilesCommit) -> PortResult<DocFilesWrite> {
+        let mut blobs: Option<Vec<String>> = None;
+        for attempt in 1..=COMMIT_ATTEMPTS {
+            let tip = self.fetched_tip(&request.repo, &request.branch).await?;
+            if blobs.is_none() {
+                let mut written = Vec::new();
+                for file in &request.files {
+                    written.push(self.repos.write_blob(&request.repo, &file.bytes).await?);
+                }
+                blobs = Some(written);
+            }
+            let blobs = blobs.as_deref().unwrap_or_default();
+            match self.attempt(request, tip, blobs).await? {
+                Attempt::Done(DocFilesWrite::Committed {
+                    commit,
+                    parent,
+                    files,
                     ..
                 }) => {
-                    return Ok(DocWrite::Committed {
+                    return Ok(DocFilesWrite::Committed {
                         commit,
                         parent,
-                        blob,
-                        created,
+                        files,
                         attempts: attempt,
                     });
                 }
@@ -321,7 +410,7 @@ mod tests {
         files: HashMap<(String, String), Vec<u8>>,
         trees: HashMap<String, Vec<TreeEntry>>,
         pushes: Mutex<VecDeque<CommitPush>>,
-        commits: Mutex<Vec<CommitOne>>,
+        commits: Mutex<Vec<CommitFiles>>,
     }
 
     #[async_trait]
@@ -417,7 +506,7 @@ mod tests {
             Ok(blob_of(bytes))
         }
 
-        async fn commit_one(&self, request: &CommitOne) -> PortResult<String> {
+        async fn commit_files(&self, request: &CommitFiles) -> PortResult<String> {
             let mut commits = self.commits.lock().unwrap();
             commits.push(request.clone());
             Ok(format!("{:040x}", 0xc0 + commits.len()))
@@ -609,7 +698,7 @@ mod tests {
         );
         let commits = m.commits.lock().unwrap();
         assert_eq!(commits[0].message, "docs: add docs/specs/new.md");
-        assert_eq!(commits[0].mode, TreeEntry::REGULAR);
+        assert_eq!(commits[0].files[0].mode, TreeEntry::REGULAR);
         assert_eq!(commits[0].parent, TIP);
         assert_eq!(commits[0].author.name, "Saka Agent");
     }
@@ -631,7 +720,7 @@ mod tests {
             .unwrap();
         assert!(matches!(out, DocWrite::Committed { created: false, .. }));
         let commits = m.commits.lock().unwrap();
-        assert_eq!(commits[0].mode, TreeEntry::EXECUTABLE);
+        assert_eq!(commits[0].files[0].mode, TreeEntry::EXECUTABLE);
         assert_eq!(commits[0].message, "docs: update docs/run.md");
     }
 

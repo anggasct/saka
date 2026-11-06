@@ -11,8 +11,9 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::{Effect as CoreEffect, EnvironmentState, MatchKind as CoreMatch};
 use saka_engine::{
     AccountView, ActiveSessionView, BudgetView, DecisionView, DocContentView, DocTreeView,
-    DocWriteView, DraftBudgetView, DraftContentView, DraftPacketView, DraftView, PermissionView,
-    ProjectView, ReloadView, SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    DocWriteView, DraftBudgetView, DraftChangesView, DraftContentView, DraftPacketView, DraftView,
+    PermissionView, ProjectView, ReloadView, SessionView, SpecView, TaskDetail, TaskView,
+    UsageView,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1347,6 +1348,8 @@ pub struct SpecDraft {
     pub locale: String,
     /// `draft` (the architect works alone and Saka commits the first passing file) or `session` (a conversation the operator commits).
     pub mode: String,
+    /// `new` (a new spec file) or `revise` (an edit of the spec file that already exists).
+    pub target_kind: String,
     pub context_paths: Vec<String>,
     /// `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`
     pub state: String,
@@ -1452,6 +1455,52 @@ pub struct SpecDraftBudget {
 }
 
 /// The latest file content the architect wrote.
+/// What a session-mode draft changed in the docs checkout, with the lint result of its last turn.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftChanges {
+    /// Markdown files inside the project folder that differ from the base commit; empty once the checkout is gone.
+    pub files: Vec<SpecDraftChange>,
+    pub lint: SpecDraftChangesLint,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftChange {
+    pub path: String,
+    /// `added | modified`
+    pub status: String,
+    /// Unified diff against the base commit, cut at 256 KiB.
+    pub diff: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SpecDraftChangesLint {
+    /// Whether the target file passed the lint after the last turn.
+    pub passed: bool,
+    pub findings: Vec<LintIssue>,
+}
+
+impl SpecDraftChanges {
+    pub fn from_view(v: &DraftChangesView) -> SpecDraftChanges {
+        SpecDraftChanges {
+            files: v
+                .files
+                .iter()
+                .map(|f| SpecDraftChange {
+                    path: f.path.clone(),
+                    status: if f.added { "added" } else { "modified" }.to_string(),
+                    diff: f.diff.clone(),
+                    truncated: f.truncated,
+                })
+                .collect(),
+            lint: SpecDraftChangesLint {
+                passed: v.passed,
+                findings: issues_of(&v.findings),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SpecDraftContent {
     pub attempt: u32,
@@ -1577,6 +1626,7 @@ impl SpecDraft {
             idea: full.then(|| d.idea.clone()),
             locale: d.locale.as_str().to_string(),
             mode: d.mode.as_str().to_string(),
+            target_kind: d.target_kind.as_str().to_string(),
             context_paths: d.context_paths.clone(),
             state: d.state.as_str().to_string(),
             attempt: v
@@ -2684,6 +2734,9 @@ pub struct CreateSpecDraftBody {
     /// `draft` (default) or `session`.
     #[serde(default)]
     pub mode: Option<String>,
+    /// `new` (default) or `revise`: `revise` needs `path` to exist on the base branch.
+    #[serde(default)]
+    pub target_kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

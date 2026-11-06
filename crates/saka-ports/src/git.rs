@@ -84,7 +84,7 @@ pub trait Repos: Send + Sync {
 
     async fn write_blob(&self, repo: &RepoRef, bytes: &[u8]) -> PortResult<String>;
 
-    async fn commit_one(&self, request: &CommitOne) -> PortResult<String>;
+    async fn commit_files(&self, request: &CommitFiles) -> PortResult<String>;
 
     async fn push_commit(&self, request: &PushCommit) -> PortResult<CommitPush>;
 }
@@ -116,12 +116,17 @@ impl TreeEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommitOne {
-    pub repo: RepoRef,
-    pub parent: String,
+pub struct CommitFile {
     pub path: String,
     pub mode: String,
     pub blob: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitFiles {
+    pub repo: RepoRef,
+    pub parent: String,
+    pub files: Vec<CommitFile>,
     pub message: String,
     pub author: GitIdentity,
     pub at: Timestamp,

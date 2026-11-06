@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
-use saka_core::vocab::{DraftLocale, DraftMode, PacketOrigin};
+use saka_core::vocab::{DraftLocale, DraftMode, PacketOrigin, TargetKind};
 use saka_engine::packet::{ArchitectInput, PreviousAttempt, render_architect, sources};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -15,6 +15,7 @@ fn input() -> ArchitectInput {
         base_sha: BASE.into(),
         locale: DraftLocale::Id,
         mode: DraftMode::Draft,
+        target_kind: TargetKind::New,
         idea: "Export tasks as CSV.\nKeep it small.\n".into(),
         target: "docs/specs/export.md".into(),
         selected: vec![

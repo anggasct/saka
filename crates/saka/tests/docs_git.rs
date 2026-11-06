@@ -15,8 +15,8 @@ use saka_core::time::Timestamp;
 use saka_docs::GitDocs;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    DocBlob, DocCommit, DocExpect, DocSource, DocWrite, GitAccess, GitRemote, PortResult, RepoRef,
-    UnitLimits,
+    DocBlob, DocCommit, DocExpect, DocFileWrite, DocFilesCommit, DocFilesWrite, DocSource,
+    DocWrite, GitAccess, GitRemote, PortResult, RepoRef, UnitLimits,
 };
 use uuid::Uuid;
 
@@ -581,4 +581,104 @@ async fn a_push_that_never_reaches_the_remote_is_an_error_not_a_refusal() {
     assert_eq!(err.code, "git_failed", "{err:?}");
     assert!(err.retryable);
     assert_eq!(w.tip(), tip);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn several_files_become_one_commit_and_one_stale_file_commits_nothing() {
+    let w = World::new();
+    let tip = w.tip();
+    let files = |run_expect: DocExpect| {
+        vec![
+            DocFileWrite {
+                path: "docs/new/page.md".into(),
+                bytes: b"# New\n".to_vec(),
+                expect: DocExpect::Absent,
+            },
+            DocFileWrite {
+                path: "docs/run.md".into(),
+                bytes: b"# Run fast\n".to_vec(),
+                expect: run_expect,
+            },
+        ]
+    };
+    let request = |files: Vec<DocFileWrite>, message: Option<&str>| DocFilesCommit {
+        repo: w.repo.clone(),
+        branch: "main".into(),
+        files,
+        message: message.map(String::from),
+        author: GitIdentity {
+            name: "Saka Agent".into(),
+            email: "agent@saka.invalid".into(),
+        },
+        at: AT,
+    };
+
+    let stale = w
+        .docs
+        .commit_files(&request(files(DocExpect::Blob("0".repeat(40))), None))
+        .await
+        .unwrap();
+    let DocFilesWrite::Stale { stale, .. } = stale else {
+        panic!("{stale:?}");
+    };
+    assert_eq!(
+        stale.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(),
+        ["docs/run.md"]
+    );
+    assert_eq!(w.tip(), tip, "nothing was pushed");
+
+    let out = w
+        .docs
+        .commit_files(&request(
+            files(DocExpect::Blob(w.blob_at("docs/run.md"))),
+            Some("docs: add a page and speed up run"),
+        ))
+        .await
+        .unwrap();
+    let DocFilesWrite::Committed {
+        commit,
+        parent,
+        files: committed,
+        ..
+    } = out
+    else {
+        panic!("{out:?}");
+    };
+    assert_eq!(parent, tip);
+    assert_eq!(commit, w.tip());
+    assert_eq!(
+        committed
+            .iter()
+            .map(|f| (f.path.as_str(), f.created))
+            .collect::<Vec<_>>(),
+        [("docs/new/page.md", true), ("docs/run.md", false)]
+    );
+    assert_eq!(
+        git(
+            &w.remote,
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", &commit]
+        ),
+        "docs/new/page.md\ndocs/run.md"
+    );
+    assert_eq!(
+        git(&w.remote, &["log", "-1", "--format=%s", &commit]),
+        "docs: add a page and speed up run"
+    );
+    assert_eq!(
+        git(&w.remote, &["ls-tree", "main", "docs/run.md"])
+            .split_whitespace()
+            .next(),
+        Some("100755"),
+        "the executable mode stays"
+    );
+
+    let again = w
+        .docs
+        .commit_files(&request(files(DocExpect::Exists), None))
+        .await
+        .unwrap();
+    assert!(
+        matches!(again, DocFilesWrite::Unchanged { .. }),
+        "{again:?}"
+    );
 }

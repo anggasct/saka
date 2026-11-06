@@ -1122,10 +1122,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(36));
+    assert_eq!(w.store.schema_version().unwrap(), Some(37));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1613,7 +1613,7 @@ fn a_draft_attempt_and_its_packet_round_trip_and_one_live_draft_holds_a_path() {
     use saka_core::draft::{self, NewDraft};
     use saka_core::ids::{SpecDraftAttemptId, SpecDraftId};
     use saka_core::model::Budget;
-    use saka_core::vocab::{DraftLocale, DraftMode, SpecDraftState, Trigger};
+    use saka_core::vocab::{DraftLocale, DraftMode, SpecDraftState, TargetKind, Trigger};
     use saka_store::draft as rows;
 
     let mut w = World::new();
@@ -1627,6 +1627,7 @@ fn a_draft_attempt_and_its_packet_round_trip_and_one_live_draft_holds_a_path() {
             idea: "Export tasks.".into(),
             locale: DraftLocale::En,
             mode: DraftMode::Draft,
+            target_kind: TargetKind::New,
             context_paths: vec!["docs/prd.md".into()],
         })
     };

@@ -676,6 +676,7 @@
   "draft.failure.target_exists": "Sementara itu sebuah file ditambahkan di path ini di branch dasar (blob {blob}), jadi draft tidak di-commit.",
   "draft.failure.target_path_conflict": "{path} adalah file, jadi spec tidak bisa disimpan di dalamnya.",
   "draft.failure.register_failed": "Spec sudah di-commit tetapi tidak bisa didaftarkan ({code}).",
+  "draft.failure.base_moved": "{paths} berubah di branch dasar saat draft terbuka, jadi tidak ada yang di-commit.",
   "draft.failure.session_idle_expired": "Tidak ada balasan selama {hours, number} jam, jadi sesi berakhir. Hasil tulisan architect tetap tersimpan di bawah.",
   "draft.failure.unknown": "Draft gagal ({code}).",
   "docs.fromDraft.exists": "Sudah ada file di path ini, jadi draft tidak dimuat.",

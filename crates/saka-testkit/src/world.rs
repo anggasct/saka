@@ -21,15 +21,15 @@ use saka_core::vocab::{ReviewOutcome, SecretPurpose};
 use saka_ports::{
     Agents, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal, ChangeSnapshot,
     ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit, DeviceCode,
-    DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree,
-    DocWrite, DocsRequest, EnqueueOutcome, EnvRef, Environments, IdentityLookup, LaunchProfile,
-    LaunchedSession, Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
-    PortResult, PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome,
-    PushRequest, Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex,
-    RepoAccess, RepoInfo, RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm,
-    ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor,
-    TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile,
-    WorktreeState,
+    DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocFileCommitted, DocFilesCommit,
+    DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite, DocsRequest, EnqueueOutcome,
+    EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome,
+    MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult, PostedReview,
+    PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached,
+    Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo,
+    RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed,
+    SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains,
+    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeChange, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -167,6 +167,7 @@ pub const SIM_RUNNER_VERSION: &str = "sim";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DraftTurn {
     Write { path: String, bytes: Vec<u8> },
+    WriteAll(Vec<(String, Vec<u8>)>),
     Nothing,
 }
 
@@ -206,6 +207,7 @@ struct Worktree {
     dirty: bool,
     torn_down: bool,
     files: BTreeMap<String, Vec<u8>>,
+    baseline: BTreeMap<String, Vec<u8>>,
     links: BTreeSet<String>,
 }
 
@@ -1255,10 +1257,14 @@ impl State {
             } else {
                 self.draft_turns.front().cloned()
             };
-            if let Some(DraftTurn::Write { path, bytes }) = next
-                && let Some(w) = self.worktrees.get_mut(&env)
-            {
-                w.files.insert(path, bytes);
+            if let Some(w) = self.worktrees.get_mut(&env) {
+                match next {
+                    Some(DraftTurn::Write { path, bytes }) => {
+                        w.files.insert(path, bytes);
+                    }
+                    Some(DraftTurn::WriteAll(files)) => w.files.extend(files),
+                    Some(DraftTurn::Nothing) | None => {}
+                }
             }
         }
         if !architect
@@ -1452,6 +1458,10 @@ impl Environments for FakeWorld {
                 .cloned()
                 .ok_or_else(|| PortError::permanent("base_branch_missing", json!({})))?,
         };
+        let baseline = match request.checkout {
+            Checkout::Detached => s.doc_history.get(&base).unwrap_or(&s.docs).clone(),
+            _ => BTreeMap::new(),
+        };
         s.prepared.push(Prepared {
             environment_id: request.environment_id,
             repo: request.repo.full_name.clone(),
@@ -1466,7 +1476,8 @@ impl Environments for FakeWorld {
                 head: base.clone(),
                 dirty: false,
                 torn_down: false,
-                files: BTreeMap::new(),
+                files: baseline.clone(),
+                baseline,
                 links: BTreeSet::new(),
             },
         );
@@ -1921,6 +1932,46 @@ impl Environments for FakeWorld {
         Ok(())
     }
 
+    async fn worktree_changes(
+        &self,
+        env: &EnvRef,
+        max_diff_bytes: usize,
+    ) -> PortResult<Vec<WorktreeChange>> {
+        let s = self.state();
+        let w = s
+            .worktrees
+            .get(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        Ok(w.files
+            .iter()
+            .filter(|(path, bytes)| w.baseline.get(*path) != Some(*bytes))
+            .map(|(path, bytes)| {
+                let before = w.baseline.get(path);
+                let mut diff = format!("--- a/{path}\n+++ b/{path}\n");
+                for line in before.iter().flat_map(|b| {
+                    String::from_utf8_lossy(b)
+                        .lines()
+                        .map(|l| format!("-{l}\n"))
+                        .collect::<Vec<_>>()
+                }) {
+                    diff.push_str(&line);
+                }
+                for line in String::from_utf8_lossy(bytes).lines() {
+                    diff.push_str(&format!("+{line}\n"));
+                }
+                let truncated = diff.len() > max_diff_bytes;
+                diff.truncate(max_diff_bytes);
+                WorktreeChange {
+                    path: path.clone(),
+                    added: before.is_none(),
+                    diff,
+                    truncated,
+                }
+            })
+            .collect())
+    }
+
     fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath {
         let root = env.worktree_path.trim_end_matches('/');
         let relative = if let Some(rest) = raw.strip_prefix(&format!("{root}/")) {
@@ -2181,6 +2232,106 @@ impl DocSource for FakeWorld {
             parent: tip,
             blob,
             created: current.is_none(),
+            attempts: 1,
+        })
+    }
+
+    async fn commit_files(&self, request: &DocFilesCommit) -> PortResult<DocFilesWrite> {
+        let mut s = self.state();
+        for file in &request.files {
+            s.doc_commits.push(DocCommit {
+                repo: request.repo.clone(),
+                branch: request.branch.clone(),
+                path: file.path.clone(),
+                bytes: file.bytes.clone(),
+                expect: file.expect.clone(),
+                message: request.message.clone(),
+                author: request.author.clone(),
+                at: request.at,
+            });
+        }
+        if let Some(outcome) = s.doc_writes.pop_front() {
+            return Ok(match outcome {
+                DocWrite::Stale { commit, blob } => DocFilesWrite::Stale {
+                    commit,
+                    stale: request
+                        .files
+                        .iter()
+                        .map(|f| DocStale {
+                            path: f.path.clone(),
+                            blob: blob.clone(),
+                        })
+                        .collect(),
+                },
+                DocWrite::Unchanged { commit, .. } => DocFilesWrite::Unchanged { commit },
+                DocWrite::PathConflict { path } => DocFilesWrite::PathConflict { path },
+                DocWrite::NotRegular => DocFilesWrite::NotRegular,
+                DocWrite::Rejected => DocFilesWrite::Rejected,
+                DocWrite::Committed { commit, parent, .. } => DocFilesWrite::Committed {
+                    commit,
+                    parent,
+                    files: Vec::new(),
+                    attempts: 1,
+                },
+            });
+        }
+        let tip = s
+            .refs(&request.repo.full_name)
+            .get(&request.branch)
+            .cloned()
+            .ok_or_else(|| {
+                PortError::permanent(
+                    "base_branch_missing",
+                    json!({ "base_branch": request.branch }),
+                )
+            })?;
+        let mut stale = Vec::new();
+        let mut changed = Vec::new();
+        for file in &request.files {
+            let blob = git_blob(&file.bytes);
+            let current = s.docs.get(&file.path).map(|b| git_blob(b));
+            if current.as_deref() == Some(blob.as_str()) {
+                continue;
+            }
+            let holds = match &file.expect {
+                DocExpect::Absent => current.is_none(),
+                DocExpect::Exists => current.is_some(),
+                DocExpect::Blob(b) => current.as_deref() == Some(b.as_str()),
+            };
+            if holds {
+                changed.push((file, blob, current.is_none()));
+            } else {
+                stale.push(DocStale {
+                    path: file.path.clone(),
+                    blob: current,
+                });
+            }
+        }
+        if !stale.is_empty() {
+            return Ok(DocFilesWrite::Stale { commit: tip, stale });
+        }
+        if changed.is_empty() {
+            return Ok(DocFilesWrite::Unchanged { commit: tip });
+        }
+        let commit = s.new_commit(vec![tip.clone()]);
+        s.refs(&request.repo.full_name)
+            .insert(request.branch.clone(), commit.clone());
+        for (file, _, _) in &changed {
+            s.docs.insert(file.path.clone(), file.bytes.clone());
+        }
+        let snapshot = s.docs.clone();
+        s.doc_history.insert(commit.clone(), snapshot);
+        Ok(DocFilesWrite::Committed {
+            commit,
+            parent: tip,
+            files: changed
+                .into_iter()
+                .map(|(file, blob, created)| DocFileCommitted {
+                    path: file.path.clone(),
+                    blob,
+                    created,
+                })
+                .collect(),
             attempts: 1,
         })
     }

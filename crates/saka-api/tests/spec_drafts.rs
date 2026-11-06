@@ -884,3 +884,130 @@ fn the_mode_of_a_new_draft_is_checked() {
     let plain = api.create(json!({ "idea": IDEA, "path": PATH }));
     assert_eq!(plain.body["mode"], "draft");
 }
+
+#[test]
+fn changes_list_the_files_with_their_diffs_and_the_lint_of_the_last_turn() {
+    let mut api = Api::new();
+    api.sim
+        .world
+        .put_doc("docs/prd.md", b"# PRD\n\nOld line.\n");
+    let big = format!("# Notes\n{}", "x".repeat(300 * 1024)).into_bytes();
+    api.sim.world.script_draft(vec![DraftTurn::WriteAll(vec![
+        (PATH.into(), good()),
+        ("docs/prd.md".into(), b"# PRD\n\nNew line.\n".to_vec()),
+        ("docs/notes/big.md".into(), big),
+    ])]);
+    let created = api.create(json!({ "idea": IDEA, "path": PATH, "mode": "session" }));
+    let id = id_of(&created.body);
+    let url = format!("/api/v1/spec-drafts/{}/changes", id.0);
+    let early = api.get(&url);
+    assert_eq!(early.status, StatusCode::OK);
+    assert_eq!(early.body["files"], json!([]));
+    assert_eq!(early.body["lint"]["passed"], false);
+
+    api.run_to_state(id, SpecDraftState::AwaitingOperator);
+    let changes = api.get(&url);
+    assert_eq!(changes.status, StatusCode::OK, "{}", changes.body);
+    let files = changes.body["files"].as_array().unwrap();
+    let paths: Vec<_> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, ["docs/notes/big.md", "docs/prd.md", PATH]);
+    assert_eq!(files[0]["status"], "added");
+    assert_eq!(files[0]["truncated"], true);
+    assert_eq!(files[0]["diff"].as_str().unwrap().len(), 256 * 1024);
+    assert_eq!(files[1]["status"], "modified");
+    assert_eq!(files[1]["truncated"], false);
+    let diff = files[1]["diff"].as_str().unwrap();
+    assert!(
+        diff.contains("-Old line.") && diff.contains("+New line."),
+        "{diff}"
+    );
+    assert_eq!(changes.body["lint"]["passed"], true);
+    assert_eq!(changes.body["lint"]["findings"], json!([]));
+
+    let missing = api.get(&format!(
+        "/api/v1/spec-drafts/{}/changes",
+        uuid::Uuid::now_v7()
+    ));
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn a_failing_lint_shows_in_the_changes_and_a_plain_draft_has_none() {
+    let mut api = Api::new();
+    api.sim.world.script_draft(vec![write(bad_crlf())]);
+    let created = api.create(json!({ "idea": IDEA, "path": PATH, "mode": "session" }));
+    let id = id_of(&created.body);
+    api.run_to_state(id, SpecDraftState::AwaitingOperator);
+    let changes = api.get(&format!("/api/v1/spec-drafts/{}/changes", id.0));
+    assert_eq!(changes.body["lint"]["passed"], false);
+    assert!(
+        !changes.body["lint"]["findings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut api = Api::new();
+    let plain = api.scripted(vec![write(good())]);
+    let changes = api.get(&format!("/api/v1/spec-drafts/{}/changes", plain.0));
+    assert_eq!(changes.body["files"], json!([]));
+}
+
+#[test]
+fn commit_refuses_an_empty_draft_and_a_moved_file_with_its_paths() {
+    let mut api = Api::new();
+    api.sim.world.put_doc(PATH, &good());
+    api.sim.world.put_doc("docs/prd.md", b"# PRD v1\n");
+    api.sim.world.script_draft(vec![DraftTurn::Nothing]);
+    let created = api.create(json!({
+        "idea": IDEA, "path": PATH, "mode": "session", "target_kind": "revise"
+    }));
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    assert_eq!(created.body["target_kind"], "revise");
+    let id = id_of(&created.body);
+    api.run_to_state(id, SpecDraftState::AwaitingOperator);
+    let commit = format!("/api/v1/spec-drafts/{}/commit", id.0);
+    let empty = api.post(&commit, &json!({}));
+    assert_eq!(empty.status, StatusCode::CONFLICT);
+    assert_eq!(empty.code(), "draft_no_changes");
+
+    let mut api = Api::new();
+    api.sim.world.put_doc("docs/prd.md", b"# PRD v1\n");
+    api.sim.world.script_draft(vec![DraftTurn::WriteAll(vec![
+        (PATH.into(), good()),
+        ("docs/prd.md".into(), b"# PRD v1\n\nMine.\n".to_vec()),
+    ])]);
+    let created = api.create(json!({ "idea": IDEA, "path": PATH, "mode": "session" }));
+    let id = id_of(&created.body);
+    api.run_to_state(id, SpecDraftState::AwaitingOperator);
+    api.sim.world.put_doc("docs/prd.md", b"# PRD v2\n");
+    let moved = api.post(&format!("/api/v1/spec-drafts/{}/commit", id.0), &json!({}));
+    assert_eq!(moved.status, StatusCode::CONFLICT);
+    assert_eq!(moved.code(), "draft_base_moved");
+    assert_eq!(moved.body["params"]["paths"], json!(["docs/prd.md"]));
+}
+
+#[test]
+fn the_target_kind_is_checked_and_a_revision_needs_an_existing_file() {
+    let mut api = Api::new();
+    let bad = api.create(json!({ "idea": IDEA, "path": PATH, "target_kind": "rewrite" }));
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(bad.error(), ("target_kind".into(), "invalid".into()));
+    let missing = api.create(json!({ "idea": IDEA, "path": PATH, "target_kind": "revise" }));
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    assert_eq!(missing.code(), "file_not_found");
+    assert_eq!(missing.body["params"]["path"], PATH);
+    let plain = api.create(json!({ "idea": IDEA, "path": PATH }));
+    assert_eq!(plain.body["target_kind"], "new");
+
+    api.sim.world.put_doc("docs/specs/there.md", &good());
+    let revise = api.create(json!({
+        "idea": IDEA, "path": "docs/specs/there.md", "target_kind": "revise"
+    }));
+    assert_eq!(revise.status, StatusCode::CREATED, "{}", revise.body);
+    let twice = api.create(json!({
+        "idea": IDEA, "path": "docs/specs/there.md", "target_kind": "revise"
+    }));
+    assert_eq!(twice.status, StatusCode::CONFLICT);
+    assert_eq!(twice.body["params"]["reason"], "draft_active");
+}

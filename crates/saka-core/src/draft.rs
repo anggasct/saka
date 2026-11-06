@@ -18,7 +18,7 @@ use crate::time::Timestamp;
 use crate::vocab::{
     DecisionState, DraftAttemptState, DraftFailureCode, DraftLocale, DraftMode, EnvironmentState,
     LintOutcome, PermissionState, PrimaryAction, ResumeCause, SessionState, SpecDraftState,
-    Trigger,
+    TargetKind, Trigger,
 };
 
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
@@ -91,6 +91,7 @@ pub enum DraftInput {
     },
     Commit {
         message: Option<String>,
+        check: CommitCheck,
     },
     Discard {
         reason: String,
@@ -102,6 +103,12 @@ pub enum DraftInput {
     Tick,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommitCheck {
+    pub changed: usize,
+    pub moved: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewDraft {
     pub spec_draft_id: SpecDraftId,
@@ -111,6 +118,7 @@ pub struct NewDraft {
     pub idea: String,
     pub locale: DraftLocale,
     pub mode: DraftMode,
+    pub target_kind: TargetKind,
     pub context_paths: Vec<String>,
 }
 
@@ -124,6 +132,7 @@ pub fn request(new: NewDraft) -> Event {
         idea: new.idea,
         locale: new.locale,
         mode: new.mode,
+        target_kind: new.target_kind,
         context_paths: new.context_paths,
     }
 }
@@ -211,7 +220,7 @@ pub fn decide(
         I::Retry { reason, note } => return d.retry(reason, note),
         I::Cancel { reason } => return d.cancel(reason),
         I::Message { text } => return d.message(text, ctx),
-        I::Commit { message } => return d.commit(message),
+        I::Commit { message, check } => return d.commit(message, check),
         I::Discard { reason } => return d.discard(reason),
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
         I::Tick => d.tick(ctx),
@@ -574,7 +583,7 @@ impl Decider<'_> {
         Ok(self.settle(outcome))
     }
 
-    fn commit(&self, message: Option<String>) -> Result<Vec<Event>, Rejection> {
+    fn commit(&self, message: Option<String>, check: CommitCheck) -> Result<Vec<Event>, Rejection> {
         self.waiting()?;
         if self.question_open() {
             return Err(Rejection::DraftDecisionOpen);
@@ -585,6 +594,12 @@ impl Decider<'_> {
             .ok_or_else(|| self.state_rejection())?;
         if self.d.last_round.map(|m| m.outcome) != Some(LintOutcome::Passed) {
             return Err(Rejection::DraftLintFailed);
+        }
+        if check.changed == 0 {
+            return Err(Rejection::DraftNoChanges);
+        }
+        if !check.moved.is_empty() {
+            return Err(Rejection::DraftBaseMoved { paths: check.moved });
         }
         let mut events = vec![Event::SpecDraftCommitting {
             spec_draft_id: self.id(),
@@ -780,6 +795,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
         idea,
         locale,
         mode,
+        target_kind,
         context_paths,
     } = event
     {
@@ -791,6 +807,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
             idea: idea.clone(),
             locale: *locale,
             mode: *mode,
+            target_kind: *target_kind,
             context_paths: context_paths.clone(),
             state: SpecDraftState::Queued,
             attempt: 0,

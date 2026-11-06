@@ -197,6 +197,14 @@ pub enum WorktreeFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeChange {
+    pub path: String,
+    pub added: bool,
+    pub diff: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     pub version: String,
     pub lts: Option<String>,
@@ -284,6 +292,12 @@ pub trait Environments: Send + Sync {
     ) -> PortResult<WorktreeFile>;
 
     async fn write_worktree_file(&self, env: &EnvRef, path: &str, bytes: &[u8]) -> PortResult<()>;
+
+    async fn worktree_changes(
+        &self,
+        env: &EnvRef,
+        max_diff_bytes: usize,
+    ) -> PortResult<Vec<WorktreeChange>>;
 
     fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath;
 }

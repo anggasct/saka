@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use saka_core::Ctx;
 use saka_core::admission::Waiting;
-use saka_core::draft::{self as core, DraftInput, NewDraft, PacketFacts};
+use saka_core::draft::{self as core, CommitCheck, DraftInput, NewDraft, PacketFacts};
 use saka_core::event::{Event, Prompt};
 use saka_core::ids::{EnvironmentId, ProjectId, SessionId, SpecDraftAttemptId, SpecDraftId};
 use saka_core::model::{
@@ -12,11 +12,11 @@ use saka_core::paths::{self, MAX_DOC_BYTES};
 use saka_core::rejection::{FileUnsupported, Rejection, TargetTakenBy};
 use saka_core::vocab::{
     DraftFailureCode, DraftLocale, DraftMode, LintOutcome, PrimaryAction, SpecDraftState,
-    SpecOrigin,
+    SpecOrigin, TargetKind,
 };
 use saka_ports::{
-    Blob, Checkout, DocBlob, EnvRef, IdsSource, LaunchProfile, PortError, PrepareRequest, RepoRef,
-    SessionLaunch, WorktreeFile,
+    Blob, Checkout, DocBlob, DocExpect, DocFileWrite, DocFilesCommit, DocFilesWrite, EnvRef,
+    IdsSource, LaunchProfile, PortError, PrepareRequest, RepoRef, SessionLaunch, WorktreeFile,
 };
 use saka_spec::{LintCode, LintIssue, PARSER_VERSION, content_hash};
 use saka_store::draft as rows;
@@ -25,7 +25,6 @@ use serde_json::{Value, json};
 
 use crate::action::{Action, Produced};
 use crate::commands::{SpecFile, reason};
-use crate::docs::Precondition;
 use crate::packet::{self, ArchitectInput, ArchitectPacket, PreviousAttempt};
 use crate::register::{invalid, path_code};
 use crate::views::{self, DecisionView, PermissionView};
@@ -40,6 +39,7 @@ pub const COMMIT_MESSAGE_MAX: usize = 200;
 pub const MAX_CONTEXT_PATHS: usize = 16;
 pub const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
 pub const MAX_ROUND_BYTES: u64 = 256 * 1024;
+pub const MAX_CHANGE_DIFF_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSpecDraft {
@@ -47,7 +47,23 @@ pub struct NewSpecDraft {
     pub idea: String,
     pub locale: DraftLocale,
     pub mode: DraftMode,
+    pub target_kind: TargetKind,
     pub context_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftChange {
+    pub path: String,
+    pub added: bool,
+    pub diff: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftChangesView {
+    pub files: Vec<DraftChange>,
+    pub passed: bool,
+    pub findings: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -554,22 +570,28 @@ impl Engine {
                 taken: by,
             })
         };
-        match &opened.blob {
-            DocBlob::Missing => {}
-            DocBlob::NotRegular => {
+        let revising = new.target_kind == TargetKind::Revise;
+        match (&opened.blob, revising) {
+            (DocBlob::Missing, true) => {
+                return Err(Rejection::FileNotFound { path: path.clone() }.into());
+            }
+            (DocBlob::NotRegular, true) => return Err(invalid("path", "invalid")),
+            (DocBlob::TooLarge { .. }, true) => return Err(invalid("path", "too_large")),
+            (DocBlob::Bytes { .. }, true) | (DocBlob::Missing, false) => {}
+            (DocBlob::NotRegular, false) => {
                 return Err(taken(TargetTakenBy::File {
                     blob: None,
                     commit: opened.commit.clone(),
                 }));
             }
-            DocBlob::TooLarge { blob, .. } | DocBlob::Bytes { blob, .. } => {
+            (DocBlob::TooLarge { blob, .. } | DocBlob::Bytes { blob, .. }, false) => {
                 return Err(taken(TargetTakenBy::File {
                     blob: Some(blob.clone()),
                     commit: opened.commit.clone(),
                 }));
             }
         }
-        self.refuse_taken_target(project_id, &path, &slug)?;
+        self.refuse_taken_target(project_id, &path, &slug, revising)?;
         let mut total = 0u64;
         for (i, p) in new.context_paths.iter().enumerate() {
             match self
@@ -587,7 +609,7 @@ impl Engine {
             return Err(invalid("context_paths", "too_large"));
         }
         let _guard = self.locked()?;
-        self.refuse_taken_target(project_id, &path, &slug)?;
+        self.refuse_taken_target(project_id, &path, &slug, revising)?;
         let now = self.now();
         let spec_draft_id = SpecDraftId(self.new_id());
         let event = core::request(NewDraft {
@@ -598,6 +620,7 @@ impl Engine {
             idea: new.idea,
             locale: new.locale,
             mode: new.mode,
+            target_kind: new.target_kind,
             context_paths: new.context_paths,
         });
         let mut after = core::evolve(None, &event, now)
@@ -616,7 +639,13 @@ impl Engine {
         Ok(after)
     }
 
-    fn refuse_taken_target(&self, project: ProjectId, path: &str, slug: &str) -> Result<()> {
+    fn refuse_taken_target(
+        &self,
+        project: ProjectId,
+        path: &str,
+        slug: &str,
+        revising: bool,
+    ) -> Result<()> {
         let (spec, by_slug, live) = self.store.read(|c| {
             Ok((
                 read::spec_by_path(c, project, path)?,
@@ -624,9 +653,9 @@ impl Engine {
                 rows::live_draft_at(c, project, path)?,
             ))
         })?;
-        let by = if let Some(s) = spec {
+        let by = if let Some(s) = spec.filter(|_| !revising) {
             TargetTakenBy::Spec { spec_id: s.id }
-        } else if let Some(s) = by_slug {
+        } else if let Some(s) = by_slug.filter(|_| !revising) {
             TargetTakenBy::Slug { spec_id: s.id }
         } else if let Some(spec_draft_id) = live {
             TargetTakenBy::Draft { spec_draft_id }
@@ -691,7 +720,7 @@ impl Engine {
         )
     }
 
-    pub fn commit_spec_draft(
+    pub async fn commit_spec_draft(
         &self,
         id: SpecDraftId,
         message: Option<&str>,
@@ -701,9 +730,15 @@ impl Engine {
         let message = message
             .map(|m| bounded(m, COMMIT_MESSAGE_MAX, "message"))
             .transpose()?;
+        let draft = self.load_draft(id)?;
+        let check = if draft.draft.state == SpecDraftState::AwaitingOperator {
+            self.commit_check(&draft).await?
+        } else {
+            CommitCheck::default()
+        };
         self.decide_draft(
             id,
-            Some(DraftInput::Commit { message }),
+            Some(DraftInput::Commit { message, check }),
             Mode::Command,
             cause,
             Extra {
@@ -711,6 +746,100 @@ impl Engine {
                 ..Extra::default()
             },
         )
+    }
+
+    async fn commit_check(&self, d: &Draft) -> Result<CommitCheck> {
+        let Some(base_sha) = d.running_attempt().and_then(|a| a.base_sha.clone()) else {
+            return Ok(CommitCheck::default());
+        };
+        let files = self.changed_docs(d, 0).await?;
+        let (project, repo) = self.workspace_of(d.draft.project_id)?;
+        if let Some(env) = self.live_env_ref(d)? {
+            for file in &files {
+                let read = self
+                    .ports
+                    .env
+                    .read_worktree_file(&env, &file.path, MAX_DOC_BYTES)
+                    .await?;
+                if matches!(read, WorktreeFile::TooLarge { .. }) {
+                    return Err(invalid("files", "too_large"));
+                }
+            }
+        }
+        let docs = &self.ports.docs;
+        let base: BTreeMap<String, String> = docs
+            .tree_at(&repo, &base_sha, &project.project_path)
+            .await?
+            .into_iter()
+            .map(|e| (e.path, e.blob))
+            .collect();
+        let tip: BTreeMap<String, String> = docs
+            .tree(
+                &repo,
+                &project.base_branch,
+                &project.project_path,
+                paths::MAX_TREE_FILES,
+            )
+            .await?
+            .files
+            .into_iter()
+            .map(|e| (e.path, e.blob))
+            .collect();
+        let moved = files
+            .iter()
+            .filter(|f| base.get(&f.path) != tip.get(&f.path))
+            .map(|f| f.path.clone())
+            .collect();
+        Ok(CommitCheck {
+            changed: files.len(),
+            moved,
+        })
+    }
+
+    fn live_env_ref(&self, d: &Draft) -> Result<Option<EnvRef>> {
+        let owner = owner_of(d);
+        let Some(env) = d.ready_environment().filter(|e| Some(e.owner) == owner) else {
+            return Ok(None);
+        };
+        let (_, repo) = self.workspace_of(d.draft.project_id)?;
+        Ok(Some(self.draft_env_ref(repo, env)))
+    }
+
+    async fn changed_docs(&self, d: &Draft, max_diff: usize) -> Result<Vec<DraftChange>> {
+        let Some(env) = self.live_env_ref(d)? else {
+            return Ok(Vec::new());
+        };
+        let (project, _) = self.workspace_of(d.draft.project_id)?;
+        let changes = self.ports.env.worktree_changes(&env, max_diff).await?;
+        Ok(changes
+            .into_iter()
+            .filter(|c| paths::check_doc_path(&project.project_path, &c.path).is_ok())
+            .map(|c| DraftChange {
+                path: c.path,
+                added: c.added,
+                diff: c.diff,
+                truncated: c.truncated,
+            })
+            .collect())
+    }
+
+    pub async fn spec_draft_changes(&self, id: SpecDraftId) -> Result<DraftChangesView> {
+        let (draft, round) = self
+            .store
+            .read(|c| Ok((rows::load_draft(c, id)?, rows::last_round(c, id)?)))?;
+        let draft = draft.ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let files = if draft.draft.mode == DraftMode::Session {
+            self.changed_docs(&draft, MAX_CHANGE_DIFF_BYTES).await?
+        } else {
+            Vec::new()
+        };
+        Ok(DraftChangesView {
+            files,
+            passed: round
+                .as_ref()
+                .is_some_and(|(_, r)| r.outcome == LintOutcome::Passed),
+            findings: round.map(|(_, r)| r.issues).unwrap_or_default(),
+        })
     }
 
     pub fn discard_spec_draft(
@@ -1031,6 +1160,7 @@ impl Engine {
             base_sha: base_sha.to_string(),
             locale: d.draft.locale,
             mode: d.draft.mode,
+            target_kind: d.draft.target_kind,
             idea: d.draft.idea.clone(),
             target: d.draft.path.clone(),
             selected,
@@ -1286,10 +1416,10 @@ impl Engine {
         attempt_id: SpecDraftAttemptId,
         message: Option<String>,
     ) -> Execution {
-        let current = d.running_attempt().is_some_and(|a| a.id == attempt_id);
-        if !current || d.draft.state != SpecDraftState::Committing {
+        let current = d.running_attempt().filter(|a| a.id == attempt_id);
+        let Some(attempt) = current.filter(|_| d.draft.state == SpecDraftState::Committing) else {
             return Ok(Effect::Skipped);
-        }
+        };
         let round = self
             .store
             .read(|c| rows::last_round_of(c, attempt_id))
@@ -1310,77 +1440,156 @@ impl Engine {
                 events: Vec::new(),
             })
         };
-        let written = match self
-            .commit_doc(
-                &project,
-                &repo,
-                &path,
-                bytes.clone(),
-                Precondition::Absent,
-                message,
-            )
-            .await
+        let mut files = vec![(path.clone(), bytes.clone())];
+        if d.draft.mode == DraftMode::Session
+            && let Some(env) = self.live_env_ref(d).map_err(internal)?
         {
-            Ok(w) => w,
-            Err(EngineError::Rejected(Rejection::FileStale { blob, commit })) => {
+            for change in self.changed_docs(d, 0).await.map_err(internal)? {
+                if change.path == path {
+                    continue;
+                }
+                match self
+                    .ports
+                    .env
+                    .read_worktree_file(&env, &change.path, paths::MAX_DOC_BYTES)
+                    .await?
+                {
+                    WorktreeFile::Bytes(b) => files.push((change.path, b)),
+                    WorktreeFile::Missing => {}
+                    WorktreeFile::NotRegular | WorktreeFile::TooLarge { .. } => {
+                        return Err(PortError::permanent(
+                            "worktree_file_unusable",
+                            json!({ "path": change.path }),
+                        ));
+                    }
+                }
+            }
+        }
+        let at_base: BTreeMap<String, String> = match &attempt.base_sha {
+            Some(base) if files.len() > 1 || d.draft.target_kind == TargetKind::Revise => self
+                .ports
+                .docs
+                .tree_at(&repo, base, &project.project_path)
+                .await?
+                .into_iter()
+                .map(|e| (e.path, e.blob))
+                .collect(),
+            _ => BTreeMap::new(),
+        };
+        let expect = |file_path: &str| match at_base.get(file_path) {
+            Some(blob) => DocExpect::Blob(blob.clone()),
+            None => DocExpect::Absent,
+        };
+        let request = DocFilesCommit {
+            repo: repo.clone(),
+            branch: project.base_branch.clone(),
+            files: files
+                .iter()
+                .map(|(file_path, content)| DocFileWrite {
+                    path: file_path.clone(),
+                    bytes: content.clone(),
+                    expect: expect(file_path),
+                })
+                .collect(),
+            message,
+            author: self.cfg.git_identity.clone(),
+            at: self.now(),
+        };
+        let (commit, events) = match self.ports.docs.commit_files(&request).await? {
+            DocFilesWrite::Committed {
+                commit,
+                parent,
+                files: committed,
+                ..
+            } => {
+                tracing::info!(
+                    spec_draft_id = %d.draft.id,
+                    attempt = d.draft.attempt,
+                    %commit,
+                    files = committed.len(),
+                    "spec_draft.committed"
+                );
+                let sizes: BTreeMap<&str, u64> = files
+                    .iter()
+                    .map(|(file_path, content)| (file_path.as_str(), content.len() as u64))
+                    .collect();
+                let events = committed
+                    .into_iter()
+                    .map(|f| Event::DocCommitted {
+                        project_id: project.id,
+                        bytes: sizes.get(f.path.as_str()).copied().unwrap_or_default(),
+                        path: f.path,
+                        commit: commit.clone(),
+                        parent: parent.clone(),
+                        blob: f.blob,
+                        created: f.created,
+                    })
+                    .collect::<Vec<_>>();
+                (commit, events)
+            }
+            DocFilesWrite::Unchanged { commit } => (commit, Vec::new()),
+            DocFilesWrite::Stale { commit, stale } => {
+                let target = stale.iter().find(|s| s.path == path);
+                return match target {
+                    Some(t) if d.draft.target_kind == TargetKind::New => failed(
+                        DraftFailureCode::TargetExists,
+                        json!({ "blob": t.blob, "commit": commit }),
+                        None,
+                    ),
+                    _ => failed(
+                        DraftFailureCode::BaseMoved,
+                        json!({ "paths": stale.iter().map(|s| s.path.clone()).collect::<Vec<_>>() }),
+                        None,
+                    ),
+                };
+            }
+            DocFilesWrite::PathConflict { path: conflict } => {
                 return failed(
-                    DraftFailureCode::TargetExists,
-                    json!({ "blob": blob, "commit": commit }),
+                    DraftFailureCode::TargetPathConflict,
+                    json!({ "path": conflict }),
                     None,
                 );
             }
-            Err(EngineError::Rejected(Rejection::FilePathConflict { path })) => {
+            DocFilesWrite::NotRegular => {
                 return failed(
                     DraftFailureCode::TargetPathConflict,
                     json!({ "path": path }),
                     None,
                 );
             }
-            Err(EngineError::Rejected(Rejection::FileUnsupported {
-                reason: FileUnsupported::NotRegular,
-            })) => {
-                return failed(
-                    DraftFailureCode::TargetPathConflict,
-                    json!({ "path": path }),
-                    None,
-                );
-            }
-            Err(EngineError::Rejected(Rejection::FilePushRejected { branch })) => {
+            DocFilesWrite::Rejected => {
                 return failed(
                     DraftFailureCode::PushRejected,
-                    json!({ "branch": branch }),
+                    json!({ "branch": project.base_branch }),
                     None,
                 );
             }
-            Err(EngineError::Port(e)) => return Err(e),
-            Err(other) => return Err(internal(other)),
         };
-        if written.event.is_some() {
-            tracing::info!(
-                spec_draft_id = %d.draft.id,
-                attempt = d.draft.attempt,
-                commit = %written.commit,
-                "spec_draft.committed"
-            );
-        }
         let cause = self.cause(ARCHITECT_ACTOR);
+        for (file_path, content) in files.iter().filter(|(file_path, _)| *file_path != path) {
+            self.register_saved(&project, &repo, file_path, &commit, content, &cause)
+                .await
+                .map_err(|e| match e {
+                    EngineError::Port(p) => p,
+                    other => internal(other),
+                })?;
+        }
         let file = SpecFile {
             path: &path,
-            source_commit: &written.commit,
+            source_commit: &commit,
             bytes: &bytes,
             origin: SpecOrigin::Architect,
         };
-        let commit = Some(written.commit.clone());
         let registered = self.register_at(&project, &repo, file, &cause, None).await;
         let problem = match registered {
             Ok((view, _)) => {
                 return Ok(Effect::Draft {
                     input: DraftInput::Committed {
-                        commit: written.commit,
+                        commit,
                         spec_id: view.spec.id,
                         revision_id: view.revision.id,
                     },
-                    events: written.event.into_iter().collect(),
+                    events,
                 });
             }
             Err(EngineError::Rejected(r)) => json!({ "code": r.code(), "params": r.params() }),
@@ -1398,9 +1607,9 @@ impl Engine {
             input: DraftInput::CommitFailed {
                 code: DraftFailureCode::RegisterFailed,
                 params: problem,
-                commit,
+                commit: Some(commit),
             },
-            events: written.event.into_iter().collect(),
+            events,
         })
     }
 

@@ -1687,3 +1687,46 @@ async fn a_rebase_never_touches_uncommitted_work_or_commits_that_are_not_pushed(
     );
     assert_eq!(git(&wt, &["rev-parse", "HEAD"]), local_only);
 }
+
+#[tokio::test]
+async fn a_detached_worktree_lists_added_and_modified_files_with_bounded_diffs() {
+    let w = World::new();
+    let env = w.prepare_with(1, Checkout::Detached).await;
+    assert!(
+        w.repos
+            .worktree_changes(&env, 4096)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    w.repos
+        .write_worktree_file(&env, "README.md", b"# Changed\n")
+        .await
+        .unwrap();
+    w.repos
+        .write_worktree_file(&env, "docs/specs/a.md", b"# A\n\nline one\nline two\n")
+        .await
+        .unwrap();
+    let changes = w.repos.worktree_changes(&env, 4096).await.unwrap();
+    let listed: Vec<_> = changes
+        .iter()
+        .map(|c| (c.path.as_str(), c.added, c.truncated))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("README.md", false, false),
+            ("docs/specs/a.md", true, false)
+        ]
+    );
+    assert!(
+        changes[0].diff.contains("+# Changed"),
+        "{}",
+        changes[0].diff
+    );
+    assert!(changes[1].diff.contains("+line two"), "{}", changes[1].diff);
+
+    let cut = w.repos.worktree_changes(&env, 16).await.unwrap();
+    assert!(cut.iter().all(|c| c.truncated && c.diff.len() <= 16));
+}

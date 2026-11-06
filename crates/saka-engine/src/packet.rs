@@ -1,7 +1,9 @@
 use std::fmt::Write as _;
 
 use saka_core::model::{ContextRef, DraftDocument};
-use saka_core::vocab::{ContextOrigin, DocsMode, DraftLocale, DraftMode, PacketOrigin, Tool};
+use saka_core::vocab::{
+    ContextOrigin, DocsMode, DraftLocale, DraftMode, PacketOrigin, TargetKind, Tool,
+};
 
 use saka_spec::content_hash;
 
@@ -289,6 +291,7 @@ pub struct ArchitectInput {
     pub base_sha: String,
     pub locale: DraftLocale,
     pub mode: DraftMode,
+    pub target_kind: TargetKind,
     pub idea: String,
     pub target: String,
     pub selected: Vec<(String, Vec<u8>)>,
@@ -441,10 +444,16 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     text.push_str("</documents>\n\n");
 
     let conversation = input.mode == DraftMode::Session;
+    let revising = input.target_kind == TargetKind::Revise;
     let _ = writeln!(
         text,
-        "You are the architect for project \"{}\". Write one new spec in this repository from the idea below.{}",
+        "You are the architect for project \"{}\". {} from the idea below.{}",
         input.project_name,
+        if revising {
+            "Revise the existing spec in this repository"
+        } else {
+            "Write one new spec in this repository"
+        },
         if conversation {
             " The operator reads your work after every turn and replies, so this is a conversation."
         } else {
@@ -474,9 +483,14 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     }
     let _ = write!(
         text,
-        "\n\nIdea:\n<idea>\n{}\n</idea>\n\nTarget file: {}\nLanguage: write the prose in {}. Headings and column names stay the English keywords from document 2.\n\n",
+        "\n\nIdea:\n<idea>\n{}\n</idea>\n\nTarget file: {}{}\nLanguage: write the prose in {}. Headings and column names stay the English keywords from document 2.\n\n",
         input.idea.trim_end_matches('\n'),
         input.target,
+        if revising {
+            " (it already exists in your checkout; read it and edit it in place, keeping what the idea does not change)"
+        } else {
+            ""
+        },
         language(input.locale)
     );
     let mut index: Vec<&String> = input.index.iter().collect();
@@ -523,6 +537,18 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     if let Some(note) = &input.note {
         let _ = write!(text, "Operator note:\n{}\n\n", note.trim_end_matches('\n'));
     }
+    let writing = if conversation {
+        format!(
+            "- Write the spec to {target}. You may also create or edit other markdown files under {project}, for example docs the spec depends on. Every other write is refused.\n",
+            target = input.target,
+            project = input.project_path
+        )
+    } else {
+        format!(
+            "- Write the spec only to {target}. Every other write is refused.\n",
+            target = input.target
+        )
+    };
     let ending = if conversation {
         "- Do not commit. End your turn when you have done what the operator asked. Saka checks the file after every turn and shows the operator the result; the operator answers with a message or commits. Keep the file complete at the end of every turn.\n"
     } else {
@@ -532,12 +558,11 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
         text,
         "Rules:\n\
          - Read any file in this repository that helps. You cannot run commands or use the web.\n\
-         - Write the spec only to {target}. Every other write is refused.\n\
+         {writing}\
          - Follow document 2 exactly and start from document 1.\n\
          - For each material technical decision the docs do not settle, add a question under \"## Decisions\" with two or three options, the recommended option first and marked \"(recommended)\". Leave every option unchecked; the operator answers.\n\
          - If you cannot write the spec without the operator's answer to a question about the idea itself, call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The answer arrives as your next message: write it into the spec as the checked option under \"## Decisions\", and carry on. Never ask what the docs or the idea already answer.\n\
-         {ending}",
-        target = input.target
+         {ending}"
     );
     let sha256 = content_hash(text.as_bytes())
         .trim_start_matches("sha256:")

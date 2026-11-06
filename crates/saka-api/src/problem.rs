@@ -87,6 +87,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         R::NotFound
         | R::DecisionNotFound
         | R::SpecFileNotFound { .. }
+        | R::FileNotFound { .. }
         | R::UserLinkNotFound
         | R::InboxItemNotFound
         | R::ChangeRequestNotFound { .. } => StatusCode::NOT_FOUND,
@@ -122,6 +123,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::DraftLintFailed
         | R::DraftDecisionOpen
         | R::DraftNoChanges
+        | R::DraftBaseMoved { .. }
         | R::RuleDuplicate { .. }
         | R::ProjectExists { .. }
         | R::ProjectRepoInUse { .. }
