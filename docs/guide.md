@@ -102,7 +102,7 @@ Linking your GitHub account to an integration lets Saka author agent work as you
 |---|---|
 | `crates/` | The product crates; the allowed dependencies between them are checked by `cargo xtask deps` |
 | `web/` | The web app (Vite, React), embedded in the binary with `--features embed-web` |
-| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `wasm`, `test-systemd`, `test-claude-memory`, `e2e` |
+| `xtask/` | Repository tasks: `check`, `deps`, `hygiene`, `wasm`, `test-systemd`, `test-claude-memory`, `test-claude-mcp`, `e2e` |
 | `spikes/` | Research experiments, excluded from every check |
 
 ```sh
@@ -110,7 +110,8 @@ make check               # format, lint, tests, saka-wasm bindings, dependency d
 cargo xtask wasm         # builds the spec lint for the browser into web/src/wasm/pkg (needed before pnpm dev, test, or build)
 make test-systemd        # the session supervisor in a real user systemd unit
 make test-claude-memory  # the installed claude CLI loads instructions only from the session worktree
-make e2e                 # both of the above, then one real delivery loop (needs credentials, see below)
+make test-claude-mcp     # the installed claude CLI sees and calls the `request_decision` tool of `saka mcp`
+make e2e                 # all three of the above, then one real delivery loop (needs credentials, see below)
 ```
 
 Every SCM adapter declares its capabilities, such as merge methods, webhook signature, and branch deletion. `saka serve` refuses a config that asks for one the adapter lacks. Each adapter also passes the shared conformance suite in `crates/saka-scm/tests/conformance.rs`, run as part of `make check` or alone with `cargo test -p saka-scm --test conformance`. A new adapter adds a `Harness` there.

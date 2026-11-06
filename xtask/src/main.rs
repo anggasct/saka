@@ -1,5 +1,5 @@
 mod check;
-mod claude_memory;
+mod claude_cli;
 mod deps;
 mod e2e;
 mod hygiene;
@@ -25,7 +25,8 @@ fn main() -> ExitCode {
             _ => return usage(),
         },
         Some("test-systemd") => systemd::run(),
-        Some("test-claude-memory") => claude_memory::run(),
+        Some("test-claude-memory") => claude_cli::memory(),
+        Some("test-claude-mcp") => claude_cli::mcp(),
         Some("wasm") => wasm::run(),
         _ => return usage(),
     };
@@ -40,7 +41,7 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cargo xtask <check|deps|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|wasm>"
+        "usage: cargo xtask <check|deps|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|test-claude-mcp|wasm>"
     );
     ExitCode::from(2)
 }

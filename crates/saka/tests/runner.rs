@@ -695,6 +695,7 @@ fn adapter(
         known_values: vec![],
         server_version: runner_version(),
         extra_env: vec![(fake_claude::SCRIPT_VAR.into(), script.into())],
+        mcp_socket: None,
     };
     (ClaudeAgents::new(cfg, supervisor, tx), rx)
 }

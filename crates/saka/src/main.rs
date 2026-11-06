@@ -4,6 +4,7 @@ mod config;
 mod doctor;
 mod init;
 mod logging;
+mod mcp;
 mod notify_cmd;
 mod scm_app;
 mod serve;
@@ -51,6 +52,15 @@ enum Command {
         session: String,
         #[arg(long)]
         launch: PathBuf,
+    },
+    #[command(
+        about = "Serves MCP tools to one agent session over stdio (started by the agent CLI, not by hand)",
+        hide = true,
+        after_help = "Exit codes: 0 done, 2 the engine socket or the session token is missing or refused."
+    )]
+    Mcp {
+        #[arg(long)]
+        session: String,
     },
     #[command(
         about = "Sets up this repo for Saka: docs location, saka.toml, toolchain versions, and a setup recipe; registers the project once saka.toml is pushed",
@@ -650,6 +660,7 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             let code = current_thread()?.block_on(saka_agents::runner::run(&session, &launch));
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
+        Command::Mcp { session } => current_thread()?.block_on(mcp::run(&session)),
         Command::Secret(cmd) => {
             let client = Client::new(&server(cli.server)?, cli.json);
             current_thread()?.block_on(async {

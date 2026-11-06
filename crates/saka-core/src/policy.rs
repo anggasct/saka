@@ -6,6 +6,8 @@ use crate::shell;
 
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
 pub const BUILTIN_GIT_PUSH: &str = "git_push";
+pub const BUILTIN_REQUEST_DECISION: &str = "request_decision";
+pub const DECISION_TOOL: &str = "mcp__saka__request_decision";
 
 pub use crate::vocab::Effect;
 
@@ -144,6 +146,12 @@ impl Policy {
         }
         if let Some(rule) = self.first(Effect::Deny, request) {
             return rule;
+        }
+        if request.tool == DECISION_TOOL {
+            return Decision::new(
+                Effect::Allow,
+                DecisionSource::Builtin(BUILTIN_REQUEST_DECISION.to_string()),
+            );
         }
         if let Some(rule) = project_first(Effect::Deny, request, project, true) {
             return rule;
@@ -299,6 +307,7 @@ pub const ARCHITECT_WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit"];
 pub const ARCHITECT_READ: &str = "read";
 pub const ARCHITECT_TARGET: &str = "target";
 pub const ARCHITECT_DENY: &str = "deny";
+pub const ARCHITECT_DECISION: &str = "decision";
 
 #[must_use]
 pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Decision {
@@ -311,6 +320,9 @@ pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Deci
     let tool = request.tool.as_str();
     let allow =
         |name: &str| Decision::new(Effect::Allow, DecisionSource::Architect(name.to_string()));
+    if tool == DECISION_TOOL {
+        return allow(ARCHITECT_DECISION);
+    }
     if ARCHITECT_READ_TOOLS.contains(&tool) {
         return allow(ARCHITECT_READ);
     }
@@ -748,6 +760,48 @@ mod tests {
             p.evaluate_with(&bash("ls && rm x"), &project).effect,
             Effect::Ask
         );
+    }
+
+    fn decision_request() -> ToolRequest {
+        ToolRequest {
+            tool: DECISION_TOOL.into(),
+            command: None,
+            path: None,
+        }
+    }
+
+    #[test]
+    fn the_decision_tool_is_allowed_by_a_builtin_rule_before_project_rules() {
+        let none = Policy::compile(&[]).unwrap();
+        let denying = project_rule_of(
+            9,
+            Effect::Deny,
+            crate::vocab::MatchKind::Exact,
+            DECISION_TOOL,
+            None,
+            None,
+        );
+        for project in [&[][..], std::slice::from_ref(&denying)] {
+            let d = none.evaluate_with(&decision_request(), project);
+            assert_eq!(d.effect, Effect::Allow);
+            assert_eq!(
+                d.source.answer_source().as_deref(),
+                Some("policy:builtin:request_decision")
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_deny_rule_still_wins_over_the_decision_tool_rule() {
+        let denying = Policy::compile(&[rule(
+            "no-questions",
+            Effect::Deny,
+            &[DECISION_TOOL],
+            &[],
+            &[],
+        )])
+        .unwrap();
+        assert_eq!(denying.evaluate(&decision_request()).effect, Effect::Deny);
     }
 
     #[test]
@@ -1200,6 +1254,13 @@ mod architect_tests {
     }
 
     #[test]
+    fn the_decision_tool_is_allowed_for_an_architect_session() {
+        let d = architect(&at(DECISION_TOOL, None, None), TARGET, &operator());
+        assert_eq!(d.effect, Effect::Allow);
+        assert_eq!(source(&d).as_deref(), Some("policy:architect:decision"));
+    }
+
+    #[test]
     fn commands_web_tasks_notebooks_and_unknown_tools_are_denied() {
         for tool in [
             "Bash",
@@ -1385,6 +1446,23 @@ mod reviewer_tests {
         }
         let bare = reviewer(&at("Grep", None, None), &operator());
         assert_eq!(bare.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn the_decision_tool_is_denied_for_a_reviewer_session_whatever_the_operator_allows() {
+        let allowing = Policy::compile(&[RuleSpec {
+            id: "allow-questions".into(),
+            effect: Effect::Allow,
+            tools: vec![DECISION_TOOL.into()],
+            paths: vec![],
+            commands: vec![],
+        }])
+        .unwrap();
+        for policy in [&allowing, &operator()] {
+            let d = reviewer(&at(DECISION_TOOL, None, None), policy);
+            assert_eq!(d.effect, Effect::Deny);
+            assert_eq!(source(&d).as_deref(), Some("policy:reviewer:deny"));
+        }
     }
 
     #[test]

@@ -354,6 +354,42 @@ mod tests {
     }
 
     #[test]
+    fn only_the_binary_may_depend_on_the_mcp_crate() {
+        let m = meta(
+            &["saka-core", "saka-ports", "saka-mcp", "saka"],
+            &[],
+            &[
+                ("saka", "saka-mcp", None),
+                ("saka-mcp", "saka-core", None),
+                ("saka-mcp", "saka-ports", None),
+            ],
+        );
+        assert_eq!(check(&m), vec![]);
+        for from in [
+            "saka-core",
+            "saka-ports",
+            "saka-engine",
+            "saka-api",
+            "saka-agents",
+        ] {
+            let m = meta(
+                &["saka-core", "saka-ports", "saka-mcp", from],
+                &[],
+                &[(from, "saka-mcp", None)],
+            );
+            assert_eq!(
+                check(&m),
+                vec![Violation::Edge {
+                    from: from.into(),
+                    to: "saka-mcp".into(),
+                    dev: false
+                }],
+                "{from}"
+            );
+        }
+    }
+
+    #[test]
     fn crate_outside_the_map_is_reported() {
         let m = meta(&["saka-core", "saka-extra"], &[], &[]);
         assert_eq!(

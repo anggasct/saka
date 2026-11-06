@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod chat;
+pub mod decisions;
 pub mod docs;
 pub mod env;
 pub mod git;
@@ -19,6 +20,7 @@ pub use agent::{
     RunnerEventKind, SessionLaunch, SessionRef,
 };
 pub use chat::{ChatAction, ChatActionKind, ChatActions, ChatOutcome};
+pub use decisions::{AskRefusal, Asked, Decisions};
 pub use docs::{
     DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree, DocWrite,
 };

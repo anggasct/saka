@@ -1,0 +1,28 @@
+[package]
+name = "saka-mcp"
+description = "The MCP server a session talks to, and the engine-side socket that answers it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "transport-io"] }
+saka-core = { path = "../saka-core" }
+saka-ports = { path = "../saka-ports" }
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
