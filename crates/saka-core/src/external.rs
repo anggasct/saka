@@ -425,7 +425,6 @@ pub fn decide(task: &Task, input: TaskInput, ctx: &mut Ctx<'_>) -> Result<Vec<Ev
     }
 }
 
-// Why a rejected change cannot be fixed now, or `None` when a round may start.
 pub fn fix_blocker(task: &Task) -> Option<&'static str> {
     let external = task.external.as_ref()?;
     if external.from_fork {

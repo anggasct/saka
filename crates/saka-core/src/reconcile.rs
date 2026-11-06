@@ -225,7 +225,6 @@ pub fn reconcile(
         for (_, id) in waiting_reviews.into_iter().take(free) {
             actions.push(Action::Decide(id, TaskInput::StartReview));
         }
-        // A task of ours already holds its slot, so its review never waits for one.
         for task in tasks.iter().filter(|t| own_review_waiting(t)) {
             actions.push(Action::Decide(task.item.id, TaskInput::StartReview));
         }

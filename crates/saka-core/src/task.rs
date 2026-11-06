@@ -702,7 +702,6 @@ impl Decider<'_> {
         run
     }
 
-    // A round answers a verdict or a conflict; the automatic ones stop at the project's limit.
     fn start_fix(&self, cause: Coded, ctx: &mut Ctx<'_>) -> Option<Event> {
         let auto = self.task.fixable()
             && self.task.workflow.stage_trigger(Stage::Fix) == Some(Trigger::Auto)
@@ -767,7 +766,6 @@ impl Decider<'_> {
     fn settle(&self, outcome: SessionOutcome, ctx: &mut Ctx<'_>) -> Vec<Event> {
         let mut events = outcome.events;
         match outcome.signal {
-            // The finished turn's worktree is inspected by the job `react` schedules for it.
             None | Some(SessionSignal::TurnCompleted { .. }) => {}
             Some(SessionSignal::Stopped {
                 code: BlockerCode::SessionLost,
@@ -1221,8 +1219,6 @@ impl Decider<'_> {
         events
     }
 
-    // A task of ours moves on from its posted verdict: an approval opens the merge at the head it
-    // judged, anything else sends the work back.
     fn own_review_settled(
         &self,
         run: &StageRun,
@@ -1677,7 +1673,6 @@ impl Decider<'_> {
             sha: sha.clone(),
         }];
         match &self.task.change_request {
-            // The change already exists (a retried dev stage): it now shows the new head.
             Some(cr) if cr.state == ChangeState::Open => {
                 if cr.head_sha != sha {
                     events.push(Event::ChangeRequestUpdated {
@@ -1731,7 +1726,6 @@ impl Decider<'_> {
         events
     }
 
-    // A change from outside has no merge here: the head the round produced is reviewed again.
     fn dev_done(&self, head_sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
         let Some(run) = &self.task.stage_run else {
             return vec![];
@@ -2071,8 +2065,6 @@ impl Decider<'_> {
         events
     }
 
-    // A head Saka did not push: while the agent works on `dev` it stops, anywhere else the head is
-    // only recorded so the next push lease and gate use it.
     fn head_moved(&self, head_sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
         let (Some(cr), Some(run)) = (&self.task.change_request, &self.task.stage_run) else {
             return vec![];
@@ -2087,7 +2079,6 @@ impl Decider<'_> {
             head_sha: head_sha.clone(),
         }];
         if self.reviewing_ours() {
-            // The verdict in flight judges a head that is gone: drop it and let CI look at the new one.
             events.extend(self.end_session(SessionState::Ended, "head_moved", json!({})));
             if matches!(run.state, StageRunState::Pending | StageRunState::Running) {
                 events.push(Event::StageRunCancelled {
@@ -2123,8 +2114,6 @@ impl Decider<'_> {
         if expected_version != self.item().version {
             return Err(Rejection::VersionStale);
         }
-        // A task stopped in the merge stage (red CI, a conflict) is not ready to merge,
-        // rather than in the wrong state.
         let in_merge = match self.item().state {
             WorkItemState::InStage => self.item().stage == Some(Stage::Merge),
             WorkItemState::Blocked => self
@@ -2209,7 +2198,6 @@ impl Decider<'_> {
             .is_some_and(|r| matches!(r.stage, Stage::Review | Stage::Fix))
     }
 
-    // A verdict judges one head: when the head moved, the last verdict is named, never applied.
     fn review_gap(&self) -> Option<Rejection> {
         let cr = self.task.change_request.as_ref()?;
         if !self.task.has_review_stage() || self.task.approved_at(&cr.head_sha) {
@@ -2378,7 +2366,6 @@ impl Decider<'_> {
         }
     }
 
-    // The queue lets go of its turn, and a fix round takes the conflict to the agent that wrote the change.
     fn conflicted(&self, params: Value, ctx: &mut Ctx<'_>) -> Vec<Event> {
         let cause = Coded {
             code: BlockerCode::MergeConflict.as_str().to_string(),
@@ -2655,8 +2642,6 @@ impl Decider<'_> {
             .unwrap_or_default()
     }
 
-    // Resuming after the operator renewed a credential or changed the mode is not a blind
-    // retry, so it never uses up the stage's automatic retries.
     fn resume(&self, trigger: ResumeTrigger, ctx: &mut Ctx<'_>) -> Vec<Event> {
         self.retry_as(Trigger::Auto, trigger.as_str().to_string(), ctx)
             .unwrap_or_default()
@@ -2690,7 +2675,6 @@ impl Decider<'_> {
         }
         let env_ready = self.task.ready_environment().is_some();
         if stage == Stage::Review {
-            // A review restarts from its request; only a failed post re-enters at the post.
         } else if entry == StagePhase::RunningSession && !env_ready {
             entry = StagePhase::PreparingEnvironment;
         } else if entry == StagePhase::PreparingEnvironment && env_ready {
@@ -2745,7 +2729,6 @@ impl Decider<'_> {
             },
             reason: Some(reason),
         }];
-        // A new run starts without a head; pushing again needs the commit the failed run produced.
         let repush = match (&run, pushed_head) {
             (Event::StageRunCreated { stage_run_id, .. }, Some(head_sha)) => {
                 Some(Event::StagePhaseChanged {
@@ -2763,7 +2746,6 @@ impl Decider<'_> {
         Ok(events)
     }
 
-    // A retry inside a fix run goes on with the same round; a blocker raised elsewhere opens one.
     fn retry_round(&self, blocker: &Blocker) -> FixRound {
         if let Some(round) = self
             .task
@@ -2868,7 +2850,6 @@ impl Decider<'_> {
             };
             return self.session(gone, ctx).unwrap_or_default();
         }
-        // A toolchain download that kept failing names the tool, not the job.
         if kind == JobKind::EnvPrepare && error.code == "toolchain_unavailable" {
             return self.environment_failed(BlockerCode::ToolchainUnavailable, error.params, ctx);
         }
@@ -2917,7 +2898,6 @@ impl Decider<'_> {
         events
     }
 
-    // Late facts for the run the operator left are dropped; only returning or cancelling changes it.
     fn paused(&self, input: TaskInput, ctx: &mut Ctx<'_>) -> Result<Vec<Event>, Rejection> {
         use TaskInput as I;
         match input {
@@ -3170,7 +3150,6 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
                 | StagePhase::PostingReview
                 | StagePhase::Reviewed => Stage::Review,
             };
-            // Merging again needs a fresh look at the change and its checks.
             let phase = if matches!(
                 phase,
                 StagePhase::Merging | StagePhase::Queued | StagePhase::Integrating

@@ -346,7 +346,6 @@ fn resolve_dependencies(
     (resolved, issues)
 }
 
-// Shortest chain of approved dependencies from `from` to `to`, as the slugs after `from`.
 fn path_back(from: SpecId, to: SpecId, graph: &[SpecDependency]) -> Option<Vec<String>> {
     let mut edges: BTreeMap<SpecId, Vec<&SpecDependency>> = BTreeMap::new();
     for edge in graph {

@@ -417,7 +417,6 @@ fn runs_git_push(command: &str) -> bool {
             if !words.by_ref().any(|w| w == "git" || w.ends_with("/git")) {
                 return false;
             }
-            // Skip global options (and the values of those that take one) to find the subcommand.
             while let Some(word) = words.next() {
                 if matches!(
                     word,

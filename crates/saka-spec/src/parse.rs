@@ -144,7 +144,6 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             if let Some(done_when) = done_when {
                 issues.push(LintIssue::new(LintCode::DoneWhenWithSteps, done_when.line));
             }
-            // Without a criteria section every reference would be unknown; report the section once.
             steps_from_table(table, doc.ac_section.then_some(&doc.ac_ids), &mut issues)
         }
         (None, Some(done_when)) => one_step(done_when, &title, &doc, &mut issues),
