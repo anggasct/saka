@@ -824,6 +824,27 @@ describe("catalog coverage", () => {
     ).toBe(
       "The gate at a1b2c3d4e5f6 is Pending, so the pull request cannot be merged yet.",
     );
+    const review = {
+      reason: "review",
+      head_sha: HEAD,
+      review_outcome: "changes_requested",
+    };
+    expect(errorText(en, "merge_not_ready", review)).toBe(
+      "The pull request at a1b2c3d4e5f6 has not been reviewed yet, so it cannot be merged yet.",
+    );
+    expect(
+      errorText(en, "merge_not_ready", { ...review, review_head_sha: HEAD }),
+    ).toBe(
+      "The review of a1b2c3d4e5f6 is Changes requested, so the pull request cannot be merged until a review approves it.",
+    );
+    expect(
+      errorText(en, "merge_not_ready", {
+        ...review,
+        review_head_sha: "f6e5d4c3b2a1ffff",
+      }),
+    ).toBe(
+      "The last review (Changes requested) judged f6e5d4c3b2a1, not the current head a1b2c3d4e5f6. The pull request needs an approving review at its current head before it can be merged.",
+    );
   });
 
   it("names the paths outside the scope and the allowed paths", () => {

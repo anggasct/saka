@@ -101,7 +101,7 @@
   "error.invalid_state": "Task atau sesi tidak lagi dalam state yang mengizinkan ini.",
   "error.version_stale": "Task berubah sejak dimuat. Periksa lagi, lalu coba ulang.",
   "error.precondition_required": "Request butuh versi task yang dituju.",
-  "error.merge_not_ready": "Gate di {head} berstatus {outcome}, jadi pull request belum bisa di-merge.",
+  "error.merge_not_ready": "{reason, select, review {{review_case, select, none {Pull request di {head} belum direview, jadi belum bisa di-merge.} same {Review atas {head} berstatus {verdict}, jadi pull request belum bisa di-merge sampai ada review yang menyetujui.} other {Review terakhir ({verdict}) menilai {review_head}, bukan head saat ini {head}. Pull request butuh review yang menyetujui di head saat ini sebelum bisa di-merge.}}} other {Gate di {head} berstatus {outcome}, jadi pull request belum bisa di-merge.}}",
   "error.entry_point_disabled": "Workflow project ini tidak punya titik masuk {entry}.",
   "error.stage_not_takeable": "Task tidak bisa diambil alih saat sedang merge atau setelah di-merge.",
   "error.return_target_invalid": "{reason, select, no_change_request {Task belum punya pull request, jadi tidak bisa kembali ke {stage}.} stage_not_in_workflow {Workflow project ini tidak punya stage {stage}, jadi task tidak bisa kembali ke sana.} no_findings {Tidak ada review yang meminta perubahan pada head pull request saat ini, jadi tidak ada yang diperbaiki.} environment_missing {Environment task sudah hilang, jadi tidak bisa kembali ke {stage}.} other {Task tidak bisa kembali ke {stage}.}}",

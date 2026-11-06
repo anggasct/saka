@@ -2131,12 +2131,23 @@ impl Decider<'_> {
             _ => false,
         };
         if !in_merge || self.task.is_at(Stage::Merge, StagePhase::Merging) {
+            if !in_merge
+                && self.judging()
+                && let Some(gap) = self.review_gap()
+            {
+                return Err(gap);
+            }
             return Err(Rejection::InvalidState {
                 state: self.state_name(),
             });
         }
         let cr = self.task.change_request.as_ref();
         let (Some(cr), true) = (cr, merge_ready(self.task)) else {
+            if gates_clear(self.task)
+                && let Some(gap) = self.review_gap()
+            {
+                return Err(gap);
+            }
             let gate_outcome = cr
                 .and_then(|c| {
                     let mut at_head = self.task.gates.iter().filter(|g| g.head_sha == c.head_sha);
@@ -2148,8 +2159,11 @@ impl Decider<'_> {
                 })
                 .map(|g| g.outcome.as_str().to_string());
             return Err(Rejection::MergeNotReady {
+                reason: "gate",
                 gate_outcome,
                 head_sha: cr.map(|c| c.head_sha.clone()),
+                review_head_sha: None,
+                review_outcome: None,
             });
         };
         let mut events = vec![Event::MergeRequested {
@@ -2178,6 +2192,33 @@ impl Decider<'_> {
         }];
         events.extend(self.phase(StagePhase::AwaitingCi, Some(cr.head_sha.clone())));
         events
+    }
+
+    fn judging(&self) -> bool {
+        matches!(
+            self.item().state,
+            WorkItemState::InStage | WorkItemState::Blocked
+        ) && self
+            .task
+            .stage_run
+            .as_ref()
+            .is_some_and(|r| matches!(r.stage, Stage::Review | Stage::Fix))
+    }
+
+    // A verdict judges one head: when the head moved, the last verdict is named, never applied.
+    fn review_gap(&self) -> Option<Rejection> {
+        let cr = self.task.change_request.as_ref()?;
+        if !self.task.has_review_stage() || self.task.approved_at(&cr.head_sha) {
+            return None;
+        }
+        let last = self.task.reviews.last();
+        Some(Rejection::MergeNotReady {
+            reason: "review",
+            gate_outcome: None,
+            head_sha: Some(cr.head_sha.clone()),
+            review_head_sha: last.map(|r| r.head_sha.clone()),
+            review_outcome: last.map(|r| r.outcome.as_str()),
+        })
     }
 
     fn merge_turn(&self) -> Vec<Event> {

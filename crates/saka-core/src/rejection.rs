@@ -28,8 +28,11 @@ pub enum Rejection {
     SpecHasActiveTasks { tasks: Value },
     #[error("merge is not ready")]
     MergeNotReady {
+        reason: &'static str,
         gate_outcome: Option<String>,
         head_sha: Option<String>,
+        review_head_sha: Option<String>,
+        review_outcome: Option<&'static str>,
     },
     #[error("permission request is already answered")]
     PermissionAlreadyAnswered,
@@ -223,11 +226,18 @@ impl Rejection {
             Rejection::RevisionConflict { steps } => json!({ "steps": steps }),
             Rejection::SpecHasActiveTasks { tasks } => json!({ "tasks": tasks }),
             Rejection::MergeNotReady {
+                reason,
                 gate_outcome,
                 head_sha,
-            } => {
-                json!({ "gate_outcome": gate_outcome, "head_sha": head_sha })
-            }
+                review_head_sha,
+                review_outcome,
+            } => json!({
+                "reason": reason,
+                "gate_outcome": gate_outcome,
+                "head_sha": head_sha,
+                "review_head_sha": review_head_sha,
+                "review_outcome": review_outcome,
+            }),
             Rejection::ProjectExists { project_id } => json!({ "project_id": project_id }),
             Rejection::SpecSlugConflict { slug, path } => json!({ "slug": slug, "path": path }),
             Rejection::TaskBranchConflict { branches } => json!({ "branches": branches }),
