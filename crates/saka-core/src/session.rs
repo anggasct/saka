@@ -16,8 +16,8 @@ use crate::rejection::Rejection;
 use crate::resume;
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, BudgetDimension, EnvironmentState, InterruptBy, PermissionState, ResumeCause,
-    SessionState, Trigger,
+    BlockerCode, BudgetDimension, EnvironmentState, InterruptBy, MatchKind, PermissionState,
+    ResumeCause, SessionState, Trigger,
 };
 
 pub const SESSION_ENDED_SOURCE: &str = "system:session_ended";
@@ -676,6 +676,9 @@ impl Decider<'_, '_> {
                     !active.iter().any(|r| {
                         r.revoked_at.is_none()
                             && r.project_id == project_id
+                            && r.effect == Effect::Allow
+                            && r.match_kind == MatchKind::Exact
+                            && r.path.is_none()
                             && &r.tool == tool
                             && &r.command == command
                     })
@@ -683,10 +686,14 @@ impl Decider<'_, '_> {
                 .map(|(tool, command)| Event::PermissionRuleAdded {
                     rule_id: PermissionRuleId::new(ctx.ids),
                     project_id,
-                    owner: request.owner,
+                    owner: Some(request.owner),
+                    effect: Effect::Allow,
                     tool,
+                    match_kind: MatchKind::Exact,
                     command,
-                    permission_request_id: id,
+                    path: None,
+                    note: None,
+                    permission_request_id: Some(id),
                     created_by: format!("human:{actor}"),
                 })
                 .collect(),

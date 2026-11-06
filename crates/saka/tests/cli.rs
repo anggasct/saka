@@ -629,10 +629,13 @@ fn task_and_permission_commands_drive_a_session_and_remembered_rules() {
         &["permission", "answer", &request, "allow", "--remember"],
     );
     assert_eq!(code(&answered), 0, "{}", err(&answered));
-    let rules = saka(&server, &["permission", "rules", "tasks"]);
+    let rules = saka(&server, &["permission", "rule", "list", "tasks"]);
     assert_eq!(code(&rules), 0, "{}", err(&rules));
     let line = stdout(&rules);
-    assert!(line.trim_end().ends_with("Bash  npm install"), "{line}");
+    assert!(
+        line.trim_end().ends_with("allow  exact  Bash  npm install"),
+        "{line}"
+    );
     let rule = line.split_whitespace().next().unwrap().to_string();
     assert!(sim.run_until(5_000, |s| {
         s.task(1)
@@ -676,17 +679,122 @@ fn task_and_permission_commands_drive_a_session_and_remembered_rules() {
 
     let revoked = saka(
         &server,
-        &["permission", "revoke", &rule, "--reason", "too broad"],
+        &[
+            "permission",
+            "rule",
+            "revoke",
+            &rule,
+            "--reason",
+            "too broad",
+        ],
     );
     assert_eq!(code(&revoked), 0, "{}", err(&revoked));
     assert_eq!(stdout(&revoked).trim(), format!("{rule} revoked"));
     assert_eq!(
         code(&saka(
             &server,
-            &["permission", "revoke", &rule, "--reason", "again"]
+            &["permission", "rule", "revoke", &rule, "--reason", "again"]
         )),
         4
     );
+}
+
+#[test]
+fn permission_rule_commands_add_list_and_revoke_with_their_exit_codes() {
+    let sim = Sim::new(SimConfig {
+        rules: vec![saka_core::policy::RuleSpec {
+            id: "safe".into(),
+            effect: saka_core::policy::Effect::Allow,
+            tools: vec!["Bash".into()],
+            paths: vec![],
+            commands: vec!["ls*".into()],
+        }],
+        ..SimConfig::default()
+    });
+    let server = serve(&sim);
+    let err = |o: &Output| String::from_utf8_lossy(&o.stderr).into_owned();
+    let add = |extra: &[&str]| {
+        let mut args = vec!["permission", "rule", "add", "tasks"];
+        args.extend_from_slice(extra);
+        saka(&server, &args)
+    };
+
+    let added = add(&[
+        "--effect",
+        "deny",
+        "--tool",
+        "Bash",
+        "--match",
+        "glob",
+        "--command",
+        "rm *",
+        "--note",
+        "never delete",
+    ]);
+    assert_eq!(code(&added), 0, "{}", err(&added));
+    let rule = stdout(&added)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(stdout(&added).trim_end().ends_with("added"));
+
+    let again = add(&[
+        "--effect",
+        "deny",
+        "--tool",
+        "Bash",
+        "--match",
+        "glob",
+        "--command",
+        "rm *",
+    ]);
+    assert_eq!(code(&again), 4);
+    assert!(err(&again).contains("rule_duplicate"), "{}", err(&again));
+    let broad = add(&[
+        "--effect",
+        "allow",
+        "--tool",
+        "Bash",
+        "--match",
+        "glob",
+        "--command",
+        "*",
+    ]);
+    assert_eq!(code(&broad), 1);
+    assert!(err(&broad).contains("rule_too_broad"), "{}", err(&broad));
+    let invalid = add(&["--effect", "allow", "--tool", "Bash"]);
+    assert_eq!(code(&invalid), 1);
+    assert!(err(&invalid).contains("rule_invalid"), "{}", err(&invalid));
+
+    let file = add(&[
+        "--effect", "ask", "--tool", "Edit", "--match", "glob", "--path", "docs/**",
+    ]);
+    assert_eq!(code(&file), 0, "{}", err(&file));
+
+    let listed = saka(&server, &["permission", "rule", "list", "tasks"]);
+    assert_eq!(code(&listed), 0, "{}", err(&listed));
+    let printed = stdout(&listed);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines.len(), 3, "{printed}");
+    assert!(lines[0].ends_with("deny  glob  Bash  rm *"), "{printed}");
+    assert!(lines[1].ends_with("ask  glob  Edit  docs/**"), "{printed}");
+    assert_eq!(lines[2], "operator:safe  allow  Bash  ls*");
+
+    let revoked = saka(
+        &server,
+        &["permission", "rule", "revoke", &rule, "--reason", "noisy"],
+    );
+    assert_eq!(code(&revoked), 0, "{}", err(&revoked));
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["permission", "rule", "revoke", &rule, "--reason", "again"]
+        )),
+        4
+    );
+    let after = saka(&server, &["permission", "rule", "list", "tasks", "--json"]);
+    assert_eq!(json(&after)["items"].as_array().unwrap().len(), 1);
 }
 
 fn saka_with_stdin(server: &str, args: &[&str], input: &str) -> Output {

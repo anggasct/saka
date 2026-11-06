@@ -20,11 +20,11 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, ExternalCause, GateOutcome,
-    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, InterruptBy,
-    LintOutcome, MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause,
-    ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage,
-    StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
+    ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, Effect, ExternalCause,
+    GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject,
+    InterruptBy, LintOutcome, MatchKind, MergeMethod, PermissionState, RelinkCause, ReloadTrigger,
+    ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin,
+    Stage, StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -594,10 +594,14 @@ pub enum Event {
     PermissionRuleAdded {
         rule_id: PermissionRuleId,
         project_id: ProjectId,
-        owner: RunOwner,
+        owner: Option<RunOwner>,
+        effect: Effect,
         tool: String,
+        match_kind: MatchKind,
         command: Option<String>,
-        permission_request_id: PermissionRequestId,
+        path: Option<String>,
+        note: Option<String>,
+        permission_request_id: Option<PermissionRequestId>,
         created_by: String,
     },
     #[serde(rename = "runtime.permission_rule.revoked")]
@@ -1013,9 +1017,9 @@ impl Event {
             | E::PermissionRequested { owner, .. }
             | E::PermissionAnswered { owner, .. }
             | E::PermissionDelivered { owner, .. }
-            | E::PermissionRuleAdded { owner, .. }
             | E::BudgetWarned { owner, .. }
             | E::QuotaObserved { owner, .. } => Some(owner),
+            E::PermissionRuleAdded { owner, .. } => owner.as_ref(),
             _ => None,
         }
     }

@@ -1570,6 +1570,62 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "operationId": "add_permission_rule",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPermissionRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRule"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/projects/{project_id}/secrets": {
@@ -5644,6 +5700,88 @@
           }
         }
       },
+      "NewPermissionRule": {
+        "type": "object",
+        "required": [
+          "effect",
+          "tool",
+          "match"
+        ],
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required for `Bash`, at most 2000 characters, matched against one part of a compound command; not allowed for other tools. An `allow` glob made only of `*` is refused as too broad."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/RuleEffect"
+          },
+          "match": {
+            "$ref": "#/components/schemas/RuleMatch",
+            "description": "`exact` or `glob`."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 500 characters."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Worktree-relative path, not allowed for `Bash`; omit to cover every path."
+          },
+          "tool": {
+            "type": "string",
+            "description": "1 to 100 characters, the agent CLI's tool name (`Bash`, `Edit`, ...)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperatorPermissionRule": {
+        "type": "object",
+        "description": "A rule from the operator's `config.toml`; read-only here.",
+        "required": [
+          "id",
+          "effect",
+          "tools",
+          "paths",
+          "commands"
+        ],
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Globs matched against one part of a Bash command; empty means any command."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/RuleEffect"
+          },
+          "id": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Globs relative to the worktree; empty means any path."
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "OptionalReason": {
         "type": "object",
         "properties": {
@@ -6859,7 +6997,7 @@
           "project_id",
           "effect",
           "tool",
-          "permission_request_id",
+          "match",
           "created_by",
           "created_at"
         ],
@@ -6869,7 +7007,7 @@
               "string",
               "null"
             ],
-            "description": "The whole Bash command; `null` for other tools."
+            "description": "One part of a Bash command (see `match`); `null` for other tools."
           },
           "created_at": {
             "type": "string"
@@ -6878,16 +7016,36 @@
             "type": "string"
           },
           "effect": {
-            "type": "string",
-            "description": "`allow`"
+            "$ref": "#/components/schemas/RuleEffect"
           },
           "id": {
             "type": "string",
             "format": "uuid"
           },
+          "match": {
+            "$ref": "#/components/schemas/RuleMatch",
+            "description": "`exact` compares text verbatim; `glob` is a glob (`*` does not cross `/` in `path`)."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Worktree-relative path the rule applies to; `null` means every path."
+          },
           "permission_request_id": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The request whose answer created the rule; `null` for a rule written by hand."
           },
           "project_id": {
             "type": "string",
@@ -6913,14 +7071,23 @@
       "PermissionRuleList": {
         "type": "object",
         "required": [
-          "items"
+          "items",
+          "operator_rules"
         ],
         "properties": {
           "items": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PermissionRule"
-            }
+            },
+            "description": "Active project rules, oldest first."
+          },
+          "operator_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorPermissionRule"
+            },
+            "description": "The operator's rules in evaluation order; they cap what a project rule can do."
           }
         }
       },
@@ -7783,6 +7950,21 @@
             "description": "Commit of the workspace repo the revision was read at."
           }
         }
+      },
+      "RuleEffect": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "deny",
+          "ask"
+        ]
+      },
+      "RuleMatch": {
+        "type": "string",
+        "enum": [
+          "exact",
+          "glob"
+        ]
       },
       "RunOwner": {
         "oneOf": [

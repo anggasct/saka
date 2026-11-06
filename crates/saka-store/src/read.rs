@@ -901,9 +901,17 @@ fn permission_rule(row: &Row<'_>) -> Result<PermissionRule> {
     Ok(PermissionRule {
         id: saka_core::ids::PermissionRuleId(uuid(row, "id")?),
         project_id: ProjectId(uuid(row, "project_id")?),
+        effect: vocab(row, "effect")?,
         tool: row.get("tool")?,
+        match_kind: vocab(row, "match_kind")?,
         command: row.get("command")?,
-        permission_request_id: PermissionRequestId(uuid(row, "permission_request_id")?),
+        path: row.get("path")?,
+        note: row.get("note")?,
+        permission_request_id: row
+            .get::<_, Option<String>>("permission_request_id")?
+            .map(|id| id.parse().map(PermissionRequestId))
+            .transpose()
+            .map_err(|_| StoreError::Corrupt("permission_request_id".into()))?,
         created_by: row.get("created_by")?,
         created_at: ts(row, "created_at")?,
         revoked_at: opt_ts(row, "revoked_at")?,

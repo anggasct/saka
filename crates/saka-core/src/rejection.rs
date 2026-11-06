@@ -147,6 +147,15 @@ pub enum Rejection {
     HookNotConfigured { hook: String },
     #[error("hook run holds a task")]
     HookRunGated { work_item_id: String },
+    #[error("an identical rule is already active")]
+    RuleDuplicate { rule_id: String },
+    #[error("an allow rule cannot match every command")]
+    RuleTooBroad,
+    #[error("the rule is not valid: {field} {reason}")]
+    RuleInvalid {
+        field: &'static str,
+        reason: &'static str,
+    },
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -217,6 +226,9 @@ impl Rejection {
             Rejection::HookRunPending => "hook_run_pending",
             Rejection::HookNotConfigured { .. } => "hook_not_configured",
             Rejection::HookRunGated { .. } => "hook_run_gated",
+            Rejection::RuleDuplicate { .. } => "rule_duplicate",
+            Rejection::RuleTooBroad => "rule_too_broad",
+            Rejection::RuleInvalid { .. } => "rule_invalid",
             Rejection::Invalid { .. } => "validation_failed",
         }
     }
@@ -282,6 +294,8 @@ impl Rejection {
             Rejection::InboxItemClosed { state } => json!({ "state": state }),
             Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
             Rejection::HookRunGated { work_item_id } => json!({ "work_item_id": work_item_id }),
+            Rejection::RuleDuplicate { rule_id } => json!({ "rule_id": rule_id }),
+            Rejection::RuleInvalid { field, reason } => json!({ "field": field, "reason": reason }),
             Rejection::FilePathConflict { path } => json!({ "path": path }),
             Rejection::FilePushRejected { branch } => json!({ "branch": branch }),
             Rejection::FileUnsupported { reason } => reason.params(),

@@ -208,6 +208,7 @@ fn a_reviewed_change_needs_no_checks_on_its_merge_commit_to_admit_the_next_step(
 
 #[test]
 fn the_time_from_merge_to_the_next_admission_is_measured() {
+    saka_testkit::logs::check_callsites_per_thread();
     let buffer = Buffer::default();
     let out = buffer.clone();
     let subscriber = tracing_subscriber::fmt()

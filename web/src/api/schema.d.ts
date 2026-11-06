@@ -381,7 +381,7 @@ export interface paths {
     };
     get: operations["list_permission_rules"];
     put?: never;
-    post?: never;
+    post: operations["add_permission_rule"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1561,6 +1561,29 @@ export interface components {
       min_client_api_version: string;
       server_version: string;
     };
+    NewPermissionRule: {
+      /** @description Required for `Bash`, at most 2000 characters, matched against one part of a compound command; not allowed for other tools. An `allow` glob made only of `*` is refused as too broad. */
+      command?: string | null;
+      effect: components["schemas"]["RuleEffect"];
+      /** @description `exact` or `glob`. */
+      match: components["schemas"]["RuleMatch"];
+      /** @description At most 500 characters. */
+      note?: string | null;
+      /** @description Worktree-relative path, not allowed for `Bash`; omit to cover every path. */
+      path?: string | null;
+      /** @description 1 to 100 characters, the agent CLI's tool name (`Bash`, `Edit`, ...). */
+      tool: string;
+    };
+    /** @description A rule from the operator's `config.toml`; read-only here. */
+    OperatorPermissionRule: {
+      /** @description Globs matched against one part of a Bash command; empty means any command. */
+      commands: string[];
+      effect: components["schemas"]["RuleEffect"];
+      id: string;
+      /** @description Globs relative to the worktree; empty means any path. */
+      paths: string[];
+      tools: string[];
+    };
     OptionalReason: {
       reason?: string | null;
     };
@@ -1881,16 +1904,23 @@ export interface components {
       tool: string;
     };
     PermissionRule: {
-      /** @description The whole Bash command; `null` for other tools. */
+      /** @description One part of a Bash command (see `match`); `null` for other tools. */
       command?: string | null;
       created_at: string;
       created_by: string;
-      /** @description `allow` */
-      effect: string;
+      effect: components["schemas"]["RuleEffect"];
       /** Format: uuid */
       id: string;
-      /** Format: uuid */
-      permission_request_id: string;
+      /** @description `exact` compares text verbatim; `glob` is a glob (`*` does not cross `/` in `path`). */
+      match: components["schemas"]["RuleMatch"];
+      note?: string | null;
+      /** @description Worktree-relative path the rule applies to; `null` means every path. */
+      path?: string | null;
+      /**
+       * Format: uuid
+       * @description The request whose answer created the rule; `null` for a rule written by hand.
+       */
+      permission_request_id?: string | null;
       /** Format: uuid */
       project_id: string;
       revoke_reason?: string | null;
@@ -1898,7 +1928,10 @@ export interface components {
       tool: string;
     };
     PermissionRuleList: {
+      /** @description Active project rules, oldest first. */
       items: components["schemas"]["PermissionRule"][];
+      /** @description The operator's rules in evaluation order; they cap what a project rule can do. */
+      operator_rules: components["schemas"]["OperatorPermissionRule"][];
     };
     PlanStep: {
       /** @description `keep | repin | restore | add | supersede | conflict` */
@@ -2176,6 +2209,10 @@ export interface components {
       /** @description Commit of the workspace repo the revision was read at. */
       source_commit: string;
     };
+    /** @enum {string} */
+    RuleEffect: "allow" | "deny" | "ask";
+    /** @enum {string} */
+    RuleMatch: "exact" | "glob";
     /** @description The run that owns a session, its permission requests, and its usage records. */
     RunOwner:
       | {
@@ -3904,6 +3941,42 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  add_permission_rule: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["NewPermissionRule"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PermissionRule"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

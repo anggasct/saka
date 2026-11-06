@@ -278,6 +278,8 @@ vocab!(
     }
 );
 vocab!(BudgetDimension { RunningMinutes => "running_minutes", Turns => "turns", Tokens => "tokens", CostUsd => "cost_usd" });
+vocab!(Effect { Allow => "allow", Deny => "deny", Ask => "ask" });
+vocab!(MatchKind { Exact => "exact", Glob => "glob" });
 vocab!(PermissionState { Pending => "pending", Allowed => "allowed", Denied => "denied", Expired => "expired" });
 vocab!(ChangeState { Open => "open", Merged => "merged", Closed => "closed" });
 vocab!(GateSource { Scm => "scm", Saka => "saka" });

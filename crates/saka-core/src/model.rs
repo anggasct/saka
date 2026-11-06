@@ -14,10 +14,11 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
-    ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, ExternalCause,
-    GateOutcome, GateSource, InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause,
-    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecDraftState, SpecOrigin, SpecState,
-    Stage, StagePhase, StageRunState, Tool, Trigger, WorkItemOrigin, WorkItemState,
+    ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, Effect, EnvironmentState,
+    ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind, PacketOrigin,
+    PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState,
+    SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool, Trigger,
+    WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -396,9 +397,13 @@ pub struct AccountQuota {
 pub struct PermissionRule {
     pub id: PermissionRuleId,
     pub project_id: ProjectId,
+    pub effect: Effect,
     pub tool: String,
+    pub match_kind: MatchKind,
     pub command: Option<String>,
-    pub permission_request_id: PermissionRequestId,
+    pub path: Option<String>,
+    pub note: Option<String>,
+    pub permission_request_id: Option<PermissionRequestId>,
     pub created_by: String,
     pub created_at: Timestamp,
     pub revoked_at: Option<Timestamp>,

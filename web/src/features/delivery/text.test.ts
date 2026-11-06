@@ -750,6 +750,9 @@ const ERRORS = [
   "inbox_item_not_found",
   "inbox_item_not_dismissible",
   "inbox_item_closed",
+  "rule_duplicate",
+  "rule_too_broad",
+  "rule_invalid",
 ];
 
 describe("catalog coverage", () => {

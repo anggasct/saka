@@ -1793,10 +1793,60 @@ pub async fn list_permission_rules(State(s): State<AppState>, Path(id): Path<Str
             StatusCode::OK,
             &dto::PermissionRuleList {
                 items: rules.iter().map(dto::PermissionRule::from).collect(),
+                operator_rules: engine
+                    .operator_rules()
+                    .iter()
+                    .map(dto::OperatorPermissionRule::from)
+                    .collect(),
             },
         ),
         None => ApiError::not_found().into_response(),
     }
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/permission-rules", tag = "runtime",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::NewPermissionRule,
+    responses((status = 201, body = dto::PermissionRule), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn add_permission_rule(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&id)));
+    let req: dto::NewPermissionRule = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Rule(r) => reply(StatusCode::CREATED, &dto::PermissionRule::from(r)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "permission_rule.add",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: req.note.clone(),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .add_rule(project, req.into(), &cause, Some(&action))
+                .map(|_| Some(project))
+                .map_err(|e| (e, Some(project)))
+        },
+    )
+    .await
 }
 
 #[utoipa::path(

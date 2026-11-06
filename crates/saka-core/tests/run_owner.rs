@@ -18,7 +18,9 @@ use saka_core::session::{
     self, RunRetry, RunView, SessionConfig, SessionInput, SessionOutcome, SessionSignal,
 };
 use saka_core::time::Timestamp;
-use saka_core::vocab::{BudgetDimension, InterruptBy, PermissionState, SessionState, Trigger};
+use saka_core::vocab::{
+    BudgetDimension, Effect, InterruptBy, MatchKind, PermissionState, SessionState, Trigger,
+};
 
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
@@ -213,10 +215,14 @@ fn owned_events(owner: RunOwner) -> Vec<Event> {
         Event::PermissionRuleAdded {
             rule_id: PermissionRuleId(id(15)),
             project_id: ProjectId(id(16)),
-            owner,
+            owner: Some(owner),
+            effect: Effect::Allow,
             tool: "Read".into(),
+            match_kind: MatchKind::Exact,
             command: None,
-            permission_request_id,
+            path: None,
+            note: None,
+            permission_request_id: Some(permission_request_id),
             created_by: "human:operator:local".into(),
         },
     ]

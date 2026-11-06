@@ -521,9 +521,55 @@ enum PermissionCmd {
         )]
         remember: bool,
     },
-    #[command(about = "Lists the project's remembered permission rules")]
-    Rules { project: String },
-    #[command(about = "Revokes a remembered permission rule")]
+    #[command(about = "Permission rules of a project", subcommand)]
+    Rule(RuleCmd),
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum RuleEffect {
+    Allow,
+    Deny,
+    Ask,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum RuleMatch {
+    Exact,
+    Glob,
+}
+
+#[derive(Subcommand)]
+enum RuleCmd {
+    #[command(
+        about = "Adds a rule to the project",
+        after_help = "Exit codes: 0 added, 1 failed or refused (too broad, invalid), 4 an identical rule is already active."
+    )]
+    Add {
+        project: String,
+        #[arg(help = "What the rule does", long, value_enum)]
+        effect: RuleEffect,
+        #[arg(help = "The agent CLI's tool name, e.g. Bash or Edit", long)]
+        tool: String,
+        #[arg(
+            default_value = "exact",
+            help = "exact compares verbatim, glob uses * and ?",
+            long = "match",
+            value_enum
+        )]
+        match_kind: RuleMatch,
+        #[arg(help = "Required for Bash: one part of a compound command", long)]
+        command: Option<String>,
+        #[arg(help = "Worktree-relative path; not for Bash", long)]
+        path: Option<String>,
+        #[arg(help = "Why the rule exists, at most 500 characters", long)]
+        note: Option<String>,
+    },
+    #[command(about = "Lists the project's active rules and the operator's rules")]
+    List { project: String },
+    #[command(
+        about = "Revokes a project rule",
+        after_help = "Exit codes: 0 revoked, 1 failed, 4 already revoked."
+    )]
     Revoke {
         id: String,
         #[arg(long)]
@@ -828,9 +874,41 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .permission_answer(&id, d, message.as_deref(), remember)
                             .await
                     }
-                    PermissionCmd::Rules { project } => client.permission_rules(&project).await,
-                    PermissionCmd::Revoke { id, reason } => {
+                    PermissionCmd::Rule(RuleCmd::List { project }) => {
+                        client.permission_rules(&project).await
+                    }
+                    PermissionCmd::Rule(RuleCmd::Revoke { id, reason }) => {
                         client.permission_revoke(&id, &reason).await
+                    }
+                    PermissionCmd::Rule(RuleCmd::Add {
+                        project,
+                        effect,
+                        tool,
+                        match_kind,
+                        command,
+                        path,
+                        note,
+                    }) => {
+                        let effect = match effect {
+                            RuleEffect::Allow => "allow",
+                            RuleEffect::Deny => "deny",
+                            RuleEffect::Ask => "ask",
+                        };
+                        let kind = match match_kind {
+                            RuleMatch::Exact => "exact",
+                            RuleMatch::Glob => "glob",
+                        };
+                        client
+                            .permission_rule_add(cli::NewRule {
+                                project: &project,
+                                effect,
+                                tool: &tool,
+                                match_kind: kind,
+                                command: command.as_deref(),
+                                path: path.as_deref(),
+                                note: note.as_deref(),
+                            })
+                            .await
                     }
                 }
             })
