@@ -170,10 +170,10 @@ fn operator_commands_call_the_api_and_exit_with_documented_codes() {
     assert_eq!(
         code(&saka(
             &server,
-            &["task", "return", &id, "--stage", "review", "--reason", "x"]
+            &["task", "return", &id, "--stage", "sync", "--reason", "x"]
         )),
         2,
-        "usage: the stage is dev or merge"
+        "usage: the stage is dev, review, fix or merge"
     );
     let cancelled = saka(
         &server,

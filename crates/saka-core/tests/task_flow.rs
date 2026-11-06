@@ -2162,14 +2162,18 @@ fn returning_is_refused_when_the_target_or_the_change_does_not_allow_it() {
             reason: "no_change_request",
         })
     );
-    for stage in [Stage::Review, Stage::Fix, Stage::Sync] {
-        assert!(matches!(
+    for (stage, reason) in [
+        (Stage::Review, "stage_not_in_workflow"),
+        (Stage::Fix, "stage_not_in_workflow"),
+        (Stage::Sync, "stage_unsupported"),
+    ] {
+        assert_eq!(
             w.try_decide(1, give_back(Some(stage), 'b')),
             Err(Rejection::ReturnTargetInvalid {
-                reason: "stage_unsupported",
-                ..
+                stage: stage.as_str(),
+                reason,
             })
-        ));
+        );
     }
     assert_eq!(w.place(1).0, WorkItemState::TakenOver);
 

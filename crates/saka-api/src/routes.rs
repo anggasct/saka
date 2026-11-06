@@ -1062,7 +1062,9 @@ async fn task_action(
             let req: dto::ReturnBody = tri!(body(&raw));
             return_stage = match req.stage.as_deref().map(str::parse::<Stage>) {
                 None => None,
-                Some(Ok(stage @ (Stage::Dev | Stage::Merge))) => Some(stage),
+                Some(Ok(stage @ (Stage::Dev | Stage::Review | Stage::Fix | Stage::Merge))) => {
+                    Some(stage)
+                }
                 Some(_) => return ApiError::validation("stage", "invalid").into_response(),
             };
             (None, Some(req.reason))

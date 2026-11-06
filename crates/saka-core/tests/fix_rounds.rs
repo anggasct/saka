@@ -7,9 +7,11 @@ use saka_core::Ctx;
 use saka_core::blocker::primary_action;
 use saka_core::event::Event;
 use saka_core::ids::{
-    ChangeRequestId, IdSource, ProjectId, RepoId, ReviewId, SessionId, StageRunId, WorkItemId,
+    ChangeRequestId, EnvironmentId, IdSource, ProjectId, RepoId, ReviewId, SessionId, StageRunId,
+    WorkItemId,
 };
 use saka_core::model::{ChangeRequest, Coded, FixRound, Review, Task, WorkItem};
+use saka_core::rejection::Rejection;
 use saka_core::review::Finding;
 use saka_core::task::{self, LoopConfig, TaskInput, retry_target};
 use saka_core::time::Timestamp;
@@ -33,6 +35,7 @@ impl IdSource for Ids {
 
 const NOW: Timestamp = Timestamp(1_000);
 const HEAD: &str = "1111111111111111111111111111111111111111";
+const OTHER: &str = "2222222222222222222222222222222222222222";
 
 fn cfg() -> LoopConfig {
     LoopConfig {
@@ -437,4 +440,134 @@ proptest! {
         prop_assert!(started <= limit);
         prop_assert!(task.fix_rounds_used() <= limit);
     }
+}
+
+fn taken_over(mut task: Task, environment: bool) -> Task {
+    if environment {
+        let owner = task.run_owner().unwrap();
+        let (repo_id, branch) = (task.item.repo_id, task.item.branch.clone());
+        task = evolved(
+            task,
+            &Event::EnvironmentPrepared {
+                owner,
+                environment_id: EnvironmentId(Uuid::from_u128(50)),
+                repo_id,
+                root_path: "/envs/1".into(),
+                worktree_path: "/envs/1/work".into(),
+                branch: Some(branch),
+                base_sha: HEAD.into(),
+                port_start: None,
+                port_count: None,
+                recipe: None,
+                recipe_sha256: None,
+                setup: Vec::new(),
+                toolchains: Vec::new(),
+                path_scope: Vec::new(),
+                docs: None,
+            },
+        );
+    }
+    evolved(
+        task,
+        &Event::WorkItemTakenOver {
+            work_item_id: WorkItemId(Uuid::from_u128(1)),
+            reason: "by hand".into(),
+            stage: Some(Stage::Review),
+            phase: Some(StagePhase::PostingReview),
+        },
+    )
+}
+
+fn give_back(task: &Task, stage: Stage) -> Result<Vec<Event>, Rejection> {
+    let mut ids = Ids(5_000);
+    task::decide(
+        task,
+        TaskInput::Return {
+            stage: Some(stage),
+            reason: "done by hand".into(),
+            change: None,
+        },
+        &cfg(),
+        &mut Ctx {
+            now: NOW,
+            ids: &mut ids,
+        },
+    )
+}
+
+fn refused(result: Result<Vec<Event>, Rejection>) -> (&'static str, &'static str) {
+    match result {
+        Err(Rejection::ReturnTargetInvalid { stage, reason }) => (stage, reason),
+        other => panic!("expected a refused return, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_task_returns_to_fix_with_the_last_verdict_and_the_round_it_had() {
+    let task = taken_over(posting(workflow(2, Some(Trigger::Auto)), 1), true);
+    assert!(task::takeable(Stage::Fix, Some(StagePhase::RunningSession)));
+    let events = give_back(&task, Stage::Fix).unwrap();
+    let (trigger, entry, fix) = created_fix(&events).unwrap();
+    assert_eq!(
+        (trigger, entry),
+        (Trigger::Auto, StagePhase::RunningSession)
+    );
+    assert_eq!(fix.number, 1, "coming back is not another round");
+    assert_eq!(fix.cause.code, "verdict_failed");
+    assert_eq!(fix.cause.params["head_sha"], HEAD);
+    let after = events.iter().fold(task, evolved);
+    assert!(after.is_at(Stage::Fix, StagePhase::RunningSession));
+    assert_eq!(after.fix_rounds_used(), 1);
+
+    let fresh = taken_over(posting(workflow(2, Some(Trigger::Auto)), 0), true);
+    let (_, _, fix) = created_fix(&give_back(&fresh, Stage::Fix).unwrap()).unwrap();
+    assert_eq!(
+        fix.number, 1,
+        "a verdict nobody fixed yet is the first round"
+    );
+}
+
+#[test]
+fn a_return_to_fix_needs_a_fix_stage_and_a_verdict_at_the_head() {
+    let mut task = taken_over(posting(workflow(2, Some(Trigger::Auto)), 0), true);
+    task.reviews[0].head_sha = OTHER.into();
+    assert_eq!(
+        refused(give_back(&task, Stage::Fix)),
+        ("fix", "no_findings")
+    );
+    task.reviews.clear();
+    assert_eq!(
+        refused(give_back(&task, Stage::Fix)),
+        ("fix", "no_findings")
+    );
+
+    let without = taken_over(posting(workflow(2, None), 0), true);
+    assert_eq!(
+        refused(give_back(&without, Stage::Fix)),
+        ("fix", "stage_not_in_workflow")
+    );
+}
+
+#[test]
+fn a_task_returns_to_review_at_the_head_it_has_now() {
+    let task = taken_over(posting(workflow(2, Some(Trigger::Auto)), 0), true);
+    let events = give_back(&task, Stage::Review).unwrap();
+    let after = events.iter().fold(task.clone(), evolved);
+    let run = after.stage_run.as_ref().unwrap();
+    assert_eq!(run.stage, Stage::Review);
+    assert_eq!(run.head_sha.as_deref(), Some(HEAD));
+    assert!(after.is_at(Stage::Review, StagePhase::AwaitingReview));
+
+    let mut build_only = workflow(2, None);
+    build_only.remove_stage(Stage::Review);
+    let no_review = taken_over(posting(build_only, 0), true);
+    assert_eq!(
+        refused(give_back(&no_review, Stage::Review)),
+        ("review", "stage_not_in_workflow")
+    );
+    let no_environment = taken_over(posting(workflow(2, Some(Trigger::Auto)), 0), false);
+    assert_eq!(
+        refused(give_back(&no_environment, Stage::Review)),
+        ("review", "environment_missing")
+    );
 }

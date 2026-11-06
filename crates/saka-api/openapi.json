@@ -6850,7 +6850,7 @@
               "string",
               "null"
             ],
-            "description": "`dev` or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`."
+            "description": "`dev`, `review`, `fix`, or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`."
           }
         },
         "additionalProperties": false

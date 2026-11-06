@@ -427,7 +427,7 @@ enum TaskCmd {
         #[arg(
             help = "Stage to re-enter (default: the stage the task left)",
             long,
-            value_parser = ["dev", "merge"]
+            value_parser = ["dev", "review", "fix", "merge"]
         )]
         stage: Option<String>,
         #[arg(long)]

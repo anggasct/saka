@@ -253,7 +253,7 @@ fn a_push_by_hand_while_the_fix_runs_blocks_the_task_for_the_operator() {
 
 #[test]
 fn a_task_taken_over_during_a_fix_stops_the_agent_and_cancels_the_round() {
-    let sim = fixing_with_a_live_agent();
+    let mut sim = fixing_with_a_live_agent();
     let engine = sim.engine();
     engine
         .takeover_with(
@@ -272,6 +272,25 @@ fn a_task_taken_over_during_a_fix_stops_the_agent_and_cancels_the_round() {
     );
     assert_eq!(sim.sessions(1).pop().unwrap().state, SessionState::Ended);
     assert_eq!(task.fix_rounds_used(), 1, "the round stays counted");
+
+    sim.world.set_script(AgentScript::default());
+    let id = task.item.id;
+    sim.block_on(engine.return_with(
+        id,
+        Some(Stage::Fix),
+        "back to the loop",
+        &engine.cause("human:operator:local"),
+        None,
+    ))
+    .unwrap();
+    assert!(sim.run_until(STEPS, awaiting_merge));
+    let task = sim.task(1);
+    assert_eq!(
+        task.fix_rounds_used(),
+        1,
+        "coming back is not another round"
+    );
+    assert!(task.approved_at(&head(&task)));
 }
 
 #[test]

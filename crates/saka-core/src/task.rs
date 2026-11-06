@@ -530,7 +530,22 @@ pub fn decide(
     })
 }
 
-const RETURN_STAGES: [Stage; 2] = [Stage::Dev, Stage::Merge];
+const RETURN_STAGES: [Stage; 4] = [Stage::Dev, Stage::Review, Stage::Fix, Stage::Merge];
+
+fn verdict_params(review: &Review) -> Value {
+    let blocking: Vec<&review::Finding> = review
+        .findings
+        .iter()
+        .filter(|f| matches!(f.severity, Severity::Blocker | Severity::Major))
+        .take(VERDICT_FAILED_FINDINGS)
+        .collect();
+    json!({
+        "head_sha": review.head_sha,
+        "findings": review.findings.len(),
+        "summary": review.summary,
+        "blocking": blocking,
+    })
+}
 
 pub fn takeable(stage: Stage, phase: Option<StagePhase>) -> bool {
     stage != Stage::Sync
@@ -568,10 +583,11 @@ pub fn can_takeover(task: &Task) -> bool {
 
 pub fn return_entry(stage: Stage, environment_ready: bool) -> Option<StagePhase> {
     match stage {
-        Stage::Dev if environment_ready => Some(StagePhase::RunningSession),
-        Stage::Dev => Some(StagePhase::PreparingEnvironment),
+        Stage::Dev | Stage::Fix if environment_ready => Some(StagePhase::RunningSession),
+        Stage::Dev | Stage::Fix => Some(StagePhase::PreparingEnvironment),
+        Stage::Review => Some(StagePhase::AwaitingReview),
         Stage::Merge => Some(StagePhase::AwaitingCi),
-        Stage::Review | Stage::Fix | Stage::Sync => None,
+        Stage::Sync => None,
     }
 }
 
@@ -1134,18 +1150,7 @@ impl Decider<'_> {
                 events.push(merge);
             }
             ReviewOutcome::ChangesRequested => {
-                let blocking: Vec<&review::Finding> = review
-                    .findings
-                    .iter()
-                    .filter(|f| matches!(f.severity, Severity::Blocker | Severity::Major))
-                    .take(VERDICT_FAILED_FINDINGS)
-                    .collect();
-                let mut params = json!({
-                    "head_sha": review.head_sha,
-                    "findings": review.findings.len(),
-                    "summary": review.summary,
-                    "blocking": blocking,
-                });
+                let mut params = verdict_params(review);
                 let cause = Coded {
                     code: BlockerCode::VerdictFailed.as_str().to_string(),
                     params: params.clone(),
@@ -2102,8 +2107,7 @@ impl Decider<'_> {
             } => {
                 let count = paths.len();
                 let shown: Vec<&String> = paths.iter().take(MAX_CONFLICT_PATHS).collect();
-                self.block(
-                    BlockerCode::MergeConflict,
+                self.conflicted(
                     json!({
                         "reason": "rebase_conflict",
                         "head_sha": head_sha,
@@ -2135,8 +2139,7 @@ impl Decider<'_> {
                 json!({ "reason": reason, "head_sha": cr.head_sha }),
                 ctx,
             ),
-            Integration::Unclean { head_sha } => self.block(
-                BlockerCode::MergeConflict,
+            Integration::Unclean { head_sha } => self.conflicted(
                 json!({ "reason": "worktree_unclean", "head_sha": head_sha }),
                 ctx,
             ),
@@ -2182,6 +2185,29 @@ impl Decider<'_> {
                 events
             }
         }
+    }
+
+    // The queue lets go of its turn, and a fix round takes the conflict to the agent that wrote the change.
+    fn conflicted(&self, params: Value, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let cause = Coded {
+            code: BlockerCode::MergeConflict.as_str().to_string(),
+            params: params.clone(),
+        };
+        let (Some(fix), Some(run)) = (self.start_fix(cause, ctx), &self.task.stage_run) else {
+            return self.block(BlockerCode::MergeConflict, params, ctx);
+        };
+        vec![
+            Event::MergeDequeued {
+                work_item_id: self.item().id,
+                reason: "merge_conflict".to_string(),
+            },
+            Event::StageRunCancelled {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                reason: "merge_conflict".to_string(),
+            },
+            fix,
+        ]
     }
 
     fn merged(
@@ -2753,24 +2779,30 @@ impl Decider<'_> {
         change: Option<ObservedChange>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Vec<Event>, Rejection> {
-        let last = self.task.stage_run.as_ref().map(|r| r.stage);
-        let stage = stage.unwrap_or(match last {
-            Some(stage) if RETURN_STAGES.contains(&stage) => stage,
+        let stage = stage.unwrap_or(match self.task.stage_run.as_ref().map(|r| r.stage) {
+            Some(stage @ (Stage::Dev | Stage::Merge)) => stage,
             Some(Stage::Review) => Stage::Merge,
             _ => Stage::Dev,
         });
         let env_ready = self.task.ready_environment().is_some();
+        let invalid = |reason: &'static str| Rejection::ReturnTargetInvalid {
+            stage: stage.as_str(),
+            reason,
+        };
         let (true, Some(entry)) = (
             RETURN_STAGES.contains(&stage),
             return_entry(stage, env_ready),
         ) else {
-            return Err(Rejection::ReturnTargetInvalid {
-                stage: stage.as_str(),
-                reason: "stage_unsupported",
-            });
+            return Err(invalid("stage_unsupported"));
         };
+        if matches!(stage, Stage::Review | Stage::Fix) && !self.task.workflow.has_stage(stage) {
+            return Err(invalid("stage_not_in_workflow"));
+        }
+        if stage == Stage::Review && !env_ready {
+            return Err(invalid("environment_missing"));
+        }
         let mut events = Vec::new();
-        match &self.task.change_request {
+        let head = match &self.task.change_request {
             Some(cr) => {
                 let (state, head) = match change {
                     Some(c) => (c.state, c.head_sha),
@@ -2787,24 +2819,43 @@ impl Decider<'_> {
                         work_item_id: self.item().id,
                         change_request_id: cr.id,
                         role: ChangeRole::Code,
-                        head_sha: head,
+                        head_sha: head.clone(),
                     });
                 }
+                Some(head)
             }
-            None if stage == Stage::Merge => {
-                return Err(Rejection::ReturnTargetInvalid {
-                    stage: stage.as_str(),
-                    reason: "no_change_request",
-                });
+            None if stage != Stage::Dev => return Err(invalid("no_change_request")),
+            None => None,
+        };
+        let mut run = self.new_run(stage, Trigger::Auto, entry, Some(reason.clone()), None, ctx);
+        if let Event::StageRunCreated { head_sha, fix, .. } = &mut run {
+            match stage {
+                Stage::Review => head_sha.clone_from(&head),
+                Stage::Fix => {
+                    let verdict = self.task.reviews.iter().rev().find(|r| {
+                        r.outcome == ReviewOutcome::ChangesRequested
+                            && Some(&r.head_sha) == head.as_ref()
+                    });
+                    let Some(verdict) = verdict else {
+                        return Err(invalid("no_findings"));
+                    };
+                    *fix = Some(FixRound {
+                        number: self.task.fix_rounds_used().max(1),
+                        cause: Coded {
+                            code: BlockerCode::VerdictFailed.as_str().to_string(),
+                            params: verdict_params(verdict),
+                        },
+                    });
+                }
+                _ => {}
             }
-            None => {}
         }
         events.push(Event::WorkItemReturned {
             work_item_id: self.item().id,
-            reason: reason.clone(),
+            reason,
             stage,
         });
-        events.push(self.new_run(stage, Trigger::Auto, entry, Some(reason), None, ctx));
+        events.push(run);
         Ok(events)
     }
 
