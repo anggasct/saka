@@ -74,14 +74,16 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
     if (shell === null) {
       return;
     }
-    void shell.list().then((list) => {
+    const load = async () => {
+      const list = await shell.list();
       setItems(list);
       const active = list.find((c) => c.active);
       if (mode === "reauth" && active !== undefined) {
         setName(active.name);
         setUrl(active.url);
       }
-    });
+    };
+    void load();
   }, [shell, mode]);
 
   if (shell === null) {
