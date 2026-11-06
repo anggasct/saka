@@ -5,15 +5,12 @@ import { Badge } from "@/ui/badge";
 
 import { useInboxSummary } from "./queries";
 
-export function InboxNavLink() {
+export function InboxNavLink({ className }: { className: string }) {
   const t = useT();
   const summary = useInboxSummary();
   const open = summary.data?.open ?? 0;
   return (
-    <Link
-      to="/"
-      className="inline-flex min-h-11 items-center gap-2 text-sm [&.active]:font-semibold [&.active]:underline"
-    >
+    <Link to="/" className={className}>
       {t("nav.inbox")}
       {open > 0 && (
         <Badge tone="attention">

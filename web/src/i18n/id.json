@@ -1278,5 +1278,6 @@
   "sessions.loadingOne": "Memuat sesi",
   "sessions.notFound": "Sesi ini tidak ada",
   "sessions.error.titleOne": "Sesi tidak bisa dimuat",
-  "session.stop.descriptionFor": "Agent yang mengerjakan {task} berhenti sekarang. Permintaan izin yang menunggu kedaluwarsa, dan task diblok sampai kamu retry atau cancel."
+  "session.stop.descriptionFor": "Agent yang mengerjakan {task} berhenti sekarang. Permintaan izin yang menunggu kedaluwarsa, dan task diblok sampai kamu retry atau cancel.",
+  "nav.main": "Utama"
 }

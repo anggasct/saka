@@ -30,6 +30,11 @@ export type Connection = {
   subscribe: (listener: () => void) => () => void;
 };
 
+export type Viewport = {
+  narrow: () => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
 export type PlatformInfo = {
   kind: "web" | "desktop";
   os: string;
@@ -85,6 +90,7 @@ export type Platform = {
   onVisible: (listener: () => void) => () => void;
   credentials: Credentials;
   connection: Connection;
+  viewport: Viewport;
   registerServiceWorker: (url: string) => void;
   navigateTo: (path: string) => void;
 };

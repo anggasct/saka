@@ -1,6 +1,8 @@
 import { webCredentials } from "./credentials";
 import type { EventStream, Platform } from "./index";
 
+const NARROW = "(max-width: 639px)";
+
 export const webPlatform: Platform = {
   connections: () => null,
   onNavigate: () => () => undefined,
@@ -61,6 +63,16 @@ export const webPlatform: Platform = {
       return () => {
         window.removeEventListener("online", listener);
         window.removeEventListener("offline", listener);
+      };
+    },
+  },
+  viewport: {
+    narrow: () => matchMedia(NARROW).matches,
+    subscribe: (listener) => {
+      const query = matchMedia(NARROW);
+      query.addEventListener("change", listener);
+      return () => {
+        query.removeEventListener("change", listener);
       };
     },
   },
