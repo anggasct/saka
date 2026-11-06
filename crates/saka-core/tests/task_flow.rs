@@ -2148,3 +2148,121 @@ fn a_taken_over_task_can_be_cancelled() {
     assert_eq!(w.task(1).item.state, WorkItemState::Cancelled);
     assert!(w.take_jobs().contains(&JobKind::EnvTeardown));
 }
+
+fn dev_again_with_change(w: &mut World) {
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Failure))]),
+    );
+    assert_eq!(w.task(1).item.state, WorkItemState::Blocked);
+    w.decide(
+        1,
+        TaskInput::Retry {
+            reason: "fix it".into(),
+        },
+    );
+    w.decide(1, launched_again(1));
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
+    w.jobs.clear();
+}
+
+#[test]
+fn a_head_pushed_by_hand_while_the_agent_works_stops_the_agent_and_blocks_the_task() {
+    let mut w = World::new();
+    dev_again_with_change(&mut w);
+    assert!(w.task(1).live_session().is_some());
+    assert_eq!(w.decide(1, observed('b', vec![])), vec![]);
+
+    let events = w.decide(1, observed('d', vec![]));
+    assert!(
+        matches!(&events[0], Event::ChangeRequestUpdated { head_sha, .. } if *head_sha == sha('d'))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::SessionEnded { .. }))
+    );
+    let Some(Event::WorkItemBlocked { code, params, .. }) = events.last() else {
+        panic!("{events:?}");
+    };
+    assert_eq!(*code, BlockerCode::BranchMoved);
+    assert_eq!(
+        *params,
+        json!({ "number": 11, "head_sha": sha('d'), "previous_head_sha": sha('b') })
+    );
+    assert_eq!(w.take_jobs(), vec![JobKind::SessionStop]);
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('d')
+    );
+    assert_eq!(primary(&w).0, BlockerAction::Takeover);
+    assert_eq!(w.decide(1, observed('d', vec![])), vec![]);
+}
+
+#[test]
+fn the_primary_action_of_a_moved_branch_takes_the_task_over_and_retry_continues_with_the_commit() {
+    let mut w = World::new();
+    dev_again_with_change(&mut w);
+    w.decide(1, observed('d', vec![]));
+    let blocker = w.task(1).open_blocker().unwrap().id;
+    assert!(task::available_actions(w.task(1)).contains(&"retry"));
+
+    let mut kept = World::new();
+    dev_again_with_change(&mut kept);
+    kept.decide(1, observed('d', vec![]));
+    kept.decide(
+        1,
+        TaskInput::Retry {
+            reason: "continue".into(),
+        },
+    );
+    assert_eq!(
+        kept.place(1),
+        (
+            WorkItemState::InStage,
+            Some(Stage::Dev),
+            Some(StagePhase::RunningSession)
+        )
+    );
+
+    w.decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id: blocker,
+            expected: Some(BlockerAction::Takeover),
+            reason: "mine now".into(),
+        },
+    );
+    assert_eq!(w.task(1).item.state, WorkItemState::TakenOver);
+    assert_eq!(
+        w.task(1).blocker.as_ref().unwrap().resolution,
+        Some(saka_core::vocab::BlockerResolution::TakenOver)
+    );
+}
+
+#[test]
+fn a_head_pushed_by_hand_is_only_recorded_when_no_agent_is_working() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Failure))]),
+    );
+    assert_eq!(w.task(1).item.state, WorkItemState::Blocked);
+    let events = w.decide(1, observed('d', vec![]));
+    assert!(matches!(
+        events.as_slice(),
+        [Event::ChangeRequestUpdated { .. }]
+    ));
+    assert_eq!(w.task(1).item.state, WorkItemState::Blocked);
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('d')
+    );
+}

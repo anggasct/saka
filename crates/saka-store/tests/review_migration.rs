@@ -91,7 +91,7 @@ fn the_review_migration_keeps_rows_and_opens_the_review_phases_and_a_branchless_
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![23]);
+    assert_eq!(store.migration().applied, vec![23, 24]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

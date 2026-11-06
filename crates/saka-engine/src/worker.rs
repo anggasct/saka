@@ -1215,6 +1215,7 @@ impl Engine {
                 .map_err(Refusal::into_error)?;
             (LaunchProfile::Task, environment, resolved)
         };
+        self.align_branch(task, env).await?;
         let launched = self
             .ports
             .agents
@@ -1240,6 +1241,37 @@ impl Engine {
             log_path: launched.log_path,
             author: resolved.author,
         })))
+    }
+
+    // The worktree follows the head the task knows when the operator pushed from elsewhere; commits
+    // that are not on the remote branch, or uncommitted work, are left alone.
+    async fn align_branch(
+        &self,
+        task: &Task,
+        env: &Environment,
+    ) -> std::result::Result<(), PortError> {
+        let Some(cr) = task
+            .change_request
+            .as_ref()
+            .filter(|c| c.state == ChangeState::Open)
+        else {
+            return Ok(());
+        };
+        let env_ref = self.env_ref(task, env)?;
+        let base = env.base_sha.clone().unwrap_or_default();
+        let state = self.ports.env.inspect(&env_ref, &base).await?;
+        if state.dirty || state.head_sha == cr.head_sha {
+            return Ok(());
+        }
+        let on_remote = self
+            .ports
+            .env
+            .contains_commit(&self.repo_ref(task)?, &state.head_sha, &task.item.branch)
+            .await?;
+        if on_remote.as_deref() == Some(cr.head_sha.as_str()) {
+            self.ports.env.check_out(&env_ref, &cr.head_sha).await?;
+        }
+        Ok(())
     }
 
     fn session_author(

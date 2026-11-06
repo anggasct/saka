@@ -130,11 +130,13 @@ vocab!(
         UserTokenInvalid => "user_token_invalid",
         UserAccessDenied => "user_access_denied",
         DocsMergeFailed => "docs_merge_failed",
+        BranchMoved => "branch_moved",
     }
 );
 vocab!(BlockerAction {
     Retry => "retry",
     Cancel => "cancel",
+    Takeover => "takeover",
     SetSecret => "set_secret",
     LinkAccount => "link_account",
     SetUserToken => "set_user_token",

@@ -1630,10 +1630,11 @@ impl Decider<'_> {
             return vec![];
         }
         if !in_merge {
-            return match merge_commit_sha {
-                Some(sha) if state == ChangeState::Merged && watches_change(self.task) => {
+            return match (state, merge_commit_sha) {
+                (ChangeState::Merged, Some(sha)) if watches_change(self.task) => {
                     self.merged_elsewhere(sha, merged_at, ctx)
                 }
+                (ChangeState::Open, _) if head_sha != cr.head_sha => self.head_moved(head_sha, ctx),
                 _ => vec![],
             };
         }
@@ -1693,6 +1694,32 @@ impl Decider<'_> {
             None,
             ctx,
         ));
+        events
+    }
+
+    // A head Saka did not push: while the agent works on `dev` it stops, anywhere else the head is
+    // only recorded so the next push lease and gate use it.
+    fn head_moved(&self, head_sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let (Some(cr), Some(run)) = (&self.task.change_request, &self.task.stage_run) else {
+            return vec![];
+        };
+        if run.head_sha.as_deref() == Some(head_sha.as_str()) {
+            return vec![];
+        }
+        let mut events = vec![Event::ChangeRequestUpdated {
+            work_item_id: self.item().id,
+            change_request_id: cr.id,
+            role: ChangeRole::Code,
+            head_sha: head_sha.clone(),
+        }];
+        if self.task.is_at_stage(Stage::Dev) {
+            events.extend(self.end_session(SessionState::Ended, "branch_moved", json!({})));
+            events.extend(self.block(
+                BlockerCode::BranchMoved,
+                json!({ "number": cr.number, "head_sha": head_sha, "previous_head_sha": cr.head_sha }),
+                ctx,
+            ));
+        }
         events
     }
 
@@ -2125,6 +2152,7 @@ impl Decider<'_> {
         match designated {
             Some(BlockerAction::Retry) => self.retry(reason, ctx),
             Some(BlockerAction::Cancel) => self.cancel(reason),
+            Some(BlockerAction::Takeover) => self.takeover(reason),
             Some(other) => Err(Rejection::ActionNeedsInput {
                 action: other.as_str(),
             }),
@@ -2397,6 +2425,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         }
         B::CiRed => (Stage::Dev, StagePhase::RunningSession),
         B::PushRejected => (Stage::Dev, StagePhase::Pushing),
+        B::BranchMoved => (Stage::Dev, StagePhase::RunningSession),
         B::MergeConflict => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
         B::HookFailed => (Stage::Sync, StagePhase::TearingDown),
