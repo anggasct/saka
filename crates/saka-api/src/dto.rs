@@ -1925,6 +1925,111 @@ impl From<&saka_core::policy::RuleSpec> for OperatorPermissionRule {
     }
 }
 
+/// Who decided: `builtin`, `rule` (operator config), `project` (a project rule, `name` is its id), `default` (nothing matched, so ask).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DecisionOrigin {
+    pub kind: String,
+    pub name: Option<String>,
+}
+
+impl From<&saka_core::policy::DecisionSource> for DecisionOrigin {
+    fn from(s: &saka_core::policy::DecisionSource) -> DecisionOrigin {
+        use saka_core::policy::DecisionSource as S;
+        let (kind, name) = match s {
+            S::Builtin(n) => ("builtin", Some(n.clone())),
+            S::Rule(n) => ("rule", Some(n.clone())),
+            S::Project(n) => ("project", Some(n.clone())),
+            S::Architect(n) => ("architect", Some(n.clone())),
+            S::Reviewer(n) => ("reviewer", Some(n.clone())),
+            S::Default => ("default", None),
+        };
+        DecisionOrigin {
+            kind: kind.into(),
+            name,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EvaluatedPart {
+    /// One part of a compound command, without the redirects Saka accepts.
+    pub command: String,
+    pub effect: RuleEffect,
+    pub source: DecisionOrigin,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PermissionEvaluation {
+    pub effect: RuleEffect,
+    pub source: DecisionOrigin,
+    /// Empty for a tool other than `Bash` and for a command that cannot be split safely.
+    pub parts: Vec<EvaluatedPart>,
+}
+
+impl From<&saka_core::policy::Decision> for PermissionEvaluation {
+    fn from(d: &saka_core::policy::Decision) -> PermissionEvaluation {
+        PermissionEvaluation {
+            effect: d.effect.into(),
+            source: (&d.source).into(),
+            parts: d
+                .parts
+                .iter()
+                .map(|p| EvaluatedPart {
+                    command: p.command.clone(),
+                    effect: p.effect.into(),
+                    source: (&p.source).into(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvaluateBody {
+    pub tool: String,
+    /// The Bash command; ignored for other tools.
+    pub command: Option<String>,
+    /// Worktree-relative path of a file tool; always treated as inside the worktree.
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PreviewChange {
+    pub permission_request_id: Uuid,
+    pub tool: String,
+    pub command: Option<String>,
+    pub before: RuleEffect,
+    pub after: RuleEffect,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PermissionPreview {
+    /// How many of the project's latest task permission requests were re-judged (at most 200).
+    pub scanned: u32,
+    /// The requests whose answer would change if the rule existed.
+    pub changed: Vec<PreviewChange>,
+}
+
+impl From<&saka_engine::PreviewView> for PermissionPreview {
+    fn from(v: &saka_engine::PreviewView) -> PermissionPreview {
+        PermissionPreview {
+            scanned: u32::try_from(v.scanned).unwrap_or(u32::MAX),
+            changed: v
+                .changed
+                .iter()
+                .map(|c| PreviewChange {
+                    permission_request_id: c.permission_request_id.0,
+                    tool: c.tool.clone(),
+                    command: c.command.clone(),
+                    before: c.before.into(),
+                    after: c.after.into(),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PermissionRuleList {
     /// Active project rules, oldest first.
@@ -2629,6 +2734,8 @@ pub struct PermissionQuery {
     /// One or more of `pending, allowed, denied, expired`, comma-separated.
     pub state: Option<String>,
     pub project_id: Option<String>,
+    /// `policy` (answered by a rule) or `human` (answered by the operator).
+    pub source: Option<String>,
     /// Exclusive with `spec_draft_id`.
     pub work_item_id: Option<String>,
     pub spec_draft_id: Option<String>,

@@ -44,6 +44,11 @@ impl Query {
         self.clauses.push(format!("{column} = {p}"));
     }
 
+    fn starts_with(&mut self, column: &str, prefix: &str) {
+        let p = self.bind(format!("{prefix}%"));
+        self.clauses.push(format!("{column} LIKE {p}"));
+    }
+
     fn any_of(&mut self, column: &str, values: &[String]) {
         if values.is_empty() {
             return;
@@ -336,6 +341,13 @@ pub struct PermissionFilter {
     pub project: Option<ProjectId>,
     pub work_item: Option<WorkItemId>,
     pub spec_draft: Option<SpecDraftId>,
+    pub source: Option<AnswerKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnswerKind {
+    Policy,
+    Human,
 }
 
 pub type PermissionRow = (PermissionRequest, ProjectId);
@@ -360,6 +372,11 @@ pub fn permissions(
     if let Some(d) = filter.spec_draft {
         q.eq("spec_draft_id", d.0.to_string());
     }
+    match filter.source {
+        Some(AnswerKind::Policy) => q.starts_with("answer_source", "policy:"),
+        Some(AnswerKind::Human) => q.starts_with("answer_source", "human:"),
+        None => {}
+    }
     q.after("requested_at", page, false);
     q.run(
         conn,
@@ -368,6 +385,27 @@ pub fn permissions(
         page,
         permission_row,
     )
+}
+
+pub fn recent_task_permissions(
+    conn: &Connection,
+    project: ProjectId,
+    limit: u32,
+) -> Result<Vec<PermissionRequest>> {
+    let mut q = Query::new();
+    q.eq("project_id", project.0.to_string());
+    q.clauses.push("work_item_id IS NOT NULL".to_string());
+    let page = Page { after: None, limit };
+    Ok(q.run(
+        conn,
+        PERMISSION_SELECT,
+        "requested_at DESC, id DESC",
+        &page,
+        permission_row,
+    )?
+    .into_iter()
+    .map(|(request, _)| request)
+    .collect())
 }
 
 pub fn load_permission(
