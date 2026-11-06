@@ -82,6 +82,7 @@ export type Platform = {
   setDocumentLanguage: (locale: string) => void;
   copyText: (text: string) => Promise<boolean>;
   observeVisible: (element: Element, onVisible: () => void) => () => void;
+  onVisible: (listener: () => void) => () => void;
   credentials: Credentials;
   connection: Connection;
   registerServiceWorker: (url: string) => void;

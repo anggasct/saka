@@ -5766,6 +5766,14 @@ fn active_sessions_list_every_live_session_with_its_owner_and_pending_counts() {
         "/api/v1/sessions/{}",
         item["id"].as_str().unwrap()
     ));
+    assert_eq!(
+        (
+            &one.body["title"],
+            &one.body["role"],
+            &one.body["project_name"]
+        ),
+        (&item["title"], &json!("dev"), &json!("tasks"))
+    );
     let env = &one.body["environment"];
     assert_eq!(env["setup_state"], "ready");
     assert!(env["branch"].as_str().is_some());

@@ -1,7 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { api, unwrap } from "@/api/client";
-import { fetchTail, QUERY_ROOTS, timelineKey } from "@/api/events";
+import { QUERY_ROOTS } from "@/api/events";
 import type { components } from "@/api/schema";
 
 export type ProjectItem = components["schemas"]["Project"];
@@ -13,15 +13,11 @@ export type WaitingOn = components["schemas"]["WaitingOn"];
 export type Gate = components["schemas"]["Gate"];
 export type StageRun = components["schemas"]["StageRunItem"];
 export type Blocker = components["schemas"]["Blocker"];
-export type Session = components["schemas"]["Session"];
 export type PermissionRequest = components["schemas"]["PermissionRequest"];
 export type Decision = components["schemas"]["Decision"];
 export type Measure = components["schemas"]["Measure"];
 
 const LIMIT = 200;
-
-export type SessionsOf =
-  { kind: "work_item"; id: string } | { kind: "spec_draft"; id: string };
 
 export const deliveryKeys = {
   projects: () => [QUERY_ROOTS.projects] as const,
@@ -31,8 +27,6 @@ export const deliveryKeys = {
   workItems: (projectId: string) => [QUERY_ROOTS.workItems, projectId] as const,
   workItem: (id: string) => [QUERY_ROOTS.workItems, "detail", id] as const,
   workPacket: (id: string) => [QUERY_ROOTS.workItems, "packet", id] as const,
-  sessions: (owner: SessionsOf) =>
-    [QUERY_ROOTS.sessions, owner.kind, owner.id] as const,
   pendingPermissions: () => [QUERY_ROOTS.permissions, "pending"] as const,
   taskPermissions: (workItemId: string) =>
     [QUERY_ROOTS.permissions, "pending", workItemId] as const,
@@ -102,9 +96,10 @@ export function usePendingPermissions() {
   });
 }
 
-export function useTaskPermissions(workItemId: string) {
+export function useTaskPermissions(workItemId: string | undefined) {
   return useQuery({
-    queryKey: deliveryKeys.taskPermissions(workItemId),
+    queryKey: deliveryKeys.taskPermissions(workItemId ?? ""),
+    enabled: workItemId !== undefined,
     queryFn: async ({ signal }) =>
       byRequestedAt(
         unwrap(
@@ -112,7 +107,7 @@ export function useTaskPermissions(workItemId: string) {
             params: {
               query: {
                 state: "pending",
-                work_item_id: workItemId,
+                work_item_id: workItemId ?? "",
                 limit: LIMIT,
               },
             },
@@ -180,84 +175,8 @@ export function useWorkPacket(id: string, enabled: boolean) {
   });
 }
 
-export function useSessions(owner: SessionsOf) {
-  return useQuery({
-    queryKey: deliveryKeys.sessions(owner),
-    queryFn: async ({ signal }) =>
-      (
-        unwrap(
-          await api.GET("/api/v1/sessions", {
-            params: {
-              query:
-                owner.kind === "work_item"
-                  ? { work_item_id: owner.id }
-                  : { spec_draft_id: owner.id },
-            },
-            signal,
-          }),
-        ) as components["schemas"]["SessionList"]
-      ).items,
-  });
-}
-
-export function useTimeline(sessionId: string) {
-  return useQuery({
-    queryKey: timelineKey(sessionId),
-    queryFn: ({ signal }) => fetchTail(sessionId, signal),
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-  });
-}
-
 function headers(idempotencyKey: string) {
   return { "Idempotency-Key": idempotencyKey };
-}
-
-export async function steerSession(
-  sessionId: string,
-  text: string,
-  idempotencyKey: string,
-): Promise<void> {
-  unwrap(
-    await api.POST("/api/v1/sessions/{session_id}/steer", {
-      params: {
-        path: { session_id: sessionId },
-        header: headers(idempotencyKey),
-      },
-      body: { text },
-    }),
-  );
-}
-
-export async function interruptSession(
-  sessionId: string,
-  idempotencyKey: string,
-): Promise<void> {
-  unwrap(
-    await api.POST("/api/v1/sessions/{session_id}/interrupt", {
-      params: {
-        path: { session_id: sessionId },
-        header: headers(idempotencyKey),
-      },
-      body: {},
-    }),
-  );
-}
-
-export async function stopSession(
-  sessionId: string,
-  reason: string,
-  idempotencyKey: string,
-): Promise<void> {
-  unwrap(
-    await api.POST("/api/v1/sessions/{session_id}/stop", {
-      params: {
-        path: { session_id: sessionId },
-        header: headers(idempotencyKey),
-      },
-      body: { reason },
-    }),
-  );
 }
 
 export async function startTask(

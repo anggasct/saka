@@ -6,15 +6,22 @@ import { newIdempotencyKey } from "@/api/client";
 import { useT } from "@/i18n/use-t";
 import { Button } from "@/ui/button";
 
-import { codeOf } from "./page-error";
+import { ActionDialog } from "@/features/delivery/action-dialog";
+import { codeOf } from "@/features/delivery/page-error";
+import { errorText } from "@/features/delivery/text";
+
 import type { Session } from "./queries";
 import { interruptSession, steerSession, stopSession } from "./queries";
-import { ActionDialog } from "./action-dialog";
-import { errorText } from "./text";
 
 export const STEER_MAX = 4000;
 
-export function SessionControls({ session }: { session: Session }) {
+export function SessionControls({
+  session,
+  subject,
+}: {
+  session: Session;
+  subject?: string;
+}) {
   const t = useT();
   const queryClient = useQueryClient();
   const [steer, setSteer] = useState("");
@@ -128,7 +135,11 @@ export function SessionControls({ session }: { session: Session }) {
           <ActionDialog
             trigger={t("session.stop.trigger")}
             title={t("session.stop.title")}
-            description={t("session.stop.description")}
+            description={
+              subject === undefined
+                ? t("session.stop.description")
+                : t("session.stop.descriptionFor", { task: subject })
+            }
             reason={{ label: t("dialog.reason"), required: true }}
             submit={t("session.stop.submit")}
             onSubmit={async (reason, key) => {

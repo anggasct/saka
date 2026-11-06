@@ -1828,6 +1828,11 @@ pub struct DecisionQuery {
 pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
+    pub project_name: String,
+    /// The stage of the owning run (`dev`, `review`, `fix`, `merge`, `sync`) or `architect` for a draft.
+    pub role: String,
+    /// The task key, or the slug of the draft.
+    pub title: String,
     pub owner: RunOwner,
     /// The environment the session runs in; `null` when it no longer exists.
     pub environment: Option<SessionEnvironment>,
@@ -2336,6 +2341,9 @@ impl Session {
         Session {
             id: s.id.0,
             project_id: v.project_id.0,
+            project_name: v.head.project_name.clone(),
+            role: v.head.role.clone(),
+            title: v.head.title.clone(),
             owner: RunOwner::from(&s.owner),
             environment: v.environment.as_ref().map(SessionEnvironment::from_env),
             cli: s.cli.clone(),

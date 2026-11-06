@@ -9490,6 +9490,9 @@
         "required": [
           "id",
           "project_id",
+          "project_name",
+          "role",
+          "title",
           "owner",
           "cli",
           "state",
@@ -9579,6 +9582,9 @@
             "type": "string",
             "format": "uuid"
           },
+          "project_name": {
+            "type": "string"
+          },
           "resume_cause": {
             "type": [
               "string",
@@ -9594,6 +9600,10 @@
             "format": "uuid",
             "description": "The session this one continues."
           },
+          "role": {
+            "type": "string",
+            "description": "The stage of the owning run (`dev`, `review`, `fix`, `merge`, `sync`) or `architect` for a draft."
+          },
           "running_ms": {
             "type": "integer",
             "format": "int64"
@@ -9606,6 +9616,10 @@
           },
           "state": {
             "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "The task key, or the slug of the draft."
           },
           "turns": {
             "type": "integer",

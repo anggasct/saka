@@ -7,12 +7,12 @@ import { QUERY_ROOTS } from "@/api/events";
 import { useT } from "@/i18n/use-t";
 import { Button } from "@/ui/button";
 
-import { ActionDialog, fieldParams } from "./action-dialog";
-import { codeOf } from "./page-error";
-import type { Decision, PermissionRequest } from "./queries";
-import { answerPermission } from "./queries";
-import { errorText } from "./text";
-import { When } from "./when";
+import { ActionDialog, fieldParams } from "@/features/delivery/action-dialog";
+import { codeOf } from "@/features/delivery/page-error";
+import type { Decision, PermissionRequest } from "@/features/delivery/queries";
+import { answerPermission } from "@/features/delivery/queries";
+import { errorText } from "@/features/delivery/text";
+import { When } from "@/features/delivery/when";
 
 type Answer = { decision: Decision; message: string | null; remember: boolean };
 

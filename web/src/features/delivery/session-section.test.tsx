@@ -7,7 +7,7 @@ import type { Recorded, Routes } from "@/test/fake-api";
 import { PROJECT_ID, task } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 
-import type { Session } from "./queries";
+import type { Session } from "@/features/sessions/queries";
 import { SessionSection } from "./session-section";
 
 const item = task(1, { state: "in_stage", stage: "dev" });
@@ -18,6 +18,9 @@ function session(id: string, extra: Partial<Session> = {}): Session {
   return {
     id,
     project_id: PROJECT_ID,
+    project_name: "tasks",
+    role: "dev",
+    title: item.task_key,
     owner: {
       kind: "stage_run",
       work_item_id: item.id,

@@ -5,7 +5,7 @@ import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
 
 import { ExternalBadges } from "./external-group";
-import { permissionAnchor } from "./permission-card";
+import { permissionAnchor } from "@/features/sessions/permission-card";
 import type { ProjectItem, SpecItem, WorkItem } from "./queries";
 import { isRetired, placeText, stateTone } from "./task-state";
 import { label } from "./text";

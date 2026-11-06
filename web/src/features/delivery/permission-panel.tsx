@@ -3,7 +3,7 @@ import { useId } from "react";
 
 import { useT } from "@/i18n/use-t";
 
-import { PermissionCard } from "./permission-card";
+import { PermissionCard } from "@/features/sessions/permission-card";
 import type { PermissionRequest, ProjectItem } from "./queries";
 import { usePendingPermissions, useWorkItems } from "./queries";
 

@@ -4,7 +4,8 @@ use saka_core::ids::{
     WorkItemId,
 };
 use saka_core::model::{
-    DecisionRequest, PermissionRequest, Project, Repo, RunOwner, Session, Spec, StageRun,
+    DecisionRequest, Environment, PermissionRequest, Project, Repo, RunOwner, Session, Spec,
+    StageRun,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::SessionState;
@@ -519,6 +520,35 @@ fn active_session_row(row: &Row<'_>) -> Result<ActiveSessionRow> {
         pending_permissions: row.get("pending_permissions")?,
         pending_decisions: row.get("pending_decisions")?,
     })
+}
+
+pub fn session_extras(
+    conn: &Connection,
+    session: &Session,
+) -> Result<Option<(Option<Environment>, ActiveSessionRow)>> {
+    let Some(head) = session_head(conn, session.id)? else {
+        return Ok(None);
+    };
+    let environment = crate::read::environment_of(conn, session.environment_id)?;
+    Ok(Some((environment, head)))
+}
+
+fn session_head(conn: &Connection, id: SessionId) -> Result<Option<ActiveSessionRow>> {
+    let mut q = Query::new();
+    q.eq("s.id", id.0.to_string());
+    let page = Page {
+        after: None,
+        limit: 1,
+    };
+    Ok(q.run(
+        conn,
+        ACTIVE_SESSION_SELECT,
+        "s.id",
+        &page,
+        active_session_row,
+    )?
+    .into_iter()
+    .next())
 }
 
 pub fn active_sessions(

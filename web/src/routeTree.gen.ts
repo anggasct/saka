@@ -17,6 +17,8 @@ import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
 import { Route as InboxItemIdRouteImport } from './routes/inbox.$itemId'
+import { Route as SessionsIndexRouteImport } from './routes/sessions.index'
+import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as SettingsProjectIdRouteImport } from './routes/settings.$projectId'
 import { Route as SettingsDevicesRouteImport } from './routes/settings.devices'
@@ -64,6 +66,16 @@ const InboxItemIdRoute = InboxItemIdRouteImport.update({
   path: '/inbox/$itemId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SessionsIndexRoute = SessionsIndexRouteImport.update({
+  id: '/sessions/',
+  path: '/sessions/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
+  id: '/sessions/$sessionId',
+  path: '/sessions/$sessionId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
   id: '/settings/',
   path: '/settings/',
@@ -104,10 +116,12 @@ export interface FileRoutesByFullPath {
   '/setup': typeof SetupRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/settings/devices': typeof SettingsDevicesRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
+  '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
   '/docs/$projectId/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
@@ -120,10 +134,12 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/settings/devices': typeof SettingsDevicesRoute
   '/delivery': typeof DeliveryIndexRoute
   '/docs': typeof DocsIndexRoute
+  '/sessions': typeof SessionsIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
   '/docs/$projectId/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
@@ -137,10 +153,12 @@ export interface FileRoutesById {
   '/setup': typeof SetupRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/settings/devices': typeof SettingsDevicesRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
+  '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/delivery/tasks/$workItemId': typeof DeliveryTasksWorkItemIdRoute
   '/docs/$projectId_/drafts/$draftId': typeof DocsProjectIdDraftsDraftIdRoute
@@ -155,10 +173,12 @@ export interface FileRouteTypes {
     | '/setup'
     | '/docs/$projectId'
     | '/inbox/$itemId'
+    | '/sessions/$sessionId'
     | '/settings/$projectId'
     | '/settings/devices'
     | '/delivery/'
     | '/docs/'
+    | '/sessions/'
     | '/settings/'
     | '/delivery/tasks/$workItemId'
     | '/docs/$projectId/drafts/$draftId'
@@ -171,10 +191,12 @@ export interface FileRouteTypes {
     | '/setup'
     | '/docs/$projectId'
     | '/inbox/$itemId'
+    | '/sessions/$sessionId'
     | '/settings/$projectId'
     | '/settings/devices'
     | '/delivery'
     | '/docs'
+    | '/sessions'
     | '/settings'
     | '/delivery/tasks/$workItemId'
     | '/docs/$projectId/drafts/$draftId'
@@ -187,10 +209,12 @@ export interface FileRouteTypes {
     | '/setup'
     | '/docs/$projectId'
     | '/inbox/$itemId'
+    | '/sessions/$sessionId'
     | '/settings/$projectId'
     | '/settings/devices'
     | '/delivery/'
     | '/docs/'
+    | '/sessions/'
     | '/settings/'
     | '/delivery/tasks/$workItemId'
     | '/docs/$projectId_/drafts/$draftId'
@@ -204,10 +228,12 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   DocsProjectIdRoute: typeof DocsProjectIdRoute
   InboxItemIdRoute: typeof InboxItemIdRoute
+  SessionsSessionIdRoute: typeof SessionsSessionIdRoute
   SettingsProjectIdRoute: typeof SettingsProjectIdRoute
   SettingsDevicesRoute: typeof SettingsDevicesRoute
   DeliveryIndexRoute: typeof DeliveryIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
+  SessionsIndexRoute: typeof SessionsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   DeliveryTasksWorkItemIdRoute: typeof DeliveryTasksWorkItemIdRoute
   DocsProjectIdDraftsDraftIdRoute: typeof DocsProjectIdDraftsDraftIdRoute
@@ -272,6 +298,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InboxItemIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sessions/': {
+      id: '/sessions/'
+      path: '/sessions'
+      fullPath: '/sessions/'
+      preLoaderRoute: typeof SessionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sessions/$sessionId': {
+      id: '/sessions/$sessionId'
+      path: '/sessions/$sessionId'
+      fullPath: '/sessions/$sessionId'
+      preLoaderRoute: typeof SessionsSessionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings/': {
       id: '/settings/'
       path: '/settings'
@@ -324,10 +364,12 @@ const rootRouteChildren: RootRouteChildren = {
   SetupRoute: SetupRoute,
   DocsProjectIdRoute: DocsProjectIdRoute,
   InboxItemIdRoute: InboxItemIdRoute,
+  SessionsSessionIdRoute: SessionsSessionIdRoute,
   SettingsProjectIdRoute: SettingsProjectIdRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   DeliveryIndexRoute: DeliveryIndexRoute,
   DocsIndexRoute: DocsIndexRoute,
+  SessionsIndexRoute: SessionsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   DeliveryTasksWorkItemIdRoute: DeliveryTasksWorkItemIdRoute,
   DocsProjectIdDraftsDraftIdRoute: DocsProjectIdDraftsDraftIdRoute,

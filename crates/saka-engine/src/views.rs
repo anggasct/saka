@@ -201,6 +201,7 @@ pub struct SessionView {
     pub session: Session,
     pub project_id: ProjectId,
     pub environment: Option<Environment>,
+    pub head: ActiveSessionView,
 }
 
 pub type ActiveSessionView = ActiveSessionRow;
@@ -231,6 +232,19 @@ pub(crate) fn paged<T>(mut rows: Vec<T>, page: &Page, key: impl Fn(&T) -> Key) -
     rows.truncate(limit);
     let next = if more { rows.last().map(key) } else { None };
     Paged { items: rows, next }
+}
+
+fn session_view(
+    extras: Option<(Option<Environment>, ActiveSessionView)>,
+    session: Session,
+    project_id: ProjectId,
+) -> Option<SessionView> {
+    extras.map(|(environment, head)| SessionView {
+        session,
+        project_id,
+        environment,
+        head,
+    })
 }
 
 pub(crate) fn probe(page: &Page) -> Page {
@@ -514,17 +528,12 @@ impl Engine {
 
     pub fn sessions_of(&self, of: RunOf) -> Result<Vec<SessionView>> {
         Ok(self.store.read(|c| {
-            read::sessions(c, of)?
-                .into_iter()
-                .map(|(session, project_id)| {
-                    let environment = read::environment_of(c, session.environment_id)?;
-                    Ok(SessionView {
-                        session,
-                        project_id,
-                        environment,
-                    })
-                })
-                .collect()
+            let mut out = Vec::new();
+            for (session, project_id) in read::sessions(c, of)? {
+                let extras = list::session_extras(c, &session)?;
+                out.extend(session_view(extras, session, project_id));
+            }
+            Ok(out)
         })?)
     }
 
@@ -848,17 +857,12 @@ impl Engine {
     }
 
     pub fn session(&self, id: SessionId) -> Result<Option<SessionView>> {
-        Ok(self.store.read(|c| {
-            list::load_session(c, id)?
-                .map(|(session, project_id)| {
-                    let environment = read::environment_of(c, session.environment_id)?;
-                    Ok(SessionView {
-                        session,
-                        project_id,
-                        environment,
-                    })
-                })
-                .transpose()
+        Ok(self.store.read(|c| match list::load_session(c, id)? {
+            Some((session, project_id)) => {
+                let extras = list::session_extras(c, &session)?;
+                Ok(session_view(extras, session, project_id))
+            }
+            None => Ok(None),
         })?)
     }
 

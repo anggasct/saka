@@ -9,12 +9,13 @@ import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Skeleton } from "@/ui/skeleton";
 
-import { useFormat } from "./format";
+import { useFormat } from "@/features/delivery/format";
+import { label, record, text } from "@/features/delivery/text";
+import type { T } from "@/features/delivery/text";
 import { PermissionCard } from "./permission-card";
-import type { PermissionRequest } from "./queries";
+import type { PermissionRequest } from "@/features/delivery/queries";
+
 import { useTimeline } from "./queries";
-import { label, record, text } from "./text";
-import type { T } from "./text";
 
 const BOTTOM_SLACK = 48;
 
