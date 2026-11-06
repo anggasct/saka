@@ -87,6 +87,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         R::NotFound
         | R::SpecFileNotFound { .. }
         | R::UserLinkNotFound
+        | R::InboxItemNotFound
         | R::ChangeRequestNotFound { .. } => StatusCode::NOT_FOUND,
         R::RevisionStale | R::VersionStale | R::FileStale { .. } => StatusCode::PRECONDITION_FAILED,
         R::SpecNotReady { .. }
@@ -119,6 +120,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FilePushRejected { .. }
         | R::RetryLimitReached { .. }
         | R::BlockerNotOpen { .. }
+        | R::InboxItemNotDismissible { .. }
+        | R::InboxItemClosed { .. }
         | R::BlockerActionChanged { .. }
         | R::SpecDraftTargetTaken { .. }
         | R::DeviceFlowUnconfigured { .. }

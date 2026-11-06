@@ -3133,3 +3133,128 @@ pub struct HookRunQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InboxTitle {
+    /// The task the item is about, when it is about one.
+    pub task_key: Option<String>,
+    /// The stage the task is at.
+    pub stage: Option<String>,
+    pub spec_slug: Option<String>,
+    pub spec_title: Option<String>,
+    /// The path of the spec draft whose session asked, for a permission that belongs to a draft.
+    pub draft_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InboxAction {
+    /// A blocker action, or `answer_permission`, `approve_spec`, `start_step`, `merge`, or `answer_decision`.
+    pub kind: String,
+    /// What the existing endpoint for the action needs: ids, a revision, or a task version.
+    pub params: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InboxItem {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub project_name: String,
+    /// `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`.
+    pub kind: String,
+    /// `spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`.
+    pub subject: String,
+    /// `open`, `answered`, `resolved`, or `dismissed`.
+    pub state: String,
+    pub work_item_id: Option<Uuid>,
+    pub spec_id: Option<Uuid>,
+    pub title: InboxTitle,
+    /// What the item is about. Never holds a secret value.
+    pub params: Value,
+    /// The one primary action. It points at an endpoint that already exists; the inbox has none of its own.
+    pub action: InboxAction,
+    /// Only a spec approval can be dismissed.
+    pub dismissible: bool,
+    pub opened_at: String,
+    pub closed_at: Option<String>,
+}
+
+impl From<&saka_engine::InboxItem> for InboxItem {
+    fn from(i: &saka_engine::InboxItem) -> InboxItem {
+        InboxItem {
+            id: i.id.0,
+            project_id: i.project_id.0,
+            project_name: i.project_name.clone(),
+            kind: i.kind.as_str().into(),
+            subject: i.subject.as_str().into(),
+            state: i.state.as_str().into(),
+            work_item_id: i.work_item_id.map(|x| x.0),
+            spec_id: i.spec_id.map(|x| x.0),
+            title: InboxTitle {
+                task_key: i.task_key.clone(),
+                stage: i.stage.clone(),
+                spec_slug: i.spec_slug.clone(),
+                spec_title: i.spec_title.clone(),
+                draft_path: i.draft_path.clone(),
+            },
+            params: i.params.clone(),
+            action: InboxAction {
+                kind: i.action.kind.as_str().into(),
+                params: i.action.params.clone(),
+            },
+            dismissible: i.dismissible(),
+            opened_at: time(i.opened_at),
+            closed_at: opt_time(i.closed_at),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InboxKinds {
+    pub decision: i64,
+    pub approval: i64,
+    pub permission: i64,
+    pub blocker: i64,
+    pub spec_unclear: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InboxSummary {
+    /// Items waiting for the operator.
+    pub open: i64,
+    pub by_kind: InboxKinds,
+    /// Tasks that are in a stage now.
+    pub running: i64,
+    /// Changes merged since midnight UTC.
+    pub merged_today: i64,
+}
+
+impl From<&saka_engine::InboxSummary> for InboxSummary {
+    fn from(s: &saka_engine::InboxSummary) -> InboxSummary {
+        use saka_core::vocab::InboxKind as K;
+        let count = |k: K| s.by_kind.get(&k).copied().unwrap_or(0);
+        InboxSummary {
+            open: s.open,
+            by_kind: InboxKinds {
+                decision: count(K::Decision),
+                approval: count(K::Approval),
+                permission: count(K::Permission),
+                blocker: count(K::Blocker),
+                spec_unclear: count(K::SpecUnclear),
+            },
+            running: s.running,
+            merged_today: s.merged_today,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct InboxQuery {
+    pub project_id: Option<String>,
+    /// `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`.
+    pub kind: Option<String>,
+    /// `open` (default) or `closed`.
+    pub state: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}

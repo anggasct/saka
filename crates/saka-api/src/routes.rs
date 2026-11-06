@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use saka_core::diagnostics::{self, CheckResult, Report, Subject};
 use saka_core::ids::{
-    BlockerId, HookRunId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId, SpecDraftId,
-    SpecId, SpecRevisionId, WorkItemId,
+    BlockerId, HookRunId, InboxItemId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId,
+    SpecDraftId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
@@ -19,15 +19,15 @@ use saka_core::vocab::{
     AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode, Stage,
 };
 use saka_engine::{
-    AddProject, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, NewSpecDraft,
-    PermissionFilter, Precondition, Produced, Reply, RunOf, SessionCommand, SessionView,
-    StoredEvent, TimelineCursor, WorkItemFilter,
+    AddProject, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, InboxFilter,
+    NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf, SessionCommand,
+    SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
 use crate::dto::{self, CAPABILITIES};
 use crate::http::{
-    Mutation, body, encode_cursor, if_match, mutate, ok, page, path_id, require_key, states,
+    Mutation, body, encode_cursor, if_match, mutate, ok, page, path_id, require_key, states, tagged,
 };
 use crate::problem::ApiError;
 use crate::state::AppState;
@@ -2608,6 +2608,109 @@ pub async fn rerun_hook(
                 .rerun_hook(run, &req.reason, &cause, Some(&action))
                 .map(|r| Some(r.project_id))
                 .map_err(|e| (e, None))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/inbox", tag = "inbox", params(dto::InboxQuery),
+    responses(
+        (status = 200, body = dto::Page<dto::InboxItem>, headers(("ETag" = String, description = "A digest of the page; send it back as If-None-Match"))),
+        (status = 304, description = "The page is unchanged"),
+        (status = 422, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn list_inbox(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<dto::InboxQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let kind = match q.kind.as_deref().filter(|v| !v.is_empty()) {
+        None => None,
+        Some(v) => Some(tri!(
+            v.parse()
+                .map_err(|_| ApiError::validation("kind", "invalid"))
+        )),
+    };
+    let closed = match q.state.as_deref().filter(|v| !v.is_empty()) {
+        None | Some("open") => false,
+        Some("closed") => true,
+        Some(_) => return ApiError::validation("state", "invalid").into_response(),
+    };
+    let filter = InboxFilter {
+        project: tri!(opt_id(q.project_id.as_deref(), "project_id")).map(ProjectId),
+        kind,
+        closed,
+    };
+    let key = format!("inbox:{:?}:{:?}:{}", filter.project, filter.kind, closed);
+    let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
+    let paged = tri!(engine.inbox(&filter, &p));
+    tagged(
+        &headers,
+        &dto::Page {
+            items: paged.items.iter().map(dto::InboxItem::from).collect(),
+            next_cursor: paged.next.map(|k| encode_cursor(k, &key)),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/inbox/summary", tag = "inbox",
+    responses(
+        (status = 200, body = dto::InboxSummary, headers(("ETag" = String, description = "A digest of the summary; send it back as If-None-Match"))),
+        (status = 304, description = "The summary is unchanged"),
+    )
+)]
+pub async fn inbox_summary(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    let engine = tri!(s.engine());
+    let summary = tri!(engine.inbox_summary());
+    tagged(&headers, &dto::InboxSummary::from(&summary))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/inbox/{inbox_item_id}/dismiss", tag = "inbox",
+    params(("inbox_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RequiredReason,
+    responses((status = 200, body = dto::InboxItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn dismiss_inbox_item(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let item = InboxItemId(tri!(path_id(&id)));
+    let req: dto::RequiredReason = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let project = tri!(engine.inbox_item(item)).map(|i| i.project_id);
+    let respond = |p: Produced<'_>| match p {
+        Produced::Inbox(i) => reply(StatusCode::OK, &dto::InboxItem::from(i)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "inbox_item.dismiss",
+        target_type: "inbox_item",
+        target_id: Some(item.0),
+        reason: Some(req.reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .dismiss_inbox_item_with(item, &req.reason, &cause, Some(&action))
+                .map(|i| Some(i.project_id))
+                .map_err(|e| (e, project))
         },
     )
     .await

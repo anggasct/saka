@@ -4,6 +4,7 @@ mod conn;
 pub mod draft;
 mod error;
 pub mod hook_run;
+pub mod inbox;
 mod jobs;
 pub mod list;
 mod migrate;
@@ -58,9 +59,13 @@ impl Store {
     }
 
     pub fn commit(&self, batch: &Batch) -> Result<Vec<i64>> {
+        self.commit_synced(batch, &[])
+    }
+
+    pub fn commit_synced(&self, batch: &Batch, inbox: &[inbox::InboxSync]) -> Result<Vec<i64>> {
         let mut conn = self.writer.lock().map_err(|_| StoreError::Poisoned)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let seqs = write::write(&tx, batch)?;
+        let seqs = write::write(&tx, batch, inbox)?;
         tx.commit()?;
         Ok(seqs)
     }

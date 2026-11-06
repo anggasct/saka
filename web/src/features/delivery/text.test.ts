@@ -747,6 +747,9 @@ const ERRORS = [
   "hook_run_pending",
   "hook_not_configured",
   "hook_run_gated",
+  "inbox_item_not_found",
+  "inbox_item_not_dismissible",
+  "inbox_item_closed",
 ];
 
 describe("catalog coverage", () => {

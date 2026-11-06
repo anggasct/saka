@@ -163,6 +163,7 @@ pub struct Batch {
     pub user_links: Vec<crate::user_link::UserLinkRow>,
     pub removed_user_links: Vec<saka_core::ids::UserLinkId>,
     pub project_authorships: Vec<crate::authorship::ProjectAuthorshipRow>,
+    pub inbox_dismissals: Vec<crate::inbox::InboxDismissal>,
 }
 
 impl Batch {
@@ -174,7 +175,11 @@ impl Batch {
     }
 }
 
-pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
+pub(crate) fn write(
+    tx: &Transaction<'_>,
+    b: &Batch,
+    inbox: &[crate::inbox::InboxSync],
+) -> Result<Vec<i64>> {
     // Events are written before the rows they describe; foreign keys are checked at commit.
     tx.pragma_update(None, "defer_foreign_keys", "ON")?;
     if let Some(outcome) = &b.job_outcome {
@@ -413,6 +418,12 @@ pub(crate) fn write(tx: &Transaction<'_>, b: &Batch) -> Result<Vec<i64>> {
             "UPDATE session SET last_offset = max(last_offset, ?2) WHERE id = ?1",
             params![session.to_string(), i64_of(*offset)?],
         )?;
+    }
+    for d in &b.inbox_dismissals {
+        crate::inbox::dismiss(tx, d, b.now)?;
+    }
+    for s in inbox {
+        crate::inbox::sync(tx, s, b.now)?;
     }
     for j in &b.jobs {
         enqueue(tx, j, b.now)?;

@@ -84,7 +84,7 @@ fn change_requests_get_a_role_unique_per_task_and_the_new_phase_and_blocker_are_
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        vec![18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
     );
     drop(store);
 

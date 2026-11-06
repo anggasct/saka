@@ -318,6 +318,179 @@
         }
       }
     },
+    "/api/v1/inbox": {
+      "get": {
+        "tags": [
+          "inbox"
+        ],
+        "operationId": "list_inbox",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`decision`, `approval`, `permission`, `blocker`, or `spec_unclear`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`open` (default) or `closed`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "A digest of the page; send it back as If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_InboxItem"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The page is unchanged"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inbox/summary": {
+      "get": {
+        "tags": [
+          "inbox"
+        ],
+        "operationId": "inbox_summary",
+        "responses": {
+          "200": {
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "A digest of the summary; send it back as If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSummary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The summary is unchanged"
+          }
+        }
+      }
+    },
+    "/api/v1/inbox/{inbox_item_id}/dismiss": {
+      "post": {
+        "tags": [
+          "inbox"
+        ],
+        "operationId": "dismiss_inbox_item",
+        "parameters": [
+          {
+            "name": "inbox_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "tags": [
@@ -5164,6 +5337,199 @@
           }
         }
       },
+      "InboxAction": {
+        "type": "object",
+        "required": [
+          "kind",
+          "params"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "A blocker action, or `answer_permission`, `approve_spec`, `start_step`, `merge`, or `answer_decision`."
+          },
+          "params": {
+            "description": "What the existing endpoint for the action needs: ids, a revision, or a task version."
+          }
+        }
+      },
+      "InboxItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "project_name",
+          "kind",
+          "subject",
+          "state",
+          "title",
+          "params",
+          "action",
+          "dismissible",
+          "opened_at"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/InboxAction",
+            "description": "The one primary action. It points at an endpoint that already exists; the inbox has none of its own."
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dismissible": {
+            "type": "boolean",
+            "description": "Only a spec approval can be dismissed."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`decision`, `approval`, `permission`, `blocker`, or `spec_unclear`."
+          },
+          "opened_at": {
+            "type": "string"
+          },
+          "params": {
+            "description": "What the item is about. Never holds a secret value."
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "spec_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "description": "`open`, `answered`, `resolved`, or `dismissed`."
+          },
+          "subject": {
+            "type": "string",
+            "description": "`spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`."
+          },
+          "title": {
+            "$ref": "#/components/schemas/InboxTitle"
+          },
+          "work_item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "InboxKinds": {
+        "type": "object",
+        "required": [
+          "decision",
+          "approval",
+          "permission",
+          "blocker",
+          "spec_unclear"
+        ],
+        "properties": {
+          "approval": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "blocker": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "decision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "permission": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "spec_unclear": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "InboxSummary": {
+        "type": "object",
+        "required": [
+          "open",
+          "by_kind",
+          "running",
+          "merged_today"
+        ],
+        "properties": {
+          "by_kind": {
+            "$ref": "#/components/schemas/InboxKinds"
+          },
+          "merged_today": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Changes merged since midnight UTC."
+          },
+          "open": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items waiting for the operator."
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tasks that are in a stage now."
+          }
+        }
+      },
+      "InboxTitle": {
+        "type": "object",
+        "properties": {
+          "draft_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The path of the spec draft whose session asked, for a permission that belongs to a draft."
+          },
+          "spec_slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spec_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stage the task is at."
+          },
+          "task_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The task the item is about, when it is about one."
+          }
+        }
+      },
       "Lint": {
         "type": "object",
         "required": [
@@ -5404,6 +5770,102 @@
                 "trigger": {
                   "type": "string",
                   "description": "The event that triggered the run."
+                },
+                "work_item_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Page_InboxItem": {
+        "type": "object",
+        "description": "A list page.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "project_name",
+                "kind",
+                "subject",
+                "state",
+                "title",
+                "params",
+                "action",
+                "dismissible",
+                "opened_at"
+              ],
+              "properties": {
+                "action": {
+                  "$ref": "#/components/schemas/InboxAction",
+                  "description": "The one primary action. It points at an endpoint that already exists; the inbox has none of its own."
+                },
+                "closed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dismissible": {
+                  "type": "boolean",
+                  "description": "Only a spec approval can be dismissed."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "`decision`, `approval`, `permission`, `blocker`, or `spec_unclear`."
+                },
+                "opened_at": {
+                  "type": "string"
+                },
+                "params": {
+                  "description": "What the item is about. Never holds a secret value."
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "project_name": {
+                  "type": "string"
+                },
+                "spec_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "`open`, `answered`, `resolved`, or `dismissed`."
+                },
+                "subject": {
+                  "type": "string",
+                  "description": "`spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`."
+                },
+                "title": {
+                  "$ref": "#/components/schemas/InboxTitle"
                 },
                 "work_item_id": {
                   "type": [
@@ -9685,6 +10147,9 @@
     },
     {
       "name": "hooks"
+    },
+    {
+      "name": "inbox"
     },
     {
       "name": "spec-drafts"
