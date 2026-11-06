@@ -44,7 +44,6 @@ export function DocsPage({
   const [filesOpen, setFilesOpen] = useState(false);
   const [shownPath, setShownPath] = useState(path);
   if (shownPath !== path) {
-    // On a narrow screen the list folds away once a file is chosen.
     setShownPath(path);
     setFilesOpen(false);
   }
@@ -77,7 +76,6 @@ export function DocsPage({
     !(path in buffers);
   const draftContent = useDraftContent(draftId ?? "", wantsDraft);
   if (wantsDraft && draftContent.data?.path === path) {
-    // The buffer takes the written bytes once; after a save the tree has the file.
     const content = draftContent.data.content;
     setLoadedDrafts((current) => new Set([...current, draftKey]));
     setBuffers((current) => ({ ...current, [path]: content }));

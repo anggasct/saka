@@ -230,8 +230,6 @@ export function FileView({
     }
     const sent = content;
     const kept = retained.current;
-    // The server stores every answer under its key, so only a request that never
-    // reached it may be sent again with the same key.
     const key =
       kept !== null && kept.content === sent ? kept.key : newIdempotencyKey();
     retained.current = null;

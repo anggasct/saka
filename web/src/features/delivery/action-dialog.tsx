@@ -105,8 +105,6 @@ export function ActionDialog({
     const sent = trimmed === "" ? null : trimmed;
     const sentNote = noteTrimmed === "" ? null : noteTrimmed;
     const kept = retained.current;
-    // The server stores every answer it gave under the key, so only a request
-    // that never reached it may be sent again with the same key.
     const key =
       kept !== null && kept.reason === sent && kept.note === sentNote
         ? kept.key

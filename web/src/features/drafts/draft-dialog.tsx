@@ -137,8 +137,6 @@ export function DraftDialog({
       target_kind: revising ? "revise" : "new",
     };
     const kept = retained.current;
-    // The server stores every answer under its key, so only a request that never
-    // reached it may be sent again with the same key.
     const key =
       kept !== null && sameBody(kept.body, body)
         ? kept.key
