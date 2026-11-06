@@ -456,6 +456,7 @@ fn remembering_a_draft_permission_is_not_applicable() {
         actor: "operator:local".into(),
         remember: true,
         active_rules: vec![],
+        allowed_parts: Vec::new(),
     }));
     assert_eq!(
         refused,

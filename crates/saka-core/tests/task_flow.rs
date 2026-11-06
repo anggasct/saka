@@ -492,11 +492,7 @@ fn ask(cli_request_id: &str, id: u128) -> TaskInput {
         tool: "Bash".into(),
         summary: "npm install".into(),
         input: json!({ "command": "npm install" }),
-        decision: Decision {
-            effect: Effect::Ask,
-            source: DecisionSource::Default,
-            message: None,
-        },
+        decision: Decision::new(Effect::Ask, DecisionSource::Default),
     })
 }
 
@@ -563,6 +559,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
             actor: "operator:local".into(),
             remember: false,
             active_rules: Vec::new(),
+            allowed_parts: Vec::new(),
         }),
     );
     assert_eq!(
@@ -580,6 +577,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
                 actor: "operator:local".into(),
                 remember: false,
                 active_rules: Vec::new(),
+                allowed_parts: Vec::new(),
             })
         ),
         Err(Rejection::PermissionAlreadyAnswered)
@@ -1066,6 +1064,7 @@ fn running_time_excludes_waiting_for_a_person() {
             actor: "operator:local".into(),
             remember: false,
             active_rules: Vec::new(),
+            allowed_parts: Vec::new(),
         }),
     );
     assert_eq!(
@@ -1144,6 +1143,7 @@ fn server_restart_loses_the_session_expires_its_requests_and_resumes_it() {
                 actor: "x".into(),
                 remember: false,
                 active_rules: Vec::new(),
+                allowed_parts: Vec::new(),
             })
         ),
         Err(Rejection::PermissionAlreadyAnswered)

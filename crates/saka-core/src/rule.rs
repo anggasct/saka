@@ -13,9 +13,12 @@ pub fn matches(rule: &PermissionRule, tool: &str, command: Option<&str>) -> bool
         && (tool != "Bash" || rule.command.as_deref() == command)
 }
 
-pub fn remembered(request: &PermissionRequest) -> Result<(String, Option<String>), Rejection> {
+pub fn remembered(
+    request: &PermissionRequest,
+    allowed_parts: &[String],
+) -> Result<Vec<(String, Option<String>)>, Rejection> {
     if request.tool != "Bash" {
-        return Ok((request.tool.clone(), None));
+        return Ok(vec![(request.tool.clone(), None)]);
     }
     let command =
         request
@@ -32,7 +35,22 @@ pub fn remembered(request: &PermissionRequest) -> Result<(String, Option<String>
             code: "contains_secret",
         });
     }
-    Ok((request.tool.clone(), Some(command.to_string())))
+    let commands = match crate::shell::split(command) {
+        Some(parts) => {
+            let mut wanted: Vec<String> = Vec::new();
+            for part in parts {
+                if !allowed_parts.contains(&part) && !wanted.contains(&part) {
+                    wanted.push(part);
+                }
+            }
+            wanted
+        }
+        None => vec![command.to_string()],
+    };
+    Ok(commands
+        .into_iter()
+        .map(|c| (request.tool.clone(), Some(c)))
+        .collect())
 }
 
 pub fn revoke(rule: &PermissionRule, reason: String) -> Result<Vec<Event>, Rejection> {

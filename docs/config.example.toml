@@ -111,8 +111,11 @@ email = "agent@saka.invalid"       # 3..=254 bytes with exactly one @
 
 # Permission rules for agent sessions. Built-in rules come first and cannot be turned off:
 # file tools outside the worktree and any Bash command containing `git push` are denied.
-# Precedence: deny > ask > allow; no matching rule means ask. A `commands` glob matches the
-# whole command and never matches one containing ; & | ` $( > < or a newline.
+# Precedence: deny > ask > allow; no matching rule means ask. A Bash command joined with && || ; | or
+# a newline is judged part by part, and a `commands` glob matches one part, never across parts.
+# The command is allowed only when every part is allowed by a rule, and one deny or ask decides it all.
+# A command Saka cannot split safely (substitution, backticks, redirects, a lone &, an assignment
+# prefix, eval/sh/sudo and the like) is never allowed by a glob: it asks, or is denied by a deny rule.
 
 [[permission.rule]]
 id = "read-tools"                  # ^[a-z0-9-]{1,64}$, unique

@@ -210,11 +210,7 @@ impl Run {
                 tool: "Bash".into(),
                 summary: command.into(),
                 input: json!({ "command": command }),
-                decision: Decision {
-                    effect: Effect::Ask,
-                    source: DecisionSource::Default,
-                    message: None,
-                },
+                decision: Decision::new(Effect::Ask, DecisionSource::Default),
             },
         ));
     }
@@ -226,6 +222,17 @@ impl Run {
         remember: bool,
         active: Vec<PermissionRule>,
     ) -> Result<Vec<Event>, Rejection> {
+        self.answer_covering(id, allow, remember, active, Vec::new())
+    }
+
+    fn answer_covering(
+        &mut self,
+        id: u128,
+        allow: bool,
+        remember: bool,
+        active: Vec<PermissionRule>,
+        allowed_parts: Vec<String>,
+    ) -> Result<Vec<Event>, Rejection> {
         self.try_decide(task::TaskInput::Session(SessionInput::AnswerPermission {
             permission_request_id: PermissionRequestId(Uuid::from_u128(id)),
             allow,
@@ -233,6 +240,7 @@ impl Run {
             actor: "operator:local".into(),
             remember,
             active_rules: active,
+            allowed_parts,
         }))
     }
 
@@ -982,11 +990,7 @@ fn remember_makes_an_exact_project_rule_that_never_beats_a_deny() {
             tool: "Write".into(),
             summary: "src/a.rs".into(),
             input: json!({ "file_path": "src/a.rs" }),
-            decision: Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
-                message: None,
-            },
+            decision: Decision::new(Effect::Ask, DecisionSource::Default),
         },
     ));
     file.answer(902, true, true, vec![]).unwrap();
@@ -1048,6 +1052,72 @@ fn a_revoked_rule_no_longer_answers_and_cannot_be_revoked_twice() {
     assert_eq!(
         rule::revoke(&revoked, "again".into()),
         Err(invalid("revoked"))
+    );
+}
+
+fn added_commands(events: &[Event]) -> Vec<Option<String>> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::PermissionRuleAdded { command, .. } => Some(command.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn remembering_a_compound_command_adds_one_exact_rule_per_part_not_yet_allowed() {
+    let mut r = Run::running(unlimited());
+    r.ask(910, "git status && ls && git status");
+    let events = r.answer(910, true, true, vec![]).unwrap();
+    assert_eq!(
+        added_commands(&events),
+        vec![Some("git status".to_string()), Some("ls".to_string())]
+    );
+    assert_eq!(r.task.added_rules.len(), 2);
+
+    let mut covered = Run::running(unlimited());
+    covered.ask(911, "git status && ls");
+    let events = covered
+        .answer_covering(911, true, true, vec![], vec!["ls".to_string()])
+        .unwrap();
+    assert_eq!(
+        added_commands(&events),
+        vec![Some("git status".to_string())]
+    );
+
+    let mut active = Run::running(unlimited());
+    active.ask(912, "git status && ls");
+    let events = active
+        .answer(912, true, true, r.task.added_rules.clone())
+        .unwrap();
+    assert!(
+        added_commands(&events).is_empty(),
+        "both parts already have an active rule"
+    );
+}
+
+#[test]
+fn remembering_a_command_that_cannot_be_split_adds_the_full_text() {
+    let mut r = Run::running(unlimited());
+    r.ask(913, "ls && $(cat x)");
+    let events = r.answer(913, true, true, vec![]).unwrap();
+    assert_eq!(
+        added_commands(&events),
+        vec![Some("ls && $(cat x)".to_string())]
+    );
+}
+
+#[test]
+fn remembering_a_compound_command_with_a_secret_is_refused() {
+    let mut r = Run::running(unlimited());
+    r.ask(914, "ls && echo «secret:TOKEN»");
+    assert_eq!(
+        r.answer(914, true, true, vec![]),
+        Err(Rejection::Invalid {
+            field: "remember",
+            code: "contains_secret"
+        })
     );
 }
 

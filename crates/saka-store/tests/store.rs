@@ -514,11 +514,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             tool: "Bash".into(),
             summary: "npm install".into(),
             input: json!({ "command": "npm install" }),
-            decision: Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
-                message: None,
-            },
+            decision: Decision::new(Effect::Ask, DecisionSource::Default),
         }),
     );
     w.tick(60_000);
@@ -531,6 +527,7 @@ fn a_whole_task_round_trips_through_the_schema() {
             actor: "operator:local".into(),
             remember: false,
             active_rules: Vec::new(),
+            allowed_parts: Vec::new(),
         }),
     );
     w.step(
@@ -1321,11 +1318,7 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
             tool: "Bash".into(),
             summary: "npm install".into(),
             input: json!({ "command": "npm install" }),
-            decision: Decision {
-                effect: Effect::Ask,
-                source: DecisionSource::Default,
-                message: None,
-            },
+            decision: Decision::new(Effect::Ask, DecisionSource::Default),
         }),
     );
     w.step(
@@ -1337,6 +1330,7 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
             actor: "operator:local".into(),
             remember: true,
             active_rules: Vec::new(),
+            allowed_parts: Vec::new(),
         }),
     );
     w.step(
