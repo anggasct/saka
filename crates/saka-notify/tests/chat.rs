@@ -42,6 +42,9 @@ fn hook_event(event: &str) -> Value {
         "blocker": if event == "blocked" {
             json!({ "id": "0193f0c4-0000-7000-8000-000000000006", "code": "ci_red", "action": "retry" })
         } else { Value::Null },
+        "review": if event == "review_done" {
+            json!({ "id": "0193f0c4-0000-7000-8000-000000000007", "outcome": "approved", "head_sha": "a1b2", "findings": 0, "summary": "Fine." })
+        } else { Value::Null },
         "occurred_at": "2026-11-04T10:00:00.123Z"
     })
 }
@@ -103,6 +106,11 @@ fn every_hook_event_renders_in_both_languages() {
             "task_done",
             "Done: tasks/s1 in tasks\nhttps://saka.example.com/delivery/tasks/0193f0c4-0000-7000-8000-000000000004",
             "Selesai: tasks/s1 di tasks\nhttps://saka.example.com/delivery/tasks/0193f0c4-0000-7000-8000-000000000004",
+        ),
+        (
+            "review_done",
+            "Review done: tasks/s1 in tasks\nVerdict: approved\nhttps://saka.example.com/delivery/tasks/0193f0c4-0000-7000-8000-000000000004",
+            "Review selesai: tasks/s1 di tasks\nPutusan: approved\nhttps://saka.example.com/delivery/tasks/0193f0c4-0000-7000-8000-000000000004",
         ),
         (
             "change_opened",

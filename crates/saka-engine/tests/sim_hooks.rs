@@ -124,6 +124,29 @@ fn a_merge_queues_one_signed_webhook_run_in_the_same_transaction() {
 }
 
 #[test]
+fn a_recorded_verdict_queues_one_run_with_the_outcome_and_the_head_it_judged() {
+    let mut sim = sim(vec![raw("judged", "review_done", "webhook")]);
+    deliver(&mut sim);
+
+    let all = runs(&sim);
+    let verdicts = sim.events_of("delivery.review.recorded");
+    assert_eq!(all.len(), verdicts.len(), "one run per verdict");
+    assert_eq!(all.len(), 2);
+    for (run, verdict) in all.iter().zip(&verdicts) {
+        assert_eq!(run.trigger.as_str(), "review_done");
+        let review = run.context.review.as_ref().unwrap();
+        assert_eq!(review.outcome.as_str(), "approved");
+        assert_eq!(review.id.0.to_string(), verdict.payload["review_id"]);
+        assert_eq!(run.sha.as_deref(), Some(review.head_sha.as_str()));
+        assert_eq!(run.context.branch.as_deref(), Some("main"));
+    }
+    let body: serde_json::Value = serde_json::from_str(&sim.hooks.webhooks()[0].body).unwrap();
+    assert_eq!(body["event"], "review_done");
+    assert_eq!(body["review"]["outcome"], "approved");
+    assert_eq!(body["review"]["findings"], 0);
+}
+
+#[test]
 fn only_matching_hooks_run() {
     let mut other_project = raw("elsewhere", "merged", "webhook");
     other_project.project = "someone-else".into();

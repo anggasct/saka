@@ -162,7 +162,7 @@ allowed_users = ["123456789"]      # required with actions: the chat user ids (d
 
 # Hooks run something when an event happens in a project's loop (the [hooks] table above is the
 # inbound webhook listener; these are outbound). Hooks live only here, never in saka.toml or the repo.
-# `on` is change_opened | merged | task_done | spec_shipped | blocked. A run is recorded for every
+# `on` is change_opened | review_done | merged | task_done | spec_shipped | blocked. A run is recorded for every
 # match and kept as history; a failed run can be re-run from the API, the CLI, or Settings.
 
 [[hook]]

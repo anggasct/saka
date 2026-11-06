@@ -4947,7 +4947,7 @@
           },
           "on": {
             "type": "string",
-            "description": "`change_opened`, `merged`, `task_done`, `spec_shipped`, or `blocked`."
+            "description": "`change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, or `blocked`."
           },
           "repos": {
             "type": "array",

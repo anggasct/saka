@@ -1332,7 +1332,7 @@ export interface components {
       /** @description `after` or `gate`. */
       mode: string;
       name: string;
-      /** @description `change_opened`, `merged`, `task_done`, `spec_shipped`, or `blocked`. */
+      /** @description `change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, or `blocked`. */
       on: string;
       repos: string[];
       target: components["schemas"]["HookTarget"];
