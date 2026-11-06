@@ -35,6 +35,10 @@ pub fn product_packages(meta: &Value) -> Result<Vec<String>> {
     members_under(meta, &["crates", "xtask"])
 }
 
+pub fn governed_packages(meta: &Value) -> Result<Vec<String>> {
+    members_under(meta, &["crates", "xtask", "desktop"])
+}
+
 pub fn spike_packages(meta: &Value) -> Result<Vec<String>> {
     members_under(meta, &["spikes"])
 }
@@ -76,4 +80,43 @@ fn members_under(meta: &Value, dirs: &[&str]) -> Result<Vec<String>> {
     }
     names.sort();
     Ok(names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_desktop_shell_is_a_member_but_not_a_default_member() {
+        let meta = load().unwrap();
+        let listed = |key: &str| -> Vec<String> {
+            meta[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect()
+        };
+        assert!(
+            listed("workspace_members")
+                .iter()
+                .any(|id| id.contains("saka-desktop"))
+        );
+        assert!(
+            !listed("workspace_default_members")
+                .iter()
+                .any(|id| id.contains("saka-desktop"))
+        );
+        assert!(
+            !product_packages(&meta)
+                .unwrap()
+                .contains(&"saka-desktop".to_string())
+        );
+        assert!(
+            governed_packages(&meta)
+                .unwrap()
+                .contains(&"saka-desktop".to_string())
+        );
+    }
 }

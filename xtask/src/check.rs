@@ -123,7 +123,7 @@ pub fn step(name: &str, f: impl FnOnce() -> Result<()>) -> Result<()> {
     f().with_context(|| format!("step failed: {name}"))
 }
 
-fn cargo(root: &Path, args: &[&str]) -> Result<()> {
+pub(crate) fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     let status = Command::new(metadata::cargo())
         .args(args)
         .current_dir(root)
@@ -138,7 +138,7 @@ fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn pnpm(root: &Path, args: &[&str]) -> Result<()> {
+pub(crate) fn pnpm(root: &Path, args: &[&str]) -> Result<()> {
     // Run from `web/`: corepack picks the pnpm version from the nearest package.json.
     let status = Command::new("corepack")
         .arg("pnpm")

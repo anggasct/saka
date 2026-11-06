@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/api/client";
+import { platform } from "@/platform";
 
 import { nextSearch, safeNext } from "./next";
 import { needsSignIn, returnPathFor, signInAgain } from "./unauthorized";
@@ -73,5 +74,28 @@ describe("sign-in redirect", () => {
     expect(calls).toEqual([
       { to: "/login", search: { next: "/settings/devices" } },
     ]);
+  });
+
+  it("sends the desktop app to pair again instead of the sign-in page", () => {
+    const calls: unknown[] = [];
+    const router = {
+      state: { location: { href: "/delivery" } },
+      navigate: (options: unknown) => {
+        calls.push(options);
+        return Promise.resolve();
+      },
+    };
+    vi.spyOn(platform, "connections").mockReturnValue({
+      hasActive: () => true,
+      list: () => Promise.resolve([]),
+      add: () => Promise.reject(new Error("unused")),
+      remove: () => Promise.resolve(),
+      select: () => Promise.resolve(),
+    });
+    signInAgain(router)(unauthorized);
+    router.state.location.href = "/connections?reauth=true";
+    signInAgain(router)(unauthorized);
+    vi.restoreAllMocks();
+    expect(calls).toEqual([{ to: "/connections", search: { reauth: true } }]);
   });
 });

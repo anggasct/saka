@@ -1,6 +1,7 @@
 mod check;
 mod claude_cli;
 mod deps;
+mod desktop;
 mod e2e;
 mod hygiene;
 mod metadata;
@@ -17,6 +18,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("check") => check::run(),
         Some("deps") => deps::run(),
+        Some("desktop-check") => desktop::run(),
         Some("e2e") => e2e::run(),
         Some("hygiene") => metadata::workspace_root().and_then(|root| hygiene::run(&root)),
         Some("supply-chain") => match &args[1..] {
@@ -41,7 +43,7 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cargo xtask <check|deps|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|test-claude-mcp|wasm>"
+        "usage: cargo xtask <check|deps|desktop-check|e2e|hygiene|supply-chain [--offline]|test-systemd|test-claude-memory|test-claude-mcp|wasm>"
     );
     ExitCode::from(2)
 }

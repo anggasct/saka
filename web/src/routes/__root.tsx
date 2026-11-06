@@ -12,6 +12,7 @@ import { InboxNavLink } from "@/features/inbox/nav-link";
 import { LanguageSelect } from "@/i18n/language-select";
 import { initialLocale } from "@/i18n/locale";
 import { useT } from "@/i18n/use-t";
+import { platform } from "@/platform";
 import { Providers } from "@/providers";
 
 export type RouterContext = { queryClient: QueryClient };
@@ -54,6 +55,14 @@ function Layout() {
               >
                 {t("nav.settings")}
               </Link>
+              {platform.connections() !== null && (
+                <Link
+                  to="/connections"
+                  className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+                >
+                  {t("nav.connections")}
+                </Link>
+              )}
               <AuthNav />
             </>
           )}
