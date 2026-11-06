@@ -1202,5 +1202,9 @@
   "diagnostic.auth_not_configured": "Sign-in is not configured. Saka answers only on this machine, which is fine for a local install; add an [auth] section to the server config to use it from other devices.",
   "diagnostic.auth_no_passkey": "Sign-in is on but no passkey is registered yet, so the browser cannot sign in.",
   "diagnosticFix.run_auth_setup": "Run the command on the server host and enter its code on the setup page.",
-  "connection.offline": "You are offline. Saka cannot be reached, so what you see may be out of date."
+  "connection.offline": "You are offline. Saka cannot be reached, so what you see may be out of date.",
+  "connection.incompatible.title": "This server does not match this app",
+  "connection.incompatible.server_too_old": "The server (version {serverVersion}, API {apiVersion}) is too old for this app. Update the server, or use an older app.",
+  "connection.incompatible.client_too_old": "The server (version {serverVersion}, API {apiVersion}) needs a newer app. Update this app.",
+  "connection.incompatible.unreadable": "The server (version {serverVersion}) reports an API version this app cannot read. Update both to matching versions."
 }

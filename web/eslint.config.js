@@ -100,7 +100,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["src/main.tsx"],
+    files: ["src/app.tsx"],
     // Module augmentation of the router's Register type needs an interface.
     rules: { "@typescript-eslint/consistent-type-definitions": "off" },
   },

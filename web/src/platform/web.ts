@@ -2,7 +2,23 @@ import { webCredentials } from "./credentials";
 import type { EventStream, Platform } from "./index";
 
 export const webPlatform: Platform = {
+  ready: () => Promise.resolve(),
+  info: () => ({ kind: "web", os: navigator.platform }),
   apiBaseUrl: () => location.origin,
+  apiToken: () => null,
+  notify: ({ title, body, route }) => {
+    if (
+      typeof Notification === "undefined" ||
+      Notification.permission !== "granted"
+    ) {
+      return;
+    }
+    const notification = new Notification(title, { body });
+    notification.onclick = () => {
+      window.focus();
+      location.assign(route);
+    };
+  },
   preferredLocales: () =>
     navigator.languages.length > 0 ? navigator.languages : [navigator.language],
   eventSource: (url: string): EventStream => new EventSource(url),

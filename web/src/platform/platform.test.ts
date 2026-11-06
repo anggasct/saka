@@ -23,3 +23,15 @@ describe("copyText", () => {
     await expect(webPlatform.copyText("x")).resolves.toBe(false);
   });
 });
+
+describe("web platform", () => {
+  it("stays on the page origin and carries no token", () => {
+    expect(webPlatform.apiBaseUrl()).toBe(location.origin);
+    expect(webPlatform.apiToken()).toBeNull();
+    expect(webPlatform.info().kind).toBe("web");
+  });
+
+  it("is ready at once", async () => {
+    await expect(webPlatform.ready()).resolves.toBeUndefined();
+  });
+});
