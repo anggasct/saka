@@ -208,6 +208,21 @@ impl GitHubApp {
         Ok(url)
     }
 
+    pub(crate) fn graphql_url(&self) -> PortResult<Url> {
+        let mut segments: Vec<String> = self
+            .api
+            .path_segments()
+            .map(|s| s.filter(|p| !p.is_empty()).map(String::from).collect())
+            .unwrap_or_default();
+        if segments.last().is_some_and(|s| s == "v3") {
+            segments.pop();
+        }
+        segments.push("graphql".to_string());
+        let mut url = self.api.clone();
+        url.set_path(&format!("/{}", segments.join("/")));
+        Ok(url)
+    }
+
     pub fn jwt(&self) -> PortResult<String> {
         let path = &self.cfg.private_key_file;
         let key_error = |reason: &str| {

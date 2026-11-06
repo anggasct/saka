@@ -20,13 +20,14 @@ use saka_ports::{
     Agents, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal, ChangeSnapshot,
     ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit, DeviceCode,
     DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocOpened, DocSource, DocTree,
-    DocWrite, DocsRequest, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession,
-    Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
-    Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess,
-    RepoInfo, RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities,
-    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh,
-    Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    DocWrite, DocsRequest, EnqueueOutcome, EnvRef, Environments, IdentityLookup, LaunchProfile,
+    LaunchedSession, Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError,
+    PortResult, PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome,
+    PushRequest, Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex,
+    RepoAccess, RepoInfo, RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm,
+    ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor,
+    TokenRefresh, Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile,
+    WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -310,6 +311,11 @@ struct State {
     merge_calls: Vec<(String, u64)>,
     lost_merge_repos: BTreeSet<String>,
     rebased: BTreeMap<(String, String), String>,
+    native_queue: bool,
+    native_hold: bool,
+    native_queued: BTreeSet<u64>,
+    enqueue_refusals: VecDeque<String>,
+    enqueue_calls: Vec<(u64, String)>,
     rebases: Vec<(EnvironmentId, String, String)>,
 }
 
@@ -468,6 +474,11 @@ impl FakeWorld {
                 scm_calls: Vec::new(),
                 docs_checkouts: BTreeMap::new(),
                 rebased: BTreeMap::new(),
+                native_queue: false,
+                native_hold: false,
+                native_queued: BTreeSet::new(),
+                enqueue_refusals: VecDeque::new(),
+                enqueue_calls: Vec::new(),
                 rebases: Vec::new(),
                 docs_refusal: None,
                 docs_turns: VecDeque::new(),
@@ -849,6 +860,26 @@ impl FakeWorld {
 
     pub fn checkouts(&self) -> Vec<(EnvironmentId, String)> {
         self.state().checkouts.clone()
+    }
+
+    pub fn set_native_queue(&self, enabled: bool) {
+        self.state().native_queue = enabled;
+    }
+
+    pub fn hold_native_queue(&self, hold: bool) {
+        self.state().native_hold = hold;
+    }
+
+    pub fn eject_from_queue(&self, number: u64) {
+        self.state().native_queued.remove(&number);
+    }
+
+    pub fn refuse_enqueues(&self, reasons: Vec<&str>) {
+        self.state().enqueue_refusals = reasons.into_iter().map(String::from).collect();
+    }
+
+    pub fn enqueue_calls(&self) -> Vec<(u64, String)> {
+        self.state().enqueue_calls.clone()
     }
 
     pub fn rebases(&self) -> Vec<(EnvironmentId, String, String)> {
@@ -2297,6 +2328,15 @@ impl Scm for FakeWorld {
         if s.change_reads_fail {
             return Err(PortError::retryable("scm_unavailable", json!({})));
         }
+        if !s.native_hold && s.native_queued.remove(&number) {
+            let pr = s
+                .prs
+                .iter()
+                .find(|p| p.number == number && p.repo == repo.full_name)
+                .cloned();
+            let head = pr.and_then(|p| s.refs(&p.repo).get(&p.head_branch).cloned());
+            s.merge(number, head.as_deref());
+        }
         let pr = s
             .prs
             .iter()
@@ -2371,6 +2411,49 @@ impl Scm for FakeWorld {
             return Ok(MergeOutcome::Rejected { reason });
         }
         Ok(s.merge(request.number, Some(&request.head_sha)))
+    }
+
+    async fn merge_queue(&self, _repo: &RepoRef, _base_branch: &str) -> PortResult<bool> {
+        Ok(self.state().native_queue)
+    }
+
+    async fn enqueue(&self, request: &MergeRequest) -> PortResult<EnqueueOutcome> {
+        let mut s = self.state();
+        s.call("enqueue");
+        s.enqueue_calls
+            .push((request.number, request.head_sha.clone()));
+        if let Some(reason) = s.enqueue_refusals.pop_front() {
+            return Ok(EnqueueOutcome::Rejected { reason });
+        }
+        let pr = s
+            .prs
+            .iter()
+            .find(|p| p.number == request.number && p.repo == request.repo.full_name)
+            .cloned()
+            .ok_or_else(|| PortError::permanent("not_found", json!({ "status": 404 })))?;
+        let head = s
+            .refs(&pr.repo)
+            .get(&pr.head_branch)
+            .cloned()
+            .unwrap_or_default();
+        let reason = if pr.state != ChangeState::Open {
+            Some("not_mergeable")
+        } else if head != request.head_sha {
+            Some("head_changed")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Ok(EnqueueOutcome::Rejected {
+                reason: reason.into(),
+            });
+        }
+        s.native_queued.insert(request.number);
+        Ok(EnqueueOutcome::Queued)
+    }
+
+    async fn in_merge_queue(&self, _repo: &RepoRef, number: u64) -> PortResult<bool> {
+        Ok(self.state().native_queued.contains(&number))
     }
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {
@@ -2560,6 +2643,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     draft_change_requests: true,
     delete_branch_after_merge: true,
     commit_status: true,
+    merge_queue: false,
     user_authorship: true,
     change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(FAKE_APP_REQUIREMENTS),

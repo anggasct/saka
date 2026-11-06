@@ -324,6 +324,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 ));
             }
         }
+        (Stage::Merge, StagePhase::Merging) if run.is_some_and(|r| r.queue_native) => {}
         (Stage::Merge, StagePhase::Merging) => {
             if let Some(cr) = cr {
                 jobs.push(Job::new(

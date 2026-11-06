@@ -23,10 +23,10 @@ use saka_env::{
 };
 use saka_ports::{
     ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, Clock, DeviceCode, DevicePoll,
-    GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest, OpenChangeRequest,
-    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
-    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh, UnitLimits,
-    WebhookDelivery,
+    EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest,
+    OpenChangeRequest, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
+    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
+    UnitLimits, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -164,6 +164,21 @@ impl Scm for ScmRouter {
     }
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         self.get(&request.repo.integration_id)?.merge(request).await
+    }
+    async fn merge_queue(&self, repo: &RepoRef, base_branch: &str) -> PortResult<bool> {
+        self.get(&repo.integration_id)?
+            .merge_queue(repo, base_branch)
+            .await
+    }
+    async fn enqueue(&self, request: &MergeRequest) -> PortResult<EnqueueOutcome> {
+        self.get(&request.repo.integration_id)?
+            .enqueue(request)
+            .await
+    }
+    async fn in_merge_queue(&self, repo: &RepoRef, number: u64) -> PortResult<bool> {
+        self.get(&repo.integration_id)?
+            .in_merge_queue(repo, number)
+            .await
     }
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {
         self.get(&repo.integration_id)?
@@ -950,6 +965,7 @@ mod capability_tests {
         draft_change_requests: false,
         delete_branch_after_merge: false,
         commit_status: false,
+        merge_queue: false,
         user_authorship: false,
         change_head_ref: "refs/pull/{number}/head",
         diagnostics: None,

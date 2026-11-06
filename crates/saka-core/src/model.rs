@@ -290,6 +290,7 @@ pub struct StageRun {
     pub head_sha: Option<String>,
     pub docs_head_sha: Option<String>,
     pub queued_at: Option<Timestamp>,
+    pub queue_native: bool,
     pub failure: Option<Coded>,
     pub budget: Option<Budget>,
     pub budget_warnings: Vec<BudgetDimension>,

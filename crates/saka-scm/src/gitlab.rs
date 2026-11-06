@@ -14,10 +14,10 @@ use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod, ReviewEvent};
 use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
-    DevicePoll, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange,
-    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
-    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, StatusState, TokenRefresh,
-    WebhookDelivery, WebhookSignature,
+    DevicePoll, EnqueueOutcome, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest,
+    OpenedChange, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
+    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, StatusState,
+    TokenRefresh, WebhookDelivery, WebhookSignature,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -34,10 +34,15 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     draft_change_requests: true,
     delete_branch_after_merge: true,
     commit_status: true,
+    merge_queue: true,
     user_authorship: false,
     change_head_ref: "refs/merge-requests/{number}/head",
     diagnostics: None,
 };
+
+fn queued_in(mr: &Value) -> bool {
+    mr["merge_when_pipeline_succeeds"] == true || mr["auto_merge"] == true
+}
 
 const MERGEABILITY_PENDING: [&str; 3] = ["checking", "unchecked", "preparing"];
 
@@ -462,6 +467,74 @@ impl Scm for GitLab {
             StatusCode::NOT_FOUND => Err(inaccessible(full_name, 404)),
             _ => Err(self.client.unexpected("merge", &reply)),
         }
+    }
+
+    async fn merge_queue(&self, repo: &RepoRef, _base_branch: &str) -> PortResult<bool> {
+        let reply = self
+            .project_call(&repo.full_name, Method::GET, &[], None)
+            .await?;
+        if reply.status == StatusCode::NOT_FOUND {
+            return Err(inaccessible(&repo.full_name, 404));
+        }
+        if !reply.status.is_success() {
+            return Err(self.client.unexpected("merge_queue", &reply));
+        }
+        Ok(reply.body["merge_pipelines_enabled"] == true
+            && reply.body["merge_trains_enabled"] == true)
+    }
+
+    async fn enqueue(&self, request: &MergeRequest) -> PortResult<EnqueueOutcome> {
+        let full_name = &request.repo.full_name;
+        let n = request.number.to_string();
+        let body = json!({
+            "sha": request.head_sha,
+            "auto_merge": true,
+            "merge_when_pipeline_succeeds": true,
+            "should_remove_source_branch": false,
+        });
+        let url = self
+            .client
+            .project_url(full_name, &["merge_requests", &n, "merge"])?;
+        let reply = self.client.send(Method::PUT, url, Some(&body)).await?;
+        let rejected = |reason: &str| {
+            Ok(EnqueueOutcome::Rejected {
+                reason: reason.into(),
+            })
+        };
+        match reply.status {
+            s if s.is_success() => {
+                if reply.body["state"] == "merged"
+                    && let Some(merge_commit_sha) = merge_commit_of(&reply.body)
+                {
+                    return Ok(EnqueueOutcome::Merged {
+                        merge_commit_sha,
+                        merged_at: parse_time(&reply.body["merged_at"]),
+                    });
+                }
+                if queued_in(&reply.body) {
+                    Ok(EnqueueOutcome::Queued)
+                } else {
+                    Err(PortError::retryable(
+                        "scm_unavailable",
+                        json!({ "detail": "enqueue_pending", "number": request.number }),
+                    ))
+                }
+            }
+            StatusCode::CONFLICT => rejected("head_changed"),
+            StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_ACCEPTABLE => {
+                rejected("not_mergeable")
+            }
+            StatusCode::UNPROCESSABLE_ENTITY | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                rejected("rejected")
+            }
+            StatusCode::NOT_FOUND => Err(inaccessible(full_name, 404)),
+            _ => Err(self.client.unexpected("enqueue", &reply)),
+        }
+    }
+
+    async fn in_merge_queue(&self, repo: &RepoRef, number: u64) -> PortResult<bool> {
+        let mr = self.merge_request(&repo.full_name, number).await?.body;
+        Ok(mr["state"] == "opened" && queued_in(&mr))
     }
 
     async fn delete_branch(&self, repo: &RepoRef, branch: &str) -> PortResult<()> {

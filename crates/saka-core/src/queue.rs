@@ -32,6 +32,7 @@ pub fn holds(task: &Task) -> bool {
                     | StagePhase::Merging
             )
         )
+        && !task.stage_run.as_ref().is_some_and(|r| r.queue_native)
 }
 
 pub fn waiting(task: &Task) -> bool {
