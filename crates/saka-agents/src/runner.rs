@@ -6,6 +6,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use saka_ports::MAX_RESULT_TEXT_BYTES;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
@@ -18,7 +19,6 @@ use crate::launch::LaunchSpec;
 use crate::protocol::{self, LogEvent, Malformed, RunnerFrame, ServerFrame};
 use crate::redact::Redactor;
 use crate::secrets::SessionSecrets;
-use saka_ports::MAX_RESULT_TEXT_BYTES;
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_VERSION_MISMATCH: i32 = 3;

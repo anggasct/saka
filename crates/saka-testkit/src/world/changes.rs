@@ -1,13 +1,12 @@
 use saka_core::time::Timestamp;
 use saka_core::vocab::ChangeState;
 use saka_ports::{
-    ChangeSignal, ChangeSummary, PortError, PortResult, RepoRef, SignalKind, clip_text,
+    ChangeSignal, ChangeSummary, Clock, PortError, PortResult, RepoRef, SignalKind, clip_text,
     unique_paths,
 };
 use serde_json::json;
 
 use super::{BASE_BRANCH, FakeWorld, Pr, State};
-use saka_ports::Clock;
 
 pub const BOT_AUTHOR: &str = "saka[bot]";
 

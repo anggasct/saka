@@ -104,15 +104,17 @@ export const tauriPlatform: Platform = {
   onNavigate: (handler) => {
     let stop: (() => void) | null = null;
     let cancelled = false;
-    void listen<string>(NAVIGATE_EVENT, (event) => {
-      handler(event.payload);
-    }).then((unlisten) => {
+    const subscribe = async () => {
+      const unlisten = await listen<string>(NAVIGATE_EVENT, (event) => {
+        handler(event.payload);
+      });
       if (cancelled) {
         unlisten();
       } else {
         stop = unlisten;
       }
-    });
+    };
+    void subscribe();
     return () => {
       cancelled = true;
       stop?.();

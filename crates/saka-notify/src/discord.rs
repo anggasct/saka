@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use saka_core::secret::SecretText;
-use saka_ports::{Clock, PortError, PortResult};
+use saka_ports::{ChatActionKind, Clock, PortError, PortResult};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::api::{BODY_MAX_BYTES, body_of, client, status_error, transport_error};
 use crate::render::Button;
-use saka_ports::ChatActionKind;
 
 pub(crate) use gateway::Gateway;
 
