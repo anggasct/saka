@@ -25,6 +25,8 @@ pub struct Counters {
     gate_runs: Mutex<BTreeMap<(String, String), u64>>,
     auto_retries: Mutex<BTreeMap<(String, String), u64>>,
     merge_turns: Mutex<BTreeMap<(String, String), u64>>,
+    merge_dequeues: Mutex<BTreeMap<(String, String), u64>>,
+    merge_requests: Mutex<BTreeMap<(String, String), u64>>,
     gate_seconds: Mutex<SecondsHistogram>,
     advance_seconds: Mutex<SecondsHistogram>,
     dod: Mutex<BTreeMap<(String, String), u64>>,
@@ -123,6 +125,14 @@ impl Counters {
 
     pub(crate) fn merge_turn(&self, outcome: &str) {
         bump(&self.merge_turns, outcome, "");
+    }
+
+    pub(crate) fn merge_dequeue(&self, reason: &str) {
+        bump(&self.merge_dequeues, reason, "");
+    }
+
+    pub(crate) fn merge_request(&self, by: &str) {
+        bump(&self.merge_requests, by, "");
     }
 
     pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
@@ -375,6 +385,8 @@ pub struct MetricsSnapshot {
     pub gate_runs: Vec<(String, String, u64)>,
     pub auto_retries: Vec<(String, u64)>,
     pub merge_turns: Vec<(String, u64)>,
+    pub merge_dequeues: Vec<(String, u64)>,
+    pub merge_requests: Vec<(String, u64)>,
     pub gate_seconds: SecondsHistogram,
     pub advance_seconds: SecondsHistogram,
     pub dod_verifications: Vec<(String, u64)>,
@@ -536,6 +548,14 @@ impl Engine {
             merge_turns: copy(&self.counters.merge_turns)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            merge_dequeues: copy(&self.counters.merge_dequeues)
+                .into_iter()
+                .map(|(reason, _, n)| (reason, n))
+                .collect(),
+            merge_requests: copy(&self.counters.merge_requests)
+                .into_iter()
+                .map(|(by, _, n)| (by, n))
                 .collect(),
             gate_seconds: snapshot_of(&self.counters.gate_seconds),
             advance_seconds: snapshot_of(&self.counters.advance_seconds),

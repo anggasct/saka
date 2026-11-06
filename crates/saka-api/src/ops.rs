@@ -246,6 +246,22 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_merge_queue_turns_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_merge_dequeues_total",
+        "counter",
+        "Merge requests withdrawn before the merge, by reason (head_moved, not_ready).",
+    );
+    for (reason, n) in &m.merge_dequeues {
+        t.sample("saka_merge_dequeues_total", &[("reason", reason)], n);
+    }
+    t.family(
+        "saka_merge_requests_total",
+        "counter",
+        "Merge requests, by who made them (operator, autonomy, queue).",
+    );
+    for (by, n) in &m.merge_requests {
+        t.sample("saka_merge_requests_total", &[("by", by)], n);
+    }
+    t.family(
         "saka_project_config_reloads_total",
         "counter",
         "Reloads of a project's saka.toml, by outcome.",

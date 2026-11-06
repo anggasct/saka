@@ -1667,6 +1667,11 @@ export interface components {
         gates: components["schemas"]["Gate"][];
         /** Format: uuid */
         id: string;
+        /**
+         * @description `true` when Saka will request the merge itself once review and checks pass: autonomy
+         *     `autonomous`, trigger `merge = "auto"`, and a review stage. `null` in the answer to an action.
+         */
+        merge_auto?: boolean | null;
         merge_queue?: components["schemas"]["MergeQueue"] | null;
         origin: string;
         /** Format: int32 */
@@ -2587,6 +2592,11 @@ export interface components {
       gates: components["schemas"]["Gate"][];
       /** Format: uuid */
       id: string;
+      /**
+       * @description `true` when Saka will request the merge itself once review and checks pass: autonomy
+       *     `autonomous`, trigger `merge = "auto"`, and a review stage. `null` in the answer to an action.
+       */
+      merge_auto?: boolean | null;
       merge_queue?: components["schemas"]["MergeQueue"] | null;
       origin: string;
       /** Format: int32 */

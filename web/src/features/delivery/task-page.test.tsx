@@ -208,6 +208,24 @@ describe("TaskPage", () => {
     expect(screen.getByText("Strict")).toBeInTheDocument();
   });
 
+  it("says when the loop will merge by itself", async () => {
+    const auto = detail(
+      task(1, {
+        state: "in_stage",
+        stage: "merge",
+        stage_phase: "awaiting_ci",
+        merge_auto: true,
+      }),
+    );
+    fakeApi(routes(auto));
+    renderWithProviders(<TaskPage workItemId={auto.id} />);
+    expect(
+      await screen.findByText(
+        "Saka merges this by itself once the review approves and the checks pass.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows the evidence of a blocked task", async () => {
     fakeApi(routes(blocked));
     renderWithProviders(<TaskPage workItemId={blocked.id} />);

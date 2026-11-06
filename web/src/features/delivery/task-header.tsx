@@ -73,6 +73,9 @@ export function TaskHeader({
       {place !== null && (
         <p className="text-sm text-muted-foreground">{place}</p>
       )}
+      {task.merge_auto === true && task.stage === "merge" && (
+        <p className="text-sm text-muted-foreground">{t("task.mergesAuto")}</p>
+      )}
       {task.state === "awaiting_start" && (
         <p className="text-sm text-muted-foreground">
           {t("task.awaitingStart")}

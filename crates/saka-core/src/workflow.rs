@@ -127,7 +127,7 @@ impl Workflow {
                     stage(Stage::Dev, Trigger::Auto),
                     stage(Stage::Review, Trigger::Auto),
                     stage(Stage::Fix, Trigger::Auto),
-                    stage(Stage::Merge, Trigger::Manual),
+                    stage(Stage::Merge, Trigger::Auto),
                 ],
             },
             WorkflowPreset::BuildOnly => Workflow {
@@ -279,7 +279,7 @@ mod tests {
                 (Stage::Dev, Trigger::Auto),
                 (Stage::Review, Trigger::Auto),
                 (Stage::Fix, Trigger::Auto),
-                (Stage::Merge, Trigger::Manual),
+                (Stage::Merge, Trigger::Auto),
             ]
         );
         let build = Workflow::of(WorkflowPreset::BuildOnly);

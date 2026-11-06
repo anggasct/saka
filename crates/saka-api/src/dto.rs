@@ -825,6 +825,9 @@ pub struct WorkItem {
     /// `strict | standard | autonomous`: the level in force for the task's repo, the lowest of the
     /// operator's ceiling and what `saka.toml` asks for. `null` in the answer to an action.
     pub autonomy: Option<String>,
+    /// `true` when Saka will request the merge itself once review and checks pass: autonomy
+    /// `autonomous`, trigger `merge = "auto"`, and a review stage. `null` in the answer to an action.
+    pub merge_auto: Option<bool>,
     pub change_request: Option<ChangeRequest>,
     /// The docs pull request in the workspace repo, for a task in another repo; `null` when none
     /// was opened. Gates and merge readiness never read it.
@@ -1132,11 +1135,12 @@ impl WorkItem {
         )
         .merging(v.merges)
         .queued(v.merge_queue.as_ref())
-        .levelled(v.autonomy)
+        .levelled(v.autonomy, v.merge_auto)
     }
 
-    fn levelled(mut self, autonomy: saka_core::vocab::Autonomy) -> WorkItem {
+    fn levelled(mut self, autonomy: saka_core::vocab::Autonomy, merge_auto: bool) -> WorkItem {
         self.autonomy = Some(autonomy.as_str().to_string());
+        self.merge_auto = Some(merge_auto);
         self
     }
 
@@ -1183,6 +1187,7 @@ impl WorkItem {
             waiting_on: waiting_on.iter().map(WaitingOn::from).collect(),
             merge_queue: None,
             autonomy: None,
+            merge_auto: None,
             change_request: t.change_request.as_ref().map(|c| ChangeRequest {
                 id: c.id.0,
                 number: c.number,
@@ -1311,7 +1316,7 @@ impl WorkItemDetail {
             )
             .merging(d.merges)
             .queued(d.merge_queue.as_ref())
-            .levelled(d.autonomy),
+            .levelled(d.autonomy, d.merge_auto),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
             reviews: {
                 let mut all: Vec<&saka_core::model::Review> = d.task.reviews.iter().collect();

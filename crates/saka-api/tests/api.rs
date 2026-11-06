@@ -561,8 +561,10 @@ fn a_repo_shows_what_the_operator_allows_what_its_file_asks_and_the_level_in_for
     let id = api.sim.task(1).item.id.0;
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
     assert_eq!(detail.body["autonomy"], "autonomous");
+    assert_eq!(detail.body["merge_auto"], true);
     let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
     assert_eq!(listed.body["items"][0]["autonomy"], "autonomous");
+    assert_eq!(listed.body["items"][0]["merge_auto"], true);
 }
 
 #[test]

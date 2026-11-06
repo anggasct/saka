@@ -330,6 +330,7 @@
   "task.start.description": "Repo ini meminta persetujuan Anda sebelum tiap step. Saka menyiapkan environment dan agent mulai begitu ada slot kosong.",
   "task.start.submit": "Mulai step",
   "task.awaitingStart": "Menunggu Anda memulai step ini.",
+  "task.mergesAuto": "Saka akan merge sendiri begitu review menyetujui dan pemeriksaan lulus.",
   "task.review.trigger": "Review",
   "task.review.title": "Review",
   "task.review.description": "Saka mengantre review pull request di head-nya saat ini. Reviewer mengambilnya begitu siap.",

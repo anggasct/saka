@@ -6168,6 +6168,13 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "merge_auto": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "`true` when Saka will request the merge itself once review and checks pass: autonomy\n`autonomous`, trigger `merge = \"auto\"`, and a review stage. `null` in the answer to an action."
+                },
                 "merge_queue": {
                   "oneOf": [
                     {
@@ -9138,6 +9145,13 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "merge_auto": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` when Saka will request the merge itself once review and checks pass: autonomy\n`autonomous`, trigger `merge = \"auto\"`, and a review stage. `null` in the answer to an action."
           },
           "merge_queue": {
             "oneOf": [
