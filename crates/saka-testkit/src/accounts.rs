@@ -77,9 +77,6 @@ struct State {
     pat_repo_denials: BTreeMap<String, u16>,
 }
 
-// The user-account side of a fake GitHub: device authorizations a test approves, denies, slows
-// down, or lets expire, single-use refresh tokens that rotate, and a log of the credential
-// each call carried.
 #[derive(Debug)]
 pub struct FakeAccounts {
     clock: Arc<FakeClock>,
@@ -179,7 +176,6 @@ impl FakeAccounts {
         self.state().pull_denial = status;
     }
 
-    // A fine-grained token owned by the current user, live until revoked.
     pub fn issue_pat(&self, expires_at: Option<Timestamp>) -> String {
         let mut s = self.state();
         s.next += 1;
@@ -357,7 +353,6 @@ impl FakeAccounts {
         if !s.live_refresh.remove(refresh_token.expose()) {
             return Ok(TokenRefresh::Rejected);
         }
-        // Using a refresh token ends the access token issued with it.
         if let Some(old) = s.access_of.remove(refresh_token.expose()) {
             s.live_access.remove(&old);
         }

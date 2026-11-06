@@ -577,7 +577,6 @@ impl FakeWorld {
         self.state().draft_turns = turns.into();
     }
 
-    // Each committing agent turn applies the next edit list; the last list repeats.
     pub fn script_edits(&self, turns: Vec<Vec<FileEdit>>) {
         self.state().agent_edits = turns.into();
     }
@@ -1251,7 +1250,6 @@ impl State {
                     | AgentOutcome::NoCommit
             );
         if drafting {
-            // The last scripted turn repeats, so a script of one turn covers every turn.
             let next = if self.draft_turns.len() > 1 {
                 self.draft_turns.pop_front()
             } else {
@@ -3277,8 +3275,6 @@ impl ReleaseIndex for FakeWorld {
     }
 }
 
-// Not encryption: the AAD followed by the value XOR a constant, so a row moved to another
-// scope fails to open and the plain value never lands in the database.
 impl SecretStore for FakeWorld {
     fn seal(&self, scope: &SecretScope<'_>, value: &SecretText) -> PortResult<Sealed> {
         let mut ciphertext = scope.aad();

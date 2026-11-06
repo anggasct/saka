@@ -422,8 +422,6 @@ impl Engine {
         Ok(self.store.read(|c| rows::project_authorship(c, id))?)
     }
 
-    // A token that cannot be opened (another key) is as good as refused: it is marked so the
-    // operator stores it again.
     pub(crate) fn open_user_token(&self, id: ProjectId) -> Result<Option<OpenedToken>> {
         let Some(row) = self.store.read(|c| rows::project_authorship_row(c, id))? else {
             return Ok(None);

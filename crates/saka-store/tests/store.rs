@@ -880,7 +880,7 @@ fn a_failing_projection_write_leaves_nothing_behind() {
     let jobs_before = count(&w.store, "job");
 
     let mut broken = tasks[0].clone();
-    broken.item.version = 0; // violates CHECK (version >= 1)
+    broken.item.version = 0;
     let mut batch = Batch::new(w.now);
     batch.events.push(record(
         &Event::WorkItemAdmitted {

@@ -912,7 +912,6 @@ impl Engine {
             .iter()
             .any(|e| matches!(e, Event::SessionSteered { .. }));
         if steering && !steered {
-            // The turn budget ran out: the run has stopped and the steer was not sent.
             return Err(EngineError::Rejected(Rejection::InvalidState {
                 state: "idle".into(),
             }));

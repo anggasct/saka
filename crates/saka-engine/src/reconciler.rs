@@ -125,7 +125,6 @@ impl Engine {
             self.push_job(&mut jobs, job, project, &cause);
         }
         if !jobs.jobs.is_empty() {
-            // Jobs that already exist keep their row: keys are unique.
             self.store.commit(&jobs)?;
         }
         Ok(report)

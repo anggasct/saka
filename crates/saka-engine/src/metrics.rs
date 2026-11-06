@@ -636,7 +636,6 @@ impl Engine {
             .store
             .read(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?))
             .is_ok();
-        // The store migrates when it opens, so an engine always has a migrated store.
         let migrations = self.store.schema_version().ok().flatten().is_some();
         Readiness {
             db,

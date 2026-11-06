@@ -124,7 +124,6 @@ pub(crate) enum Refusal {
 }
 
 impl Refusal {
-    // Outside environment preparation a refusal has no blocker of its own; the job fails with it.
     pub(crate) fn into_error(self) -> PortError {
         match self {
             Refusal::Block(code, params) => PortError::permanent(code.as_str(), params),
@@ -685,7 +684,6 @@ impl Engine {
         self.bound(task).map(|(_, binding)| binding.base_branch)
     }
 
-    // A task in another repo than the workspace reads the project folder at its spec's commit.
     fn docs_request(
         &self,
         task: &Task,
@@ -699,7 +697,6 @@ impl Engine {
             return Ok(None);
         }
         let pinned = self.pinned(task).map_err(internal)?;
-        // A docs change already pushed is where the next checkout continues.
         let start = task.docs_change.as_ref().map_or_else(
             || pinned.source_commit().to_string(),
             |c| c.head_sha.clone(),
@@ -761,7 +758,6 @@ impl Engine {
             .map(|(project, binding)| project.effective_scope(&binding))
     }
 
-    // The scope is read at use time, so a reload applies to the next check of a running task.
     async fn scope_violation(
         &self,
         task: &Task,
@@ -983,7 +979,6 @@ impl Engine {
         if !current || task.ready_environment().is_some() {
             return Ok(Effect::Skipped);
         }
-        // One environment per stage run: a repeated job finds the one it made.
         let environment_id = EnvironmentId(run.0);
         let repo = self.repo_ref(task)?;
         let prepared = self
@@ -1090,7 +1085,6 @@ impl Engine {
                     .await;
             }
         };
-        // Checked before any download or command, so a missing secret costs nothing to report.
         env.secrets = match self.recipe_secrets(task.item.project_id, &recipe) {
             Ok(s) => s,
             Err(Refusal::Block(code, params)) => {
@@ -1187,7 +1181,6 @@ impl Engine {
         {
             return Ok(Effect::Skipped);
         }
-        // One start job per session: a repeated start replaces the runner it left behind.
         let session_id = match &task.session {
             Some(previous) if previous.owner.stage_run_id() == Some(run) => SessionId(job),
             _ => SessionId(run.0),
@@ -1262,8 +1255,6 @@ impl Engine {
         })))
     }
 
-    // The worktree follows the head the task knows when the operator pushed from elsewhere; commits
-    // that are not on the remote branch, or uncommitted work, are left alone.
     async fn align_branch(
         &self,
         task: &Task,
@@ -1537,7 +1528,6 @@ impl Engine {
             .map_err(Refusal::into_error)?;
         let base = env.base_sha.clone().unwrap_or_default();
         let mut worktree = self.ports.env.inspect(&env_ref, &base).await?;
-        // A head the operator pushed is not in the worktree; a dirty one is never overwritten.
         if in_sync || (!worktree.dirty && worktree.head_sha != head) {
             self.ports.env.check_out(&env_ref, &head).await?;
             worktree = self.ports.env.inspect(&env_ref, &base).await?;
@@ -1705,13 +1695,11 @@ impl Engine {
         };
         match snapshot.state {
             ChangeState::Merged | ChangeState::Closed => return observed(snapshot),
-            // A head pushed from outside is recorded first; the merge then names that head.
             ChangeState::Open if snapshot.head_sha != change.head_sha => return observed(snapshot),
             ChangeState::Open => {}
         }
         let head_sha = change.head_sha.clone();
         let base = format!("refs/remotes/origin/{}", change.base_branch);
-        // The docs folder bounds what may be merged; without it nothing is merged.
         let Some(docs) = docs else {
             return Err(PortError::permanent("docs_checkout_missing", json!({})));
         };
@@ -1816,7 +1804,6 @@ impl Engine {
                 }));
             }
         };
-        // One change request per task: a repeated job records the same id.
         Ok(Effect::Fact(TaskInput::ChangeOpened {
             role: ChangeRole::Code,
             change_request_id: ChangeRequestId(task.item.id.0),
@@ -1865,7 +1852,6 @@ impl Engine {
                 }));
             }
         };
-        // The job id is stable across its retries; a repeated fact is dropped by the decider.
         Ok(Effect::Fact(TaskInput::ChangeOpened {
             role: ChangeRole::Docs,
             change_request_id: ChangeRequestId(job),
@@ -2371,7 +2357,6 @@ impl Engine {
         else {
             return Ok(Effect::Skipped);
         };
-        // Teardown is best effort: a secret removed since setup only leaves its commands without it.
         let env_ref = match self.env_ref_with_secrets(task, env) {
             Ok(r) => r,
             Err(Refusal::Fail(e)) if e.retryable => return Err(e),
