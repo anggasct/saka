@@ -14,7 +14,7 @@ use crate::ids::{
 use crate::job::{JobKind, exhausted_code};
 use crate::model::{
     Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, ExternalChange, GateResult, Retries,
-    Review, ReviewPosted, RunOwner, StageRun, Task, Usage, WorkItem,
+    Review, ReviewPosted, RunOwner, Session, StageRun, Task, Usage, WorkItem,
 };
 use crate::rejection::Rejection;
 use crate::review;
@@ -27,7 +27,7 @@ use crate::vocab::{
     BlockerAction, BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
     EnvironmentState, ExternalCause, GateOutcome, GateSource, HookRunState, MergeMethod,
     ResumeCause, ResumeTrigger, ReviewBasis, ReviewEvent, ReviewOutcome, ScopeStage, SessionState,
-    Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    Severity, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -50,6 +50,7 @@ pub struct LoopConfig {
 pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
 pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
+pub const VERDICT_FAILED_FINDINGS: usize = 20;
 pub const MERGED_ON_HOST: &str = "change merged on the host";
 pub const QUEUE_REASON: &str = "merge queue";
 const MAX_CONFLICT_PATHS: usize = 20;
@@ -525,7 +526,7 @@ pub fn decide(
             review_id,
             event,
             url,
-        } => d.review_posted(review_id, event, url),
+        } => d.review_posted(review_id, event, url, ctx),
     })
 }
 
@@ -1066,11 +1067,67 @@ impl Decider<'_> {
         events
     }
 
+    // A task of ours moves on from its posted verdict: an approval opens the merge at the head it
+    // judged, anything else sends the work back.
+    fn own_review_settled(
+        &self,
+        run: &StageRun,
+        review_id: ReviewId,
+        mut events: Vec<Event>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(review) = self.task.reviews.iter().find(|r| r.id == review_id) else {
+            return vec![];
+        };
+        match review.outcome {
+            ReviewOutcome::Approved => {
+                events.push(Event::StageRunSucceeded {
+                    work_item_id: self.item().id,
+                    stage_run_id: run.id,
+                    head_sha: run.head_sha.clone(),
+                });
+                let mut merge = self.new_run(
+                    Stage::Merge,
+                    Trigger::Auto,
+                    StagePhase::AwaitingMerge,
+                    None,
+                    None,
+                    ctx,
+                );
+                if let Event::StageRunCreated { head_sha, .. } = &mut merge {
+                    head_sha.clone_from(&run.head_sha);
+                }
+                events.push(merge);
+            }
+            ReviewOutcome::ChangesRequested => {
+                let blocking: Vec<&review::Finding> = review
+                    .findings
+                    .iter()
+                    .filter(|f| matches!(f.severity, Severity::Blocker | Severity::Major))
+                    .take(VERDICT_FAILED_FINDINGS)
+                    .collect();
+                events.extend(self.block(
+                    BlockerCode::VerdictFailed,
+                    json!({
+                        "head_sha": review.head_sha,
+                        "findings": review.findings.len(),
+                        "summary": review.summary,
+                        "blocking": blocking,
+                    }),
+                    ctx,
+                ));
+            }
+            ReviewOutcome::SpecUnclear => return vec![],
+        }
+        events
+    }
+
     fn review_posted(
         &self,
         review_id: ReviewId,
         event: ReviewEvent,
         url: Option<String>,
+        ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let (Some(run), true) = (
             &self.task.stage_run,
@@ -1091,6 +1148,9 @@ impl Decider<'_> {
             event,
             url,
         }];
+        if self.task.item.origin == WorkItemOrigin::SpecStep {
+            return self.own_review_settled(run, review_id, events, ctx);
+        }
         events.extend(self.phase(StagePhase::Reviewed, None));
         events.push(Event::StageRunSucceeded {
             work_item_id: self.item().id,
@@ -1293,6 +1353,7 @@ impl Decider<'_> {
             Verdict::Passed if self.task.is_queued() && !head_changed => {
                 self.queued_merge(head_sha, true)
             }
+            Verdict::Passed if self.needs_review(head_sha) => self.request_review(head_sha, ctx),
             Verdict::Passed if !awaiting_merge || head_changed => {
                 self.phase(StagePhase::AwaitingMerge, Some(head_sha.to_string()))
             }
@@ -1302,6 +1363,39 @@ impl Decider<'_> {
             }
             Verdict::Pending => vec![],
         }
+    }
+
+    fn needs_review(&self, head_sha: &str) -> bool {
+        self.task.has_review_stage() && !self.task.approved_at(head_sha)
+    }
+
+    fn request_review(&self, head_sha: &str, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Some(run) = &self.task.stage_run else {
+            return vec![];
+        };
+        let mut request = self.new_run(
+            Stage::Review,
+            Trigger::Auto,
+            StagePhase::AwaitingReview,
+            None,
+            None,
+            ctx,
+        );
+        if let Event::StageRunCreated {
+            head_sha: head @ None,
+            ..
+        } = &mut request
+        {
+            *head = Some(head_sha.to_string());
+        }
+        vec![
+            Event::StageRunSucceeded {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                head_sha: Some(head_sha.to_string()),
+            },
+            request,
+        ]
     }
 
     fn proven(&self) -> bool {
@@ -1692,6 +1786,7 @@ impl Decider<'_> {
                 (ChangeState::Merged, Some(sha)) if watches_change(self.task) => {
                     self.merged_elsewhere(sha, merged_at, ctx)
                 }
+                (ChangeState::Closed, _) if self.reviewing_ours() => self.closed_in_review(ctx),
                 (ChangeState::Open, _) if head_sha != cr.head_sha => self.head_moved(head_sha, ctx),
                 _ => vec![],
             };
@@ -1768,6 +1863,30 @@ impl Decider<'_> {
         events
     }
 
+    fn reviewing_ours(&self) -> bool {
+        self.task.item.origin == WorkItemOrigin::SpecStep
+            && self.item().state == WorkItemState::InStage
+            && self.item().stage == Some(Stage::Review)
+    }
+
+    fn closed_in_review(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Some(cr) = &self.task.change_request else {
+            return vec![];
+        };
+        let mut events = vec![Event::ChangeRequestClosed {
+            work_item_id: self.item().id,
+            change_request_id: cr.id,
+            role: ChangeRole::Code,
+        }];
+        events.extend(self.end_session(SessionState::Ended, "change_closed", json!({})));
+        events.extend(self.block(
+            BlockerCode::ChangeClosed,
+            json!({ "number": cr.number }),
+            ctx,
+        ));
+        events
+    }
+
     // A head Saka did not push: while the agent works on `dev` it stops, anywhere else the head is
     // only recorded so the next push lease and gate use it.
     fn head_moved(&self, head_sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -1783,7 +1902,25 @@ impl Decider<'_> {
             role: ChangeRole::Code,
             head_sha: head_sha.clone(),
         }];
-        if self.task.is_at_stage(Stage::Dev) {
+        if self.reviewing_ours() {
+            // The verdict in flight judges a head that is gone: drop it and let CI look at the new one.
+            events.extend(self.end_session(SessionState::Ended, "head_moved", json!({})));
+            if matches!(run.state, StageRunState::Pending | StageRunState::Running) {
+                events.push(Event::StageRunCancelled {
+                    work_item_id: self.item().id,
+                    stage_run_id: run.id,
+                    reason: "head_moved".to_string(),
+                });
+            }
+            events.push(self.new_run(
+                Stage::Merge,
+                Trigger::Auto,
+                StagePhase::AwaitingCi,
+                None,
+                None,
+                ctx,
+            ));
+        } else if self.task.is_at_stage(Stage::Dev) {
             events.extend(self.end_session(SessionState::Ended, "branch_moved", json!({})));
             events.extend(self.block(
                 BlockerCode::BranchMoved,
@@ -2051,6 +2188,16 @@ impl Decider<'_> {
             });
         }
         events.extend(self.end_session(SessionState::Ended, "change_merged", json!({})));
+        if let Some(run) = self.task.stage_run.as_ref().filter(|r| {
+            r.stage == Stage::Review
+                && matches!(r.state, StageRunState::Pending | StageRunState::Running)
+        }) {
+            events.push(Event::StageRunCancelled {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                reason: "change_merged".to_string(),
+            });
+        }
         events.push(Event::ChangeRequestMerged {
             work_item_id: self.item().id,
             change_request_id: cr.id,
@@ -2530,6 +2677,7 @@ impl Decider<'_> {
         let last = self.task.stage_run.as_ref().map(|r| r.stage);
         let stage = stage.unwrap_or(match last {
             Some(stage) if RETURN_STAGES.contains(&stage) => stage,
+            Some(Stage::Review) => Stage::Merge,
             _ => Stage::Dev,
         });
         let env_ready = self.task.ready_environment().is_some();
@@ -2604,6 +2752,7 @@ pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(S
         | B::BudgetExhausted
         | B::QuotaExhausted
         | B::SpecUnclear => Some((Stage::Review, StagePhase::AwaitingReview)),
+        B::VerdictFailed => Some((Stage::Dev, StagePhase::RunningSession)),
         B::ScmUnavailable
             if params.get("phase").and_then(Value::as_str) == Some("posting_review") =>
         {
@@ -2642,6 +2791,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         }
         B::UserAccessDenied => (Stage::Dev, StagePhase::OpeningChange),
         B::SpecUnclear => (Stage::Review, StagePhase::AwaitingReview),
+        B::VerdictFailed => (Stage::Dev, StagePhase::RunningSession),
         B::CiRed if params.get("reason").and_then(Value::as_str) == Some("runner_failed") => {
             (Stage::Merge, StagePhase::AwaitingCi)
         }
@@ -2929,12 +3079,17 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             });
             t.attempts.insert(*stage, *attempt);
             let merged_head = t.change_request.as_ref().map(|c| c.head_sha.clone());
-            if *stage == Stage::Sync {
-                t.gates.retain(|g| {
+            match (*stage, *entry_phase) {
+                (Stage::Sync, _) => t.gates.retain(|g| {
                     Some(g.stage_run_id) == retired && Some(&g.head_sha) == merged_head.as_ref()
-                });
-            } else {
-                t.gates.clear();
+                }),
+                // The review judges the head the gates passed on, and the merge that follows it
+                // needs those gates unchanged.
+                (Stage::Review, _) | (Stage::Merge, StagePhase::AwaitingMerge) => {
+                    t.gates
+                        .retain(|g| Some(&g.head_sha) == merged_head.as_ref());
+                }
+                _ => t.gates.clear(),
             }
             if queued {
                 set_place(
@@ -3317,6 +3472,17 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
     }
 }
 
+pub fn merge_ready(task: &Task) -> bool {
+    let reviewed = task
+        .change_request
+        .as_ref()
+        .is_some_and(|cr| !task.has_review_stage() || task.approved_at(&cr.head_sha));
+    task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+        && gates_clear(task)
+        && reviewed
+        && !task.is_queued()
+}
+
 pub fn gates_clear(task: &Task) -> bool {
     let Some(cr) = &task.change_request else {
         return false;
@@ -3338,10 +3504,6 @@ pub fn can_retry(task: &Task) -> bool {
                 task.retries.get(&stage).map_or(0, |r| r.manual) < MANUAL_RETRY_LIMIT
             })
         })
-}
-
-pub fn merge_ready(task: &Task) -> bool {
-    task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(task) && !task.is_queued()
 }
 
 pub fn available_actions(task: &Task) -> Vec<&'static str> {
@@ -3477,6 +3639,7 @@ pub fn watches_change(task: &Task) -> bool {
         WorkItemState::Blocked => true,
         WorkItemState::InStage => {
             task.item.stage == Some(Stage::Dev)
+                || task.item.stage == Some(Stage::Review)
                 || task.is_at(Stage::Merge, StagePhase::AwaitingCi)
                 || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
                 || task.is_at(Stage::Merge, StagePhase::Queued)
@@ -3513,10 +3676,15 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
     };
     let reviewing = run.stage == Stage::Review;
     // A reviewer never inherits another run's conversation: only its own session is visible.
-    let session = task
-        .session
-        .as_ref()
-        .filter(|s| !reviewing || s.owner == owner);
+    let session = if reviewing {
+        task.session.as_ref().filter(|s| s.owner == owner)
+    } else {
+        // And the agent that wrote the change never resumes the reviewer's conversation.
+        std::iter::once(task.session.as_ref())
+            .flatten()
+            .chain(task.retired_sessions.iter().rev())
+            .find(|s| !reviewer_session(task, s))
+    };
     Some(RunView {
         owner,
         project_id: task.item.project_id,
@@ -3543,6 +3711,16 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
             }
         },
     })
+}
+
+fn reviewer_session(task: &Task, session: &Session) -> bool {
+    let Some(run_id) = session.owner.stage_run_id() else {
+        return false;
+    };
+    task.stage_run
+        .iter()
+        .chain(task.retired_runs.iter())
+        .any(|r| r.id == run_id && r.stage == Stage::Review)
 }
 
 pub fn merge_status(reason: &str) -> u16 {

@@ -291,6 +291,7 @@ fn strings(value: Option<&Value>) -> Vec<String> {
 pub(crate) fn retry_text(retry_of: &Coded) -> Option<String> {
     match retry_of.code.as_str() {
         "ci_red" => ci_failure(retry_of),
+        "verdict_failed" => verdict_rejection(retry_of),
         "path_scope_violation" => {
             let params = &retry_of.params;
             let count = params
@@ -342,6 +343,44 @@ fn merge_conflict(params: &Value) -> Option<String> {
         )),
         _ => None,
     }
+}
+
+const VERDICT_TEXT_MAX: usize = 4000;
+
+fn verdict_rejection(retry_of: &Coded) -> Option<String> {
+    let params = &retry_of.params;
+    let head = params
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("the head");
+    let summary = params.get("summary").and_then(Value::as_str)?;
+    let mut text =
+        format!("An independent review rejected {head}: {summary}\n\nFindings to fix:\n");
+    if let Some(Value::Array(items)) = params.get("blocking") {
+        for item in items {
+            let place = match (
+                item.get("path").and_then(Value::as_str),
+                item.get("line").and_then(Value::as_u64),
+            ) {
+                (Some(path), Some(line)) => format!(" {path}:{line}"),
+                (Some(path), None) => format!(" {path}"),
+                _ => String::new(),
+            };
+            let severity = item
+                .get("severity")
+                .and_then(Value::as_str)
+                .unwrap_or("major");
+            let body = item.get("body").and_then(Value::as_str).unwrap_or_default();
+            text.push_str(&format!("- [{severity}]{place}: {body}\n"));
+        }
+    }
+    let cut = (0..=VERDICT_TEXT_MAX.min(text.len()))
+        .rev()
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(0);
+    text.truncate(cut);
+    text.push_str("\nFix them, run the Done when commands again, and commit. Do not push.");
+    Some(text)
 }
 
 fn ci_failure(retry_of: &Coded) -> Option<String> {
@@ -427,6 +466,30 @@ mod tests {
                 .unwrap()
                 .contains("`make e2e` failed (timed out)")
         );
+    }
+
+    #[test]
+    fn a_rejected_verdict_sends_its_blocking_findings_back_to_the_agent() {
+        let retry = Coded {
+            code: "verdict_failed".into(),
+            params: serde_json::json!({
+                "head_sha": "abc", "findings": 2, "summary": "The loop never backs off.",
+                "blocking": [
+                    { "path": "src/poll.rs", "line": 42, "severity": "major", "body": "Add a delay." },
+                    { "path": null, "line": null, "severity": "blocker", "body": "No test." },
+                ],
+            }),
+        };
+        let text = retry_text(&retry).unwrap();
+        assert!(text.contains("rejected abc: The loop never backs off."));
+        assert!(text.contains("- [major] src/poll.rs:42: Add a delay."));
+        assert!(text.contains("- [blocker]: No test."));
+        assert!(text.ends_with("commit. Do not push."));
+        let huge = Coded {
+            code: "verdict_failed".into(),
+            params: serde_json::json!({ "summary": "x".repeat(9000) }),
+        };
+        assert!(retry_text(&huge).unwrap().len() < 4200);
     }
 
     #[test]

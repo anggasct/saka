@@ -22,7 +22,7 @@ fn gate_hook(name: &str, mode: &str) -> RawHook {
 fn sim(hooks: Vec<RawHook>) -> Sim {
     Sim::new(SimConfig {
         hooks: hook::parse_all(&hooks).unwrap(),
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     })
 }
 

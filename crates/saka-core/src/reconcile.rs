@@ -58,6 +58,16 @@ fn review_waiting(task: &Task) -> Option<Timestamp> {
     .then_some(run.created_at)
 }
 
+fn own_review_waiting(task: &Task) -> bool {
+    task.item.origin == WorkItemOrigin::SpecStep
+        && task.is_at(Stage::Review, StagePhase::AwaitingReview)
+        && task
+            .stage_run
+            .as_ref()
+            .is_some_and(|r| r.stage == Stage::Review && r.state == StageRunState::Pending)
+        && task.ready_environment().is_some()
+}
+
 pub fn free_port_blocks(snapshot: &Snapshot) -> Option<usize> {
     let held = snapshot
         .tasks
@@ -178,6 +188,10 @@ pub fn reconcile(
         waiting_reviews.sort();
         for (_, id) in waiting_reviews.into_iter().take(free) {
             actions.push(Action::Decide(id, TaskInput::StartReview));
+        }
+        // A task of ours already holds its slot, so its review never waits for one.
+        for task in tasks.iter().filter(|t| own_review_waiting(t)) {
+            actions.push(Action::Decide(task.item.id, TaskInput::StartReview));
         }
     }
 

@@ -21,7 +21,7 @@ fn sim(agent: AgentScript) -> Sim {
             retry: vec![],
             answer: Some(true),
         },
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     });
     sim.approve();
     sim
@@ -196,7 +196,7 @@ fn budgeted(agent: AgentScript, budget: Budget, retry: Vec<BlockerCode>) -> Sim 
             retry,
             answer: Some(true),
         },
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     };
     cfg.loop_cfg.budgets.insert(Stage::Dev, budget);
     let mut sim = Sim::new(cfg);

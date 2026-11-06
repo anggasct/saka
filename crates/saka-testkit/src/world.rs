@@ -2753,7 +2753,7 @@ impl Agents for FakeWorld {
         fs.open_turn = Some(turn);
         fs.current_turn = turn;
         let first = turn == 1;
-        let ask_now = ask.filter(|_| !fs.asked);
+        let ask_now = ask.filter(|_| !fs.asked && !fs.reviewer);
         if ask_now.is_some() {
             fs.asked = true;
             fs.waiting_turn = Some(turn);

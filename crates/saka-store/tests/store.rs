@@ -119,7 +119,7 @@ impl World {
             base_branch: "main".into(),
             config_commit: "a".repeat(40),
             config_sha256: format!("sha256:{}", "0".repeat(64)),
-            workflow: saka_core::workflow::Workflow::default(),
+            workflow: without_review(),
             repos: vec![ProjectRepo {
                 repo_id,
                 name: "app".into(),
@@ -290,11 +290,13 @@ impl World {
         batch.tasks.push(after.clone());
         self.store.commit(&batch).unwrap();
 
-        let stored = self
+        let mut stored = self
             .store
             .read(|c| read::load_task(c, id))
             .unwrap()
             .unwrap();
+        stored.retired_sessions.clear();
+        stored.retired_runs.clear();
         let mut expected = after;
         expected.retired_runs.clear();
         expected.retired_sessions.clear();
@@ -1779,4 +1781,13 @@ fn diagnostics_read_the_last_received_webhook_and_the_latest_authorization() {
             .unwrap()
             .is_none()
     );
+}
+
+fn without_review() -> saka_core::workflow::Workflow {
+    use saka_core::vocab::{Stage, Trigger, WorkflowPreset};
+    let mut workflow = saka_core::workflow::Workflow::of(WorkflowPreset::Custom);
+    workflow.spec = true;
+    workflow.set_stage(Stage::Dev, Trigger::Auto);
+    workflow.set_stage(Stage::Merge, Trigger::Manual);
+    workflow
 }

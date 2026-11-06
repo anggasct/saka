@@ -104,6 +104,8 @@ export function blockerText(
     limit: text(params.limit),
     tool: text(params.tool),
     summary: text(params.summary),
+    summary_known: text(params.summary) !== "" ? "yes" : "no",
+    findings: number(params.findings),
     account: text(params.account),
     window: text(params.window),
     resets:

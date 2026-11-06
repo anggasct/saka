@@ -297,6 +297,15 @@ function hookFailures(): [string, Record<string, unknown>][] {
 
 const VARIANTS: [string, Record<string, unknown>][] = [
   ["verdict_failed", {}],
+  [
+    "verdict_failed",
+    {
+      head_sha: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0",
+      findings: 2,
+      summary: "The loop never backs off.",
+    },
+  ],
+  ["verdict_failed", { head_sha: "a1b2c3d4e5f6", findings: 1 }],
   ["review_rounds_exhausted", {}],
   ["spec_unclear", {}],
   [

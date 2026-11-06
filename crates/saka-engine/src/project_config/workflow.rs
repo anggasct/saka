@@ -166,7 +166,8 @@ fn stages(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<DeValu
             continue;
         };
         let unsupported = (*stage == Stage::Merge && t == Trigger::Auto)
-            || (*stage == Stage::Dev && t == Trigger::Manual);
+            || (*stage == Stage::Dev && t == Trigger::Manual)
+            || (*stage == Stage::Review && t == Trigger::Manual && workflow.spec);
         if !preset_stage_allowed(workflow.preset, *stage) {
             c.push("workflow_stage_not_allowed", &field, at);
         } else if unsupported {
@@ -346,8 +347,8 @@ fix = "manual"
 
     #[test]
     fn full_loop_adjusts_triggers_and_build_only_takes_none() {
-        let w = config("[workflow]\n[workflow.stages]\nreview = \"manual\"\n").unwrap();
-        assert_eq!(w.stage_trigger(Stage::Review), Some(Trigger::Manual));
+        let w = config("[workflow]\n[workflow.stages]\nfix = \"manual\"\n").unwrap();
+        assert_eq!(w.stage_trigger(Stage::Fix), Some(Trigger::Manual));
         assert_eq!(w.stage_trigger(Stage::Merge), Some(Trigger::Manual));
         assert_eq!(
             issues("[workflow]\npreset = \"build_only\"\n[workflow.stages]\nreview = \"auto\"\n"),
@@ -403,6 +404,25 @@ fix = "manual"
                 12
             )]
         );
+    }
+
+    #[test]
+    fn a_manual_review_is_refused_while_specs_are_an_entry_but_fine_for_outside_changes() {
+        assert_eq!(
+            issues(
+                "[workflow]\npreset = \"custom\"\nspec = true\n[workflow.stages]\ndev = \"auto\"\nreview = \"manual\"\n"
+            ),
+            [(
+                "workflow_trigger_unsupported",
+                "workflow.stages.review".into(),
+                13
+            )]
+        );
+        let outside = config(
+            "[workflow]\npreset = \"review_only\"\n[workflow.stages]\nreview = \"manual\"\n",
+        )
+        .unwrap();
+        assert_eq!(outside.stage_trigger(Stage::Review), Some(Trigger::Manual));
     }
 
     #[test]

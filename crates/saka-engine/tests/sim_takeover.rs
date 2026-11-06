@@ -92,7 +92,7 @@ fn a_task_taken_over_during_dev_returns_to_the_loop_and_ships() {
 
 #[test]
 fn a_head_pushed_by_hand_during_takeover_is_gated_and_merged_after_returning_to_merge() {
-    let mut sim = Sim::new(SimConfig::default());
+    let mut sim = Sim::new(SimConfig::without_review());
     sim.approve();
     assert!(sim.run_until(STEPS, |s| {
         s.task(1).is_at(Stage::Merge, StagePhase::AwaitingCi)

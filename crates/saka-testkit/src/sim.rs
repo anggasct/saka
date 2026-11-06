@@ -84,6 +84,16 @@ pub struct SimConfig {
     pub config_poll_secs: u32,
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
+    pub workflow: saka_core::workflow::Workflow,
+}
+
+pub fn without_review() -> saka_core::workflow::Workflow {
+    use saka_core::vocab::{Stage, Trigger, WorkflowPreset};
+    let mut workflow = saka_core::workflow::Workflow::of(WorkflowPreset::Custom);
+    workflow.spec = true;
+    workflow.set_stage(Stage::Dev, Trigger::Auto);
+    workflow.set_stage(Stage::Merge, Trigger::Manual);
+    workflow
 }
 
 pub fn draft_config() -> DraftConfig {
@@ -103,6 +113,15 @@ pub fn draft_config() -> DraftConfig {
             rate_limit_pause: 0.9,
             account: "claude:default".into(),
         },
+    }
+}
+
+impl SimConfig {
+    pub fn without_review() -> SimConfig {
+        SimConfig {
+            workflow: without_review(),
+            ..SimConfig::default()
+        }
     }
 }
 
@@ -157,6 +176,7 @@ impl Default for SimConfig {
             config_poll_secs: 0,
             diagnostics: DiagnosticLimits::default(),
             hooks: Vec::new(),
+            workflow: saka_core::workflow::Workflow::default(),
         }
     }
 }
@@ -246,7 +266,7 @@ impl Sim {
                     base_branch: "main".into(),
                     config_commit: sim.world.base_head(),
                     config_sha256: ZERO_SHA256.into(),
-                    workflow: saka_core::workflow::Workflow::default(),
+                    workflow: sim.cfg.workflow.clone(),
                     bindings: vec![NewBinding {
                         repo: home_repo(),
                         name: "app".into(),

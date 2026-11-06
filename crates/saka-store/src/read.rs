@@ -12,7 +12,7 @@ use saka_core::model::{
     WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
-use saka_core::vocab::{ChangeRole, SessionState, Stage, Trigger};
+use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -218,6 +218,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
                 t.stage_run = Some(run);
             } else {
                 previous.entry(run.work_item_id).or_insert(run.id);
+                t.retired_runs.push(run);
             }
         }
     }
@@ -271,6 +272,19 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             t.external = Some(external);
         }
     }
+    for (id, workflow) in rows_of(
+        conn,
+        "SELECT w.id, p.workflow FROM work_item w JOIN project p ON p.id = w.project_id",
+        "w.id",
+        selection,
+        "w.id",
+        b,
+        |row| Ok((WorkItemId(uuid(row, "id")?), json(row, "workflow")?)),
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.workflow = workflow;
+        }
+    }
     for r in rows(
         conn,
         "SELECT * FROM review",
@@ -305,10 +319,15 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         } else {
             t.stage_run.as_ref().map(|r| r.id)
         };
-        if owner != Some(g.stage_run_id) || !seen.insert((g.work_item_id, g.source)) {
+        let merged_head = t.change_request.as_ref().map(|c| c.head_sha.as_str());
+        // A review, and the merge that follows its approval, stand on the gates of the head they judged.
+        let judged = t.stage_run.as_ref().is_some_and(|r| {
+            r.stage == Stage::Review
+                || (r.stage == Stage::Merge && r.entry_phase == StagePhase::AwaitingMerge)
+        }) && merged_head == Some(g.head_sha.as_str());
+        if (owner != Some(g.stage_run_id) && !judged) || !seen.insert((g.work_item_id, g.source)) {
             continue;
         }
-        let merged_head = t.change_request.as_ref().map(|c| c.head_sha.as_str());
         if !carried || merged_head == Some(g.head_sha.as_str()) {
             let at = t.gates.partition_point(|x| x.source < g.source);
             t.gates.insert(at, g);
@@ -371,11 +390,13 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
                     }
                     t.prior_usage.add(s.usage_at(Timestamp(0)));
                 }
-                _ => {}
+                _ => t.retired_sessions.push(s),
             }
         }
     }
     for t in tasks.values_mut() {
+        t.retired_runs.reverse();
+        t.retired_sessions.reverse();
         if let (Some(s), Some(run)) = (&t.session, &mut t.stage_run)
             && s.owner.stage_run_id() == Some(run.id)
             && s.resume_cause == Some(saka_core::vocab::ResumeCause::Lost)

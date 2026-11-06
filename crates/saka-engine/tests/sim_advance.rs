@@ -12,7 +12,7 @@ const STEPS: usize = 8_000;
 fn sim(ci: CiScript) -> Sim {
     let mut cfg = SimConfig {
         ci,
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     };
     cfg.operator.merge = false;
     cfg.operator.retry = vec![];

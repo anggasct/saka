@@ -13,7 +13,7 @@ const SLOW_POLL_MS: i64 = 300_000;
 fn sim() -> Sim {
     let mut cfg = SimConfig {
         ci: CiScript::Silent,
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     };
     cfg.loop_cfg.poll_interval_ms = SLOW_POLL_MS;
     cfg.loop_cfg.ci_appear_timeout_ms = 3_600_000;

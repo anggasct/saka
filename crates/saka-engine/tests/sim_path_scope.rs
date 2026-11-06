@@ -26,7 +26,7 @@ fn shop_scoped(extra: &str) -> Layout {
 fn one_at_a_time() -> SimConfig {
     SimConfig {
         max_active_tasks: 1,
-        ..SimConfig::default()
+        ..SimConfig::without_review()
     }
 }
 
