@@ -796,6 +796,8 @@ pub struct WorkItem {
     pub docs_change_request: Option<DocsChangeRequest>,
     /// What is known about a pull request opened outside Saka; `null` for a task made from a spec step.
     pub external: Option<ExternalChange>,
+    /// The newest reviewer verdict of the task; `null` before any review ran.
+    pub review: Option<ReviewSummary>,
     /// Latest result per gate source for the current change request head, `scm` first.
     pub gates: Vec<Gate>,
     pub blocker: Option<Blocker>,
@@ -828,6 +830,94 @@ pub struct ExternalChange {
     pub cause: String,
     /// The login of who asked for it, or `null` when Saka took it on its own.
     pub actor: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewSummary {
+    pub id: Uuid,
+    /// `approved | changes_requested | spec_unclear`
+    pub outcome: String,
+    /// `step | spec | none`; `none` means the reviewer judged without a spec.
+    pub basis: String,
+    /// The head the verdict judged.
+    pub head_sha: String,
+    /// The verdict judged the head the change request has now.
+    pub current: bool,
+    pub summary: String,
+    pub finding_count: u32,
+    /// Where the review was posted; `null` before it was posted and for `spec_unclear`.
+    pub posted: Option<ReviewPostedInfo>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewPostedInfo {
+    /// `approve | request_changes | comment`
+    pub event: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewFinding {
+    pub path: Option<String>,
+    pub line: Option<u32>,
+    /// `blocker | major | minor | nit`
+    pub severity: String,
+    pub body: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReviewDetail {
+    #[serde(flatten)]
+    pub summary: ReviewSummary,
+    pub findings: Vec<ReviewFinding>,
+    /// What the reviewer could not judge; only for `spec_unclear`.
+    pub questions: Vec<String>,
+}
+
+fn latest_review(t: &Task) -> Option<&saka_core::model::Review> {
+    t.reviews.iter().max_by_key(|r| r.created_at)
+}
+
+impl ReviewSummary {
+    fn of(r: &saka_core::model::Review, t: &Task) -> ReviewSummary {
+        ReviewSummary {
+            id: r.id.0,
+            outcome: r.outcome.as_str().to_string(),
+            basis: r.basis.as_str().to_string(),
+            head_sha: r.head_sha.clone(),
+            current: t
+                .change_request
+                .as_ref()
+                .is_some_and(|c| c.head_sha == r.head_sha),
+            summary: r.summary.clone(),
+            finding_count: u32::try_from(r.findings.len()).unwrap_or(u32::MAX),
+            posted: r.posted.as_ref().map(|p| ReviewPostedInfo {
+                event: p.event.as_str().to_string(),
+                url: p.url.clone(),
+            }),
+            created_at: time(r.created_at),
+        }
+    }
+}
+
+impl ReviewDetail {
+    fn of(r: &saka_core::model::Review, t: &Task) -> ReviewDetail {
+        ReviewDetail {
+            summary: ReviewSummary::of(r, t),
+            findings: r
+                .findings
+                .iter()
+                .map(|f| ReviewFinding {
+                    path: f.path.clone(),
+                    line: f.line,
+                    severity: f.severity.as_str().to_string(),
+                    body: f.body.clone(),
+                })
+                .collect(),
+            questions: r.questions.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1017,6 +1107,7 @@ impl WorkItem {
                 skipped: c.skipped_at.is_some(),
             }),
             external: t.external.as_ref().map(ExternalChange::from),
+            review: latest_review(t).map(|r| ReviewSummary::of(r, t)),
             gates: gates_at_head(t),
             blocker: t
                 .open_blocker()
@@ -1103,6 +1194,8 @@ pub struct WorkItemDetail {
     #[serde(flatten)]
     pub item: WorkItem,
     pub stage_runs: Vec<StageRunItem>,
+    /// Every verdict of the task, newest first.
+    pub reviews: Vec<ReviewDetail>,
 }
 
 impl WorkItemDetail {
@@ -1116,6 +1209,13 @@ impl WorkItemDetail {
             )
             .merging(d.merges),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
+            reviews: {
+                let mut all: Vec<&saka_core::model::Review> = d.task.reviews.iter().collect();
+                all.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+                all.into_iter()
+                    .map(|r| ReviewDetail::of(r, &d.task))
+                    .collect()
+            },
         }
     }
 }

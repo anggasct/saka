@@ -629,6 +629,101 @@ fn wait_for_outside_task(api: &mut Api) {
     assert!(api.sim.run_until(STEPS, |s| !s.all_tasks().is_empty()));
 }
 
+fn reviewed_outside_task(api: &Api) -> bool {
+    api.sim
+        .externals()
+        .iter()
+        .any(|t| t.is_at(Stage::Review, StagePhase::Reviewed))
+}
+
+#[test]
+fn a_verdict_is_shown_with_what_it_judged_and_where_it_was_posted() {
+    let mut api = outside_api("[workflow]\npreset = \"review_only\"\n");
+    api.sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.externals()
+            .iter()
+            .any(|t| t.is_at(Stage::Review, StagePhase::Reviewed))
+    }));
+    assert!(reviewed_outside_task(&api));
+    let project = api.sim.project_id.0;
+    let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
+    let item = &listed.body["items"][0];
+    let review = &item["review"];
+    assert_eq!(review["outcome"], "approved");
+    assert_eq!(review["basis"], "none");
+    assert_eq!(review["current"], true);
+    assert_eq!(review["finding_count"], 0);
+    assert_eq!(review["posted"]["event"], "approve");
+    assert!(
+        review["posted"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("scm.test")
+    );
+    assert_eq!(review["head_sha"], item["change_request"]["head_sha"]);
+    let id = item["id"].as_str().unwrap();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    let reviews = detail.body["reviews"].as_array().unwrap();
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0]["id"], review["id"]);
+    assert_eq!(reviews[0]["findings"], json!([]));
+    assert_eq!(reviews[0]["questions"], json!([]));
+}
+
+#[test]
+fn a_verdict_that_asks_for_changes_lists_its_findings() {
+    let mut api = outside_api("[workflow]\npreset = \"review_only\"\n");
+    api.sim
+        .world
+        .script_reviews(vec![saka_testkit::ReviewReply::request_changes(
+            "The retry loop never backs off.",
+        )]);
+    api.sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.externals()
+            .iter()
+            .any(|t| t.is_at(Stage::Review, StagePhase::Reviewed))
+    }));
+    let project = api.sim.project_id.0;
+    let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
+    let item = &listed.body["items"][0];
+    assert_eq!(item["review"]["outcome"], "changes_requested");
+    assert_eq!(item["review"]["finding_count"], 1);
+    assert_eq!(item["review"]["posted"]["event"], "request_changes");
+    let id = item["id"].as_str().unwrap();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["reviews"][0]["findings"],
+        json!([{
+            "path": "src/lib.rs", "line": 1, "severity": "major",
+            "body": "The retry loop never backs off.",
+        }])
+    );
+}
+
+#[test]
+fn a_task_nobody_reviewed_has_no_verdict() {
+    let mut api = outside_api(
+        "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nreview = \"manual\"\n",
+    );
+    api.sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    wait_for_outside_task(&mut api);
+    let project = api.sim.project_id.0;
+    let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
+    let item = &listed.body["items"][0];
+    assert_eq!(item["review"], Value::Null);
+    let id = item["id"].as_str().unwrap();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["reviews"], json!([]));
+}
+
 #[test]
 fn an_operator_takes_a_pull_request_by_number_and_every_refusal_has_its_code() {
     let mut api = outside_api(

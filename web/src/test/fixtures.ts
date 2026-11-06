@@ -176,7 +176,7 @@ export function detail(
   item: WorkItem,
   extra: Partial<WorkItemDetail> = {},
 ): WorkItemDetail {
-  return { ...item, stage_runs: [], ...extra };
+  return { ...item, stage_runs: [], reviews: [], ...extra };
 }
 
 export function specWithSteps(steps: [string, string[]][]): SpecItem {

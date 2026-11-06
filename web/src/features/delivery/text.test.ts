@@ -343,6 +343,7 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ["secret_unreadable", { name: "A" }],
   ["session_failed", { cause: "operator_stop", reason: "stop" }],
   ["session_failed", { subtype: "error_during_execution" }],
+  ["session_failed", { cause: "verdict_invalid", code: "not_json" }],
   ["session_lost", { cause: "runner_silent" }],
   ["session_timeout", { cause: "idle", minutes: 30 }],
   ["session_timeout", { minutes: 60 }],

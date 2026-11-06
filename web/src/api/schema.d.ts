@@ -1613,6 +1613,7 @@ export interface components {
         repo_id: string;
         /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
         repo_name?: string | null;
+        review?: components["schemas"]["ReviewSummary"] | null;
         session?: components["schemas"]["SessionBrief"] | null;
         /** Format: uuid */
         spec_id?: string | null;
@@ -1868,6 +1869,41 @@ export interface components {
     };
     /** @description Request body of a review request; no fields. */
     ReviewBody: Record<string, never>;
+    ReviewDetail: components["schemas"]["ReviewSummary"] & {
+      findings: components["schemas"]["ReviewFinding"][];
+      /** @description What the reviewer could not judge; only for `spec_unclear`. */
+      questions: string[];
+    };
+    ReviewFinding: {
+      body: string;
+      /** Format: int32 */
+      line?: number | null;
+      path?: string | null;
+      /** @description `blocker | major | minor | nit` */
+      severity: string;
+    };
+    ReviewPostedInfo: {
+      /** @description `approve | request_changes | comment` */
+      event: string;
+      url?: string | null;
+    };
+    ReviewSummary: {
+      /** @description `step | spec | none`; `none` means the reviewer judged without a spec. */
+      basis: string;
+      created_at: string;
+      /** @description The verdict judged the head the change request has now. */
+      current: boolean;
+      /** Format: int32 */
+      finding_count: number;
+      /** @description The head the verdict judged. */
+      head_sha: string;
+      /** Format: uuid */
+      id: string;
+      /** @description `approved | changes_requested | spec_unclear` */
+      outcome: string;
+      posted?: components["schemas"]["ReviewPostedInfo"] | null;
+      summary: string;
+    };
     Revision: {
       content_hash: string;
       /** @description Context documents pinned with this revision, in work packet order (`link` first, then `always`). */
@@ -2474,6 +2510,7 @@ export interface components {
       repo_id: string;
       /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
       repo_name?: string | null;
+      review?: components["schemas"]["ReviewSummary"] | null;
       session?: components["schemas"]["SessionBrief"] | null;
       /** Format: uuid */
       spec_id?: string | null;
@@ -2507,6 +2544,8 @@ export interface components {
       warn_percent: number;
     };
     WorkItemDetail: components["schemas"]["WorkItem"] & {
+      /** @description Every verdict of the task, newest first. */
+      reviews: components["schemas"]["ReviewDetail"][];
       stage_runs: components["schemas"]["StageRunItem"][];
     };
     WorkItemEnvironment: {

@@ -5992,6 +5992,17 @@
                   ],
                   "description": "Name of the binding of `repo_id` in the project now; `null` once a reload removed it."
                 },
+                "review": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewSummary",
+                      "description": "The newest reviewer verdict of the task; `null` before any review ran."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "session": {
                   "oneOf": [
                     {
@@ -6812,6 +6823,140 @@
         "type": "object",
         "description": "Request body of a review request; no fields.",
         "additionalProperties": false
+      },
+      "ReviewDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ReviewSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "findings",
+              "questions"
+            ],
+            "properties": {
+              "findings": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewFinding"
+                }
+              },
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "What the reviewer could not judge; only for `spec_unclear`."
+              }
+            }
+          }
+        ]
+      },
+      "ReviewFinding": {
+        "type": "object",
+        "required": [
+          "severity",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "description": "`blocker | major | minor | nit`"
+          }
+        }
+      },
+      "ReviewPostedInfo": {
+        "type": "object",
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "`approve | request_changes | comment`"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReviewSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "outcome",
+          "basis",
+          "head_sha",
+          "current",
+          "summary",
+          "finding_count",
+          "created_at"
+        ],
+        "properties": {
+          "basis": {
+            "type": "string",
+            "description": "`step | spec | none`; `none` means the reviewer judged without a spec."
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "The verdict judged the head the change request has now."
+          },
+          "finding_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "head_sha": {
+            "type": "string",
+            "description": "The head the verdict judged."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`approved | changes_requested | spec_unclear`"
+          },
+          "posted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewPostedInfo",
+                "description": "Where the review was posted; `null` before it was posted and for `spec_unclear`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
       },
       "Revision": {
         "type": "object",
@@ -8756,6 +8901,17 @@
             ],
             "description": "Name of the binding of `repo_id` in the project now; `null` once a reload removed it."
           },
+          "review": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewSummary",
+                "description": "The newest reviewer verdict of the task; `null` before any review ran."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "session": {
             "oneOf": [
               {
@@ -8877,9 +9033,17 @@
           {
             "type": "object",
             "required": [
-              "stage_runs"
+              "stage_runs",
+              "reviews"
             ],
             "properties": {
+              "reviews": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewDetail"
+                },
+                "description": "Every verdict of the task, newest first."
+              },
               "stage_runs": {
                 "type": "array",
                 "items": {
