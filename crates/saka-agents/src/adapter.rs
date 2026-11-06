@@ -35,6 +35,7 @@ pub struct AgentsConfig {
     pub known_values: Vec<String>,
     pub server_version: String,
     pub extra_env: Vec<(String, String)>,
+    pub mcp_socket: Option<PathBuf>,
 }
 
 pub struct ClaudeAgents {
@@ -165,6 +166,7 @@ impl ClaudeAgents {
             author: &launch.author,
             add_dirs: &add_dirs,
             isolated: launch.profile == LaunchProfile::Reviewer,
+            mcp: self.cfg.mcp_socket.is_some() && launch.profile != LaunchProfile::Reviewer,
         };
         let mut spec = launch::claude(
             &self.cfg.claude,
@@ -206,6 +208,35 @@ impl ClaudeAgents {
     }
 }
 
+fn id_of(launch: &SessionLaunch) -> String {
+    launch.session_id.to_string()
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    std::io::Write::write_all(&mut f, bytes)?;
+    f.sync_all()
+}
+
+fn write_mcp(
+    paths: &SessionPaths,
+    command: &Path,
+    session_id: &str,
+    socket: &Path,
+) -> std::io::Result<()> {
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).map_err(std::io::Error::other)?;
+    let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    write_private(&paths.mcp_token_file(), token.as_bytes())?;
+    let config = launch::mcp_config(command, session_id, socket, &token);
+    write_private(&paths.mcp_config_file(), config.as_bytes())
+}
+
 fn write_launch(paths: &SessionPaths, spec: &LaunchSpec) -> std::io::Result<()> {
     std::fs::create_dir_all(&paths.session_dir)?;
     std::fs::set_permissions(&paths.session_dir, std::fs::Permissions::from_mode(0o700))?;
@@ -239,6 +270,12 @@ impl Agents for ClaudeAgents {
         // A socket left by an earlier attempt must not answer for the new runner.
         let _ = std::fs::remove_file(&paths.socket_path);
         write_launch(&paths, &spec).map_err(|e| io_error("launch_write_failed", &e))?;
+        if let Some(socket) = self.cfg.mcp_socket.as_deref()
+            && spec.args.iter().any(|a| a == "--mcp-config")
+        {
+            write_mcp(&paths, &self.cfg.runner_program, &id_of(launch), socket)
+                .map_err(|e| io_error("launch_write_failed", &e))?;
+        }
         let secrets = paths.secrets_file();
         if spec.secrets_path.is_some() {
             SessionSecrets::of(&launch.environment.secrets)
@@ -471,6 +508,7 @@ mod tests {
                 known_values: Vec::new(),
                 server_version: "0.0.0".into(),
                 extra_env: Vec::new(),
+                mcp_socket: None,
             },
             Arc::new(NoSupervisor),
             sink,
@@ -527,6 +565,97 @@ mod tests {
                 email: "1+octo@users.noreply.github.com".into(),
             },
         }
+    }
+
+    #[test]
+    fn dev_and_architect_sessions_get_the_mcp_config_and_a_reviewer_never_does() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .join("e-1");
+        std::fs::create_dir_all(root.join("worktree")).unwrap_or_else(|e| panic!("{e}"));
+        let mut agents = agents(dir.path());
+        let profiles = [
+            LaunchProfile::Task,
+            LaunchProfile::Architect { cwd: ".".into() },
+            LaunchProfile::Reviewer,
+        ];
+        for profile in &profiles {
+            let (spec, _paths) = agents
+                .launch_spec(
+                    Path::new("/usr/bin/claude"),
+                    &launch(&root, profile.clone(), None),
+                )
+                .unwrap_or_else(|e| panic!("{e:?}"));
+            assert!(
+                !spec.args.contains(&"--mcp-config".to_string()),
+                "{profile:?}"
+            );
+            assert!(!spec.env.contains_key("ENABLE_TOOL_SEARCH"), "{profile:?}");
+        }
+        agents.cfg.mcp_socket = Some(dir.path().join("run/saka/mcp.sock"));
+        for profile in profiles {
+            let reviewer = profile == LaunchProfile::Reviewer;
+            let (spec, paths) = agents
+                .launch_spec(
+                    Path::new("/usr/bin/claude"),
+                    &launch(&root, profile.clone(), None),
+                )
+                .unwrap_or_else(|e| panic!("{e:?}"));
+            let at = spec.args.iter().position(|a| a == "--mcp-config");
+            assert_eq!(at.is_some(), !reviewer, "{profile:?}");
+            assert_eq!(
+                spec.env.get("ENABLE_TOOL_SEARCH").map(String::as_str),
+                (!reviewer).then_some("false"),
+                "{profile:?}"
+            );
+            if let Some(at) = at {
+                assert_eq!(spec.args[at + 1], paths.mcp_config_file().to_string_lossy());
+            }
+        }
+    }
+
+    #[test]
+    fn the_mcp_config_and_token_are_private_files_and_the_token_is_not_in_the_launch_args() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let paths = SessionPaths::new(
+            &dir.path().join("run"),
+            &dir.path().join("sessions"),
+            "s-1",
+            &dir.path().join("e-1"),
+            &dir.path().join("e-1/worktree"),
+        );
+        std::fs::create_dir_all(&paths.session_dir).unwrap_or_else(|e| panic!("{e}"));
+        let socket = dir.path().join("run/saka/mcp.sock");
+        write_mcp(&paths, Path::new("/usr/bin/saka"), "s-1", &socket)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let token =
+            std::fs::read_to_string(paths.mcp_token_file()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+        let config: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(paths.mcp_config_file()).unwrap_or_else(|e| panic!("{e}")),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let server = &config["mcpServers"]["saka"];
+        assert_eq!(server["command"], "/usr/bin/saka");
+        assert_eq!(server["args"], json!(["mcp", "--session", "s-1"]));
+        assert_eq!(server["env"]["SAKA_MCP_TOKEN"], token);
+        assert_eq!(server["env"]["SAKA_MCP_SOCKET"], &*socket.to_string_lossy());
+        for file in [paths.mcp_token_file(), paths.mcp_config_file()] {
+            let mode = std::fs::metadata(&file)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{file:?}");
+        }
+        write_mcp(&paths, Path::new("/usr/bin/saka"), "s-1", &socket)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let again =
+            std::fs::read_to_string(paths.mcp_token_file()).unwrap_or_else(|e| panic!("{e}"));
+        assert_ne!(again, token, "every launch gets its own token");
     }
 
     #[test]

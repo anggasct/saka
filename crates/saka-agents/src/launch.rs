@@ -17,6 +17,7 @@ pub struct LaunchOptions<'a> {
     pub author: &'a GitIdentity,
     pub add_dirs: &'a [PathBuf],
     pub isolated: bool,
+    pub mcp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +75,14 @@ impl SessionPaths {
 
     pub fn launch_file(&self) -> PathBuf {
         self.session_dir.join("launch.json")
+    }
+
+    pub fn mcp_config_file(&self) -> PathBuf {
+        self.session_dir.join("mcp.json")
+    }
+
+    pub fn mcp_token_file(&self) -> PathBuf {
+        self.session_dir.join("mcp.token")
     }
 
     pub fn home(&self) -> PathBuf {
@@ -153,6 +162,25 @@ fn session_settings(worktree: &Path, isolated: bool) -> Result<String, Unsupport
     .to_string())
 }
 
+pub const MCP_SERVER: &str = "saka";
+
+pub fn mcp_config(command: &Path, session_id: &str, socket: &Path, token: &str) -> String {
+    serde_json::json!({
+        "mcpServers": {
+            MCP_SERVER: {
+                "type": "stdio",
+                "command": s(command),
+                "args": ["mcp", "--session", session_id],
+                "env": {
+                    "SAKA_MCP_SOCKET": s(socket),
+                    "SAKA_MCP_TOKEN": token,
+                },
+            },
+        },
+    })
+    .to_string()
+}
+
 pub fn claude(
     settings: &ClaudeSettings,
     program: &Path,
@@ -181,6 +209,9 @@ pub fn claude(
     .map(String::from)
     .to_vec();
     args.push(session_settings(&paths.worktree, options.isolated)?);
+    if options.mcp {
+        args.extend(["--mcp-config".to_string(), s(&paths.mcp_config_file())]);
+    }
     for dir in options.add_dirs {
         args.extend(["--add-dir".to_string(), s(dir)]);
     }
@@ -197,7 +228,7 @@ pub fn claude(
     if let Some(cli_session_id) = options.resume {
         args.extend(["--resume".to_string(), cli_session_id.to_string()]);
     }
-    let env: BTreeMap<String, String> = [
+    let mut env: BTreeMap<String, String> = [
         ("PATH", settings.path.join(":")),
         ("HOME", s(&paths.home())),
         ("TMPDIR", s(&paths.tmp())),
@@ -212,6 +243,9 @@ pub fn claude(
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
+    if options.mcp {
+        env.insert("ENABLE_TOOL_SEARCH".to_string(), "false".to_string());
+    }
     Ok(LaunchSpec {
         session_id: session_id.to_string(),
         socket_path: s(&paths.socket_path),
@@ -289,6 +323,7 @@ mod tests {
                 author: &saka(),
                 add_dirs: &[],
                 isolated: false,
+                mcp: false,
             },
         )
         .unwrap();
@@ -345,6 +380,7 @@ mod tests {
                     author: &author,
                     add_dirs,
                     isolated: false,
+                    mcp: false,
                 },
             )
             .unwrap()
@@ -382,6 +418,7 @@ mod tests {
                 author: &octo(),
                 add_dirs: &[],
                 isolated: false,
+                mcp: false,
             },
         )
         .unwrap();
@@ -422,6 +459,7 @@ mod tests {
                 author: &saka(),
                 add_dirs: &[],
                 isolated: false,
+                mcp: false,
             },
         )
         .unwrap();
@@ -449,6 +487,7 @@ mod tests {
                     author: &octo(),
                     add_dirs: &[],
                     isolated: false,
+                    mcp: false,
                 },
             )
             .unwrap();
@@ -547,6 +586,7 @@ mod tests {
                     author: &saka(),
                     add_dirs: &[],
                     isolated: false,
+                    mcp: false,
                 },
             ),
             Err(UnsupportedPath(PathBuf::from("/data/[envs]/e-1/worktree")))

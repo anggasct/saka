@@ -472,6 +472,7 @@ pub fn agents_config(cfg: &Config) -> AgentsConfig {
         known_values: Vec::new(),
         server_version: VERSION.to_string(),
         extra_env: Vec::new(),
+        mcp_socket: Some(runtime_dir().join("saka").join("mcp.sock")),
     }
 }
 

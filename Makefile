@@ -3,7 +3,7 @@
 
 LIMITED := $(if $(CI),,./scripts/limited)
 
-.PHONY: check deps e2e supply-chain test-systemd test-claude-memory
+.PHONY: check deps e2e supply-chain test-systemd test-claude-memory test-claude-mcp
 
 check:
 	$(LIMITED) cargo xtask check
@@ -23,6 +23,10 @@ test-systemd:
 test-claude-memory:
 	$(LIMITED) cargo xtask test-claude-memory
 
+# Needs the `claude` CLI on PATH; talks only to a local fake API and `saka mcp`. Part of `make e2e`.
+test-claude-mcp:
+	$(LIMITED) cargo xtask test-claude-mcp
+
 # Opt-in: a real loop against a test repository with real credentials (see docs/guide.md).
-e2e: test-systemd test-claude-memory
+e2e: test-systemd test-claude-memory test-claude-mcp
 	$(LIMITED) cargo xtask e2e

@@ -2,6 +2,7 @@ pub mod admission;
 pub mod authorship;
 pub mod autonomy;
 pub mod blocker;
+pub mod decision;
 pub mod diagnostics;
 pub mod draft;
 pub mod event;

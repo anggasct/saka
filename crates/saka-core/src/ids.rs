@@ -49,4 +49,5 @@ id_type!(
     HookRunId,
     ReviewId,
     InboxItemId,
+    DecisionRequestId,
 );

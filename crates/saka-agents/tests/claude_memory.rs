@@ -99,6 +99,7 @@ impl Fixture {
             author: &saka(),
             add_dirs: &[],
             isolated,
+            mcp: false,
         };
         launch::claude(&settings, &program, "conformance", &paths, vec![], &options).unwrap()
     }
