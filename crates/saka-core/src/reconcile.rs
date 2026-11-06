@@ -6,7 +6,9 @@ use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency}
 use crate::react::phase_jobs;
 use crate::task::{LoopConfig, TaskInput};
 use crate::time::Timestamp;
-use crate::vocab::{EnvironmentState, SpecState, WorkItemOrigin, WorkItemState};
+use crate::vocab::{
+    EnvironmentState, SpecState, Stage, StagePhase, StageRunState, WorkItemOrigin, WorkItemState,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -38,6 +40,22 @@ fn holds_port_block(task: &Task) -> bool {
         )
     });
     live_env || task.item.state == WorkItemState::Admitted
+}
+
+fn holds_review_slot(task: &Task) -> bool {
+    task.external.is_some()
+        && (task.is_at(Stage::Review, StagePhase::PreparingEnvironment)
+            || task.is_at(Stage::Review, StagePhase::RunningSession))
+}
+
+fn review_waiting(task: &Task) -> Option<Timestamp> {
+    let run = task.stage_run.as_ref()?;
+    (task.external.is_some()
+        && task.is_at(Stage::Review, StagePhase::AwaitingReview)
+        && run.stage == Stage::Review
+        && run.state == StageRunState::Pending
+        && task.ready_environment().is_none())
+    .then_some(run.created_at)
 }
 
 pub fn free_port_blocks(snapshot: &Snapshot) -> Option<usize> {
@@ -113,6 +131,8 @@ pub fn reconcile(
                 )
         })
         .count();
+    let reviewing = tasks.iter().filter(|t| holds_review_slot(t)).count();
+    let active = active + reviewing;
     let waits = waiting(snapshot, cfg, now);
     let candidates: Vec<Candidate> = tasks
         .iter()
@@ -141,8 +161,24 @@ pub fn reconcile(
     let slots = max_active_tasks
         .saturating_sub(active)
         .min(free_port_blocks(snapshot).unwrap_or(usize::MAX));
-    for id in admission::select(&candidates, 0, slots) {
+    let admitted = admission::select(&candidates, 0, slots);
+    let free = max_active_tasks
+        .saturating_sub(active)
+        .saturating_sub(admitted.len());
+    for id in admitted {
         actions.push(Action::Decide(id, TaskInput::Admit));
+    }
+    let paused = !admission::quota_waits(&snapshot.quotas, &cfg.account, cfg.rate_limit_pause, now)
+        .is_empty();
+    if !paused {
+        let mut waiting_reviews: Vec<(Timestamp, WorkItemId)> = tasks
+            .iter()
+            .filter_map(|t| review_waiting(t).map(|at| (at, t.item.id)))
+            .collect();
+        waiting_reviews.sort();
+        for (_, id) in waiting_reviews.into_iter().take(free) {
+            actions.push(Action::Decide(id, TaskInput::StartReview));
+        }
     }
 
     for task in tasks {

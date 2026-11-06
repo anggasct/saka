@@ -3,12 +3,13 @@ use std::collections::{BTreeMap, HashMap};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use saka_core::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
-    RepoId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
+    RepoId, ReviewId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, ExternalChange, GateResult,
-    PermissionRequest, PermissionRule, Project, ProjectRepo, Repo, RevisionView, RunOwner, Session,
-    Spec, SpecDependency, SpecLink, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
+    PermissionRequest, PermissionRule, Project, ProjectRepo, Repo, Review, ReviewPosted,
+    RevisionView, RunOwner, Session, Spec, SpecDependency, SpecLink, StageRun, StepPlan, Task,
+    WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeRole, SessionState, Stage, Trigger};
@@ -270,6 +271,18 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             t.external = Some(external);
         }
     }
+    for r in rows(
+        conn,
+        "SELECT * FROM review",
+        selection,
+        "created_at, id",
+        b,
+        review,
+    )? {
+        if let Some(t) = tasks.get_mut(&r.work_item_id) {
+            t.reviews.push(r);
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     for g in rows(
         conn,
@@ -515,6 +528,28 @@ fn gate(row: &Row<'_>) -> Result<GateResult> {
         outcome: vocab(row, "outcome")?,
         checks: json(row, "checks")?,
         observed_at: ts(row, "observed_at")?,
+    })
+}
+
+fn review(row: &Row<'_>) -> Result<Review> {
+    let event = opt_vocab(row, "posted_event")?;
+    let at = opt_ts(row, "posted_at")?;
+    let url: Option<String> = row.get("posted_url")?;
+    Ok(Review {
+        id: ReviewId(uuid(row, "id")?),
+        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
+        session_id: SessionId(uuid(row, "session_id")?),
+        head_sha: row.get("head_sha")?,
+        outcome: vocab(row, "outcome")?,
+        basis: vocab(row, "basis")?,
+        summary: row.get("summary")?,
+        findings: json(row, "findings")?,
+        questions: json(row, "questions")?,
+        posted: event
+            .zip(at)
+            .map(|(event, at)| ReviewPosted { event, url, at }),
+        created_at: ts(row, "created_at")?,
     })
 }
 

@@ -3,7 +3,7 @@ use saka_core::ids::{ProjectId, RepoId, SpecDraftAttemptId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, Draft, Environment, GateResult, LintRound,
-    PermissionRequest, PermissionRule, Project, Repo, Session, SessionActivity, Spec,
+    PermissionRequest, PermissionRule, Project, Repo, Review, Session, SessionActivity, Spec,
     SpecDependency, StageRun, Task, UsageRecord, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
@@ -682,6 +682,9 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     if let Some(b) = &t.blocker {
         blocker(tx, t, b)?;
     }
+    for r in &t.reviews {
+        review(tx, t, r)?;
+    }
     if let Some(cr) = &t.docs_change {
         change_request(tx, t, cr)?;
     }
@@ -990,6 +993,33 @@ fn gate(tx: &Transaction<'_>, t: &Task, g: &GateResult) -> Result<()> {
             g.outcome.as_str(),
             to_json(&g.checks)?,
             g.observed_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+fn review(tx: &Transaction<'_>, t: &Task, r: &Review) -> Result<()> {
+    tx.execute(
+        "INSERT INTO review (id, work_item_id, stage_run_id, session_id, head_sha, outcome, basis, summary,
+           findings, questions, posted_event, posted_url, posted_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT (id) DO UPDATE SET posted_event = excluded.posted_event,
+           posted_url = excluded.posted_url, posted_at = excluded.posted_at",
+        params![
+            r.id.to_string(),
+            t.item.id.to_string(),
+            r.stage_run_id.to_string(),
+            r.session_id.to_string(),
+            r.head_sha,
+            r.outcome.as_str(),
+            r.basis.as_str(),
+            r.summary,
+            to_json(&r.findings)?,
+            to_json(&r.questions)?,
+            r.posted.as_ref().map(|p| p.event.as_str()),
+            r.posted.as_ref().and_then(|p| p.url.clone()),
+            r.posted.as_ref().map(|p| p.at.0),
+            r.created_at.0,
         ],
     )?;
     Ok(())

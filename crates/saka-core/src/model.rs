@@ -6,16 +6,17 @@ use serde_json::Value;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
-    ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId,
-    StageRunId, UsageRecordId, WorkItemId,
+    ProjectId, RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId,
+    SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
 };
+use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
     ContextOrigin, DocsMode, DraftAttemptState, DraftLocale, EnvironmentState, ExternalCause,
     GateOutcome, GateSource, InterruptBy, LintOutcome, PacketOrigin, PermissionState, ResumeCause,
-    SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool,
-    Trigger, WorkItemOrigin, WorkItemState,
+    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecDraftState, SpecOrigin, SpecState,
+    Stage, StagePhase, StageRunState, Tool, Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -586,6 +587,30 @@ pub struct Task {
     pub quota_observations: Vec<AccountQuota>,
     pub added_rules: Vec<PermissionRule>,
     pub hook_gates: Vec<HookGate>,
+    pub reviews: Vec<Review>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewPosted {
+    pub event: ReviewEvent,
+    pub url: Option<String>,
+    pub at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Review {
+    pub id: ReviewId,
+    pub work_item_id: WorkItemId,
+    pub stage_run_id: StageRunId,
+    pub session_id: SessionId,
+    pub head_sha: String,
+    pub outcome: ReviewOutcome,
+    pub basis: ReviewBasis,
+    pub summary: String,
+    pub findings: Vec<Finding>,
+    pub questions: Vec<String>,
+    pub posted: Option<ReviewPosted>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -626,6 +651,7 @@ impl Task {
             quota_observations: Vec::new(),
             added_rules: Vec::new(),
             hook_gates: Vec::new(),
+            reviews: Vec::new(),
         }
     }
 
@@ -666,6 +692,13 @@ impl Task {
         self.environment
             .as_ref()
             .filter(|e| e.state == EnvironmentState::Ready)
+    }
+
+    pub fn unposted_review(&self) -> Option<&Review> {
+        let head = self.stage_run.as_ref()?.head_sha.as_deref()?;
+        self.reviews.iter().rev().find(|r| {
+            r.head_sha == head && r.posted.is_none() && r.outcome != ReviewOutcome::SpecUnclear
+        })
     }
 
     pub fn stage_usage(&self, now: Timestamp) -> Usage {

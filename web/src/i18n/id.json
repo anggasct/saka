@@ -47,6 +47,8 @@
   "phase.tearing_down": "membersihkan",
   "phase.awaiting_trigger": "menunggu perintah review",
   "phase.awaiting_review": "menunggu reviewer",
+  "phase.posting_review": "memposting review",
+  "phase.reviewed": "sudah direview, menunggu pull request",
   "blocker.env_setup_failed": "{error, select, setup_command_failed {{timed_out, select, yes {Perintah setup ke-{command_index, number} dari resep environment kehabisan waktu.} other {Perintah setup ke-{command_index, number} dari resep environment gagal.}}} docs_commit_missing {Commit spec {docs_commit} tidak ada di repo docs.} docs_checkout_too_large {Folder project di repo docs terlalu besar untuk di-checkout: {files, number} file, {mib, number} MiB (paling banyak {max_files, number} file dan {max_mib, number} MiB).} port_block_unavailable {Semua blok port sedang dipegang environment lain.} other {Environment task tidak bisa disiapkan.}}",
   "blocker.env_recipe_invalid": "Resep environment .saka/environment.toml ditolak: {issue}{line, select, none {} other { (baris {line})}}.",
   "blocker.toolchain_unpinned": "{source, select, pnpm_requires_node {pnpm butuh versi Node yang dipin; deklarasikan di package.json devEngines, .node-version, atau .nvmrc.} other {Repo meminta {tool} {value}; pin versi persis (misalnya 1.2.3) di {source}.}}",

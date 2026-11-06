@@ -47,6 +47,8 @@
   "phase.tearing_down": "cleaning up",
   "phase.awaiting_trigger": "waiting for a review command",
   "phase.awaiting_review": "waiting for the reviewer",
+  "phase.posting_review": "posting the review",
+  "phase.reviewed": "reviewed, waiting for the pull request",
   "blocker.env_setup_failed": "{error, select, setup_command_failed {{timed_out, select, yes {Setup command {command_index, number} of the environment recipe ran out of time.} other {Setup command {command_index, number} of the environment recipe failed.}}} docs_commit_missing {The spec commit {docs_commit} is not in the docs repo.} docs_checkout_too_large {The project folder in the docs repo is too large to check out: {files, number} files, {mib, number} MiB (at most {max_files, number} files and {max_mib, number} MiB).} port_block_unavailable {Every port block is held by another environment.} other {The task environment could not be prepared.}}",
   "blocker.env_recipe_invalid": "The environment recipe .saka/environment.toml was refused: {issue}{line, select, none {} other { (line {line})}}.",
   "blocker.toolchain_unpinned": "{source, select, pnpm_requires_node {pnpm needs a pinned Node version; declare one in package.json devEngines, .node-version, or .nvmrc.} other {The repo asks for {tool} {value}; pin an exact version (for example 1.2.3) in {source}.}}",

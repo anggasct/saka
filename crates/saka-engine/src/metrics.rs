@@ -40,6 +40,9 @@ pub struct Counters {
     intake_changes: Mutex<BTreeMap<(String, String), u64>>,
     chat_actions: Mutex<BTreeMap<(String, String), u64>>,
     review_requests: Mutex<BTreeMap<(String, String), u64>>,
+    review_verdicts: Mutex<BTreeMap<(String, String), u64>>,
+    review_format_rejected: Mutex<BTreeMap<(String, String), u64>>,
+    review_posts: Mutex<BTreeMap<(String, String), u64>>,
     intake_scan_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
@@ -170,6 +173,18 @@ impl Counters {
 
     pub(crate) fn intake_change(&self, outcome: &str) {
         bump(&self.intake_changes, outcome, "");
+    }
+
+    pub(crate) fn review_verdict(&self, outcome: &str, basis: &str) {
+        bump(&self.review_verdicts, outcome, basis);
+    }
+
+    pub(crate) fn review_format_rejected(&self, code: &str) {
+        bump(&self.review_format_rejected, code, "");
+    }
+
+    pub(crate) fn review_post(&self, event: &str) {
+        bump(&self.review_posts, event, "");
     }
 
     pub(crate) fn review_request(&self, cause: &str) {
@@ -361,6 +376,9 @@ pub struct MetricsSnapshot {
     pub intake_changes: Vec<(String, u64)>,
     pub chat_actions: Vec<(String, String, u64)>,
     pub review_requests: Vec<(String, u64)>,
+    pub review_verdicts: Vec<(String, String, u64)>,
+    pub review_format_rejected: Vec<(String, u64)>,
+    pub review_posts: Vec<(String, u64)>,
     pub intake_scan_seconds: SecondsHistogram,
 }
 
@@ -545,6 +563,15 @@ impl Engine {
             intake_changes: copy(&self.counters.intake_changes)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            review_verdicts: copy(&self.counters.review_verdicts),
+            review_format_rejected: copy(&self.counters.review_format_rejected)
+                .into_iter()
+                .map(|(code, _, n)| (code, n))
+                .collect(),
+            review_posts: copy(&self.counters.review_posts)
+                .into_iter()
+                .map(|(event, _, n)| (event, n))
                 .collect(),
             review_requests: copy(&self.counters.review_requests)
                 .into_iter()

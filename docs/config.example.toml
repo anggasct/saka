@@ -73,6 +73,12 @@ turns = 6                          # 1..=100, and at least architect.lint_rounds
 tokens = 0                         # 0 = no limit; input + output
 cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
 
+[budget.review]
+running_minutes = 20               # 1..=1440; running time of one review run
+turns = 3                          # 1..=100; the packet, one format correction, and one spare
+tokens = 0                         # 0 = no limit; input + output
+cost_usd = 0.0                     # 0 = no limit; cost reported by the CLI
+
 [architect]
 max_active = 1                     # 1..=4; drafts preparing, drafting, or committing at once
 lint_rounds = 4                    # 1..=10; lint checks per attempt (the first after the first turn)

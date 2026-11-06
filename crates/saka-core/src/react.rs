@@ -39,6 +39,10 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             ..
         } if status == "success"
             && task
+                .stage_run
+                .as_ref()
+                .is_none_or(|r| r.stage != Stage::Review)
+            && task
                 .live_session()
                 .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none()) =>
         {
@@ -124,6 +128,20 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
         jobs.extend(poll_job(task.docs_change.as_ref(), task, cfg, now));
     }
 
+    if let Some(env) = task.environment.as_ref().filter(|e| {
+        e.state == EnvironmentState::Ready
+            && task.external.is_some()
+            && !task.is_at(Stage::Review, StagePhase::PreparingEnvironment)
+            && !task.is_at(Stage::Review, StagePhase::RunningSession)
+    }) {
+        jobs.push(Job::new(
+            JobKind::EnvTeardown,
+            env.id,
+            json!({ "owner": env.owner, "environment_id": env.id }),
+            now,
+        ));
+    }
+
     if item.state.is_terminal() || item.state == WorkItemState::Blocked {
         if let Some(s) = task.live_session().filter(|_| item.state.is_terminal()) {
             jobs.push(session::stop_job(s, now));
@@ -173,40 +191,41 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
     };
     let cr = task.change_request.as_ref();
     match (stage, phase) {
-        (Stage::Dev, StagePhase::RunningSession) => {
-            let view = run_view(task);
-            if let (Some(run_id), Some(view)) =
-                (run_id, view.as_ref().filter(|v| resume::wants_session(v)))
-            {
-                let plan = resume::plan(view);
-                let key = match plan
-                    .as_ref()
-                    .filter(|p| p.cause == crate::vocab::ResumeCause::Lost)
-                {
-                    Some(p) => format!("{run_id}:{}", p.from),
-                    None => run_id.to_string(),
-                };
+        (Stage::Dev | Stage::Review, StagePhase::RunningSession) => {
+            jobs.extend(session_jobs(task, now));
+        }
+        (Stage::Review, StagePhase::PreparingEnvironment) => {
+            if let (Some(run), Some(cr)) = (run, cr) {
                 jobs.push(Job::new(
-                    JobKind::SessionStart,
-                    key,
+                    JobKind::EnvPrepareReview,
+                    run.id,
                     json!({
-                        "owner": view.owner,
-                        "environment_id": view.ready_environment,
-                        "resume": plan.map(|p| json!({
-                            "session_id": p.from,
-                            "cause": p.cause,
-                            "cli_session_id": p.cli_session_id,
-                        })),
+                        "work_item_id": id,
+                        "stage_run_id": run.id,
+                        "repo_id": cr.repo_id,
+                        "number": cr.number,
+                        "base_branch": cr.base_branch,
+                        "head_sha": run.head_sha,
                     }),
                     now,
                 ));
             }
-            for p in &task.permissions {
-                if matches!(p.state, PermissionState::Allowed | PermissionState::Denied)
-                    && p.delivered_at.is_none()
-                {
-                    jobs.push(session::deliver_job(p, now));
-                }
+        }
+        (Stage::Review, StagePhase::PostingReview) => {
+            if let (Some(run), Some(cr), Some(review)) = (run, cr, task.unposted_review()) {
+                jobs.push(Job::new(
+                    JobKind::ScmPostReview,
+                    format!("{}:{}", run.id, review.id),
+                    json!({
+                        "work_item_id": id,
+                        "stage_run_id": run.id,
+                        "review_id": review.id,
+                        "repo_id": cr.repo_id,
+                        "number": cr.number,
+                        "head_sha": review.head_sha,
+                    }),
+                    now,
+                ));
             }
         }
         (Stage::Dev, StagePhase::Pushing) => {
@@ -398,6 +417,45 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
             }
         }
         _ => {}
+    }
+    jobs
+}
+
+fn session_jobs(task: &Task, now: Timestamp) -> Vec<Job> {
+    let mut jobs = Vec::new();
+    let run_id = task.stage_run.as_ref().map(|r| r.id);
+    let view = run_view(task);
+    if let (Some(run_id), Some(view)) = (run_id, view.as_ref().filter(|v| resume::wants_session(v)))
+    {
+        let plan = resume::plan(view);
+        let key = match plan
+            .as_ref()
+            .filter(|p| p.cause == crate::vocab::ResumeCause::Lost)
+        {
+            Some(p) => format!("{run_id}:{}", p.from),
+            None => run_id.to_string(),
+        };
+        jobs.push(Job::new(
+            JobKind::SessionStart,
+            key,
+            json!({
+                "owner": view.owner,
+                "environment_id": view.ready_environment,
+                "resume": plan.map(|p| json!({
+                    "session_id": p.from,
+                    "cause": p.cause,
+                    "cli_session_id": p.cli_session_id,
+                })),
+            }),
+            now,
+        ));
+    }
+    for p in &task.permissions {
+        if matches!(p.state, PermissionState::Allowed | PermissionState::Denied)
+            && p.delivered_at.is_none()
+        {
+            jobs.push(session::deliver_job(p, now));
+        }
     }
     jobs
 }

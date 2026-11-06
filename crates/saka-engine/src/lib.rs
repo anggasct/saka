@@ -19,6 +19,7 @@ mod reconciler;
 mod register;
 mod reload;
 pub mod review_packet;
+mod review_run;
 mod runner;
 mod secrets;
 mod text;
@@ -34,7 +35,7 @@ use std::time::Duration;
 
 use saka_core::Ctx;
 use saka_core::authorship::GitIdentity;
-use saka_core::event::Event;
+use saka_core::event::{Event, Prompt};
 use saka_core::ids::{ProjectId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::Task;
@@ -336,6 +337,32 @@ impl Engine {
         self.commit(&batch)?;
         for e in &events {
             match e {
+                Event::ReviewRecorded {
+                    work_item_id,
+                    outcome,
+                    basis,
+                    findings,
+                    ..
+                } => {
+                    self.counters
+                        .review_verdict(outcome.as_str(), basis.as_str());
+                    tracing::info!(%work_item_id, outcome = outcome.as_str(), basis = basis.as_str(), findings = findings.len(), "review.verdict");
+                }
+                Event::ReviewPosted {
+                    work_item_id,
+                    event,
+                    ..
+                } => {
+                    self.counters.review_post(event.as_str());
+                    tracing::info!(%work_item_id, event = event.as_str(), "review.post");
+                }
+                Event::SessionTurnRequested {
+                    prompt: Prompt::VerdictFormat { reason },
+                    ..
+                } => {
+                    self.counters.review_format_rejected(reason);
+                    tracing::info!(code = %reason, "review.format_rejected");
+                }
                 Event::ChangeRequestOpened {
                     work_item_id,
                     number,

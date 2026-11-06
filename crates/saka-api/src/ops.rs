@@ -353,6 +353,34 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     for (cause, n) in &m.review_requests {
         t.sample("saka_review_requests_total", &[("cause", cause)], n);
     }
+    t.family(
+        "saka_review_verdicts_total",
+        "counter",
+        "Reviewer verdicts recorded, by outcome and what they were judged against.",
+    );
+    for (outcome, basis, n) in &m.review_verdicts {
+        t.sample(
+            "saka_review_verdicts_total",
+            &[("outcome", outcome), ("basis", basis)],
+            n,
+        );
+    }
+    t.family(
+        "saka_review_format_rejected_total",
+        "counter",
+        "Reviewer replies rejected for the verdict format, by reason.",
+    );
+    for (code, n) in &m.review_format_rejected {
+        t.sample("saka_review_format_rejected_total", &[("code", code)], n);
+    }
+    t.family(
+        "saka_review_posts_total",
+        "counter",
+        "Native reviews posted, by review event.",
+    );
+    for (event, n) in &m.review_posts {
+        t.sample("saka_review_posts_total", &[("event", event)], n);
+    }
     histogram(
         &mut t,
         "saka_intake_scan_seconds",

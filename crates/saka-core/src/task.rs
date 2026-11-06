@@ -8,13 +8,16 @@ use crate::blocker::primary_action;
 use crate::event::{Event, Prompt};
 use crate::external;
 use crate::gate::{self, Check, GatePolicy};
-use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, GateResultId, StageRunId};
+use crate::ids::{
+    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, ReviewId, SessionId, StageRunId,
+};
 use crate::job::{JobKind, exhausted_code};
 use crate::model::{
     Blocker, Budget, ChangeRequest, Coded, EnvironmentSetup, ExternalChange, GateResult, Retries,
-    RunOwner, StageRun, Task, Usage, WorkItem,
+    Review, ReviewPosted, RunOwner, StageRun, Task, Usage, WorkItem,
 };
 use crate::rejection::Rejection;
+use crate::review;
 use crate::scope::ScopeViolation;
 use crate::session::{
     self, RunRetry, RunView, SessionConfig, SessionInput, SessionOutcome, SessionSignal,
@@ -23,8 +26,8 @@ use crate::time::Timestamp;
 use crate::vocab::{
     BlockerAction, BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
     EnvironmentState, ExternalCause, GateOutcome, GateSource, HookRunState, MergeMethod,
-    ResumeCause, ResumeTrigger, ScopeStage, SessionState, Stage, StagePhase, StageRunState,
-    Trigger, WorkItemOrigin, WorkItemState,
+    ResumeCause, ResumeTrigger, ReviewBasis, ReviewEvent, ReviewOutcome, ScopeStage, SessionState,
+    Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -206,6 +209,23 @@ pub enum TaskInput {
         reason: String,
         change: Option<ObservedChange>,
     },
+    StartReview,
+    ReviewEnvironmentPrepared {
+        environment_id: EnvironmentId,
+        root_path: String,
+        worktree_path: String,
+        head_sha: String,
+    },
+    ReviewReported {
+        session_id: SessionId,
+        turn: u32,
+        text: String,
+    },
+    ReviewPosted {
+        review_id: ReviewId,
+        event: ReviewEvent,
+        url: Option<String>,
+    },
 }
 
 pub fn decide(
@@ -215,7 +235,26 @@ pub fn decide(
     ctx: &mut Ctx<'_>,
 ) -> Result<Vec<Event>, Rejection> {
     if task.item.origin == WorkItemOrigin::ExternalChange {
-        return external::decide(task, input, ctx);
+        match input {
+            TaskInput::ChangeObserved { .. } | TaskInput::ReviewRequested { .. } => {
+                return external::decide(task, input, ctx);
+            }
+            TaskInput::Session(_)
+            | TaskInput::StartReview
+            | TaskInput::ReviewEnvironmentPrepared { .. }
+            | TaskInput::EnvironmentFailed { .. }
+            | TaskInput::ReviewReported { .. }
+            | TaskInput::ReviewPosted { .. }
+            | TaskInput::Tick
+            | TaskInput::Retry { .. }
+            | TaskInput::AutoRetry
+            | TaskInput::Resume { .. }
+            | TaskInput::ResolveBlocker { .. }
+            | TaskInput::JobExhausted { .. }
+            | TaskInput::EnvironmentTornDown { .. }
+            | TaskInput::Cancel { .. } => {}
+            _ => return Err(Rejection::Unsupported),
+        }
     }
     if task.item.state == WorkItemState::Superseded {
         return Err(Rejection::InvalidState {
@@ -430,6 +469,23 @@ pub fn decide(
                 state: d.state_name(),
             });
         }
+        I::StartReview => d.start_review(),
+        I::ReviewEnvironmentPrepared {
+            environment_id,
+            root_path,
+            worktree_path,
+            head_sha,
+        } => d.review_environment_prepared(environment_id, root_path, worktree_path, head_sha),
+        I::ReviewReported {
+            session_id,
+            turn,
+            text,
+        } => d.review_reported(session_id, turn, &text, ctx),
+        I::ReviewPosted {
+            review_id,
+            event,
+            url,
+        } => d.review_posted(review_id, event, url),
     })
 }
 
@@ -572,13 +628,16 @@ impl Decider<'_> {
                 _ => Ok(vec![]),
             };
         };
-        if matches!(input, SessionInput::Launched { .. })
-            && !self.task.is_at(Stage::Dev, StagePhase::RunningSession)
-        {
+        if matches!(input, SessionInput::Launched { .. }) && !self.running_agent() {
             return Ok(vec![]);
         }
         let outcome = session::decide(&view, input, &self.cfg.session(), ctx)?;
         Ok(self.settle(outcome, ctx))
+    }
+
+    fn running_agent(&self) -> bool {
+        self.task.is_at(Stage::Dev, StagePhase::RunningSession)
+            || self.task.is_at(Stage::Review, StagePhase::RunningSession)
     }
 
     fn settle(&self, outcome: SessionOutcome, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -589,7 +648,7 @@ impl Decider<'_> {
             Some(SessionSignal::Stopped {
                 code: BlockerCode::SessionLost,
                 ..
-            }) if !self.task.is_at(Stage::Dev, StagePhase::RunningSession) => {}
+            }) if !self.running_agent() => {}
             Some(SessionSignal::Stopped { code, params }) => {
                 events.extend(self.block(code, params, ctx));
             }
@@ -693,7 +752,11 @@ impl Decider<'_> {
         params: Value,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
-        if !self.preparing() {
+        if !self.preparing()
+            && !self
+                .task
+                .is_at(Stage::Review, StagePhase::PreparingEnvironment)
+        {
             return vec![];
         }
         self.block(code, params, ctx)
@@ -786,6 +849,210 @@ impl Decider<'_> {
         let params = json!({ "dirty": dirty, "commits": commits_ahead, "docs_dirty": docs_dirty });
         let mut events = self.end_session(SessionState::Ended, "no_changes", params.clone());
         events.extend(self.block(BlockerCode::NoChanges, params, ctx));
+        events
+    }
+
+    fn start_review(&self) -> Vec<Event> {
+        let pending = self
+            .task
+            .stage_run
+            .as_ref()
+            .is_some_and(|r| r.stage == Stage::Review && r.state == StageRunState::Pending);
+        if !pending || !self.task.is_at(Stage::Review, StagePhase::AwaitingReview) {
+            return vec![];
+        }
+        match (
+            self.task.external.is_some(),
+            self.task.ready_environment().is_some(),
+        ) {
+            (true, false) => self.phase(StagePhase::PreparingEnvironment, None),
+            (false, true) => self.phase(StagePhase::RunningSession, None),
+            _ => vec![],
+        }
+    }
+
+    fn review_environment_prepared(
+        &self,
+        environment_id: EnvironmentId,
+        root_path: String,
+        worktree_path: String,
+        head_sha: String,
+    ) -> Vec<Event> {
+        let Some(owner) = self.task.run_owner() else {
+            return vec![];
+        };
+        if !self
+            .task
+            .is_at(Stage::Review, StagePhase::PreparingEnvironment)
+        {
+            return vec![];
+        }
+        let mut events = vec![Event::EnvironmentPrepared {
+            owner,
+            environment_id,
+            repo_id: self.item().repo_id,
+            root_path,
+            worktree_path,
+            branch: None,
+            base_sha: head_sha,
+            port_start: None,
+            port_count: None,
+            recipe: None,
+            recipe_sha256: None,
+            setup: Vec::new(),
+            toolchains: Vec::new(),
+            path_scope: Vec::new(),
+            docs: None,
+        }];
+        events.extend(self.phase(StagePhase::RunningSession, None));
+        events
+    }
+
+    fn review_has_spec(&self) -> bool {
+        self.item().spec_id.is_some()
+            || self
+                .task
+                .external
+                .as_ref()
+                .is_some_and(|e| e.spec.is_some())
+    }
+
+    fn review_basis(&self) -> ReviewBasis {
+        let linked_step = self
+            .task
+            .external
+            .as_ref()
+            .and_then(|e| e.spec.as_ref())
+            .is_some_and(|s| s.step_id.is_some());
+        if self.item().step_id.is_some() || linked_step {
+            ReviewBasis::Step
+        } else if self.review_has_spec() {
+            ReviewBasis::Spec
+        } else {
+            ReviewBasis::None
+        }
+    }
+
+    fn review_reported(
+        &self,
+        session_id: SessionId,
+        turn: u32,
+        text: &str,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(session) = self.task.live_session() else {
+            return vec![];
+        };
+        if !self.task.is_at(Stage::Review, StagePhase::RunningSession)
+            || session.id != session_id
+            || session.turns != turn
+            || session.state != SessionState::Idle
+            || session.interrupt_requested.is_some()
+        {
+            return vec![];
+        }
+        let Some(run) = &self.task.stage_run else {
+            return vec![];
+        };
+        match review::parse(text, self.review_has_spec()) {
+            Ok(verdict) => self.review_recorded(run, session.id, verdict, ctx),
+            Err(error) if session.followups < review::FORMAT_RETRIES => {
+                let Some(view) = run_view(self.task) else {
+                    return vec![];
+                };
+                let prompt = Prompt::VerdictFormat {
+                    reason: error.code().to_string(),
+                };
+                let outcome =
+                    session::next_turn(&view, turn + 1, prompt, &self.cfg.session(), self.now);
+                self.settle(outcome, ctx)
+            }
+            Err(error) => {
+                let params = json!({ "cause": "verdict_invalid", "code": error.code() });
+                let mut events =
+                    self.end_session(SessionState::Ended, "verdict_invalid", params.clone());
+                events.extend(self.block(BlockerCode::SessionFailed, params, ctx));
+                events
+            }
+        }
+    }
+
+    fn review_recorded(
+        &self,
+        run: &StageRun,
+        session_id: SessionId,
+        verdict: review::Verdict,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(head_sha) = run.head_sha.clone() else {
+            return vec![];
+        };
+        let outcome = verdict.outcome;
+        let step_id = self.item().step_id.clone().or_else(|| {
+            self.task
+                .external
+                .as_ref()
+                .and_then(|e| e.spec.as_ref())
+                .and_then(|s| s.step_id.clone())
+        });
+        let questions = verdict.questions.clone();
+        let mut events = vec![Event::ReviewRecorded {
+            work_item_id: self.item().id,
+            stage_run_id: run.id,
+            review_id: ReviewId::new(ctx.ids),
+            session_id,
+            head_sha: head_sha.clone(),
+            outcome,
+            basis: self.review_basis(),
+            summary: verdict.summary,
+            findings: verdict.findings,
+            questions: verdict.questions,
+        }];
+        events.extend(self.end_session(SessionState::Ended, "completed", json!({})));
+        match outcome {
+            ReviewOutcome::Approved | ReviewOutcome::ChangesRequested => {
+                events.extend(self.phase(StagePhase::PostingReview, None));
+            }
+            ReviewOutcome::SpecUnclear => events.extend(self.block(
+                BlockerCode::SpecUnclear,
+                json!({ "head_sha": head_sha, "questions": questions, "step_id": step_id }),
+                ctx,
+            )),
+        }
+        events
+    }
+
+    fn review_posted(
+        &self,
+        review_id: ReviewId,
+        event: ReviewEvent,
+        url: Option<String>,
+    ) -> Vec<Event> {
+        let (Some(run), true) = (
+            &self.task.stage_run,
+            self.task.is_at(Stage::Review, StagePhase::PostingReview),
+        ) else {
+            return vec![];
+        };
+        if self
+            .task
+            .unposted_review()
+            .is_none_or(|r| r.id != review_id)
+        {
+            return vec![];
+        }
+        let mut events = vec![Event::ReviewPosted {
+            work_item_id: self.item().id,
+            review_id,
+            event,
+            url,
+        }];
+        events.extend(self.phase(StagePhase::Reviewed, None));
+        events.push(Event::StageRunSucceeded {
+            work_item_id: self.item().id,
+            stage_run_id: run.id,
+            head_sha: run.head_sha.clone(),
+        });
         events
     }
 
@@ -1745,7 +2012,8 @@ impl Decider<'_> {
                 state: self.state_name(),
             });
         };
-        let Some((stage, mut entry)) = retry_entry(blocker.code, &blocker.params) else {
+        let Some((stage, mut entry)) = retry_target(self.task, blocker.code, &blocker.params)
+        else {
             return Err(Rejection::InvalidState {
                 state: self.state_name(),
             });
@@ -1759,7 +2027,9 @@ impl Decider<'_> {
             });
         }
         let env_ready = self.task.ready_environment().is_some();
-        if entry == StagePhase::RunningSession && !env_ready {
+        if stage == Stage::Review {
+            // A review restarts from its request; only a failed post re-enters at the post.
+        } else if entry == StagePhase::RunningSession && !env_ready {
             entry = StagePhase::PreparingEnvironment;
         } else if entry == StagePhase::PreparingEnvironment && env_ready {
             entry = StagePhase::RunningSession;
@@ -1775,7 +2045,7 @@ impl Decider<'_> {
             .filter(|r| r.stage == stage && entry == StagePhase::Pushing);
         let pushed_head = pushing.and_then(|r| r.head_sha.clone());
         let pushed_docs = pushing.and_then(|r| r.docs_head_sha.clone());
-        let run = self.new_run(
+        let mut run = self.new_run(
             stage,
             trigger,
             entry,
@@ -1783,6 +2053,21 @@ impl Decider<'_> {
             Some(retry_of),
             ctx,
         );
+        if stage == Stage::Review
+            && let Event::StageRunCreated { head_sha, .. } = &mut run
+        {
+            *head_sha = if entry == StagePhase::PostingReview {
+                self.task
+                    .stage_run
+                    .as_ref()
+                    .and_then(|r| r.head_sha.clone())
+            } else {
+                self.task
+                    .change_request
+                    .as_ref()
+                    .map(|c| c.head_sha.clone())
+            };
+        }
         let mut events = vec![Event::BlockerResolved {
             work_item_id: self.item().id,
             blocker_id: blocker.id,
@@ -1871,6 +2156,7 @@ impl Decider<'_> {
                 reason: Some(reason.clone()),
             });
         }
+        events.extend(external::cancel_run(self.task, "cancelled"));
         events.extend(self.end_session(SessionState::Ended, "cancelled", json!({})));
         events.push(Event::WorkItemCancelled {
             work_item_id: self.item().id,
@@ -1894,6 +2180,16 @@ impl Decider<'_> {
             return self.environment_failed(BlockerCode::ToolchainUnavailable, error.params, ctx);
         }
         if kind == JobKind::ScmPollChangeRequest && self.task.item.stage != Some(Stage::Merge) {
+            return vec![];
+        }
+        let stale = match kind {
+            JobKind::EnvPrepareReview => !self
+                .task
+                .is_at(Stage::Review, StagePhase::PreparingEnvironment),
+            JobKind::ScmPostReview => !self.task.is_at(Stage::Review, StagePhase::PostingReview),
+            _ => false,
+        };
+        if stale {
             return vec![];
         }
         if kind == JobKind::GateVerify && self.task.is_at(Stage::Sync, StagePhase::Verifying) {
@@ -2040,6 +2336,33 @@ impl Decider<'_> {
     }
 }
 
+pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
+    let reviewing = task
+        .stage_run
+        .as_ref()
+        .is_some_and(|r| r.stage == Stage::Review);
+    if !reviewing {
+        return retry_entry(code, params);
+    }
+    use BlockerCode as B;
+    match code {
+        B::EnvSetupFailed
+        | B::SessionFailed
+        | B::SessionLost
+        | B::SessionTimeout
+        | B::PermissionExpired
+        | B::BudgetExhausted
+        | B::QuotaExhausted
+        | B::SpecUnclear => Some((Stage::Review, StagePhase::AwaitingReview)),
+        B::ScmUnavailable
+            if params.get("phase").and_then(Value::as_str) == Some("posting_review") =>
+        {
+            Some((Stage::Review, StagePhase::PostingReview))
+        }
+        _ => retry_entry(code, params).filter(|(stage, _)| *stage == Stage::Review),
+    }
+}
+
 pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
     use BlockerCode as B;
     Some(match code {
@@ -2068,6 +2391,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
             }
         }
         B::UserAccessDenied => (Stage::Dev, StagePhase::OpeningChange),
+        B::SpecUnclear => (Stage::Review, StagePhase::AwaitingReview),
         B::CiRed if params.get("reason").and_then(Value::as_str) == Some("runner_failed") => {
             (Stage::Merge, StagePhase::AwaitingCi)
         }
@@ -2089,7 +2413,10 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
                 StagePhase::MergingDocs | StagePhase::Verifying | StagePhase::TearingDown => {
                     Stage::Sync
                 }
-                StagePhase::AwaitingTrigger | StagePhase::AwaitingReview => Stage::Review,
+                StagePhase::AwaitingTrigger
+                | StagePhase::AwaitingReview
+                | StagePhase::PostingReview
+                | StagePhase::Reviewed => Stage::Review,
             };
             // Merging again needs a fresh look at the change and its checks.
             let phase = if phase == StagePhase::Merging {
@@ -2250,7 +2577,9 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
     }
     match event {
         E::StageRunCancelled { stage_run_id, .. } => {
-            if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id) {
+            if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
+                && matches!(run.state, StageRunState::Pending | StageRunState::Running)
+            {
                 run.state = StageRunState::Cancelled;
                 run.ended_at = Some(now);
                 run.updated_at = now;
@@ -2441,6 +2770,45 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             );
         }
         E::MergeRequested { .. } => {}
+        E::ReviewRecorded {
+            review_id,
+            stage_run_id,
+            session_id,
+            head_sha,
+            outcome,
+            basis,
+            summary,
+            findings,
+            questions,
+            ..
+        } => t.reviews.push(Review {
+            id: *review_id,
+            work_item_id: t.item.id,
+            stage_run_id: *stage_run_id,
+            session_id: *session_id,
+            head_sha: head_sha.clone(),
+            outcome: *outcome,
+            basis: *basis,
+            summary: summary.clone(),
+            findings: findings.clone(),
+            questions: questions.clone(),
+            posted: None,
+            created_at: now,
+        }),
+        E::ReviewPosted {
+            review_id,
+            event,
+            url,
+            ..
+        } => {
+            if let Some(review) = t.reviews.iter_mut().find(|r| r.id == *review_id) {
+                review.posted = Some(ReviewPosted {
+                    event: *event,
+                    url: url.clone(),
+                    at: now,
+                });
+            }
+        }
         E::WorkItemBlocked {
             stage_run_id,
             blocker_id,
@@ -2685,7 +3053,7 @@ pub fn gates_clear(task: &Task) -> bool {
 pub fn can_retry(task: &Task) -> bool {
     task.item.state == WorkItemState::Blocked
         && task.open_blocker().is_some_and(|b| {
-            retry_entry(b.code, &b.params).is_some_and(|(stage, _)| {
+            retry_target(task, b.code, &b.params).is_some_and(|(stage, _)| {
                 task.retries.get(&stage).map_or(0, |r| r.manual) < MANUAL_RETRY_LIMIT
             })
         })
@@ -2767,7 +3135,7 @@ pub fn auto_retry_due(task: &Task, now: Timestamp) -> bool {
     if task.item.state != WorkItemState::Blocked || !auto_retryable(blocker.code, &blocker.params) {
         return false;
     }
-    let Some((stage, _)) = retry_entry(blocker.code, &blocker.params) else {
+    let Some((stage, _)) = retry_target(task, blocker.code, &blocker.params) else {
         return false;
     };
     let done = task.retries.get(&stage).map_or(0, |r| r.auto);

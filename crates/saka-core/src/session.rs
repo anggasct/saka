@@ -1196,6 +1196,7 @@ pub fn apply(run: RunParts<'_>, event: &Event, now: Timestamp) -> bool {
                         | Prompt::OutOfScope { .. }
                         | Prompt::DocsUncommitted { .. }
                         | Prompt::DocsOutOfScope { .. }
+                        | Prompt::VerdictFormat { .. }
                 ) {
                     s.followups += 1;
                 }

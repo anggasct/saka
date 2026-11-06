@@ -10,11 +10,12 @@ use saka_core::gate::Check;
 use saka_core::ids::{EnvironmentId, SessionId};
 use saka_core::model::{RunOwner, ToolchainUse};
 use saka_core::policy::RequestPath;
+use saka_core::review::Finding;
 use saka_core::secret::{SecretScope, SecretText, SecretVar};
 use saka_core::time::Timestamp;
-use saka_core::vocab::SecretPurpose;
 use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, MergeMethod};
 use saka_core::vocab::{HostTool, Tool};
+use saka_core::vocab::{ReviewOutcome, SecretPurpose};
 use saka_ports::{
     Agents, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal, ChangeSnapshot,
     ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit, DeviceCode,
@@ -80,6 +81,76 @@ impl Default for AgentScript {
             ask: None,
             usage: TurnUsage::default(),
             rate_limit: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReviewReply {
+    Verdict {
+        outcome: ReviewOutcome,
+        summary: String,
+        findings: Vec<Finding>,
+        questions: Vec<String>,
+    },
+    Raw(String),
+}
+
+impl ReviewReply {
+    pub fn approve() -> ReviewReply {
+        ReviewReply::Verdict {
+            outcome: ReviewOutcome::Approved,
+            summary: "Looks right.".into(),
+            findings: Vec::new(),
+            questions: Vec::new(),
+        }
+    }
+
+    pub fn request_changes(finding: &str) -> ReviewReply {
+        ReviewReply::Verdict {
+            outcome: ReviewOutcome::ChangesRequested,
+            summary: "Something needs to change.".into(),
+            findings: vec![Finding {
+                path: Some("src/lib.rs".into()),
+                line: Some(1),
+                severity: saka_core::vocab::Severity::Major,
+                body: finding.into(),
+            }],
+            questions: Vec::new(),
+        }
+    }
+
+    pub fn spec_unclear(question: &str) -> ReviewReply {
+        ReviewReply::Verdict {
+            outcome: ReviewOutcome::SpecUnclear,
+            summary: "The spec does not say.".into(),
+            findings: Vec::new(),
+            questions: vec![question.into()],
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            ReviewReply::Raw(text) => text.clone(),
+            ReviewReply::Verdict {
+                outcome,
+                summary,
+                findings,
+                questions,
+            } => {
+                let verdict = match outcome {
+                    ReviewOutcome::Approved => "approve",
+                    ReviewOutcome::ChangesRequested => "request_changes",
+                    ReviewOutcome::SpecUnclear => "spec_unclear",
+                };
+                json!({
+                    "verdict": verdict,
+                    "summary": summary,
+                    "findings": findings,
+                    "questions": questions,
+                })
+                .to_string()
+            }
         }
     }
 }
@@ -171,6 +242,7 @@ struct FakeSession {
     answered: BTreeSet<String>,
     steers: BTreeSet<u32>,
     architect: bool,
+    reviewer: bool,
 }
 
 struct State {
@@ -212,6 +284,7 @@ struct State {
     statuses_refused: bool,
     change_diffs: HashMap<String, ChangeDiff>,
     change_diff_requests: Vec<String>,
+    review_replies: VecDeque<ReviewReply>,
     reviews: Vec<ReviewPost>,
     review_outages: u32,
     reviews_refused: bool,
@@ -372,6 +445,7 @@ impl FakeWorld {
                 statuses_refused: false,
                 change_diffs: HashMap::new(),
                 change_diff_requests: Vec::new(),
+                review_replies: VecDeque::new(),
                 reviews: Vec::new(),
                 review_outages: 0,
                 reviews_refused: false,
@@ -710,6 +784,19 @@ impl FakeWorld {
 
     pub fn statuses(&self) -> Vec<(String, StatusReport)> {
         self.state().statuses.clone()
+    }
+
+    pub fn script_reviews(&self, replies: Vec<ReviewReply>) {
+        self.state().review_replies = replies.into();
+    }
+
+    pub fn reviewer_launches(&self) -> Vec<Launch> {
+        self.state()
+            .launches
+            .iter()
+            .filter(|l| l.profile == LaunchProfile::Reviewer)
+            .cloned()
+            .collect()
     }
 
     pub fn script_change_diff(&self, head_sha: &str, diff: ChangeDiff) {
@@ -1057,7 +1144,10 @@ impl State {
     }
 
     fn work(&mut self, session: SessionId, turn: u32, at: Timestamp) {
-        let Some((env, architect)) = self.sessions.get(&session).map(|s| (s.env, s.architect))
+        let Some((env, architect, reviewer)) = self
+            .sessions
+            .get(&session)
+            .map(|s| (s.env, s.architect, s.reviewer))
         else {
             return;
         };
@@ -1103,6 +1193,20 @@ impl State {
                 DocsTurn::Nothing => {}
             }
         }
+        let reply = (reviewer
+            && matches!(
+                outcome,
+                AgentOutcome::Commit
+                    | AgentOutcome::CommitOnFollowup
+                    | AgentOutcome::LeaveDirty
+                    | AgentOutcome::NoCommit
+            ))
+        .then(|| {
+            self.review_replies
+                .pop_front()
+                .unwrap_or_else(ReviewReply::approve)
+                .text()
+        });
         let usage = self.script.usage;
         if let Some(info) = self.script.rate_limit.clone() {
             self.emit(session, at, RunnerEventKind::RateLimit { info });
@@ -1122,6 +1226,22 @@ impl State {
                 },
             );
         };
+        if let Some(text) = reply {
+            self.emit(
+                session,
+                at,
+                RunnerEventKind::TurnEnded {
+                    turn,
+                    status: "success".to_string(),
+                    cost_usd_micros: Some(usage.cost_usd_micros),
+                    input_tokens: Some(usage.input_tokens),
+                    output_tokens: Some(usage.output_tokens),
+                    result_summary: Some(format!("turn {turn} done")),
+                    result_text: Some(text),
+                },
+            );
+            return;
+        }
         let commit = |s: &mut State| {
             let Some(w) = s.worktrees.get(&env).cloned() else {
                 return;
@@ -2395,6 +2515,7 @@ impl Agents for FakeWorld {
                 answered: BTreeSet::new(),
                 steers: BTreeSet::new(),
                 architect: matches!(launch.profile, LaunchProfile::Architect { .. }),
+                reviewer: launch.profile == LaunchProfile::Reviewer,
             },
         );
         s.stats.session_starts += 1;
