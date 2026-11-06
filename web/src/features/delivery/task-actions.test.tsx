@@ -491,4 +491,134 @@ describe("review request", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
+
+  it("takes a task over with a reason", async () => {
+    const running = detail(
+      task(1, {
+        state: "in_stage",
+        stage: "dev",
+        stage_phase: "running_session",
+        available_actions: ["cancel", "takeover"],
+      }),
+    );
+    const { requests } = fakeApi(
+      routes(() => running, { [`${DETAIL}/actions/takeover`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const dialog = await open("Take over");
+    const submit = within(dialog).getByRole("button", {
+      name: "Take the task over",
+    });
+    expect(submit).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "by hand");
+    await userEvent.click(submit);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(posts(requests, "takeover").map((r) => r.body)).toEqual([
+      { reason: "by hand" },
+    ]);
+  });
+
+  it("shows where a taken over task is worked on and returns it at the stage it left", async () => {
+    const taken = detail(
+      task(1, {
+        state: "taken_over",
+        stage: null,
+        stage_phase: null,
+        change_request: change,
+        available_actions: ["cancel", "return"],
+      }),
+      {
+        stage_runs: [
+          {
+            id: "0193f0c4-1b2a-7c3d-9e8f-001122334477",
+            attempt: 1,
+            stage: "merge",
+            state: "cancelled",
+            trigger: "auto",
+          },
+        ],
+      },
+    );
+    const { requests } = fakeApi(
+      routes(() => taken, { [`${DETAIL}/actions/return`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const banner = await screen.findByRole("region", { name: "Taken over" });
+    expect(within(banner).getByText(taken.branch)).toBeInTheDocument();
+    const dialog = await open("Return to the loop");
+    const stage = within(dialog).getByLabelText("Stage to start");
+    expect(stage).toHaveValue("merge");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "fixed");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Return to the loop" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(posts(requests, "return").map((r) => r.body)).toEqual([
+      { stage: "merge", reason: "fixed" },
+    ]);
+  });
+
+  it("offers only the development stage when the task has no pull request yet", async () => {
+    const taken = detail(
+      task(1, {
+        state: "taken_over",
+        stage: null,
+        stage_phase: null,
+        available_actions: ["cancel", "return"],
+      }),
+    );
+    fakeApi(routes(() => taken));
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const dialog = await open("Return to the loop");
+    const stage = within(dialog).getByLabelText("Stage to start");
+    expect(stage).toHaveValue("dev");
+    expect(within(stage).getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("takes over from the blocker when someone pushed to the branch", async () => {
+    const moved = detail(
+      task(1, {
+        state: "blocked",
+        stage: "dev",
+        change_request: change,
+        blocker: {
+          ...BASE_BLOCKER,
+          code: "branch_moved",
+          params: { number: 12, head_sha: HEAD, previous_head_sha: HEAD },
+          primary_action: { kind: "takeover", params: {} },
+        },
+        available_actions: ["retry", "cancel", "takeover"],
+      }),
+    );
+    const { requests } = fakeApi(
+      routes(() => moved, { [`${DETAIL}/actions/primary`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    expect(
+      within(card).getByText(/Someone pushed to the task branch/),
+    ).toBeInTheDocument();
+    const header = await screen.findByRole("banner");
+    expect(
+      within(header).queryByRole("button", { name: "Take over" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Take over" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "mine");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Take the task over" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(posts(requests, "primary").map((r) => r.body)).toEqual([
+      { blocker_id: BLOCKER, reason: "mine" },
+    ]);
+  });
 });

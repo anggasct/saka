@@ -19,6 +19,7 @@ import {
 } from "./queries";
 import { SessionSection } from "./session-section";
 import { StageRunsSection } from "./stage-runs-section";
+import { TakenOverBanner } from "./taken-over-banner";
 import { TaskActions } from "./task-actions";
 import { TaskHeader } from "./task-header";
 import { WaitingSection } from "./waiting-section";
@@ -93,6 +94,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
           specPath={spec.data?.path}
         />
       )}
+      <TakenOverBanner task={item} />
       <WaitingSection task={item} tasks={tasks} />
       <ChangeSection task={item} />
       <GatesSection task={item} />
