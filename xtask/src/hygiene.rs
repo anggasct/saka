@@ -7,6 +7,7 @@ use ra_ap_rustc_lexer::{FrontmatterAllowed, TokenKind, tokenize};
 use regex::Regex;
 
 const MAX_COMMENT_LINES: usize = 3;
+const COMMENT_LINE_LIMIT: usize = 127;
 
 const SKIPPED_PREFIXES: &[&str] = &[
     "spikes/",
@@ -151,6 +152,20 @@ fn rust_findings(patterns: &Patterns, source: &str) -> Vec<(usize, Rule)> {
     findings
 }
 
+fn line_comment_count(source: &str) -> usize {
+    tokenize(source, FrontmatterAllowed::No)
+        .filter(|token| matches!(token.kind, TokenKind::LineComment { doc_style: None }))
+        .count()
+}
+
+fn over_comment_limit(total: usize, limit: usize) -> Option<String> {
+    (total > limit).then(|| {
+        format!(
+            "{total} Rust line-comment lines, the limit is {limit}: remove comments, or raise COMMENT_LINE_LIMIT in xtask/src/hygiene.rs in the same change"
+        )
+    })
+}
+
 fn shell_findings(patterns: &Patterns, source: &str) -> Vec<(usize, Rule)> {
     let comments: Vec<Comment<'_>> = source
         .lines()
@@ -235,10 +250,14 @@ fn tracked_files(root: &Path) -> Result<Vec<String>> {
 pub fn run(root: &Path) -> Result<()> {
     let patterns = Patterns::new()?;
     let mut total = 0;
+    let mut comment_lines = 0;
     for path in tracked_files(root)? {
         let Ok(source) = std::fs::read_to_string(root.join(&path)) else {
             continue;
         };
+        if path.ends_with(".rs") && !API_DOC_SOURCES.contains(&path.as_str()) {
+            comment_lines += line_comment_count(&source);
+        }
         for (line, rule) in check_file(&patterns, &path, &source) {
             eprintln!("  {path}:{line}: {rule}");
             total += 1;
@@ -246,6 +265,9 @@ pub fn run(root: &Path) -> Result<()> {
     }
     if total > 0 {
         bail!("{total} finding(s)");
+    }
+    if let Some(message) = over_comment_limit(comment_lines, COMMENT_LINE_LIMIT) {
+        bail!(message);
     }
     Ok(())
 }
@@ -297,6 +319,22 @@ mod tests {
             rules("a.rs", source),
             [(2, Rule::TaskMarker), (3, Rule::CommentedOutCode)]
         );
+    }
+
+    #[test]
+    fn line_comments_are_counted_but_not_doc_comments_or_literals() {
+        let source =
+            "//! crate\n/// item\nfn a() {\n    // one\n    let x = \"// no\"; // two\n}\n";
+        assert_eq!(line_comment_count(source), 2);
+    }
+
+    #[test]
+    fn the_comment_limit_passes_at_the_limit_and_fails_above_it() {
+        assert_eq!(over_comment_limit(4, 4), None);
+        assert_eq!(over_comment_limit(3, 4), None);
+        let message = over_comment_limit(5, 4).unwrap_or_default();
+        assert!(message.contains("5 Rust line-comment lines"), "{message}");
+        assert!(message.contains("limit is 4"), "{message}");
     }
 
     #[test]
