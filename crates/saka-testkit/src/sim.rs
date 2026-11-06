@@ -113,15 +113,26 @@ impl Default for SimConfig {
                 max_followup_turns: 1,
                 permission_wait_ms: 24 * 3_600_000,
                 idle_ms: 30 * 60_000,
-                budgets: std::collections::BTreeMap::from([(
-                    saka_core::vocab::Stage::Dev,
-                    saka_core::model::Budget {
-                        running_minutes: 60,
-                        turns: 10,
-                        tokens: 0,
-                        cost_usd_micros: 0,
-                    },
-                )]),
+                budgets: std::collections::BTreeMap::from([
+                    (
+                        saka_core::vocab::Stage::Dev,
+                        saka_core::model::Budget {
+                            running_minutes: 60,
+                            turns: 10,
+                            tokens: 0,
+                            cost_usd_micros: 0,
+                        },
+                    ),
+                    (
+                        saka_core::vocab::Stage::Review,
+                        saka_core::model::Budget {
+                            running_minutes: 20,
+                            turns: 3,
+                            tokens: 0,
+                            cost_usd_micros: 0,
+                        },
+                    ),
+                ]),
                 budget_warn_percent: 80,
                 rate_limit_pause: 0.9,
                 account: "claude:default".into(),
@@ -639,6 +650,24 @@ impl Sim {
         engine
             .store()
             .read(|c| read::load_tasks(c, TaskSet::Reconcile))
+            .unwrap()
+    }
+
+    pub fn externals(&self) -> Vec<Task> {
+        self.engine()
+            .store()
+            .read(|c| {
+                let ids: Vec<WorkItemId> = {
+                    let mut stmt = c.prepare(
+                        "SELECT id FROM work_item WHERE origin = 'external_change' ORDER BY created_at, id",
+                    )?;
+                    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                    rows.filter_map(|r| r.ok()?.parse::<uuid::Uuid>().ok())
+                        .map(WorkItemId)
+                        .collect()
+                };
+                read::load_tasks(c, TaskSet::Ids(&ids))
+            })
             .unwrap()
     }
 

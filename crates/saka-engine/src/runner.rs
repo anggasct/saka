@@ -4,6 +4,7 @@ use saka_core::model::{Draft, Environment, PermissionRequest, RunOwner, Session,
 use saka_core::policy::{Effect, ToolRequest};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
+use saka_core::vocab::{Stage, StagePhase};
 use saka_ports::{EnvRef, RunnerEvent, RunnerEventKind};
 use saka_store::read;
 use serde_json::Value;
@@ -199,6 +200,31 @@ impl Engine {
         for input in inputs {
             decide(Some(input), Extra::default())?;
         }
+        if let (
+            Run::Task(t),
+            RunnerEventKind::TurnEnded {
+                turn,
+                status,
+                result_text,
+                ..
+            },
+        ) = (&run, &event.kind)
+            && status == "success"
+            && t.is_at(Stage::Review, StagePhase::RunningSession)
+        {
+            let report = TaskInput::ReviewReported {
+                session_id: event.session_id,
+                turn: *turn,
+                text: result_text.clone().unwrap_or_default(),
+            };
+            self.decide(
+                t.item.id,
+                Some(report),
+                Mode::Fact,
+                &cause,
+                Extra::default(),
+            )?;
+        }
         Ok(())
     }
 
@@ -218,10 +244,18 @@ impl Engine {
                     &tool,
                     &input,
                 );
-                let rules = self
-                    .store
-                    .read(|c| read::active_permission_rules(c, task.item.project_id))?;
-                self.cfg.policy.evaluate_with(&request, &rules)
+                if task
+                    .stage_run
+                    .as_ref()
+                    .is_some_and(|r| r.stage == Stage::Review)
+                {
+                    saka_core::policy::reviewer(&request, &self.cfg.policy)
+                } else {
+                    let rules = self
+                        .store
+                        .read(|c| read::active_permission_rules(c, task.item.project_id))?;
+                    self.cfg.policy.evaluate_with(&request, &rules)
+                }
             }
             Run::Draft(d) => {
                 let (project, _) = self.workspace_of(d.draft.project_id)?;

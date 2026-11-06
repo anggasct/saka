@@ -157,7 +157,7 @@ fn the_run_owner_migration_keeps_every_task_row_and_guards_the_owner_arc() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     );
     assert!(store.migration().backup.is_some());
     drop(store);
@@ -224,9 +224,6 @@ fn the_run_owner_migration_keeps_every_task_row_and_guards_the_owner_arc() {
         "INSERT INTO environment (id, project_id, work_item_id, spec_draft_id, spec_draft_attempt_id, repo_id,
              root_path, worktree_path, branch, state, created_at, updated_at)
            VALUES ('e-both', 'p1', 'w2', 'd1', 'a1', 'r1', '/e', '/e/w', 'b', 'preparing', 7, 7)",
-        "INSERT INTO environment (id, project_id, work_item_id, repo_id, root_path, worktree_path, state, created_at,
-             updated_at)
-           VALUES ('e-nobranch', 'p1', 'w2', 'r1', '/e', '/e/w', 'preparing', 7, 7)",
         "INSERT INTO environment (id, project_id, spec_draft_id, spec_draft_attempt_id, repo_id, root_path,
              worktree_path, state, created_at, updated_at)
            VALUES ('e-ghost', 'p1', 'd-missing', 'a-missing', 'r1', '/e', '/e/w', 'preparing', 7, 7)",

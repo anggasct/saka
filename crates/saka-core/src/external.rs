@@ -5,8 +5,8 @@ use crate::model::{SpecLink, Task};
 use crate::rejection::Rejection;
 use crate::task::TaskInput;
 use crate::vocab::{
-    ChangeRole, ChangeState, ExternalCause, Stage, StagePhase, StageRunState, Trigger,
-    WorkItemState,
+    BlockerResolution, ChangeRole, ChangeState, ExternalCause, SessionState, Stage, StagePhase,
+    StageRunState, Trigger, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -199,19 +199,56 @@ pub fn accept(
     Ok(events)
 }
 
-fn pending_run(task: &Task) -> Option<StageRunId> {
+fn open_run(task: &Task) -> Option<StageRunId> {
     task.stage_run
         .as_ref()
-        .filter(|r| r.stage == Stage::Review && r.state == StageRunState::Pending)
+        .filter(|r| {
+            r.stage == Stage::Review
+                && matches!(r.state, StageRunState::Pending | StageRunState::Running)
+        })
         .map(|r| r.id)
 }
 
-fn cancel_pending(task: &Task, reason: &str) -> Option<Event> {
-    pending_run(task).map(|stage_run_id| Event::StageRunCancelled {
+pub fn cancel_run(task: &Task, reason: &str) -> Option<Event> {
+    open_run(task).map(|stage_run_id| Event::StageRunCancelled {
         work_item_id: task.item.id,
         stage_run_id,
         reason: reason.to_string(),
     })
+}
+
+fn cancel_open(task: &Task, reason: &str, now: crate::time::Timestamp) -> Vec<Event> {
+    let mut events: Vec<Event> = cancel_run(task, reason).into_iter().collect();
+    if task
+        .stage_run
+        .as_ref()
+        .is_some_and(|r| r.stage == Stage::Review)
+        && let Some(view) = crate::task::run_view(task)
+    {
+        events.extend(crate::session::end(
+            &view,
+            SessionState::Ended,
+            reason,
+            serde_json::json!({}),
+            now,
+        ));
+    }
+    events
+}
+
+fn release(task: &Task, reason: &str, now: crate::time::Timestamp) -> Vec<Event> {
+    let mut events = cancel_open(task, reason, now);
+    if events.is_empty()
+        && task.is_at(Stage::Review, StagePhase::Reviewed)
+        && let Some(run) = &task.stage_run
+    {
+        events.push(Event::StageRunCancelled {
+            work_item_id: task.item.id,
+            stage_run_id: run.id,
+            reason: reason.to_string(),
+        });
+    }
+    events
 }
 
 fn request(
@@ -260,7 +297,7 @@ fn request(
             head_sha: head_sha.to_string(),
         });
     }
-    events.extend(cancel_pending(task, "head_moved"));
+    events.extend(cancel_open(task, "head_moved", ctx.now));
     let attempt = task.attempts.get(&Stage::Review).copied().unwrap_or(0) + 1;
     events.push(review_run(
         task.item.id,
@@ -284,24 +321,42 @@ fn observe(
     let (Some(cr), Some(external)) = (&task.change_request, &task.external) else {
         return Vec::new();
     };
-    if cr.state != ChangeState::Open || task.item.state != WorkItemState::InStage {
+    let blocked = task.item.state == WorkItemState::Blocked;
+    if cr.state != ChangeState::Open || !(blocked || task.item.state == WorkItemState::InStage) {
         return Vec::new();
     }
     let id = task.item.id;
+    let updated = || Event::ChangeRequestUpdated {
+        work_item_id: id,
+        change_request_id: cr.id,
+        role: ChangeRole::Code,
+        head_sha: head_sha.to_string(),
+    };
+    let mut events = Vec::new();
+    if let (true, ChangeState::Merged | ChangeState::Closed, Some(b)) =
+        (blocked, state, task.open_blocker())
+    {
+        events.push(Event::BlockerResolved {
+            work_item_id: id,
+            blocker_id: b.id,
+            resolution: BlockerResolution::Auto,
+            reason: None,
+        });
+    }
     match state {
         ChangeState::Merged => {
             let Some(merge_commit_sha) = merge_commit_sha else {
                 return Vec::new();
             };
-            let mut events = vec![Event::ChangeRequestMerged {
+            events.push(Event::ChangeRequestMerged {
                 work_item_id: id,
                 change_request_id: cr.id,
                 role: ChangeRole::Code,
                 merge_commit_sha: merge_commit_sha.clone(),
                 merged_at,
                 merged_by_saka: false,
-            }];
-            events.extend(cancel_pending(task, "change_merged"));
+            });
+            events.extend(cancel_open(task, "change_merged", ctx.now));
             events.push(Event::WorkItemDone {
                 work_item_id: id,
                 merge_commit_sha,
@@ -309,39 +364,30 @@ fn observe(
             events
         }
         ChangeState::Closed => {
-            let mut events = vec![Event::ChangeRequestClosed {
+            events.push(Event::ChangeRequestClosed {
                 work_item_id: id,
                 change_request_id: cr.id,
                 role: ChangeRole::Code,
-            }];
-            events.extend(cancel_pending(task, "change_closed"));
+            });
+            events.extend(cancel_open(task, "change_closed", ctx.now));
             events.push(Event::WorkItemCancelled {
                 work_item_id: id,
                 reason: "change_closed".to_string(),
             });
             events
         }
+        ChangeState::Open if head_sha != cr.head_sha && blocked => vec![updated()],
         ChangeState::Open if head_sha != cr.head_sha => {
             match external.workflow.stage_trigger(Stage::Review) {
                 Some(Trigger::Auto) => {
                     request(task, head_sha, ExternalCause::Auto, None, ctx).unwrap_or_default()
                 }
                 Some(Trigger::Manual) => {
-                    let mut events = vec![Event::ChangeRequestUpdated {
-                        work_item_id: id,
-                        change_request_id: cr.id,
-                        role: ChangeRole::Code,
-                        head_sha: head_sha.to_string(),
-                    }];
-                    events.extend(cancel_pending(task, "head_moved"));
+                    let mut events = vec![updated()];
+                    events.extend(release(task, "head_moved", ctx.now));
                     events
                 }
-                None => vec![Event::ChangeRequestUpdated {
-                    work_item_id: id,
-                    change_request_id: cr.id,
-                    role: ChangeRole::Code,
-                    head_sha: head_sha.to_string(),
-                }],
+                None => vec![updated()],
             }
         }
         ChangeState::Open => Vec::new(),
@@ -370,20 +416,6 @@ pub fn decide(task: &Task, input: TaskInput, ctx: &mut Ctx<'_>) -> Result<Vec<Ev
             cause,
             actor,
         } => request(task, &head_sha, cause, actor.as_deref(), ctx),
-        TaskInput::Cancel { reason } => {
-            if task.item.state.is_terminal() {
-                return Err(Rejection::InvalidState {
-                    state: task.item.state.as_str().to_string(),
-                });
-            }
-            let mut events: Vec<Event> = cancel_pending(task, "cancelled").into_iter().collect();
-            events.push(Event::WorkItemCancelled {
-                work_item_id: task.item.id,
-                reason,
-            });
-            Ok(events)
-        }
-        TaskInput::Tick => Ok(Vec::new()),
         _ => Err(Rejection::Unsupported),
     }
 }

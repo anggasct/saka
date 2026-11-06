@@ -81,6 +81,8 @@ vocab!(
         TearingDown => "tearing_down",
         AwaitingTrigger => "awaiting_trigger",
         AwaitingReview => "awaiting_review",
+        PostingReview => "posting_review",
+        Reviewed => "reviewed",
     }
 );
 vocab!(StageRunState {

@@ -62,12 +62,14 @@ job_kinds! {
     ScmMergeDocs => "scm.merge_docs", 5;
     HookRun => "hook.run", 3;
     ScmScanChanges => "scm.scan_changes", 3;
+    EnvPrepareReview => "env.prepare_review", 3;
+    ScmPostReview => "scm.post_review", 3;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
     let scm = |phase: StagePhase| Some((BlockerCode::ScmUnavailable, json!({ "phase": phase })));
     match kind {
-        JobKind::EnvPrepare | JobKind::EnvInspectWorktree => {
+        JobKind::EnvPrepare | JobKind::EnvInspectWorktree | JobKind::EnvPrepareReview => {
             Some((BlockerCode::EnvSetupFailed, json!({})))
         }
         JobKind::SessionStart => Some((
@@ -85,6 +87,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         JobKind::ScmOpenChangeRequest => scm(StagePhase::OpeningChange),
         JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
         JobKind::ScmMerge => scm(StagePhase::Merging),
+        JobKind::ScmPostReview => scm(StagePhase::PostingReview),
         JobKind::ScmPushDocsBranch => Some((
             BlockerCode::ScmUnavailable,
             json!({ "phase": StagePhase::Pushing, "target": "docs" }),
@@ -191,5 +194,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmMergeDocs => "scm.merge_docs",
         JobKind::HookRun => "hook",
         JobKind::ScmScanChanges => "scm.scan",
+        JobKind::EnvPrepareReview => "env.prepare_review",
+        JobKind::ScmPostReview => "scm.post_review",
     }
 }

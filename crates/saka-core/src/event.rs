@@ -7,21 +7,24 @@ use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, HookRunId, PermissionRequestId,
-    PermissionRuleId, ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId,
-    SpecRevisionId, StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
+    PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId,
+    SpecId, SpecRevisionId, StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId,
+    WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
     Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, ProjectRepo, RunOwner,
     SpecLink, ToolchainUse,
 };
+use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, ChangeRole, DraftFailureCode, DraftLocale, ExternalCause, GateOutcome,
     GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InterruptBy, LintOutcome,
     MergeMethod, PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason,
-    SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, TokenInvalidCause, Trigger,
+    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase,
+    SupersedeReason, TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -329,6 +332,26 @@ pub enum Event {
         work_item_id: WorkItemId,
         stage_run_id: StageRunId,
         head_sha: Option<String>,
+    },
+    #[serde(rename = "delivery.review.recorded")]
+    ReviewRecorded {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        review_id: ReviewId,
+        session_id: SessionId,
+        head_sha: String,
+        outcome: ReviewOutcome,
+        basis: ReviewBasis,
+        summary: String,
+        findings: Vec<Finding>,
+        questions: Vec<String>,
+    },
+    #[serde(rename = "delivery.review.posted")]
+    ReviewPosted {
+        work_item_id: WorkItemId,
+        review_id: ReviewId,
+        event: ReviewEvent,
+        url: Option<String>,
     },
     #[serde(rename = "delivery.gate.observed")]
     GateObserved {
@@ -886,6 +909,8 @@ impl Event {
             | E::ExternalChangeAccepted { work_item_id, .. }
             | E::StagePhaseChanged { work_item_id, .. }
             | E::StageRunSucceeded { work_item_id, .. }
+            | E::ReviewRecorded { work_item_id, .. }
+            | E::ReviewPosted { work_item_id, .. }
             | E::GateObserved { work_item_id, .. }
             | E::GateStarted { work_item_id, .. }
             | E::MergeRequested { work_item_id, .. }

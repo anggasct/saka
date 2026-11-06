@@ -381,6 +381,10 @@ impl Engine {
         let p = &job.payload;
         match job.kind {
             JobKind::EnvPrepare => self.env_prepare(&task, owner_run(p)?).await,
+            JobKind::EnvPrepareReview => {
+                self.prepare_review(&task, field(p, "stage_run_id")?).await
+            }
+            JobKind::ScmPostReview => self.post_review_job(&task, p).await,
             JobKind::SessionStart => self.session_start(&task, owner_run(p)?, job.id).await,
             JobKind::SessionSendTurn => {
                 self.send_turn(
@@ -1165,7 +1169,10 @@ impl Engine {
         let Some(env) = task.ready_environment().filter(|_| current) else {
             return Ok(Effect::Skipped);
         };
-        if !task.is_at(Stage::Dev, StagePhase::RunningSession) || task.live_session().is_some() {
+        let reviewing = task.is_at(Stage::Review, StagePhase::RunningSession);
+        if !(reviewing || task.is_at(Stage::Dev, StagePhase::RunningSession))
+            || task.live_session().is_some()
+        {
             return Ok(Effect::Skipped);
         }
         // One start job per session: a repeated start replaces the runner it left behind.
@@ -1176,14 +1183,37 @@ impl Engine {
         let Some(view) = saka_core::task::run_view(task) else {
             return Ok(Effect::Skipped);
         };
-        let resolved = match self.session_author(task)? {
-            Ok(resolved) => resolved,
-            Err(block) => {
-                return Ok(Effect::Fact(TaskInput::CredentialBlocked {
-                    target: saka_core::vocab::ChangeRole::Code,
-                    block,
-                }));
-            }
+        let (profile, environment, resolved) = if reviewing {
+            let bare = EnvRef {
+                environment_id: env.id,
+                repo: self.repo_ref(task)?,
+                branch: None,
+                root_path: env.root_path.clone(),
+                worktree_path: env.worktree_path.clone(),
+                vars: BTreeMap::new(),
+                path_prefix: Vec::new(),
+                secrets: Vec::new(),
+                extra_dirs: Vec::new(),
+            };
+            let bot = ResolvedAuthor {
+                identity: self.cfg.git_identity.clone(),
+                author: SessionAuthor::saka(),
+            };
+            (LaunchProfile::Reviewer, bare, bot)
+        } else {
+            let resolved = match self.session_author(task)? {
+                Ok(resolved) => resolved,
+                Err(block) => {
+                    return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                        target: saka_core::vocab::ChangeRole::Code,
+                        block,
+                    }));
+                }
+            };
+            let environment = self
+                .env_ref_with_secrets(task, env)
+                .map_err(Refusal::into_error)?;
+            (LaunchProfile::Task, environment, resolved)
         };
         let launched = self
             .ports
@@ -1191,12 +1221,10 @@ impl Engine {
             .start(&SessionLaunch {
                 session_id,
                 owner: view.owner,
-                environment: self
-                    .env_ref_with_secrets(task, env)
-                    .map_err(Refusal::into_error)?,
+                environment,
                 resume_cli_session_id: saka_core::resume::plan(&view)
                     .and_then(|p| p.cli_session_id),
-                profile: LaunchProfile::Task,
+                profile,
                 model: None,
                 author: resolved.identity,
             })
@@ -1354,6 +1382,7 @@ impl Engine {
                 );
                 packet.text
             }
+            Prompt::ReviewPacket => self.review_packet_text(task).await?,
             other => self.turn_text(task, other).map_err(internal)?,
         };
         self.ports.agents.send_turn(&session, turn, &body).await?;

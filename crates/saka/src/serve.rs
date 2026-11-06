@@ -524,19 +524,31 @@ fn draft_config(cfg: &Config) -> saka_core::draft::DraftConfig {
 fn loop_config(cfg: &Config) -> LoopConfig {
     let first = cfg.scm.first();
     let dev = &cfg.budget.dev;
+    let review = &cfg.budget.review;
     LoopConfig {
         max_followup_turns: cfg.agent.max_followup_turns,
         permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
         idle_ms: cfg.agent.idle_minutes * 60_000,
-        budgets: BTreeMap::from([(
-            Stage::Dev,
-            Budget {
-                running_minutes: dev.running_minutes,
-                turns: dev.turns,
-                tokens: dev.tokens,
-                cost_usd_micros: micros_of(dev.cost_usd),
-            },
-        )]),
+        budgets: BTreeMap::from([
+            (
+                Stage::Dev,
+                Budget {
+                    running_minutes: dev.running_minutes,
+                    turns: dev.turns,
+                    tokens: dev.tokens,
+                    cost_usd_micros: micros_of(dev.cost_usd),
+                },
+            ),
+            (
+                Stage::Review,
+                Budget {
+                    running_minutes: review.running_minutes,
+                    turns: review.turns,
+                    tokens: review.tokens,
+                    cost_usd_micros: micros_of(review.cost_usd),
+                },
+            ),
+        ]),
         budget_warn_percent: cfg.budget.warn_percent,
         rate_limit_pause: cfg.agent.rate_limit_pause,
         account: format!("{}:{}", cfg.agent.cli, cfg.account_name()),

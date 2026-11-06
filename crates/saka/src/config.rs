@@ -378,6 +378,8 @@ pub struct BudgetConfig {
     pub dev: StageBudget,
     #[serde(default)]
     pub architect: ArchitectBudget,
+    #[serde(default)]
+    pub review: ReviewBudget,
 }
 
 impl Default for BudgetConfig {
@@ -386,6 +388,7 @@ impl Default for BudgetConfig {
             warn_percent: eighty(),
             dev: StageBudget::default(),
             architect: ArchitectBudget::default(),
+            review: ReviewBudget::default(),
         }
     }
 }
@@ -435,6 +438,36 @@ impl Default for ArchitectBudget {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewBudget {
+    #[serde(default = "twenty_minutes")]
+    pub running_minutes: u32,
+    #[serde(default = "three")]
+    pub turns: u32,
+    #[serde(default)]
+    pub tokens: i64,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+impl Default for ReviewBudget {
+    fn default() -> ReviewBudget {
+        ReviewBudget {
+            running_minutes: twenty_minutes(),
+            turns: three(),
+            tokens: 0,
+            cost_usd: 0.0,
+        }
+    }
+}
+
+fn twenty_minutes() -> u32 {
+    20
+}
+fn three() -> u32 {
+    3
+}
 fn one_usize() -> usize {
     1
 }
@@ -845,6 +878,25 @@ impl Config {
         if let Some((_, message)) = architect.iter().find(|(ok, _)| !ok) {
             return Err(err("config_invalid", *message));
         }
+        let rb = &b.review;
+        let review: [(bool, &str); 4] = [
+            (
+                (1..=1440).contains(&rb.running_minutes),
+                "budget.review.running_minutes must be 1..=1440",
+            ),
+            (
+                (1..=100).contains(&rb.turns),
+                "budget.review.turns must be 1..=100",
+            ),
+            (rb.tokens >= 0, "budget.review.tokens must be 0 or more"),
+            (
+                rb.cost_usd >= 0.0 && rb.cost_usd.is_finite(),
+                "budget.review.cost_usd must be 0 or more",
+            ),
+        ];
+        if let Some((_, message)) = review.iter().find(|(ok, _)| !ok) {
+            return Err(err("config_invalid", *message));
+        }
         let e = &self.env;
         if !(1..=100).contains(&e.ports_per_env) {
             return Err(err("config_invalid", "env.ports_per_env must be 1..=100"));
@@ -1022,6 +1074,25 @@ mod tests {
             let e = Config::parse(bad).unwrap_err();
             assert_eq!(e.code, "config_invalid");
             assert!(e.detail.starts_with(field), "{bad}: {}", e.detail);
+        }
+    }
+
+    #[test]
+    fn the_review_budget_has_defaults_and_ranges() {
+        let cfg = Config::parse("").unwrap();
+        let b = &cfg.budget.review;
+        assert_eq!((b.running_minutes, b.turns, b.tokens), (20, 3, 0));
+        let partial = Config::parse("[budget.review]\ntokens = 5\n").unwrap();
+        assert_eq!(partial.budget.review.running_minutes, 20);
+        for bad in [
+            "[budget.review]\nrunning_minutes = 0\n",
+            "[budget.review]\nturns = 101\n",
+            "[budget.review]\ntokens = -1\n",
+            "[budget.review]\ncost_usd = -1.0\n",
+        ] {
+            let e = Config::parse(bad).unwrap_err();
+            assert_eq!(e.code, "config_invalid");
+            assert!(e.detail.starts_with("budget.review"), "{bad}: {}", e.detail);
         }
     }
 
@@ -1297,6 +1368,7 @@ mod tests {
         assert_eq!(gitlab.api_url, "https://git.example.com/api/v4");
         assert_eq!(gitlab.merge_method, MergeMethod::Merge);
         assert_eq!(cfg.agent.limits.cpu_quota, "200%");
+        assert_eq!(cfg.budget.review.running_minutes, 20);
         assert_eq!(cfg.permission.rule.len(), 3);
         assert_eq!(cfg.env.ports_per_env, 10);
         assert_eq!(cfg.env.limits.tasks_max, 512);

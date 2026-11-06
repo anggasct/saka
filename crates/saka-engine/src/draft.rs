@@ -744,6 +744,8 @@ impl Engine {
             K::DraftCommit => self.draft_commit(&d, attempt).await,
             K::EnvTeardown => self.draft_teardown(&d, field(p, "environment_id")?).await,
             K::EnvInspectWorktree
+            | K::EnvPrepareReview
+            | K::ScmPostReview
             | K::ScmPushBranch
             | K::ScmOpenChangeRequest
             | K::ScmPollChangeRequest

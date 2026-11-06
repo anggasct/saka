@@ -29,6 +29,14 @@ fn layout(workflow: &str) -> Layout {
 }
 
 fn sim(workflow: &str) -> Sim {
+    let cfg = SimConfig {
+        max_active_tasks: 0,
+        ..SimConfig::default()
+    };
+    Sim::multi_repo(cfg, &layout(workflow))
+}
+
+fn sim_with_slots(workflow: &str) -> Sim {
     Sim::multi_repo(SimConfig::default(), &layout(workflow))
 }
 
@@ -193,7 +201,7 @@ fn forks_and_drafts_come_in_only_when_the_entry_allows_them() {
 
 #[test]
 fn a_pull_request_opened_by_saka_is_never_taken_as_outside_work() {
-    let mut sim = sim(BOTH_ENTRIES);
+    let mut sim = sim_with_slots(BOTH_ENTRIES);
     let number = sim
         .world
         .open_external_change(SHOP_REPO, outside("Outside", "feature/outside"));
@@ -426,7 +434,7 @@ fn a_pull_request_that_names_a_registered_spec_step_is_linked_to_it() {
 }
 
 #[test]
-fn outside_tasks_never_take_a_slot_from_the_steps_of_a_spec() {
+fn waiting_reviews_beside_a_spec_do_not_stop_it_from_shipping() {
     let cfg = SimConfig {
         max_active_tasks: 1,
         ..SimConfig::default()

@@ -47,4 +47,5 @@ id_type!(
     UserLinkId,
     UserLinkAuthorizationId,
     HookRunId,
+    ReviewId,
 );
