@@ -387,6 +387,26 @@ impl Engine {
                     self.counters.review_format_rejected(reason);
                     tracing::info!(code = %reason, "review.format_rejected");
                 }
+                Event::MergeRequested {
+                    work_item_id,
+                    reason,
+                    ..
+                } => {
+                    let by = match reason.as_deref() {
+                        Some(saka_core::task::AUTONOMY_REASON) => "autonomy",
+                        Some(saka_core::task::QUEUE_REASON) => "queue",
+                        _ => "operator",
+                    };
+                    self.counters.merge_request(by);
+                    tracing::info!(%work_item_id, by, "delivery.merge.requested");
+                }
+                Event::MergeDequeued {
+                    work_item_id,
+                    reason,
+                } => {
+                    self.counters.merge_dequeue(reason);
+                    tracing::info!(%work_item_id, reason, "delivery.merge.dequeued");
+                }
                 Event::ChangeRequestOpened {
                     work_item_id,
                     number,

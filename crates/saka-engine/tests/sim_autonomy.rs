@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
 use saka_core::autonomy::Ceilings;
-use saka_core::vocab::{Autonomy, ReloadOutcome, WorkItemState};
+use saka_core::vocab::{Autonomy, ReloadOutcome, Stage, StagePhase, Trigger, WorkItemState};
 use saka_testkit::{Layout, SHOP_REPO, Sim, SimConfig, repo_entry, saka_toml};
 
 fn layout(extra: &str) -> Layout {
@@ -133,4 +133,106 @@ fn lowering_the_ceiling_does_not_release_a_step_that_already_waits() {
     assert_eq!(sim.task(1).item.state, WorkItemState::AwaitingStart);
     start(&sim, 1);
     assert!(sim.run_to_shipped(STEPS));
+}
+
+fn autonomous() -> SimConfig {
+    let mut cfg = ceiling(Autonomy::Autonomous);
+    cfg.operator.merge = false;
+    cfg
+}
+
+fn merge_reasons(sim: &Sim) -> Vec<String> {
+    sim.events_of("delivery.merge.requested")
+        .iter()
+        .filter_map(|e| e.payload["reason"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn an_autonomous_repo_ships_a_spec_with_no_touch_after_the_approval() {
+    let mut sim = Sim::new(autonomous());
+    sim.approve();
+    assert!(sim.run_to_shipped(STEPS));
+    assert_eq!(sim.stats().merges, 2);
+    let reasons = merge_reasons(&sim);
+    assert_eq!(
+        reasons.iter().filter(|r| *r == "autonomy").count(),
+        2,
+        "{reasons:?}"
+    );
+    assert!(
+        reasons
+            .iter()
+            .all(|r| r == "autonomy" || r == "merge queue"),
+        "the operator never tapped: {reasons:?}"
+    );
+    assert!(
+        sim.events_of("delivery.work_item.awaiting_start")
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_standard_repo_and_a_manual_merge_trigger_still_wait_for_the_tap() {
+    let mut standard = ceiling(Autonomy::Standard);
+    standard.operator.merge = false;
+    let mut manual = autonomous();
+    manual.workflow.set_stage(Stage::Merge, Trigger::Manual);
+    for cfg in [standard, manual] {
+        let mut sim = Sim::new(cfg);
+        sim.approve();
+        assert!(sim.run_until(STEPS, |s| {
+            s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+        }));
+        for _ in 0..300 {
+            sim.step();
+        }
+        assert!(sim.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge));
+        assert_eq!(sim.stats().merges, 0);
+        assert!(merge_reasons(&sim).is_empty());
+    }
+}
+
+#[test]
+fn an_autonomous_repo_without_a_reviewer_never_merges_alone() {
+    let mut cfg = autonomous();
+    cfg.workflow = SimConfig::without_review().workflow;
+    cfg.workflow.set_stage(Stage::Merge, Trigger::Auto);
+    let mut sim = Sim::new(cfg);
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    for _ in 0..300 {
+        sim.step();
+    }
+    assert!(sim.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge));
+    assert_eq!(sim.stats().merges, 0);
+}
+
+#[test]
+fn a_head_pushed_after_the_merge_was_asked_for_stops_it_before_the_provider_is_called() {
+    let mut sim = Sim::new(autonomous());
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::Merging)
+    }));
+    let number = sim.task(1).change_request.unwrap().number;
+    sim.world.push_to_change("acme/tasks", number);
+
+    assert!(sim.run_to_shipped(STEPS));
+    let dequeued = sim.events_of("delivery.merge.dequeued");
+    assert_eq!(dequeued[0].payload["reason"], "head_moved");
+    assert!(sim.events_of("delivery.work_item.blocked").is_empty());
+    assert_eq!(
+        sim.world.merge_calls().len(),
+        2,
+        "one merge per step, none at the head that was left behind"
+    );
+    let reviews = sim.events_of("delivery.review.recorded");
+    assert!(
+        reviews.len() >= 3,
+        "the new head was reviewed again: {}",
+        reviews.len()
+    );
 }

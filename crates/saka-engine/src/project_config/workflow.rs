@@ -167,8 +167,7 @@ fn stages(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<DeValu
         let Some(t) = trigger(c, v, &field) else {
             continue;
         };
-        let unsupported = (*stage == Stage::Merge && t == Trigger::Auto)
-            || (*stage == Stage::Dev && t == Trigger::Manual)
+        let unsupported = (*stage == Stage::Dev && t == Trigger::Manual)
             || (*stage == Stage::Review && t == Trigger::Manual && workflow.spec);
         if !preset_stage_allowed(workflow.preset, *stage) {
             c.push("workflow_stage_not_allowed", &field, at);
@@ -398,7 +397,14 @@ fix = "manual"
     fn full_loop_adjusts_triggers_and_build_only_takes_none() {
         let w = config("[workflow]\n[workflow.stages]\nfix = \"manual\"\n").unwrap();
         assert_eq!(w.stage_trigger(Stage::Fix), Some(Trigger::Manual));
-        assert_eq!(w.stage_trigger(Stage::Merge), Some(Trigger::Manual));
+        assert_eq!(w.stage_trigger(Stage::Merge), Some(Trigger::Auto));
+        let narrowed = config("[workflow]\n[workflow.stages]\nmerge = \"manual\"\n").unwrap();
+        assert_eq!(narrowed.stage_trigger(Stage::Merge), Some(Trigger::Manual));
+        let custom = config(
+            "[workflow]\npreset = \"custom\"\nspec = true\n[workflow.stages]\ndev = \"auto\"\nmerge = \"auto\"\n",
+        )
+        .unwrap();
+        assert_eq!(custom.stage_trigger(Stage::Merge), Some(Trigger::Auto));
         assert_eq!(
             issues("[workflow]\npreset = \"build_only\"\n[workflow.stages]\nreview = \"auto\"\n"),
             [(
@@ -435,14 +441,6 @@ fix = "manual"
 
     #[test]
     fn triggers_with_no_consumer_are_refused_instead_of_ignored() {
-        assert_eq!(
-            issues("[workflow]\n[workflow.stages]\nmerge = \"auto\"\n"),
-            [(
-                "workflow_trigger_unsupported",
-                "workflow.stages.merge".into(),
-                10
-            )]
-        );
         assert_eq!(
             issues(
                 "[workflow]\npreset = \"custom\"\nspec = true\n[workflow.stages]\ndev = \"manual\"\n"

@@ -25,10 +25,11 @@ use crate::session::{
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerAction, BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole, ChangeState,
-    EnvironmentState, ExternalCause, GateOutcome, GateSource, HookRunState, MergeMethod,
-    ResumeCause, ResumeTrigger, ReviewBasis, ReviewEvent, ReviewOutcome, ScopeStage, SessionState,
-    Severity, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    Autonomy, BlockerAction, BlockerCode, BlockerResolution, ChangeCredentialKind, ChangeRole,
+    ChangeState, EnvironmentState, ExternalCause, GateOutcome, GateSource, HookRunState,
+    MergeMethod, ResumeCause, ResumeTrigger, ReviewBasis, ReviewEvent, ReviewOutcome, ScopeStage,
+    SessionState, Severity, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin,
+    WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -55,6 +56,7 @@ pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
 pub const VERDICT_FAILED_FINDINGS: usize = 20;
 pub const MERGED_ON_HOST: &str = "change merged on the host";
 pub const QUEUE_REASON: &str = "merge queue";
+pub const AUTONOMY_REASON: &str = "autonomy";
 const MAX_CONFLICT_PATHS: usize = 20;
 
 impl LoopConfig {
@@ -249,6 +251,7 @@ pub enum TaskInput {
         actor: Option<String>,
     },
     StartReview,
+    MergeNotReady,
     AwaitStart,
     ApproveStart {
         expected_version: u64,
@@ -327,6 +330,7 @@ pub fn decide(
     Ok(match input {
         I::Admit => d.admit(ctx),
         I::AwaitStart => d.await_start(),
+        I::MergeNotReady => d.merge_not_ready(),
         I::ApproveStart { expected_version } => return d.approve_start(expected_version),
         I::EnvironmentPrepared {
             environment_id,
@@ -1986,8 +1990,11 @@ impl Decider<'_> {
             }
             ChangeState::Open => {}
         }
-        let mut events = Vec::new();
         let head_changed = cr.head_sha != head_sha;
+        if head_changed && self.task.is_at(Stage::Merge, StagePhase::Merging) && !run.queue_native {
+            return self.leave_queue(head_sha);
+        }
+        let mut events = Vec::new();
         if head_changed {
             events.push(Event::ChangeRequestUpdated {
                 work_item_id: self.item().id,
@@ -2153,6 +2160,24 @@ impl Decider<'_> {
         }];
         events.extend(self.phase(StagePhase::Queued, Some(cr.head_sha.clone())));
         Ok(events)
+    }
+
+    fn merge_not_ready(&self) -> Vec<Event> {
+        let native = self.task.stage_run.as_ref().is_some_and(|r| r.queue_native);
+        let Some(cr) = self
+            .task
+            .change_request
+            .as_ref()
+            .filter(|_| self.task.is_at(Stage::Merge, StagePhase::Merging) && !native)
+        else {
+            return vec![];
+        };
+        let mut events = vec![Event::MergeDequeued {
+            work_item_id: self.item().id,
+            reason: "not_ready".to_string(),
+        }];
+        events.extend(self.phase(StagePhase::AwaitingCi, Some(cr.head_sha.clone())));
+        events
     }
 
     fn merge_turn(&self) -> Vec<Event> {
@@ -3771,6 +3796,25 @@ pub fn merge_ready(task: &Task) -> bool {
         && !task.is_queued()
 }
 
+pub fn merge_allowed(task: &Task, head_sha: &str) -> bool {
+    task.change_request.as_ref().is_some_and(|cr| {
+        cr.head_sha == head_sha
+            && gates_clear(task)
+            && (!task.has_review_stage() || task.approved_at(head_sha))
+    })
+}
+
+pub fn auto_merge_enabled(task: &Task, ceilings: &Ceilings) -> bool {
+    task.item.origin == WorkItemOrigin::SpecStep
+        && task.autonomy(ceilings) == Autonomy::Autonomous
+        && task.workflow.stage_trigger(Stage::Merge) == Some(Trigger::Auto)
+        && task.has_review_stage()
+}
+
+pub fn auto_merge(task: &Task, ceilings: &Ceilings) -> bool {
+    auto_merge_enabled(task, ceilings) && merge_ready(task)
+}
+
 pub fn gates_clear(task: &Task) -> bool {
     let Some(cr) = &task.change_request else {
         return false;
@@ -3940,8 +3984,7 @@ pub fn watches_change(task: &Task) -> bool {
                 || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
                 || task.is_at(Stage::Merge, StagePhase::Queued)
                 || task.is_at(Stage::Merge, StagePhase::Integrating)
-                || (task.is_at(Stage::Merge, StagePhase::Merging)
-                    && task.stage_run.as_ref().is_some_and(|r| r.queue_native))
+                || task.is_at(Stage::Merge, StagePhase::Merging)
         }
         _ => false,
     }

@@ -234,6 +234,15 @@ pub fn reconcile(
     for task in tasks {
         actions.extend(phase_jobs(task, cfg, now).into_iter().map(Action::Enqueue));
 
+        if crate::task::auto_merge(task, &cfg.autonomy) {
+            actions.push(Action::Decide(
+                task.item.id,
+                TaskInput::RequestMerge {
+                    expected_version: task.item.version,
+                    reason: Some(crate::task::AUTONOMY_REASON.to_string()),
+                },
+            ));
+        }
         if crate::task::needs_tick(task, cfg, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::Tick));
         }

@@ -6,6 +6,7 @@
 
 use rusqlite::{Connection, params};
 use saka_core::time::Timestamp;
+use saka_core::vocab::{Stage, Trigger};
 use saka_core::workflow::Workflow;
 use saka_store::Store;
 use sha2::{Digest, Sha256};
@@ -80,10 +81,12 @@ fn existing_projects_get_the_full_loop_workflow_and_lose_the_preset_column() {
             r.get(0)
         })
         .unwrap();
+    let mut expected = Workflow::default();
+    expected.set_stage(Stage::Merge, Trigger::Manual);
     assert_eq!(
         serde_json::from_str::<Workflow>(&stored).unwrap(),
-        Workflow::default(),
-        "the column default is the resolved full_loop workflow"
+        expected,
+        "the column default is the full_loop workflow with a merge by hand, as it was when the column was added"
     );
     assert!(
         conn.query_row("SELECT workflow_preset FROM project", [], |r| r

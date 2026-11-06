@@ -2236,6 +2236,22 @@ impl Engine {
             }
             ChangeState::Open => {}
         }
+        if change.head_sha != head_sha {
+            return Ok(Effect::Skipped);
+        }
+        if snapshot.head_sha != head_sha {
+            return Ok(Effect::Fact(TaskInput::ChangeObserved {
+                role: saka_core::vocab::ChangeRole::Code,
+                state: snapshot.state,
+                head_sha: snapshot.head_sha,
+                merge_commit_sha: None,
+                merged_at: None,
+                checks: snapshot.checks,
+            }));
+        }
+        if !saka_core::task::merge_allowed(task, &head_sha) {
+            return Ok(Effect::Fact(TaskInput::MergeNotReady));
+        }
         // The merge names this head, so the head checked here is the head that lands.
         let base = format!("refs/remotes/origin/{}", change.base_branch);
         if let Some(violation) = self

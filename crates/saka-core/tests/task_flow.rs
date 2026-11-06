@@ -1512,7 +1512,7 @@ fn an_open_change_is_polled_in_every_state_until_sync() {
 }
 
 #[test]
-fn a_change_being_merged_by_saka_is_not_polled() {
+fn a_change_being_merged_by_saka_is_polled_so_a_moved_head_is_seen_before_the_provider_is_asked() {
     let mut w = World::new();
     w.approve();
     w.run_to_awaiting_ci(1);
@@ -1544,7 +1544,7 @@ fn a_change_being_merged_by_saka_is_not_polled() {
         }),
     );
     assert_eq!(w.place(1).2, Some(StagePhase::Merging));
-    assert_eq!(polls(&w), 0);
+    assert_eq!(polls(&w), 1, "merge/merging");
 }
 
 #[test]

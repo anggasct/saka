@@ -9,6 +9,7 @@ use saka_core::model::{
 use saka_core::plan::RevisionPlan;
 use saka_core::queue::{self, Position};
 use saka_core::spec as core_spec;
+use saka_core::task::auto_merge_enabled;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SpecState, Stage, WorkItemState};
 use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
@@ -137,6 +138,7 @@ pub struct TaskView {
     pub task: Task,
     pub repo_name: Option<String>,
     pub autonomy: saka_core::vocab::Autonomy,
+    pub merge_auto: bool,
     pub merges: bool,
     pub waiting_on: Vec<Waiting>,
     pub merge_queue: Option<Position>,
@@ -176,6 +178,7 @@ pub struct TaskDetail {
     pub task: Task,
     pub repo_name: Option<String>,
     pub autonomy: saka_core::vocab::Autonomy,
+    pub merge_auto: bool,
     pub merges: bool,
     pub stage_runs: Vec<StageRun>,
     pub waiting_on: Vec<Waiting>,
@@ -649,6 +652,7 @@ impl Engine {
                     |(((task, waiting_on), (repo_name, merges)), merge_queue)| TaskView {
                         budget: self.budget_view(&task),
                         autonomy: task.autonomy(&self.cfg.loop_cfg.autonomy),
+                        merge_auto: auto_merge_enabled(&task, &self.cfg.loop_cfg.autonomy),
                         task,
                         repo_name,
                         merges,
@@ -734,6 +738,7 @@ impl Engine {
             merge_queue,
             budget: self.budget_view(&task),
             autonomy: task.autonomy(&self.cfg.loop_cfg.autonomy),
+            merge_auto: auto_merge_enabled(&task, &self.cfg.loop_cfg.autonomy),
             task,
             repo_name,
             merges,
