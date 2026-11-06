@@ -5,7 +5,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::docs::DocWriteView;
-use crate::views::{PermissionView, ProjectView, SpecView};
+use crate::views::{DecisionView, PermissionView, ProjectView, SpecView};
 use crate::{Cause, Engine, Result};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +24,7 @@ pub enum Produced<'a> {
     Taken(&'a Task, bool),
     Draft(&'a Draft),
     Permission(&'a PermissionView),
+    Decision(&'a DecisionView),
     Session(&'a Session),
     Rule(&'a PermissionRule),
     HookRun(&'a saka_core::hook::HookRun),

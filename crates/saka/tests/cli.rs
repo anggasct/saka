@@ -2538,3 +2538,109 @@ fn auth_revoke_with_passkey_ends_one_passkey_and_exits_4_for_the_last() {
     assert_eq!(code(&last), 4);
     assert!(String::from_utf8_lossy(&last.stderr).contains("last_credential"));
 }
+
+#[test]
+fn decision_commands_show_numbered_options_and_answer_with_documented_codes() {
+    use saka_core::decision::{DecisionOption, Question};
+    use saka_core::vocab::DecisionState;
+    use saka_testkit::AgentScript;
+
+    let option = |label: &str, detail: Option<&str>| DecisionOption {
+        label: label.into(),
+        detail: detail.map(String::from),
+    };
+    let mut sim = Sim::new(SimConfig {
+        agent: AgentScript {
+            decisions: vec![vec![Question {
+                question: "Where do we store audio?".into(),
+                options: vec![option("Local disk", Some("Simple")), option("R2", None)],
+                context: Some("The recorder needs a place.".into()),
+            }]]
+            .into(),
+            ..AgentScript::default()
+        },
+        ..SimConfig::default()
+    });
+    sim.approve();
+    assert!(sim.run_until(8_000, |s| {
+        s.task(1)
+            .decisions
+            .iter()
+            .any(|d| d.state == DecisionState::Asked)
+    }));
+    let id = sim.task(1).decisions[0].id.to_string();
+    let server = serve(&sim);
+
+    let listed = saka(&server, &["decision", "list"]);
+    assert_eq!(
+        code(&listed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    assert_eq!(
+        stdout(&listed).trim(),
+        format!("{id}  asked  Where do we store audio?")
+    );
+    let shown = saka(&server, &["decision", "show", &id]);
+    assert_eq!(code(&shown), 0);
+    assert_eq!(
+        stdout(&shown).trim(),
+        format!(
+            "{id}  asked\nWhere do we store audio?\nThe recorder needs a place.\n  1. Local disk (recommended) - Simple\n  2. R2"
+        )
+    );
+    assert_eq!(
+        json(&saka(&server, &["--json", "decision", "show", &id]))["state"],
+        "asked"
+    );
+
+    let nothing = saka(&server, &["decision", "answer", &id]);
+    assert_eq!(code(&nothing), 2, "usage: an option or a note is required");
+    let zero = saka(&server, &["decision", "answer", &id, "--option", "0"]);
+    assert_eq!(code(&zero), 2, "options are numbered from 1");
+    let beyond = saka(&server, &["decision", "answer", &id, "--option", "3"]);
+    assert_eq!(code(&beyond), 1, "422 decision_answer_invalid");
+    assert!(String::from_utf8_lossy(&beyond.stderr).contains("decision_answer_invalid"));
+    let missing = saka(
+        &server,
+        &[
+            "decision",
+            "answer",
+            "00000000-0000-0000-0000-0000000000aa",
+            "--option",
+            "1",
+        ],
+    );
+    assert_eq!(code(&missing), 1, "404 decision_not_found");
+
+    let answered = saka(
+        &server,
+        &[
+            "decision",
+            "answer",
+            &id,
+            "--option",
+            "2",
+            "--note",
+            "R2 please",
+        ],
+    );
+    assert_eq!(
+        code(&answered),
+        0,
+        "{}",
+        String::from_utf8_lossy(&answered.stderr)
+    );
+    assert_eq!(stdout(&answered).trim(), format!("{id} answered"));
+    let after = saka(&server, &["decision", "show", &id]);
+    assert!(
+        stdout(&after).ends_with("answered: option 2: R2 please\n"),
+        "{}",
+        stdout(&after)
+    );
+    let again = saka(&server, &["decision", "answer", &id, "--note", "again"]);
+    assert_eq!(code(&again), 4, "409 decision_already_answered");
+    assert!(String::from_utf8_lossy(&again.stderr).contains("decision_already_answered"));
+    assert_eq!(stdout(&saka(&server, &["decision", "list"])).trim(), "");
+}

@@ -432,6 +432,185 @@
         }
       }
     },
+    "/api/v1/decision-requests": {
+      "get": {
+        "tags": [
+          "runtime"
+        ],
+        "operationId": "list_decisions",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "One or more of `asked, answered, delivered, expired`, comma-separated.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "work_item_id",
+            "in": "query",
+            "description": "Exclusive with `spec_draft_id`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "spec_draft_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DecisionRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/decision-requests/{decision_request_id}": {
+      "get": {
+        "tags": [
+          "runtime"
+        ],
+        "operationId": "get_decision",
+        "parameters": [
+          {
+            "name": "decision_request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/decision-requests/{decision_request_id}/answer": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "operationId": "answer_decision",
+        "parameters": [
+          {
+            "name": "decision_request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerDecisionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionRequest"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/diagnostics": {
       "get": {
         "tags": [
@@ -4624,6 +4803,26 @@
         },
         "additionalProperties": false
       },
+      "AnswerDecisionBody": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "option": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Index into `options`. At least one of `option` and `note` is required."
+          }
+        },
+        "additionalProperties": false
+      },
       "AuthDevices": {
         "type": "object",
         "required": [
@@ -5116,6 +5315,55 @@
           "deny"
         ]
       },
+      "DecisionAnswer": {
+        "type": "object",
+        "required": [
+          "answered_by"
+        ],
+        "properties": {
+          "answered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answered_by": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "option": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Index into `options`; 0 is the agent's recommendation. Null when only a note was given.",
+            "minimum": 0
+          }
+        }
+      },
+      "DecisionOption": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
       "DecisionOrigin": {
         "type": "object",
         "description": "Who decided: `builtin`, `rule` (operator config), `project` (a project rule, `name` is its id), `default` (nothing matched, so ask).",
@@ -5131,6 +5379,67 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "DecisionRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "owner",
+          "state",
+          "question",
+          "options",
+          "asked_at",
+          "expires_at"
+        ],
+        "properties": {
+          "answer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DecisionAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "asked_at": {
+            "type": "string"
+          },
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionOption"
+            }
+          },
+          "owner": {
+            "$ref": "#/components/schemas/RunOwner"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "question": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "`asked | answered | delivered | expired`"
           }
         }
       },
@@ -6496,6 +6805,85 @@
           }
         },
         "additionalProperties": false
+      },
+      "Page_DecisionRequest": {
+        "type": "object",
+        "description": "A list page.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "owner",
+                "state",
+                "question",
+                "options",
+                "asked_at",
+                "expires_at"
+              ],
+              "properties": {
+                "answer": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DecisionAnswer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "asked_at": {
+                  "type": "string"
+                },
+                "context": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "expires_at": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionOption"
+                  }
+                },
+                "owner": {
+                  "$ref": "#/components/schemas/RunOwner"
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "question": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "`asked | answered | delivered | expired`"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "Page_HookRun": {
         "type": "object",

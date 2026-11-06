@@ -7,7 +7,8 @@ use saka_core::session::SessionInput;
 use saka_ports::{AskRefusal, Asked, Decisions};
 use saka_store::read;
 
-use crate::{Cause, Engine, EngineError, Extra, Result};
+use crate::action::Action;
+use crate::{Cause, Engine, EngineError, Extra, Result, Shows};
 
 pub const AGENT_ACTOR: &str = "agent:decision";
 
@@ -48,6 +49,18 @@ impl Engine {
         note: Option<String>,
         cause: &Cause,
     ) -> Result<()> {
+        self.answer_decision_with(id, option, note, cause, None)
+            .map(|_| ())
+    }
+
+    pub fn answer_decision_with(
+        &self,
+        id: DecisionRequestId,
+        option: Option<u32>,
+        note: Option<String>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<saka_core::event::Event>> {
         let owner = self
             .store
             .read(|c| read::decision_owner(c, id))?
@@ -58,8 +71,11 @@ impl Engine {
             note,
             actor: crate::OPERATOR.to_string(),
         };
-        self.decide_owner(owner, input, cause, Extra::default())
-            .map(|_| ())
+        let extra = Extra {
+            action: action.map(|a| (a, Shows::Decision(id))),
+            ..Extra::default()
+        };
+        self.decide_owner(owner, input, cause, extra)
     }
 }
 

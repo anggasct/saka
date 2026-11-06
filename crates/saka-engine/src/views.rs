@@ -1,10 +1,11 @@
 use saka_core::admission::{Waiting, waiting_on};
 use saka_core::ids::{
-    PermissionRequestId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId, WorkItemId,
+    DecisionRequestId, PermissionRequestId, ProjectId, RepoId, SessionId, SpecId, SpecRevisionId,
+    WorkItemId,
 };
 use saka_core::model::{
-    AccountQuota, Budget, ContextRef, PermissionRequest, PermissionRule, Project, Repo, Session,
-    SessionActivity, Spec, StageRun, StepPlan, Task, Usage, UsageRecord, step_repo,
+    AccountQuota, Budget, ContextRef, DecisionRequest, PermissionRequest, PermissionRule, Project,
+    Repo, Session, SessionActivity, Spec, StageRun, StepPlan, Task, Usage, UsageRecord, step_repo,
 };
 use saka_core::plan::RevisionPlan;
 use saka_core::queue::{self, Position};
@@ -12,7 +13,7 @@ use saka_core::spec as core_spec;
 use saka_core::task::auto_merge_enabled;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SpecState, Stage, WorkItemState};
-use saka_store::list::{self, Key, Page, PermissionFilter, WorkItemFilter};
+use saka_store::list::{self, DecisionFilter, Key, Page, PermissionFilter, WorkItemFilter};
 use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 use saka_store::{SpecRevisionRow, StoredEvent, TaskSet, read};
 use serde_json::Value;
@@ -170,6 +171,12 @@ pub struct UsageView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PermissionView {
     pub request: PermissionRequest,
+    pub project_id: ProjectId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionView {
+    pub request: DecisionRequest,
     pub project_id: ProjectId,
 }
 
@@ -771,6 +778,38 @@ impl Engine {
                 .collect(),
             next: paged.next,
         })
+    }
+
+    pub fn decision_requests(
+        &self,
+        filter: &DecisionFilter,
+        page: &Page,
+    ) -> Result<Paged<DecisionView>> {
+        let rows = self
+            .store
+            .read(|c| list::decisions(c, filter, &probe(page)))?;
+        let paged = paged(rows, page, |(d, _)| (d.asked_at.0, d.id.0));
+        Ok(Paged {
+            items: paged
+                .items
+                .into_iter()
+                .map(|(request, project_id)| DecisionView {
+                    request,
+                    project_id,
+                })
+                .collect(),
+            next: paged.next,
+        })
+    }
+
+    pub fn decision(&self, id: DecisionRequestId) -> Result<Option<DecisionView>> {
+        Ok(self
+            .store
+            .read(|c| list::load_decision(c, id))?
+            .map(|(request, project_id)| DecisionView {
+                request,
+                project_id,
+            }))
     }
 
     pub fn permission(&self, id: PermissionRequestId) -> Result<Option<PermissionView>> {

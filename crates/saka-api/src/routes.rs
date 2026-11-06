@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use saka_core::diagnostics::{self, CheckResult, Report, Subject};
 use saka_core::ids::{
-    BlockerId, HookRunId, InboxItemId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId,
-    SpecDraftId, SpecId, SpecRevisionId, WorkItemId,
+    BlockerId, DecisionRequestId, HookRunId, InboxItemId, PermissionRequestId, PermissionRuleId,
+    ProjectId, SessionId, SpecDraftId, SpecId, SpecRevisionId, WorkItemId,
 };
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
@@ -19,9 +19,9 @@ use saka_core::vocab::{
     AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode, Stage,
 };
 use saka_engine::{
-    AddProject, AnswerKind, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, InboxFilter,
-    NewSpecDraft, PermissionFilter, Precondition, Produced, Reply, RunOf, SessionCommand,
-    SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
+    AddProject, AnswerKind, CheckConfig, DecisionFilter, DiagnosticFilter, EngineError,
+    HookRunFilter, InboxFilter, NewSpecDraft, PermissionFilter, Precondition, Produced, Reply,
+    RunOf, SessionCommand, SessionView, StoredEvent, TimelineCursor, WorkItemFilter,
 };
 use serde_json::Value;
 
@@ -45,6 +45,7 @@ const WORK_ITEM_STATES: &[&str] = &[
     "superseded",
 ];
 const PERMISSION_STATES: &[&str] = &["pending", "allowed", "denied", "expired"];
+const DECISION_STATES: &[&str] = &["asked", "answered", "delivered", "expired"];
 const EVENT_BATCH: u32 = 100;
 const EVENT_POLL: Duration = Duration::from_millis(500);
 
@@ -1565,6 +1566,115 @@ pub async fn answer_permission(
                     &cause,
                     Some(&action),
                 )
+                .map(|_| project)
+                .map_err(|e| (e, project))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/decision-requests", tag = "runtime", params(dto::DecisionQuery),
+    responses((status = 200, body = dto::Page<dto::DecisionRequest>), (status = 422, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn list_decisions(
+    State(s): State<AppState>,
+    Query(q): Query<dto::DecisionQuery>,
+) -> Response {
+    let engine = tri!(s.engine());
+    let run = tri!(run_of(
+        q.work_item_id.as_deref(),
+        q.spec_draft_id.as_deref()
+    ));
+    let filter = DecisionFilter {
+        states: tri!(states(q.state.as_deref(), DECISION_STATES)),
+        project: tri!(opt_id(q.project_id.as_deref(), "project_id")).map(ProjectId),
+        work_item: match run {
+            Some(RunOf::WorkItem(id)) => Some(id),
+            _ => None,
+        },
+        spec_draft: match run {
+            Some(RunOf::SpecDraft(id)) => Some(id),
+            _ => None,
+        },
+    };
+    let key = format!(
+        "decisions:{}:{:?}:{run:?}",
+        filter.states.join(","),
+        filter.project,
+    );
+    let p = tri!(page(q.cursor.as_deref(), q.limit, &key));
+    let paged = tri!(engine.decision_requests(&filter, &p));
+    ok(
+        StatusCode::OK,
+        &dto::Page {
+            items: paged
+                .items
+                .iter()
+                .map(dto::DecisionRequest::from_view)
+                .collect(),
+            next_cursor: paged.next.map(|k| encode_cursor(k, &key)),
+        },
+    )
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/decision-requests/{decision_request_id}", tag = "runtime",
+    params(("decision_request_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::DecisionRequest), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn get_decision(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine());
+    let id = tri!(path_id(&id));
+    match tri!(engine.decision(DecisionRequestId(id))) {
+        Some(v) => ok(StatusCode::OK, &dto::DecisionRequest::from_view(&v)),
+        None => ApiError::from(EngineError::Rejected(
+            saka_core::rejection::Rejection::DecisionNotFound,
+        ))
+        .into_response(),
+    }
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/decision-requests/{decision_request_id}/answer", tag = "runtime",
+    params(("decision_request_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::AnswerDecisionBody,
+    responses((status = 200, body = dto::DecisionRequest), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn answer_decision(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let request = DecisionRequestId(tri!(path_id(&id)));
+    let req: dto::AnswerDecisionBody = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let project = tri!(engine.decision(request)).map(|v| v.project_id);
+    let respond = |p: Produced<'_>| match p {
+        Produced::Decision(v) => reply(StatusCode::OK, &dto::DecisionRequest::from_view(v)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "decision.answer",
+        target_type: "decision_request",
+        target_id: Some(request.0),
+        reason: req.note.clone(),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            let option = req.option.map(|o| u32::try_from(o).unwrap_or(u32::MAX));
+            engine
+                .answer_decision_with(request, option, req.note, &cause, Some(&action))
                 .map(|_| project)
                 .map_err(|e| (e, project))
         },
