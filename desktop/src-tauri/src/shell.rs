@@ -6,12 +6,14 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager as _, Runtime, WebviewWindow};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
+use tauri_plugin_updater::Update;
 
 use crate::inbox::{self, Notice, Watcher};
 use crate::labels::Labels;
 use crate::manager::Manager;
 use crate::sidecar::Phase;
 use crate::tray::{self, Mode};
+use crate::updater;
 
 pub const NAVIGATE_EVENT: &str = "saka://navigate";
 const TRAY_ID: &str = "main";
@@ -24,6 +26,7 @@ pub struct Ui {
     open: AtomicI64,
     pub tray: AtomicBool,
     pending: Mutex<Option<(String, Instant)>>,
+    update: Mutex<Option<Update>>,
 }
 
 impl Ui {
@@ -33,7 +36,16 @@ impl Ui {
             open: AtomicI64::new(NO_COUNT),
             tray: AtomicBool::new(false),
             pending: Mutex::new(None),
+            update: Mutex::new(None),
         }
+    }
+
+    fn offered_version(&self) -> Option<String> {
+        self.update.lock().ok()?.as_ref().map(|u| u.version.clone())
+    }
+
+    pub fn take_update(&self) -> Option<Update> {
+        self.update.lock().ok()?.take()
     }
 
     fn open(&self) -> Option<i64> {
@@ -111,7 +123,8 @@ fn mode<R: Runtime>(app: &AppHandle<R>) -> Mode {
 fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let ui = app.state::<Ui>();
     let menu = Menu::new(app)?;
-    for entry in tray::menu(mode(app), ui.open(), ui.labels) {
+    let offered = ui.offered_version();
+    for entry in tray::menu(mode(app), ui.open(), offered.as_deref(), ui.labels) {
         if entry.id == tray::QUIT {
             menu.append(&PredefinedMenuItem::separator(app)?)?;
         }
@@ -171,6 +184,15 @@ fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 refresh_tray(&app);
             });
         }
+        tray::UPDATE => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(update) = updater::take_pending(&app) {
+                    app.state::<Manager>().local_stop().await;
+                    updater::install(&app, update).await;
+                }
+            });
+        }
         tray::QUIT => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -180,6 +202,23 @@ fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
         }
         _ => {}
     }
+}
+
+pub fn offer_update<R: Runtime>(app: &AppHandle<R>, update: Update) {
+    let version = update.version.clone();
+    let ui = app.state::<Ui>();
+    if let Ok(mut slot) = ui.update.lock() {
+        *slot = Some(update);
+    }
+    refresh_tray(app);
+    notify(
+        app,
+        &Notice {
+            title: "Saka".to_string(),
+            body: ui.labels.update_available(&version),
+            route: "/".to_string(),
+        },
+    );
 }
 
 pub fn on_focus<R: Runtime>(app: &AppHandle<R>) {
