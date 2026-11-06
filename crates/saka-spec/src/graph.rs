@@ -1,4 +1,3 @@
-// Every cycle comes back once, rotated to start at its smallest node and listed in edge order.
 pub(crate) fn cycles(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     #[derive(Clone, Copy, PartialEq)]
     enum Mark {

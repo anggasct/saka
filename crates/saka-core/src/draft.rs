@@ -270,7 +270,6 @@ impl Decider<'_> {
 
     fn admit(&self, attempt_id: SpecDraftAttemptId, budget: Budget) -> Vec<Event> {
         let next = self.d.draft.attempt + 1;
-        // The previous attempt's worktree goes first: a draft holds one live environment.
         let retiring = self.d.live_environment().is_some();
         if !self.is(SpecDraftState::Queued) || next > MANUAL_RETRY_LIMIT + 1 || retiring {
             return vec![];
@@ -618,7 +617,6 @@ impl Decider<'_> {
 
     fn job_exhausted(&self, kind: JobKind, error: Coded, ctx: &mut Ctx<'_>) -> Vec<Event> {
         if kind == JobKind::EnvTeardown {
-            // A teardown job names its environment; the worker reports it as `TeardownFailed`.
             return vec![];
         }
         if kind == JobKind::SessionReattach {

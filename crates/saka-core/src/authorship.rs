@@ -61,7 +61,6 @@ impl UserLink {
         }
     }
 
-    // A link that cannot be used says why; one that was never marked keeps the safest cause.
     pub fn problem(&self) -> Option<UserLinkCause> {
         (!self.is_active())
             .then(|| UserLinkCause::from(self.relink_cause.unwrap_or(RelinkCause::RefreshFailed)))
@@ -132,7 +131,6 @@ pub struct TokenExpiry {
 }
 
 impl TokenExpiry {
-    // Only short-lived user tokens are accepted: both lifetimes must be present and positive.
     pub fn of(
         now: Timestamp,
         access_secs: Option<u64>,
@@ -178,7 +176,6 @@ pub struct Linked {
     pub authorization: UserLinkAuthorization,
 }
 
-// A relink to the same integration keeps the link id, so anything that points at it stays valid.
 #[must_use]
 pub fn link(
     authorization: &UserLinkAuthorization,
@@ -437,7 +434,6 @@ pub struct ProjectUserToken {
 }
 
 impl ProjectUserToken {
-    // A token the provider refused stays refused; one past its expiry is expired without a write.
     pub fn problem(&self, now: Timestamp) -> Option<TokenInvalidCause> {
         self.invalid_cause.or_else(|| {
             self.expires_at
@@ -466,7 +462,6 @@ pub fn token_of(authorship: Option<&ProjectAuthorship>) -> Option<&ProjectUserTo
     authorship.and_then(|a| a.token.as_ref())
 }
 
-// Setting the mode a project already has changes nothing and records nothing.
 #[must_use]
 pub fn set_mode(
     project_id: ProjectId,
@@ -488,7 +483,6 @@ pub fn set_mode(
     Some((event, after))
 }
 
-// The user token mode needs a stored token that is usable right now.
 pub fn check_user_pat_mode(
     current: Option<&ProjectAuthorship>,
     now: Timestamp,
@@ -500,7 +494,6 @@ pub fn check_user_pat_mode(
     }
 }
 
-// Only the shape is checked here; whether the token works is the provider's answer.
 pub fn check_user_token_value(value: &str) -> Result<(), Rejection> {
     if !(USER_TOKEN_MIN_BYTES..=USER_TOKEN_MAX_BYTES).contains(&value.len()) {
         return Err(Rejection::Invalid {
@@ -520,7 +513,6 @@ pub fn check_user_token_value(value: &str) -> Result<(), Rejection> {
     Ok(())
 }
 
-// A project that never had a row is in bot mode, so a token stored first records bot mode too.
 #[must_use]
 pub fn store_token(
     project_id: ProjectId,
@@ -562,7 +554,6 @@ pub fn remove_token(
     Some((event, after))
 }
 
-// Only the token that was used is marked: one stored again meanwhile is left as it is.
 #[must_use]
 pub fn invalidate_token(
     current: Option<&ProjectAuthorship>,
@@ -599,7 +590,6 @@ impl From<TokenInvalidCause> for UserTokenCause {
     }
 }
 
-// The token belongs to one integration; a repo on another one never sees it.
 pub fn usable_token<'a>(
     current: Option<&'a ProjectAuthorship>,
     integration_id: &str,
@@ -709,8 +699,6 @@ pub fn link_required(
     })
 }
 
-// The author is fixed when a session starts, since a commit cannot change it afterwards.
-// The access token's lifetime does not matter here: the session never sees a token.
 pub fn user_link_author(
     integration_id: &str,
     link: Option<&UserLink>,
@@ -731,9 +719,6 @@ pub fn user_link_author(
     }
 }
 
-// An operator's own action ends a credential blocker: a fresh link for its integration, a new
-// usable token for the project, or any later change of the project's mode. Nothing else does,
-// so it is never retried blindly.
 pub fn resume_trigger(
     blocker: &Blocker,
     links: &[UserLink],

@@ -65,7 +65,6 @@ pub(crate) fn read(text: &str, slug: &str) -> Option<Frontmatter> {
             }
             None => {
                 issues.push(not_a_key(line, content.trim()));
-                // Lines indented under a broken key belong to it; report the key once.
                 entries.push(Entry {
                     key: "",
                     line,

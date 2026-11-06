@@ -70,7 +70,6 @@ impl Redactor {
         Redactor::named(known_values, &[])
     }
 
-    // `named` pairs are (name, value): the value is replaced by `«secret:NAME»`.
     pub fn named(known_values: &[String], named: &[(String, String)]) -> Redactor {
         let mut known: Vec<(String, String)> = named
             .iter()
