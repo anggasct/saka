@@ -1512,6 +1512,8 @@ export interface components {
     InboxTitle: {
       /** @description The path of the spec draft whose session asked, for a permission that belongs to a draft. */
       draft_path?: string | null;
+      /** @description Where the spec lives in the docs, so a link can open it in the editor. */
+      spec_path?: string | null;
       spec_slug?: string | null;
       spec_title?: string | null;
       /** @description The stage the task is at. */

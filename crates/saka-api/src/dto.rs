@@ -3142,6 +3142,8 @@ pub struct InboxTitle {
     pub stage: Option<String>,
     pub spec_slug: Option<String>,
     pub spec_title: Option<String>,
+    /// Where the spec lives in the docs, so a link can open it in the editor.
+    pub spec_path: Option<String>,
     /// The path of the spec draft whose session asked, for a permission that belongs to a draft.
     pub draft_path: Option<String>,
 }
@@ -3194,6 +3196,7 @@ impl From<&saka_engine::InboxItem> for InboxItem {
                 stage: i.stage.clone(),
                 spec_slug: i.spec_slug.clone(),
                 spec_title: i.spec_title.clone(),
+                spec_path: i.spec_path.clone(),
                 draft_path: i.draft_path.clone(),
             },
             params: i.params.clone(),

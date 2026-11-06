@@ -192,7 +192,7 @@ for (const empty of [false, true]) {
   }) => {
     await page.setViewportSize({ width: 375, height: 800 });
     await mockApi(page, empty);
-    await page.goto("/");
+    await page.goto("/delivery");
     await expect(page).toHaveURL(/\/delivery$/);
     const heading = empty
       ? "Nothing to deliver yet"

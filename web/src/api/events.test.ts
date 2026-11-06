@@ -50,7 +50,7 @@ describe("startEventStream", () => {
       stream_type: "work_item",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["work-items"], ["specs"]],
+      [["work-items"], ["specs"], ["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("runtime.session.state_changed.v1", {
@@ -58,7 +58,7 @@ describe("startEventStream", () => {
       stream_type: "session",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["work-items"], ["sessions"], ["spec-drafts"]],
+      [["work-items"], ["sessions"], ["spec-drafts"], ["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("spec.draft.succeeded.v1", {
@@ -66,7 +66,7 @@ describe("startEventStream", () => {
       stream_type: "spec_draft",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["spec-drafts"], ["specs"]],
+      [["spec-drafts"], ["specs"], ["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("runtime.permission.requested.v1", {
@@ -74,7 +74,7 @@ describe("startEventStream", () => {
       stream_type: "permission_request",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["permission-requests"], ["work-items"]],
+      [["permission-requests"], ["work-items"], ["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("delivery.hook_run.finished.v1", {
@@ -83,6 +83,14 @@ describe("startEventStream", () => {
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
       [["hook-runs"]],
+    );
+    invalidate.mockClear();
+    fake.emit("delivery.inbox_item.dismissed.v1", {
+      seq: 9,
+      stream_type: "inbox_item",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("engine.job.exhausted.v1", { seq: 9, stream_type: "job" });

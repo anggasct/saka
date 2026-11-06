@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::autonomy::Ceilings;
 use crate::blocker::primary_action;
 use crate::ids::{ProjectId, SpecDraftId, SpecId, WorkItemId};
-use crate::model::{Draft, PermissionRequest, Spec, Task};
+use crate::model::{Blocker, Draft, PermissionRequest, Spec, Task};
 use crate::task::{auto_merge_enabled, merge_ready};
 use crate::vocab::{
     BlockerCode, InboxActionKind, InboxKind, InboxSubject, PermissionState, SpecState, Stage,
@@ -98,10 +98,7 @@ fn for_task(task: &Task, ceilings: &Ceilings) -> Vec<InboxDraft> {
             project_id: task.item.project_id,
             work_item_id: Some(task.item.id),
             spec_id: task.item.spec_id,
-            params: json!({
-                "code": blocker.code,
-                "head_sha": task.stage_run.as_ref().and_then(|r| r.head_sha.clone()),
-            }),
+            params: blocker_params(task, blocker),
             action: InboxAction {
                 kind: primary.kind.into(),
                 params,
@@ -124,6 +121,19 @@ fn for_task(task: &Task, ceilings: &Ceilings) -> Vec<InboxDraft> {
         }
     }
     out
+}
+
+fn blocker_params(task: &Task, blocker: &Blocker) -> Value {
+    let mut params = match &blocker.params {
+        Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    params.insert("code".into(), json!(blocker.code));
+    if !params.contains_key("head_sha") {
+        let head = task.stage_run.as_ref().and_then(|r| r.head_sha.clone());
+        params.insert("head_sha".into(), json!(head));
+    }
+    Value::Object(params)
 }
 
 fn step_item(task: &Task, subject: InboxSubject, action: InboxActionKind) -> InboxDraft {

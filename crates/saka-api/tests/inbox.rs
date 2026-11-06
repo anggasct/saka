@@ -131,6 +131,9 @@ fn the_list_is_newest_first_filters_by_project_and_kind_and_pages_with_a_cursor(
     assert_eq!(permission["state"], "open");
     assert_eq!(permission["project_name"], "tasks");
     assert_eq!(permission["title"]["task_key"], "tasks-done/s1");
+    let approval = &api.get("/api/v1/inbox?kind=approval").body["items"][0];
+    assert!(approval["title"]["spec_path"].is_string());
+    assert!(approval["title"]["task_key"].is_null());
     assert_eq!(permission["action"]["kind"], "answer_permission");
     assert_eq!(permission["dismissible"], false);
     assert_eq!(permission["params"]["tool"], "Bash");
