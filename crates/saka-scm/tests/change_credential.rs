@@ -174,7 +174,6 @@ async fn only_opening_carries(token: &str) {
         };
         assert_eq!(auth, &expected, "{m} {p}");
     }
-    // The push credential: base64("x-access-token:ghs_1"), the installation token.
     assert_eq!(
         remote.config[0].1,
         "AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzXzE="

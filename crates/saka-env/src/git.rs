@@ -113,7 +113,6 @@ impl Git {
         cmd
     }
 
-    // Reads at most `cap` bytes of stdout and kills git after that, so a huge diff stays bounded.
     pub async fn local_capped(
         &self,
         dir: &Path,

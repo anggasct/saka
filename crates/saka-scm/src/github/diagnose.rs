@@ -24,7 +24,6 @@ fn unavailable(status: Option<u16>) -> PortError {
     PortError::retryable("scm_unavailable", json!({ "status": status }))
 }
 
-// Diagnosis reports only these two codes, so every adapter failure is folded into them here.
 fn classify(app: &GitHubApp, e: PortError) -> PortError {
     match e.code.as_str() {
         "scm_app_auth_refused" => auth_failed(app, Some(401)),

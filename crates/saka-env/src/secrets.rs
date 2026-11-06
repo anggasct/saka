@@ -46,7 +46,6 @@ impl AeadSecrets {
         }
     }
 
-    // Creates the key on first use; an existing key must be a 0600 regular file owned by us.
     pub fn from_key_file(path: &Path) -> Result<AeadSecrets, KeyFileError> {
         match std::fs::symlink_metadata(path) {
             Ok(meta) => {

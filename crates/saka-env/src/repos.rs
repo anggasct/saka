@@ -23,6 +23,9 @@ use crate::git::{Extra, Git, GitOutput, auth_refused, failed};
 const FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
 const REBASE_COMMITTER_NAME: &str = "Saka";
 const REBASE_COMMITTER_EMAIL: &str = "saka@localhost";
+const GIT_CONFIG_KEY_NOT_SET: i32 = 5;
+const GIT_NOT_AN_ANCESTOR: i32 = 1;
+const GIT_UNKNOWN_COMMIT: i32 = 128;
 const BASE_FILE: &str = "base-sha";
 const DOCS_DIR: &str = "docs";
 const DOCS_FILE: &str = "docs-sha";
@@ -473,8 +476,7 @@ impl GitRepos {
             .git
             .local(bare, &["config", "--local", "--unset", "core.bare"])
             .await?;
-        // 5: the key was not set.
-        if !unset.ok() && unset.code != Some(5) {
+        if !unset.ok() && unset.code != Some(GIT_CONFIG_KEY_NOT_SET) {
             return Err(failed("config", &unset));
         }
         self.git_ok(
@@ -704,7 +706,6 @@ impl AsyncStep<PushOutcome> for Push<'_> {
             "--force-with-lease={refname}:{}",
             current.clone().unwrap_or_default()
         );
-        // The local branch must still be where the worktree was inspected.
         let local = git
             .local(bare, &["rev-parse", "--verify", "--quiet", &refname])
             .await?;
@@ -726,7 +727,6 @@ impl AsyncStep<PushOutcome> for Push<'_> {
         if auth_refused(&out.stderr) {
             return Ok(Step::Failed(out));
         }
-        // The lease did not hold: someone else moved the branch in between.
         let again = git
             .remote(bare, &["ls-remote", "origin", &refname], remote)
             .await?;
@@ -1352,8 +1352,7 @@ impl Environments for GitRepos {
             .await?;
         match out.code {
             Some(0) => self.tip_locked(repo, base_branch).await,
-            // 1: not an ancestor; 128: the commit is not in the mirror at all.
-            Some(1 | 128) => Ok(None),
+            Some(GIT_NOT_AN_ANCESTOR | GIT_UNKNOWN_COMMIT) => Ok(None),
             _ => Err(failed("merge_base", &out)),
         }
     }
@@ -1486,7 +1485,6 @@ impl Environments for GitRepos {
             String::from_utf8_lossy(&out.stdout[..out.stdout.len().min(max_bytes)]).into_owned();
         let mut omitted_files = 0;
         if truncated {
-            // Drop a half-written trailing line and count the files whose header did not fit.
             if let Some(end) = text.rfind('\n') {
                 text.truncate(end + 1);
             }
@@ -1932,7 +1930,6 @@ impl Environments for GitRepos {
         Ok(changes)
     }
 
-    // A writable docs checkout counts as a second worktree; a read-only one never does.
     fn resolve_path(&self, env: &EnvRef, cwd: &str, raw: &str) -> RequestPath {
         let resolved = resolve_in(Path::new(&env.worktree_path), cwd, raw);
         if resolved.inside_worktree {

@@ -42,7 +42,6 @@ async fn git_gets_the_token_as_a_basic_auth_header_for_the_web_host() {
     w.mount_tokens().await;
     let remote = w.app.remote(&w.repo).await.unwrap();
     assert_eq!(remote.url, "https://github.example/acme/app.git");
-    // base64("x-access-token:ghs_1")
     assert_eq!(
         remote.config,
         [(

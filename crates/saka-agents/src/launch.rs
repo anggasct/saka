@@ -201,7 +201,6 @@ pub fn claude(
         "--output-format",
         "stream-json",
         "--verbose",
-        // Nothing is allowed without an answer, and every prompt comes to the runner over stdio.
         "--permission-mode",
         "manual",
         "--permission-prompt-tool",
