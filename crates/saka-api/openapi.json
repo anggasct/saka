@@ -5383,7 +5383,6 @@
                 "name",
                 "workspace",
                 "repos",
-                "autonomy",
                 "workflow",
                 "authorship_mode",
                 "config_commit",
@@ -5396,10 +5395,6 @@
                 "authorship_mode": {
                   "type": "string",
                   "description": "`bot | user | user_pat`: who authors the agent's commits and opens its pull requests."
-                },
-                "autonomy": {
-                  "type": "string",
-                  "description": "`standard` in this version."
                 },
                 "config_commit": {
                   "type": "string"
@@ -5922,6 +5917,13 @@
                     "null"
                   ]
                 },
+                "autonomy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`strict | standard | autonomous`: the level in force for the task's repo, the lowest of the\noperator's ceiling and what `saka.toml` asks for. `null` in the answer to an action."
+                },
                 "available_actions": {
                   "type": "array",
                   "items": {
@@ -6442,7 +6444,6 @@
           "name",
           "workspace",
           "repos",
-          "autonomy",
           "workflow",
           "authorship_mode",
           "config_commit",
@@ -6455,10 +6456,6 @@
           "authorship_mode": {
             "type": "string",
             "description": "`bot | user | user_pat`: who authors the agent's commits and opens its pull requests."
-          },
-          "autonomy": {
-            "type": "string",
-            "description": "`standard` in this version."
           },
           "config_commit": {
             "type": "string"
@@ -6621,9 +6618,13 @@
           "is_default",
           "is_workspace",
           "path_scope",
-          "effective_path_scope"
+          "effective_path_scope",
+          "autonomy"
         ],
         "properties": {
+          "autonomy": {
+            "$ref": "#/components/schemas/RepoAutonomy"
+          },
           "base_branch": {
             "type": "string",
             "description": "Branch this binding's worktrees, recipes, change requests, and merge checks use."
@@ -6837,6 +6838,31 @@
           "present": {
             "type": "boolean",
             "description": "`false` when the file does not exist at that commit."
+          }
+        }
+      },
+      "RepoAutonomy": {
+        "type": "object",
+        "description": "How much the loop may do on its own in this repo: the lowest of what the operator allows and what\n`saka.toml` asks for.",
+        "required": [
+          "allowed",
+          "effective"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "string",
+            "description": "The operator's ceiling for this repo, from `[autonomy]` in `config.toml`."
+          },
+          "effective": {
+            "type": "string",
+            "description": "The level in force."
+          },
+          "requested": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`strict | standard | autonomous`, or `null` when `saka.toml` asks for nothing."
           }
         }
       },
@@ -8861,6 +8887,13 @@
               "string",
               "null"
             ]
+          },
+          "autonomy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`strict | standard | autonomous`: the level in force for the task's repo, the lowest of the\noperator's ceiling and what `saka.toml` asks for. `null` in the answer to an action."
           },
           "available_actions": {
             "type": "array",

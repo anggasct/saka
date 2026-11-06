@@ -148,6 +148,12 @@ describe("Repos and config", () => {
       within(repos).getByRole("link", { name: "acme/web" }),
     ).toHaveAttribute("href", "https://github.com/acme/web");
     expect(within(repos).getAllByText("Effective path scope")).toHaveLength(1);
+    expect(within(repos).getByText("Strict")).toBeInTheDocument();
+    expect(
+      within(repos).getByText(
+        "The repo file asks for Autonomous; the operator allows Standard.",
+      ),
+    ).toBeInTheDocument();
     expect(
       within(repos).getByText(
         "Repo web overlaps shop of project storefront: both can change the same files.",
@@ -240,7 +246,6 @@ describe("Workflow", () => {
     expect(
       within(workflow).getByText("Full loop: spec to merged pull request"),
     ).toBeInTheDocument();
-    expect(within(workflow).getByText("Standard")).toBeInTheDocument();
     expect(within(workflow).getByText("Approved specs")).toBeInTheDocument();
     expect(
       within(workflow).getByText("Development: automatic"),

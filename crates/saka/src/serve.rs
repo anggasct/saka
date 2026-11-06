@@ -577,6 +577,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
         budget_warn_percent: cfg.budget.warn_percent,
         rate_limit_pause: cfg.agent.rate_limit_pause,
         account: format!("{}:{}", cfg.agent.cli, cfg.account_name()),
+        autonomy: cfg.autonomy_ceilings(),
         ci_appear_timeout_ms: first.map_or(600, |s| {
             i64::try_from(s.ci_appear_timeout_secs).unwrap_or(600)
         }) * 1000,

@@ -85,6 +85,7 @@ pub struct SimConfig {
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
     pub workflow: saka_core::workflow::Workflow,
+    pub autonomy_request: Option<saka_core::vocab::Autonomy>,
 }
 
 pub fn without_review() -> saka_core::workflow::Workflow {
@@ -177,6 +178,7 @@ impl Default for SimConfig {
                 budget_warn_percent: 80,
                 rate_limit_pause: 0.9,
                 account: "claude:default".into(),
+                autonomy: saka_core::autonomy::Ceilings::default(),
                 ci_appear_timeout_ms: 600_000,
                 poll_interval_ms: 15_000,
                 merge_method: MergeMethod::Squash,
@@ -199,6 +201,7 @@ impl Default for SimConfig {
             diagnostics: DiagnosticLimits::default(),
             hooks: Vec::new(),
             workflow: saka_core::workflow::Workflow::default(),
+            autonomy_request: None,
         }
     }
 }
@@ -295,6 +298,7 @@ impl Sim {
                         is_default: true,
                         base_branch: "main".into(),
                         path_scope: vec!["**".into()],
+                        autonomy: sim.cfg.autonomy_request,
                     }],
                 },
                 &cause,

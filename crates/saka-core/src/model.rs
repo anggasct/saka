@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::autonomy::RepoPolicy;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, PermissionRuleId,
@@ -92,7 +93,6 @@ pub struct Project {
     pub config_commit: String,
     pub config_sha256: String,
     pub config_error: Option<ConfigError>,
-    pub autonomy: Autonomy,
     pub workflow: Workflow,
     pub repos: Vec<ProjectRepo>,
     pub created_at: Timestamp,
@@ -106,6 +106,7 @@ pub struct ProjectRepo {
     pub is_default: bool,
     pub base_branch: String,
     pub path_scope: Vec<String>,
+    pub autonomy: Option<Autonomy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -599,6 +600,8 @@ pub struct Task {
     pub reviews: Vec<Review>,
     #[serde(skip)]
     pub workflow: Workflow,
+    #[serde(skip)]
+    pub policy: RepoPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -664,6 +667,7 @@ impl Task {
             hook_gates: Vec::new(),
             reviews: Vec::new(),
             workflow: Workflow::default(),
+            policy: RepoPolicy::default(),
         }
     }
 

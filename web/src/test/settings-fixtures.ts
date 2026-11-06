@@ -27,6 +27,11 @@ export const twoRepos: Project = {
       is_workspace: true,
       path_scope: ["services/**"],
       effective_path_scope: ["services/**", "docs/**"],
+      autonomy: {
+        requested: "strict",
+        allowed: "standard",
+        effective: "strict",
+      },
     },
     {
       name: "web",
@@ -41,6 +46,11 @@ export const twoRepos: Project = {
       is_workspace: false,
       path_scope: ["**"],
       effective_path_scope: ["**"],
+      autonomy: {
+        requested: "autonomous",
+        allowed: "standard",
+        effective: "standard",
+      },
     },
   ],
   warnings: [

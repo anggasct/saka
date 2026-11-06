@@ -131,6 +131,18 @@ effect = "allow"
 tools = ["Bash"]
 commands = ["go test *", "go vet *", "go build *", "gofmt *", "npm test*", "npm run *", "git status*", "git diff*", "git add *", "git commit *", "git log*", "ls *", "cat *"]
 
+# How far the loop may run on its own, per repo. This is the ceiling: a repo's saka.toml can ask for
+# a lower level (`autonomy` under [project] or [[repo]]) and never a higher one. Changing it needs a restart.
+#   strict      each step waits for you to start it; merging is one tap
+#   standard    steps start by themselves once the spec is approved; merging is one tap (default)
+#   autonomous  steps start by themselves; Saka merges when the review approved the head and CI is green on it
+[autonomy]
+default = "standard"               # strict | standard | autonomous
+
+[[autonomy.repo]]
+repo = "acme/api"                  # owner/name as the host shows it, case-insensitive; each repo once
+level = "autonomous"
+
 # Chat notifications. A `notify` hook sends its message through one of these channels; the hook
 # decides which events, projects and filters (see the hooks below). Saka never creates a bot or an
 # account: you make the bot, put its token in a file, and name your chat.

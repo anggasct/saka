@@ -134,6 +134,7 @@ fn binding(full_name: &str, name: &str, base_branch: &str, is_default: bool) -> 
         is_default,
         base_branch: base_branch.into(),
         path_scope: vec!["**".into()],
+        autonomy: None,
     }
 }
 

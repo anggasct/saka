@@ -581,6 +581,7 @@ fn add_web_project(sim: &Sim) -> saka_core::ids::ProjectId {
         is_default,
         base_branch: "main".into(),
         path_scope: vec!["**".into()],
+        autonomy: None,
     };
     let (id, _) = engine
         .register_project(

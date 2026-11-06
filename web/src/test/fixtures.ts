@@ -19,7 +19,6 @@ export const project: ProjectItem = {
     base_branch: "main",
   },
   repos: [],
-  autonomy: "standard",
   authorship_mode: "bot",
   workflow: {
     preset: "full_loop",
@@ -95,6 +94,7 @@ export function task(step: number, extra: Partial<WorkItem>): WorkItem {
     priority: 0,
     waiting_on: [],
     merge_queue: null,
+    autonomy: "standard",
     change_request: null,
     gates: [],
     blocker: null,

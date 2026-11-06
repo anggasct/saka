@@ -524,6 +524,48 @@ fn a_failed_check_at_the_merge_commit_shows_the_gate_of_that_commit() {
 }
 
 #[test]
+fn a_repo_shows_what_the_operator_allows_what_its_file_asks_and_the_level_in_force() {
+    let layout = Layout {
+        saka_toml: saka_toml(
+            "shop",
+            &[repo_entry("shop", SHOP_REPO, "autonomy = \"autonomous\"\n")],
+        ),
+        ..Layout::default()
+    };
+    let api = Api::with(Sim::multi_repo(SimConfig::default(), &layout));
+    let project = api.sim.project_id.0;
+    let shown = api.get(&format!("/api/v1/projects/{project}"));
+    assert_eq!(
+        shown.body["repos"][0]["autonomy"],
+        json!({ "requested": "autonomous", "allowed": "standard", "effective": "standard" }),
+        "a repo file cannot raise the operator's ceiling"
+    );
+    assert!(shown.body.get("autonomy").is_none());
+
+    let mut cfg = SimConfig::default();
+    cfg.loop_cfg.autonomy = saka_core::autonomy::Ceilings {
+        default: saka_core::vocab::Autonomy::Standard,
+        repos: vec![(
+            SHOP_REPO.to_ascii_uppercase(),
+            saka_core::vocab::Autonomy::Autonomous,
+        )],
+    };
+    let mut api = Api::with(Sim::multi_repo(cfg, &layout));
+    let project = api.sim.project_id.0;
+    let shown = api.get(&format!("/api/v1/projects/{project}"));
+    assert_eq!(
+        shown.body["repos"][0]["autonomy"],
+        json!({ "requested": "autonomous", "allowed": "autonomous", "effective": "autonomous" })
+    );
+    api.sim.approve();
+    let id = api.sim.task(1).item.id.0;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["autonomy"], "autonomous");
+    let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
+    assert_eq!(listed.body["items"][0]["autonomy"], "autonomous");
+}
+
+#[test]
 fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
     let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
     text.push_str("\n[workflow]\npreset = \"build_only\"\n");

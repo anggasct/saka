@@ -200,6 +200,14 @@ describe("TaskPage", () => {
     ).toHaveAttribute("href", `/settings/${PROJECT_ID}`);
   });
 
+  it("names the autonomy level the task runs at", async () => {
+    const strict = detail(task(1, { autonomy: "strict" }));
+    fakeApi(routes(strict));
+    renderWithProviders(<TaskPage workItemId={strict.id} />);
+    expect(await screen.findByText("Autonomy")).toBeInTheDocument();
+    expect(screen.getByText("Strict")).toBeInTheDocument();
+  });
+
   it("shows the evidence of a blocked task", async () => {
     fakeApi(routes(blocked));
     renderWithProviders(<TaskPage workItemId={blocked.id} />);

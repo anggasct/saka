@@ -11,7 +11,7 @@ use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
-use saka_core::vocab::{BlockerAction, SpecOrigin, Stage, WorkItemState};
+use saka_core::vocab::{Autonomy, BlockerAction, SpecOrigin, Stage, WorkItemState};
 use saka_core::workflow::Workflow;
 use saka_core::workspace;
 use saka_ports::{IdsSource, RepoRef};
@@ -62,6 +62,7 @@ pub struct NewBinding {
     pub is_default: bool,
     pub base_branch: String,
     pub path_scope: Vec<String>,
+    pub autonomy: Option<Autonomy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +155,7 @@ impl Engine {
                 is_default: b.is_default,
                 base_branch: b.base_branch.clone(),
                 path_scope: b.path_scope.clone(),
+                autonomy: b.autonomy,
             });
         }
         if !workspace::bindings_hold(&repos) {

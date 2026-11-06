@@ -1529,7 +1529,6 @@ mod tests {
             config_commit: "c0ffee".into(),
             config_sha256: "sha256:0".into(),
             config_error,
-            autonomy: crate::vocab::Autonomy::Standard,
             workflow: crate::workflow::Workflow::default(),
             repos: Vec::new(),
             created_at: NOW,

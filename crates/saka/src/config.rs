@@ -2,8 +2,9 @@ use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
+use saka_core::autonomy::Ceilings;
 use saka_core::policy::RuleSpec;
-use saka_core::vocab::MergeMethod;
+use saka_core::vocab::{Autonomy, MergeMethod};
 use saka_scm::github::app::client_id_valid;
 use serde::Deserialize;
 
@@ -56,6 +57,53 @@ pub struct Config {
     pub hook: Vec<saka_core::hook::RawHook>,
     #[serde(default)]
     pub notify: Notify,
+    #[serde(default)]
+    pub autonomy: AutonomyConfig,
+}
+
+pub const MAX_AUTONOMY_REPOS: usize = 256;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutonomyConfig {
+    #[serde(default = "standard")]
+    pub default: Autonomy,
+    #[serde(default)]
+    pub repo: Vec<AutonomyRepo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutonomyRepo {
+    pub repo: String,
+    pub level: Autonomy,
+}
+
+impl Default for AutonomyConfig {
+    fn default() -> AutonomyConfig {
+        AutonomyConfig {
+            default: standard(),
+            repo: Vec::new(),
+        }
+    }
+}
+
+fn standard() -> Autonomy {
+    Autonomy::Standard
+}
+
+fn repo_full_name_ok(name: &str) -> bool {
+    let mut parts = name.split('/');
+    let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let part_ok = |p: &str| {
+        !p.is_empty()
+            && p.len() <= 100
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    part_ok(owner) && part_ok(repo)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -725,6 +773,35 @@ impl Config {
         Ok(())
     }
 
+    fn validate_autonomy(&self) -> Result<(), ConfigError> {
+        let mut seen = std::collections::BTreeSet::new();
+        let valid =
+            self.autonomy.repo.len() <= MAX_AUTONOMY_REPOS
+                && self.autonomy.repo.iter().all(|r| {
+                    repo_full_name_ok(&r.repo) && seen.insert(r.repo.to_ascii_lowercase())
+                });
+        if valid {
+            Ok(())
+        } else {
+            Err(err(
+                "config_invalid",
+                "autonomy.repo must list each owner/name once, at most 256",
+            ))
+        }
+    }
+
+    pub fn autonomy_ceilings(&self) -> Ceilings {
+        Ceilings {
+            default: self.autonomy.default,
+            repos: self
+                .autonomy
+                .repo
+                .iter()
+                .map(|r| (r.repo.clone(), r.level))
+                .collect(),
+        }
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         self.listen()?;
         if let Some(hooks) = &self.hooks {
@@ -822,6 +899,7 @@ impl Config {
                 "git.email must be 3 to 254 bytes with exactly one '@'",
             ));
         }
+        self.validate_autonomy()?;
         let mut rule_ids = std::collections::BTreeSet::new();
         for r in &self.permission.rule {
             if !id_ok(&r.id, 64) || !rule_ids.insert(r.id.clone()) {
@@ -1441,6 +1519,11 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        assert_eq!(cfg.autonomy.default, Autonomy::Standard);
+        assert_eq!(
+            cfg.autonomy_ceilings().allowed("ACME/api"),
+            Autonomy::Autonomous
+        );
         assert_eq!(cfg.notify.channel[0].name, "ops");
         assert!(cfg.notify.channel[0].actions);
         assert_eq!(cfg.notify.channel[0].allowed_users, ["123456789"]);
@@ -1571,5 +1654,31 @@ mod tests {
                 "{old}"
             );
         }
+    }
+
+    #[test]
+    fn the_autonomy_ceiling_defaults_to_standard_and_lists_repos_once() {
+        let cfg = Config::parse("").unwrap();
+        assert_eq!(cfg.autonomy_ceilings().allowed("a/b"), Autonomy::Standard);
+        let listed = "[autonomy]\ndefault = \"strict\"\n[[autonomy.repo]]\nrepo = \"Acme/Api\"\nlevel = \"autonomous\"\n";
+        let ceilings = Config::parse(listed).unwrap().autonomy_ceilings();
+        assert_eq!(ceilings.allowed("acme/api"), Autonomy::Autonomous);
+        assert_eq!(ceilings.allowed("acme/web"), Autonomy::Strict);
+        for bad in [
+            "[autonomy]\ndefault = \"reckless\"\n",
+            "[[autonomy.repo]]\nrepo = \"acme\"\nlevel = \"strict\"\n",
+            "[[autonomy.repo]]\nrepo = \"acme/api\"\nlevel = \"loud\"\n",
+            "[[autonomy.repo]]\nrepo = \"acme/api\"\nlevel = \"strict\"\n[[autonomy.repo]]\nrepo = \"ACME/API\"\nlevel = \"standard\"\n",
+        ] {
+            assert_eq!(
+                Config::parse(bad).unwrap_err().code,
+                "config_invalid",
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            Config::parse("[autonomy]\nrepos = []\n").unwrap_err().code,
+            "config_unknown_field"
+        );
     }
 }

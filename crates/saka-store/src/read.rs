@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use saka_core::autonomy::RepoPolicy;
 use saka_core::ids::{
     BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
     RepoId, ReviewId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
@@ -272,17 +273,29 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             t.external = Some(external);
         }
     }
-    for (id, workflow) in rows_of(
+    for (id, workflow, policy) in rows_of(
         conn,
-        "SELECT w.id, p.workflow FROM work_item w JOIN project p ON p.id = w.project_id",
+        "SELECT w.id, p.workflow, r.full_name, pr.autonomy FROM work_item w JOIN project p ON p.id = w.project_id
+           JOIN repo r ON r.id = w.repo_id
+           LEFT JOIN project_repo pr ON pr.project_id = w.project_id AND pr.repo_id = w.repo_id",
         "w.id",
         selection,
         "w.id",
         b,
-        |row| Ok((WorkItemId(uuid(row, "id")?), json(row, "workflow")?)),
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "id")?),
+                json(row, "workflow")?,
+                RepoPolicy {
+                    full_name: row.get("full_name")?,
+                    requested: opt_vocab(row, "autonomy")?,
+                },
+            ))
+        },
     )? {
         if let Some(t) = tasks.get_mut(&id) {
             t.workflow = workflow;
+            t.policy = policy;
         }
     }
     for r in rows(
@@ -1296,7 +1309,7 @@ pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>>
         return Ok(None);
     };
     let mut stmt = conn.prepare(
-        "SELECT repo_id, name, is_default, base_branch, path_scope FROM project_repo WHERE project_id = ?1
+        "SELECT repo_id, name, is_default, base_branch, path_scope, autonomy FROM project_repo WHERE project_id = ?1
          ORDER BY is_default DESC, name",
     )?;
     let mut q = stmt.query([id.0.to_string()])?;
@@ -1307,6 +1320,7 @@ pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>>
             is_default: row.get("is_default")?,
             base_branch: row.get("base_branch")?,
             path_scope: json(row, "path_scope")?,
+            autonomy: opt_vocab(row, "autonomy")?,
         });
     }
     Ok(Some(project))
@@ -1322,7 +1336,6 @@ pub(crate) fn project_row(row: &Row<'_>) -> Result<Project> {
         config_commit: row.get("config_commit")?,
         config_sha256: row.get("config_sha256")?,
         config_error: opt_json(row, "config_error")?,
-        autonomy: vocab(row, "autonomy")?,
         workflow: json(row, "workflow")?,
         repos: Vec::new(),
         created_at: ts(row, "created_at")?,

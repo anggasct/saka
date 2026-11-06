@@ -42,6 +42,7 @@ fn cfg() -> LoopConfig {
         budget_warn_percent: 80,
         rate_limit_pause: 0.9,
         account: "claude:default".into(),
+        autonomy: saka_core::autonomy::Ceilings::default(),
         ci_appear_timeout_ms: 600_000,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
