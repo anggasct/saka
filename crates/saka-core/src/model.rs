@@ -18,8 +18,8 @@ use crate::vocab::{
     ContextOrigin, DecisionState, DocsMode, DraftAttemptState, DraftLocale, DraftMode, Effect,
     EnvironmentState, ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind,
     PacketOrigin, PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome,
-    SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState, Tool,
-    Trigger, WorkItemOrigin, WorkItemState,
+    SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState,
+    TargetKind, Tool, Trigger, WorkItemOrigin, WorkItemState,
 };
 use crate::workflow::Workflow;
 
@@ -851,6 +851,7 @@ pub struct SpecDraft {
     pub idea: String,
     pub locale: DraftLocale,
     pub mode: DraftMode,
+    pub target_kind: TargetKind,
     pub context_paths: Vec<String>,
     pub state: SpecDraftState,
     pub attempt: u32,

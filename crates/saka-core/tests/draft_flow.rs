@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 use saka_core::Ctx;
-use saka_core::draft::{self, DraftConfig, DraftInput, NewDraft, PacketFacts};
+use saka_core::draft::{self, CommitCheck, DraftConfig, DraftInput, NewDraft, PacketFacts};
 use saka_core::event::{Event, Prompt};
 use saka_core::ids::{
     EnvironmentId, IdSource, ProjectId, RepoId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId,
@@ -17,7 +17,7 @@ use saka_core::session::{SessionConfig, SessionInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     DraftFailureCode, DraftLocale, DraftMode, LintOutcome, PrimaryAction, SessionState,
-    SpecDraftState,
+    SpecDraftState, TargetKind,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -86,6 +86,7 @@ impl World {
             idea: "Let users upload an avatar".into(),
             locale: DraftLocale::En,
             mode,
+            target_kind: TargetKind::New,
             context_paths: vec![],
         });
         let d = draft::evolve(None, &event, T0).unwrap();
@@ -226,6 +227,13 @@ impl World {
     fn committing(&mut self) {
         self.drafting();
         self.lint(LintOutcome::Passed);
+    }
+}
+
+fn changed() -> CommitCheck {
+    CommitCheck {
+        changed: 2,
+        moved: Vec::new(),
     }
 }
 
@@ -934,13 +942,19 @@ fn a_message_starts_a_turn_and_only_an_awaiting_draft_takes_one() {
 fn commit_needs_a_passing_lint_and_then_hands_the_message_to_the_commit_job() {
     let mut w = World::session();
     assert_eq!(
-        w.go(DraftInput::Commit { message: None }),
+        w.go(DraftInput::Commit {
+            message: None,
+            check: changed(),
+        }),
         Err(Rejection::DraftNotWaiting)
     );
     w.drafting();
     w.lint(LintOutcome::Failed);
     assert_eq!(
-        w.go(DraftInput::Commit { message: None }),
+        w.go(DraftInput::Commit {
+            message: None,
+            check: changed(),
+        }),
         Err(Rejection::DraftLintFailed)
     );
     assert!(!draft::available_actions(&w.d).contains(&"commit"));
@@ -952,6 +966,7 @@ fn commit_needs_a_passing_lint_and_then_hands_the_message_to_the_commit_job() {
     w.take_jobs();
     w.jobs.clear();
     let events = w.ok(DraftInput::Commit {
+        check: changed(),
         message: Some("docs: add the export spec".into()),
     });
     assert_eq!(
@@ -1014,4 +1029,31 @@ fn a_session_lost_while_awaiting_goes_back_to_work_so_it_resumes() {
     assert_eq!(w.state(), SpecDraftState::Drafting);
     let jobs = draft::phase_jobs(&w.d, w.now);
     assert!(jobs.iter().any(|j| j.kind == JobKind::SessionStart));
+}
+
+#[test]
+fn a_commit_needs_a_change_and_no_file_moved_on_the_base() {
+    let mut w = World::session();
+    w.drafting();
+    w.lint(LintOutcome::Passed);
+    assert_eq!(
+        w.go(DraftInput::Commit {
+            message: None,
+            check: CommitCheck::default()
+        }),
+        Err(Rejection::DraftNoChanges)
+    );
+    assert_eq!(
+        w.go(DraftInput::Commit {
+            message: None,
+            check: CommitCheck {
+                changed: 2,
+                moved: vec!["docs/prd.md".into()]
+            }
+        }),
+        Err(Rejection::DraftBaseMoved {
+            paths: vec!["docs/prd.md".into()]
+        })
+    );
+    assert_eq!(w.state(), SpecDraftState::AwaitingOperator);
 }

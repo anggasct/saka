@@ -27,7 +27,7 @@ use crate::vocab::{
     InboxSubject, InterruptBy, LintOutcome, MatchKind, MergeMethod, PairingPurpose,
     PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis,
     ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
-    TokenInvalidCause, Trigger,
+    TargetKind, TokenInvalidCause, Trigger,
 };
 use crate::workflow::Workflow;
 
@@ -185,6 +185,7 @@ pub enum Event {
         idea: String,
         locale: DraftLocale,
         mode: DraftMode,
+        target_kind: TargetKind,
         context_paths: Vec<String>,
     },
     #[serde(rename = "spec.draft.attempt_started")]

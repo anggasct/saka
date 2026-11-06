@@ -2,6 +2,7 @@ use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::model::PermissionRule;
+use crate::paths;
 use crate::shell;
 
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
@@ -311,6 +312,32 @@ pub const ARCHITECT_DECISION: &str = "decision";
 
 #[must_use]
 pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Decision {
+    architect_with(
+        request,
+        operator,
+        |p| p.path == target,
+        &format!("Architect sessions can read the repository and write only {target}."),
+    )
+}
+
+#[must_use]
+pub fn architect_session(request: &ToolRequest, project_path: &str, operator: &Policy) -> Decision {
+    architect_with(
+        request,
+        operator,
+        |p| paths::check_doc_path(project_path, &p.path).is_ok(),
+        &format!(
+            "Architect sessions can read the repository and write only markdown files under {project_path}."
+        ),
+    )
+}
+
+fn architect_with(
+    request: &ToolRequest,
+    operator: &Policy,
+    writable: impl Fn(&RequestPath) -> bool,
+    denied: &str,
+) -> Decision {
     if let Some(name) = builtin_deny(request) {
         return Decision::new(Effect::Deny, DecisionSource::Builtin(name.to_string()));
     }
@@ -326,17 +353,15 @@ pub fn architect(request: &ToolRequest, target: &str, operator: &Policy) -> Deci
     if ARCHITECT_READ_TOOLS.contains(&tool) {
         return allow(ARCHITECT_READ);
     }
-    let writes_target = request
+    let writes_allowed = request
         .path
         .as_ref()
-        .is_some_and(|p| p.inside_worktree && !p.through_symlink && p.path == target);
-    if ARCHITECT_WRITE_TOOLS.contains(&tool) && writes_target {
+        .is_some_and(|p| p.inside_worktree && !p.through_symlink && writable(p));
+    if ARCHITECT_WRITE_TOOLS.contains(&tool) && writes_allowed {
         return allow(ARCHITECT_TARGET);
     }
     Decision {
-        message: Some(format!(
-            "Architect sessions can read the repository and write only {target}."
-        )),
+        message: Some(denied.to_string()),
         ..Decision::new(
             Effect::Deny,
             DecisionSource::Architect(ARCHITECT_DENY.to_string()),
@@ -1251,6 +1276,78 @@ mod architect_tests {
         );
         assert_eq!(d.effect, Effect::Deny);
         assert_eq!(source(&d).as_deref(), Some("policy:architect:deny"));
+    }
+
+    #[test]
+    fn a_session_writes_markdown_files_inside_the_project_folder_and_nothing_else() {
+        let cases: [(&str, &str, bool, bool, bool); 14] = [
+            ("docs", "docs/specs/export.md", true, false, true),
+            ("docs", "docs/prd.md", true, false, true),
+            ("docs", "docs/notes/deep/er/x.markdown", true, false, true),
+            ("docs", "docs/saka.toml", true, false, false),
+            ("docs", "docs/specs/export.txt", true, false, false),
+            ("docs", "docs/specs/export", true, false, false),
+            ("docs", "README.md", true, false, false),
+            ("docs", "docsx/export.md", true, false, false),
+            ("docs", "../docs/export.md", false, false, false),
+            ("docs", "/etc/hosts.md", false, false, false),
+            ("docs", "docs/linked/outside.md", true, true, false),
+            ("docs", "docs/.git/hook.md", true, false, false),
+            (".", "notes/x.md", true, false, true),
+            (".", "saka.toml", true, false, false),
+        ];
+        for (project, path, inside, symlink, allowed) in cases {
+            for tool in ARCHITECT_WRITE_TOOLS {
+                let d = architect_session(
+                    &at(tool, Some((path, inside, symlink)), None),
+                    project,
+                    &operator(),
+                );
+                let effect = if allowed { Effect::Allow } else { Effect::Deny };
+                assert_eq!(d.effect, effect, "{tool} {path} in {project}");
+            }
+        }
+        let denied = architect_session(
+            &at("Write", Some(("docs/saka.toml", true, false)), None),
+            "docs",
+            &operator(),
+        );
+        assert_eq!(source(&denied).as_deref(), Some("policy:architect:deny"));
+        assert!(
+            denied
+                .message
+                .unwrap()
+                .contains("markdown files under docs")
+        );
+    }
+
+    #[test]
+    fn a_session_keeps_the_other_architect_limits() {
+        for tool in ["Bash", "WebFetch", "NotebookEdit", "Task"] {
+            let d = architect_session(
+                &at(tool, Some(("docs/a.md", true, false)), Some("ls")),
+                "docs",
+                &operator(),
+            );
+            assert_eq!(d.effect, Effect::Deny, "{tool}");
+        }
+        let read = architect_session(
+            &at("Read", Some(("docs/prd.md", true, false)), None),
+            "docs",
+            &operator(),
+        );
+        assert_eq!(source(&read).as_deref(), Some("policy:architect:read"));
+        let decision = architect_session(&at(DECISION_TOOL, None, None), "docs", &operator());
+        assert_eq!(
+            source(&decision).as_deref(),
+            Some("policy:architect:decision")
+        );
+        let secret = architect_session(
+            &at("Read", Some(("docs/.env", true, false)), None),
+            "docs",
+            &operator(),
+        );
+        assert_eq!(secret.effect, Effect::Deny);
     }
 
     #[test]

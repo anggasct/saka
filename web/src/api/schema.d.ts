@@ -900,6 +900,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/spec-drafts/{spec_draft_id}/changes": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_spec_draft_changes"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/spec-drafts/{spec_draft_id}/commit": {
     parameters: {
       query?: never;
@@ -1540,6 +1556,8 @@ export interface components {
       mode?: string | null;
       /** @description The new spec file from the repo root, inside the project folder, ending in `.md`. */
       path: string;
+      /** @description `new` (default) or `revise`: `revise` needs `path` to exist on the base branch. */
+      target_kind?: string | null;
     };
     /** @enum {string} */
     Decision: "allow" | "deny";
@@ -2234,6 +2252,8 @@ export interface components {
         spec_id?: string | null;
         /** @description `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled` */
         state: string;
+        /** @description `new` (a new spec file) or `revise` (an edit of the spec file that already exists). */
+        target_kind: string;
         updated_at: string;
         /** Format: int64 */
         version: number;
@@ -2975,6 +2995,8 @@ export interface components {
       spec_id?: string | null;
       /** @description `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled` */
       state: string;
+      /** @description `new` (a new spec file) or `revise` (an edit of the spec file that already exists). */
+      target_kind: string;
       updated_at: string;
       /** Format: int64 */
       version: number;
@@ -3017,7 +3039,28 @@ export interface components {
       /** Format: int32 */
       warn_percent: number;
     };
-    /** @description The latest file content the architect wrote. */
+    SpecDraftChange: {
+      /** @description Unified diff against the base commit, cut at 256 KiB. */
+      diff: string;
+      path: string;
+      /** @description `added | modified` */
+      status: string;
+      truncated: boolean;
+    };
+    /**
+     * @description The latest file content the architect wrote.
+     *     What a session-mode draft changed in the docs checkout, with the lint result of its last turn.
+     */
+    SpecDraftChanges: {
+      /** @description Markdown files inside the project folder that differ from the base commit; empty once the checkout is gone. */
+      files: components["schemas"]["SpecDraftChange"][];
+      lint: components["schemas"]["SpecDraftChangesLint"];
+    };
+    SpecDraftChangesLint: {
+      findings: components["schemas"]["LintIssue"][];
+      /** @description Whether the target file passed the lint after the last turn. */
+      passed: boolean;
+    };
     SpecDraftContent: {
       /** Format: int32 */
       attempt: number;
@@ -5757,6 +5800,35 @@ export interface operations {
         };
       };
       "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_spec_draft_changes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        spec_draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraftChanges"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

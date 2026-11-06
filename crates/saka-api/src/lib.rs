@@ -41,7 +41,7 @@ pub use state::{ApiConfig, AppState};
         routes::list_permission_rules, routes::add_permission_rule, routes::preview_permission_rule, routes::evaluate_permission, routes::revoke_rule, routes::list_agent_accounts,
         routes::list_usage_records,
         routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
-        routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet,
+        routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet, routes::get_spec_draft_changes,
         routes::retry_spec_draft, routes::cancel_spec_draft, routes::message_spec_draft,
         routes::commit_spec_draft, routes::discard_spec_draft,
         routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::list_inbox, routes::inbox_summary, routes::dismiss_inbox_item, routes::rerun_hook,
@@ -243,6 +243,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/content",
             get(routes::get_spec_draft_content),
+        )
+        .route(
+            "/api/v1/spec-drafts/{spec_draft_id}/changes",
+            get(routes::get_spec_draft_changes),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/packet",

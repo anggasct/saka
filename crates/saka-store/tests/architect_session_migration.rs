@@ -107,7 +107,7 @@ fn the_session_migration_keeps_drafts_and_accepts_the_awaiting_state_only_for_se
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![36]);
+    assert_eq!(store.migration().applied, vec![36, 37]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();
@@ -120,6 +120,26 @@ fn the_session_migration_keeps_drafts_and_accepts_the_awaiting_state_only_for_se
         )
         .unwrap();
     assert_eq!(kept, "docs/specs/a.md draft queued");
+    let kind: String = conn
+        .query_row(
+            "SELECT target_kind FROM spec_draft WHERE id = 'd1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "new");
+    assert!(
+        conn.execute(
+            "UPDATE spec_draft SET target_kind = 'rewrite' WHERE id = 'd1'",
+            []
+        )
+        .is_err()
+    );
+    conn.execute(
+        "UPDATE spec_draft SET target_kind = 'revise' WHERE id = 'd1'",
+        [],
+    )
+    .unwrap();
 
     assert!(insert(
         &conn,

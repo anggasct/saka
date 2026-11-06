@@ -4,7 +4,7 @@ use saka_core::model::{Draft, Environment, PermissionRequest, RunOwner, Session,
 use saka_core::policy::{Effect, ToolRequest};
 use saka_core::session::SessionInput;
 use saka_core::task::TaskInput;
-use saka_core::vocab::{Stage, StagePhase};
+use saka_core::vocab::{DraftMode, Stage, StagePhase};
 use saka_ports::{EnvRef, RunnerEvent, RunnerEventKind};
 use saka_store::read;
 use serde_json::Value;
@@ -270,7 +270,16 @@ impl Engine {
                     &tool,
                     &input,
                 );
-                saka_core::policy::architect(&request, &d.draft.path, &self.cfg.policy)
+                match d.draft.mode {
+                    DraftMode::Draft => {
+                        saka_core::policy::architect(&request, &d.draft.path, &self.cfg.policy)
+                    }
+                    DraftMode::Session => saka_core::policy::architect_session(
+                        &request,
+                        &project.project_path,
+                        &self.cfg.policy,
+                    ),
+                }
             }
         };
         Ok(SessionInput::PermissionRequested {

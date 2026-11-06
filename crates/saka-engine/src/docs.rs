@@ -255,7 +255,7 @@ impl Engine {
         })
     }
 
-    async fn register_saved(
+    pub(crate) async fn register_saved(
         &self,
         project: &saka_core::model::Project,
         repo: &saka_ports::RepoRef,

@@ -10,11 +10,11 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    Blob, ChangeDiff, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, DOCS_MAX_BYTES,
+    Blob, ChangeDiff, ChangedPaths, Checkout, CommandUnit, CommitFiles, CommitPush, DOCS_MAX_BYTES,
     DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, GitAccess, GitRemote, PortError,
     PortResult, PrepareRequest, PreparedDocs, PreparedEnvironment, PushCommit, PushOutcome,
     PushRequest, Rebase, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor,
-    TreeEntry, UnitLimits, WorktreeFile, WorktreeState,
+    TreeEntry, UnitLimits, WorktreeChange, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -947,18 +947,20 @@ impl Repos for GitRepos {
         Ok(blob)
     }
 
-    async fn commit_one(&self, request: &CommitOne) -> PortResult<String> {
+    async fn commit_files(&self, request: &CommitFiles) -> PortResult<String> {
         sha_arg(&request.parent, "parent")?;
-        sha_arg(&request.blob, "blob")?;
-        arg(&request.path, "path")?;
-        if !matches!(
-            request.mode.as_str(),
-            TreeEntry::REGULAR | TreeEntry::EXECUTABLE
-        ) {
-            return Err(PortError::permanent(
-                "git_argument_invalid",
-                json!({ "field": "mode" }),
-            ));
+        for file in &request.files {
+            sha_arg(&file.blob, "blob")?;
+            arg(&file.path, "path")?;
+            if !matches!(
+                file.mode.as_str(),
+                TreeEntry::REGULAR | TreeEntry::EXECUTABLE
+            ) {
+                return Err(PortError::permanent(
+                    "git_argument_invalid",
+                    json!({ "field": "mode" }),
+                ));
+            }
         }
         let bare = self.mirror_path(request.repo.repo_id);
         let bare = bare.as_path();
@@ -997,17 +999,12 @@ impl Repos for GitRepos {
             "read_tree",
         )
         .await?;
-        let info = format!("{},{},{}", request.mode, request.blob, request.path);
-        run(
-            vec![
-                "update-index".into(),
-                "--add".into(),
-                "--cacheinfo".into(),
-                info,
-            ],
-            "update_index",
-        )
-        .await?;
+        let mut update = vec!["update-index".to_string(), "--add".to_string()];
+        for file in &request.files {
+            update.push("--cacheinfo".into());
+            update.push(format!("{},{},{}", file.mode, file.blob, file.path));
+        }
+        run(update, "update_index").await?;
         let tree = run(vec!["write-tree".into()], "write_tree").await?;
         let commit = run(
             vec![
@@ -1877,6 +1874,62 @@ impl Environments for GitRepos {
 
     async fn write_worktree_file(&self, env: &EnvRef, path: &str, bytes: &[u8]) -> PortResult<()> {
         write_file_in(Path::new(&env.worktree_path), path, bytes)
+    }
+
+    async fn worktree_changes(
+        &self,
+        env: &EnvRef,
+        max_diff_bytes: usize,
+    ) -> PortResult<Vec<WorktreeChange>> {
+        let wt = Path::new(&env.worktree_path);
+        let status = self
+            .git_ok(
+                wt,
+                &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                "status",
+            )
+            .await?;
+        let mut changes = Vec::new();
+        for entry in status.stdout.split(|b| *b == 0).filter(|e| e.len() > 3) {
+            let code = String::from_utf8_lossy(&entry[..2]).into_owned();
+            let path = String::from_utf8_lossy(&entry[3..]).into_owned();
+            if code.contains('D') {
+                continue;
+            }
+            arg(&path, "path")?;
+            let added = code == "??" || code.contains('A');
+            let diff = if added {
+                self.cfg
+                    .git
+                    .local(
+                        wt,
+                        &["diff", "--no-index", "--no-color", "--", "/dev/null", &path],
+                    )
+                    .await?
+            } else {
+                self.cfg
+                    .git
+                    .local(wt, &["diff", "--no-color", "HEAD", "--", &path])
+                    .await?
+            };
+            if !matches!(diff.code, Some(0 | 1)) {
+                return Err(failed("diff", &diff));
+            }
+            let text = String::from_utf8_lossy(&diff.stdout).into_owned();
+            let truncated = text.len() > max_diff_bytes;
+            let mut end = text.len().min(max_diff_bytes);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            changes.push(WorktreeChange {
+                path,
+                added,
+                diff: text[..end].to_string(),
+                truncated,
+            });
+        }
+        changes.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(changes)
     }
 
     // A writable docs checkout counts as a second worktree; a read-only one never does.

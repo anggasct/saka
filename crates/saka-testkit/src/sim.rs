@@ -11,7 +11,7 @@ use saka_core::task::LoopConfig;
 use saka_core::vocab::{
     BlockerCode, MergeMethod, PermissionState, SpecState, Stage, StagePhase, WorkItemState,
 };
-use saka_core::vocab::{DraftMode, ReloadTrigger, SpecOrigin, WorkItemOrigin};
+use saka_core::vocab::{DraftMode, ReloadTrigger, SpecOrigin, TargetKind, WorkItemOrigin};
 use saka_engine::{
     AddProject, DiagnosticLimits, Engine, EngineConfig, EngineError, EnvConfig, Integration,
     JobReport, NewBinding, NewProject, NewRepo, NewSpecDraft, Ports, ProjectView, RegisteredSpec,
@@ -652,7 +652,7 @@ impl Sim {
         idea: &str,
         context_paths: &[&str],
     ) -> Result<Draft, EngineError> {
-        self.create_draft_as(DraftMode::Draft, path, idea, context_paths)
+        self.create_draft_as(DraftMode::Draft, TargetKind::New, path, idea, context_paths)
     }
 
     pub fn create_session(
@@ -661,12 +661,23 @@ impl Sim {
         idea: &str,
         context_paths: &[&str],
     ) -> Result<Draft, EngineError> {
-        self.create_draft_as(DraftMode::Session, path, idea, context_paths)
+        self.create_draft_as(
+            DraftMode::Session,
+            TargetKind::New,
+            path,
+            idea,
+            context_paths,
+        )
+    }
+
+    pub fn revise_session(&self, path: &str, idea: &str) -> Result<Draft, EngineError> {
+        self.create_draft_as(DraftMode::Session, TargetKind::Revise, path, idea, &[])
     }
 
     fn create_draft_as(
         &self,
         mode: DraftMode,
+        target_kind: TargetKind,
         path: &str,
         idea: &str,
         context_paths: &[&str],
@@ -680,6 +691,7 @@ impl Sim {
                 idea: idea.into(),
                 locale: saka_core::vocab::DraftLocale::En,
                 mode,
+                target_kind,
                 context_paths: context_paths.iter().map(|p| (*p).to_string()).collect(),
             },
             &cause,

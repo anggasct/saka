@@ -84,6 +84,58 @@ pub enum DocWrite {
     Rejected,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocFileWrite {
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub expect: DocExpect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocFilesCommit {
+    pub repo: RepoRef,
+    pub branch: String,
+    pub files: Vec<DocFileWrite>,
+    pub message: Option<String>,
+    pub author: GitIdentity,
+    pub at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocFileCommitted {
+    pub path: String,
+    pub blob: String,
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocStale {
+    pub path: String,
+    pub blob: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocFilesWrite {
+    Committed {
+        commit: String,
+        parent: String,
+        files: Vec<DocFileCommitted>,
+        attempts: u32,
+    },
+    Unchanged {
+        commit: String,
+    },
+    Stale {
+        commit: String,
+        stale: Vec<DocStale>,
+    },
+    PathConflict {
+        path: String,
+    },
+    NotRegular,
+    Rejected,
+}
+
 #[async_trait]
 pub trait DocSource: Send + Sync {
     async fn branch_tip(&self, repo: &RepoRef, branch: &str) -> PortResult<Option<String>>;
@@ -134,4 +186,6 @@ pub trait DocSource: Send + Sync {
     ) -> PortResult<DocOpened>;
 
     async fn commit_file(&self, request: &DocCommit) -> PortResult<DocWrite>;
+
+    async fn commit_files(&self, request: &DocFilesCommit) -> PortResult<DocFilesWrite>;
 }

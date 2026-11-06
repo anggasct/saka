@@ -676,6 +676,7 @@
   "draft.failure.target_exists": "A file was added at this path on the base branch in the meantime (blob {blob}), so the draft was not committed.",
   "draft.failure.target_path_conflict": "{path} is a file, so the spec cannot be saved inside it.",
   "draft.failure.register_failed": "The spec was committed but could not be registered ({code}).",
+  "draft.failure.base_moved": "{paths} changed on the base branch while the draft was open, so nothing was committed.",
   "draft.failure.session_idle_expired": "Nobody replied for {hours, number} hours, so the session ended. What the architect wrote is kept below.",
   "draft.failure.unknown": "The draft failed ({code}).",
   "docs.fromDraft.exists": "A file already exists at this path, so the draft was not loaded.",

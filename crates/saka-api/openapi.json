@@ -3491,6 +3491,45 @@
         }
       }
     },
+    "/api/v1/spec-drafts/{spec_draft_id}/changes": {
+      "get": {
+        "tags": [
+          "spec-drafts"
+        ],
+        "operationId": "get_spec_draft_changes",
+        "parameters": [
+          {
+            "name": "spec_draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraftChanges"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/spec-drafts/{spec_draft_id}/commit": {
       "post": {
         "tags": [
@@ -5613,6 +5652,13 @@
           "path": {
             "type": "string",
             "description": "The new spec file from the repo root, inside the project folder, ending in `.md`."
+          },
+          "target_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`new` (default) or `revise`: `revise` needs `path` to exist on the base branch."
           }
         },
         "additionalProperties": false
@@ -7787,6 +7833,7 @@
                 "slug",
                 "locale",
                 "mode",
+                "target_kind",
                 "context_paths",
                 "state",
                 "waiting_on",
@@ -7936,6 +7983,10 @@
                 "state": {
                   "type": "string",
                   "description": "`queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`"
+                },
+                "target_kind": {
+                  "type": "string",
+                  "description": "`new` (a new spec file) or `revise` (an edit of the spec file that already exists)."
                 },
                 "updated_at": {
                   "type": "string"
@@ -10235,6 +10286,7 @@
           "slug",
           "locale",
           "mode",
+          "target_kind",
           "context_paths",
           "state",
           "waiting_on",
@@ -10385,6 +10437,10 @@
             "type": "string",
             "description": "`queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`"
           },
+          "target_kind": {
+            "type": "string",
+            "description": "`new` (a new spec file) or `revise` (an edit of the spec file that already exists)."
+          },
           "updated_at": {
             "type": "string"
           },
@@ -10514,9 +10570,72 @@
           }
         }
       },
+      "SpecDraftChange": {
+        "type": "object",
+        "required": [
+          "path",
+          "status",
+          "diff",
+          "truncated"
+        ],
+        "properties": {
+          "diff": {
+            "type": "string",
+            "description": "Unified diff against the base commit, cut at 256 KiB."
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`added | modified`"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SpecDraftChanges": {
+        "type": "object",
+        "description": "The latest file content the architect wrote.\nWhat a session-mode draft changed in the docs checkout, with the lint result of its last turn.",
+        "required": [
+          "files",
+          "lint"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecDraftChange"
+            },
+            "description": "Markdown files inside the project folder that differ from the base commit; empty once the checkout is gone."
+          },
+          "lint": {
+            "$ref": "#/components/schemas/SpecDraftChangesLint"
+          }
+        }
+      },
+      "SpecDraftChangesLint": {
+        "type": "object",
+        "required": [
+          "passed",
+          "findings"
+        ],
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LintIssue"
+            }
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "Whether the target file passed the lint after the last turn."
+          }
+        }
+      },
       "SpecDraftContent": {
         "type": "object",
-        "description": "The latest file content the architect wrote.",
         "required": [
           "attempt",
           "round",

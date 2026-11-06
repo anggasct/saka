@@ -17,7 +17,7 @@ use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     AuthorshipMode, BlockerAction, CheckId, DraftLocale, DraftMode, ReloadTrigger, ReportMode,
-    Stage,
+    Stage, TargetKind,
 };
 use saka_engine::{
     AddProject, AnswerKind, CheckConfig, DecisionFilter, DiagnosticFilter, EngineError,
@@ -2306,6 +2306,13 @@ pub async fn create_spec_draft(
                 .map_err(|_| ApiError::validation("mode", "invalid"))
         ),
     };
+    let target_kind = match req.target_kind.as_deref() {
+        None => TargetKind::New,
+        Some(k) => tri!(
+            k.parse::<TargetKind>()
+                .map_err(|_| ApiError::validation("target_kind", "invalid"))
+        ),
+    };
     let project = ProjectId(tri!(path_id(&project)));
     let engine = tri!(s.engine().cloned());
     let viewer = engine.clone();
@@ -2336,6 +2343,7 @@ pub async fn create_spec_draft(
                 idea: req.idea,
                 locale,
                 mode,
+                target_kind,
                 context_paths: req.context_paths,
             };
             engine
@@ -2432,6 +2440,18 @@ pub async fn get_spec_draft_content(State(s): State<AppState>, Path(id): Path<St
     let id = SpecDraftId(tri!(path_id(&id)));
     let content = tri!(engine.spec_draft_content(id));
     ok(StatusCode::OK, &dto::SpecDraftContent::from_view(&content))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/spec-drafts/{spec_draft_id}/changes", tag = "spec-drafts",
+    params(("spec_draft_id" = uuid::Uuid, Path)),
+    responses((status = 200, body = dto::SpecDraftChanges), (status = 404, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn get_spec_draft_changes(State(s): State<AppState>, Path(id): Path<String>) -> Response {
+    let engine = tri!(s.engine().cloned());
+    let id = SpecDraftId(tri!(path_id(&id)));
+    let changes = tri!(engine.spec_draft_changes(id).await);
+    ok(StatusCode::OK, &dto::SpecDraftChanges::from_view(&changes))
 }
 
 #[utoipa::path(
@@ -2538,7 +2558,9 @@ async fn draft_action(
                     Some(&action),
                 ),
                 DraftAction::Commit => {
-                    engine.commit_spec_draft(draft, text.as_deref(), &cause, Some(&action))
+                    engine
+                        .commit_spec_draft(draft, text.as_deref(), &cause, Some(&action))
+                        .await
                 }
             };
             result.map(|_| project).map_err(|e| (e, project))

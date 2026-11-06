@@ -69,8 +69,8 @@ pub use config_check::{
 pub use diagnostics::{DiagnosticFilter, DiagnosticLimits};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
-    DraftBudgetView, DraftContentView, DraftPacketDocument, DraftPacketView, DraftView,
-    NewSpecDraft,
+    DraftBudgetView, DraftChange, DraftChangesView, DraftContentView, DraftPacketDocument,
+    DraftPacketView, DraftView, NewSpecDraft,
 };
 pub use hooks::HookReport;
 pub use identity::{DeviceIssued, PairingIssued, Principal, Registered, SessionIssued, digest};

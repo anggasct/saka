@@ -317,6 +317,7 @@ vocab!(SpecDraftState {
     Cancelled => "cancelled",
 });
 vocab!(DraftMode { Draft => "draft", Session => "session" });
+vocab!(TargetKind { New => "new", Revise => "revise" });
 vocab!(DraftAttemptState { Running => "running", Succeeded => "succeeded", Failed => "failed", Cancelled => "cancelled" });
 vocab!(DraftLocale { En => "en", Id => "id" });
 vocab!(LintOutcome { Passed => "passed", Failed => "failed", Missing => "missing" });
@@ -342,6 +343,7 @@ vocab!(
         TargetPathConflict => "target_path_conflict",
         RegisterFailed => "register_failed",
         SessionIdleExpired => "session_idle_expired",
+        BaseMoved => "base_moved",
     }
 );
 
@@ -400,6 +402,7 @@ impl DraftFailureCode {
                 | DraftFailureCode::TargetPathConflict
                 | DraftFailureCode::RegisterFailed
                 | DraftFailureCode::SessionIdleExpired
+                | DraftFailureCode::BaseMoved
         )
     }
 

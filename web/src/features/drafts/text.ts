@@ -79,6 +79,7 @@ export function failureText(
     question: text(params.question),
     error: text(error.code) || "other",
     path: text(params.path),
+    paths: Array.isArray(params.paths) ? params.paths.map(text).join(", ") : "",
     phase: text(params.phase) || "other",
     branch: text(params.branch),
     blob: sha(params.blob),

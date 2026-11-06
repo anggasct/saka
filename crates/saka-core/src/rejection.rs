@@ -54,6 +54,10 @@ pub enum Rejection {
     DraftDecisionOpen,
     #[error("the draft has no changes to commit")]
     DraftNoChanges,
+    #[error("a file of the draft changed on the base branch")]
+    DraftBaseMoved { paths: Vec<String> },
+    #[error("file not found")]
+    FileNotFound { path: String },
     #[error("not found")]
     NotFound,
     #[error("project is already registered")]
@@ -210,6 +214,8 @@ impl Rejection {
             Rejection::DraftLintFailed => "draft_lint_failed",
             Rejection::DraftDecisionOpen => "draft_decision_open",
             Rejection::DraftNoChanges => "draft_no_changes",
+            Rejection::DraftBaseMoved { .. } => "draft_base_moved",
+            Rejection::FileNotFound { .. } => "file_not_found",
             Rejection::NotFound => "not_found",
             Rejection::ProjectExists { .. } => "project_exists",
             Rejection::SpecSlugConflict { .. } => "spec_slug_conflict",
@@ -318,6 +324,8 @@ impl Rejection {
                 params["path"] = json!(path);
                 params
             }
+            Rejection::DraftBaseMoved { paths } => json!({ "paths": paths }),
+            Rejection::FileNotFound { path } => json!({ "path": path }),
             Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
             Rejection::BlockerNotOpen { blocker_id } => json!({ "blocker_id": blocker_id }),
             Rejection::BlockerActionChanged {

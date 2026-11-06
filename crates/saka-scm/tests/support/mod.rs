@@ -13,7 +13,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use saka_core::ids::RepoId;
 use saka_core::time::Timestamp;
 use saka_ports::{
-    Blob, Clock, CommitOne, CommitPush, PortError, PortResult, PushCommit, PushOutcome,
+    Blob, Clock, CommitFiles, CommitPush, PortError, PortResult, PushCommit, PushOutcome,
     PushRequest, RepoRef, Repos, TreeEntry,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig};
@@ -74,7 +74,7 @@ impl Repos for NoRepos {
     async fn write_blob(&self, _r: &RepoRef, _b: &[u8]) -> PortResult<String> {
         Err(PortError::permanent("unused", json!({})))
     }
-    async fn commit_one(&self, _request: &CommitOne) -> PortResult<String> {
+    async fn commit_files(&self, _request: &CommitFiles) -> PortResult<String> {
         Err(PortError::permanent("unused", json!({})))
     }
     async fn push_commit(&self, _request: &PushCommit) -> PortResult<CommitPush> {
