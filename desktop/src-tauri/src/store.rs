@@ -15,6 +15,7 @@ pub struct Saved {
 pub struct Book {
     pub active: Option<String>,
     pub connections: Vec<Saved>,
+    pub local_port: Option<u16>,
 }
 
 pub struct Store {
@@ -64,6 +65,7 @@ mod tests {
                 name: "Office".into(),
                 url: "https://saka.example.com".into(),
             }],
+            local_port: Some(40123),
         }
     }
 

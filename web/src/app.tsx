@@ -67,6 +67,11 @@ export async function start() {
     return;
   }
   watchSignIn();
+  platform.onNavigate((path) => {
+    if (path.startsWith("/") && !path.startsWith("//")) {
+      router.history.push(path);
+    }
+  });
   startEventStream(queryClient);
   if (import.meta.env.PROD) {
     platform.registerServiceWorker("/sw.js");

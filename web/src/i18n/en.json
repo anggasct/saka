@@ -1240,5 +1240,14 @@
   "connections.error.keychain_unavailable": "The system keychain is not available, so the token cannot be stored safely.",
   "connections.error.not_found": "That server is no longer in the list.",
   "connections.error.store_failed": "The server list could not be saved.",
-  "connections.error.unknown": "Something went wrong."
+  "connections.error.unknown": "Something went wrong.",
+  "connections.local.name": "This computer",
+  "connections.local.hint": "Runs Saka on this machine, with no sign-in, for you only",
+  "connections.local.running": "Running",
+  "connections.local.stopped": "Stopped",
+  "connections.local.start": "Start",
+  "connections.local.stop": "Stop",
+  "connections.error.sidecar_missing": "The Saka program is missing next to this app, so it cannot run on this computer.",
+  "connections.error.local_start_failed": "Saka did not start on this computer. Its log is in the app data folder.",
+  "connections.error.local_not_ready": "Saka started on this computer but did not become ready in time."
 }

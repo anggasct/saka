@@ -24,6 +24,12 @@ pub enum ShellError {
     NotFound,
     #[error("the connection list could not be saved")]
     StoreFailed,
+    #[error("the saka program is missing next to the app")]
+    SidecarMissing,
+    #[error("the local saka did not start")]
+    LocalStartFailed,
+    #[error("the local saka did not become ready in time")]
+    LocalNotReady,
 }
 
 impl ShellError {
@@ -40,6 +46,9 @@ impl ShellError {
             ShellError::KeychainUnavailable => "keychain_unavailable",
             ShellError::NotFound => "not_found",
             ShellError::StoreFailed => "store_failed",
+            ShellError::SidecarMissing => "sidecar_missing",
+            ShellError::LocalStartFailed => "local_start_failed",
+            ShellError::LocalNotReady => "local_not_ready",
         }
     }
 }

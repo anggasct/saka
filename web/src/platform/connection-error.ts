@@ -10,6 +10,9 @@ export const CONNECTION_ERROR_CODES = [
   "keychain_unavailable",
   "not_found",
   "store_failed",
+  "sidecar_missing",
+  "local_start_failed",
+  "local_not_ready",
 ] as const;
 
 export type ConnectionErrorCode = (typeof CONNECTION_ERROR_CODES)[number];

@@ -87,6 +87,9 @@ describe("sign-in redirect", () => {
     };
     vi.spyOn(platform, "connections").mockReturnValue({
       hasActive: () => true,
+      startError: () => null,
+      localStart: () => Promise.resolve(),
+      localStop: () => Promise.resolve(),
       list: () => Promise.resolve([]),
       add: () => Promise.reject(new Error("unused")),
       remove: () => Promise.resolve(),

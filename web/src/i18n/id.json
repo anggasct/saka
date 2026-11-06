@@ -1240,5 +1240,14 @@
   "connections.error.keychain_unavailable": "Keychain sistem tidak tersedia, jadi token tidak bisa disimpan dengan aman.",
   "connections.error.not_found": "Server itu tidak ada lagi di daftar.",
   "connections.error.store_failed": "Daftar server tidak bisa disimpan.",
-  "connections.error.unknown": "Terjadi kesalahan."
+  "connections.error.unknown": "Terjadi kesalahan.",
+  "connections.local.name": "Komputer ini",
+  "connections.local.hint": "Menjalankan Saka di mesin ini, tanpa masuk, hanya untukmu",
+  "connections.local.running": "Berjalan",
+  "connections.local.stopped": "Berhenti",
+  "connections.local.start": "Mulai",
+  "connections.local.stop": "Hentikan",
+  "connections.error.sidecar_missing": "Program Saka tidak ada di samping app ini, jadi tidak bisa berjalan di komputer ini.",
+  "connections.error.local_start_failed": "Saka tidak mulai di komputer ini. Lognya ada di folder data app.",
+  "connections.error.local_not_ready": "Saka mulai di komputer ini tetapi tidak siap tepat waktu."
 }

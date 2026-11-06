@@ -36,11 +36,21 @@ const ERRORS: Record<ConnectionError["code"], MessageKey> = {
   keychain_unavailable: "connections.error.keychain_unavailable",
   not_found: "connections.error.not_found",
   store_failed: "connections.error.store_failed",
+  sidecar_missing: "connections.error.sidecar_missing",
+  local_start_failed: "connections.error.local_start_failed",
+  local_not_ready: "connections.error.local_not_ready",
   unknown: "connections.error.unknown",
 };
 
 function failureOf(error: unknown): ConnectionError["code"] {
   return error instanceof ConnectionError ? error.code : "unknown";
+}
+
+function knownCode(code: string | null): ConnectionError["code"] | null {
+  if (code === null) {
+    return null;
+  }
+  return code in ERRORS ? (code as ConnectionError["code"]) : "unknown";
 }
 
 export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
@@ -55,7 +65,9 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
   const [url, setUrl] = useState("");
   const [code, setCode] = useState("");
   const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<ConnectionError["code"] | null>(null);
+  const [failure, setFailure] = useState<ConnectionError["code"] | null>(() =>
+    knownCode(shell?.startError() ?? null),
+  );
   const [removing, setRemoving] = useState<string | null>(null);
 
   useEffect(() => {
@@ -130,13 +142,26 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
               >
                 <div className="min-w-0">
                   <p className="flex flex-wrap items-center gap-2 font-medium">
-                    {item.name}
+                    {item.kind === "local"
+                      ? t("connections.local.name")
+                      : item.name}
                     {item.active && (
                       <Badge tone="success">{t("connections.active")}</Badge>
                     )}
+                    {item.kind === "local" && (
+                      <Badge tone={item.running ? "success" : "neutral"}>
+                        {t(
+                          item.running
+                            ? "connections.local.running"
+                            : "connections.local.stopped",
+                        )}
+                      </Badge>
+                    )}
                   </p>
                   <p className="text-sm break-all text-muted-foreground">
-                    {item.url}
+                    {item.kind === "local"
+                      ? t("connections.local.hint")
+                      : item.url}
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -144,7 +169,10 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
                     <Button
                       variant="outline"
                       aria-label={t("connections.use.label", {
-                        name: item.name,
+                        name:
+                          item.kind === "local"
+                            ? t("connections.local.name")
+                            : item.name,
                       })}
                       onClick={() => {
                         void act(() => shell.select(item.id));
@@ -153,32 +181,54 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
                       {t("connections.use")}
                     </Button>
                   )}
-                  <Button
-                    variant="outline"
-                    aria-label={t(
-                      removing === item.id
-                        ? "connections.remove.confirmLabel"
-                        : "connections.remove.label",
-                      { name: item.name },
-                    )}
-                    onClick={() => {
-                      if (removing !== item.id) {
-                        setRemoving(item.id);
-                        return;
-                      }
-                      setRemoving(null);
-                      void act(async () => {
-                        await shell.remove(item.id);
-                        await reload();
-                      });
-                    }}
-                  >
-                    {t(
-                      removing === item.id
-                        ? "connections.remove.confirm"
-                        : "connections.remove",
-                    )}
-                  </Button>
+                  {item.kind === "local" ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        void act(async () => {
+                          if (item.running) {
+                            await shell.localStop();
+                          } else {
+                            await shell.localStart();
+                          }
+                          await reload();
+                        });
+                      }}
+                    >
+                      {t(
+                        item.running
+                          ? "connections.local.stop"
+                          : "connections.local.start",
+                      )}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      aria-label={t(
+                        removing === item.id
+                          ? "connections.remove.confirmLabel"
+                          : "connections.remove.label",
+                        { name: item.name },
+                      )}
+                      onClick={() => {
+                        if (removing !== item.id) {
+                          setRemoving(item.id);
+                          return;
+                        }
+                        setRemoving(null);
+                        void act(async () => {
+                          await shell.remove(item.id);
+                          await reload();
+                        });
+                      }}
+                    >
+                      {t(
+                        removing === item.id
+                          ? "connections.remove.confirm"
+                          : "connections.remove",
+                      )}
+                    </Button>
+                  )}
                 </div>
               </li>
             ))}
