@@ -158,6 +158,7 @@ fn logged(buffer: &Buffer, message: &str) -> Vec<serde_json::Value> {
 
 #[test]
 fn re_approval_and_withdraw_log_once_with_their_counts() {
+    saka_testkit::logs::check_callsites_per_thread();
     let sim = Sim::new(SimConfig {
         max_active_tasks: 0,
         ..SimConfig::default()
