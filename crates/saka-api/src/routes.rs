@@ -1834,14 +1834,12 @@ async fn session_action(
     };
     let current = tri!(engine.session(session));
     let project = current.as_ref().map(|v| v.project_id);
-    let environment = current.and_then(|v| v.environment);
-    let respond = |p: Produced<'_>| match (p, project) {
-        (Produced::Session(session), Some(project_id)) => reply(
+    let respond = |p: Produced<'_>| match (p, &current) {
+        (Produced::Session(session), Some(current)) => reply(
             StatusCode::ACCEPTED,
             &dto::Session::from_view(&SessionView {
                 session: session.clone(),
-                project_id,
-                environment: environment.clone(),
+                ..current.clone()
             }),
         ),
         _ => unexpected(),

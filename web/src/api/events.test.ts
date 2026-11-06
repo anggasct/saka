@@ -74,7 +74,7 @@ describe("startEventStream", () => {
       stream_type: "permission_request",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["permission-requests"], ["work-items"], ["inbox"]],
+      [["permission-requests"], ["work-items"], ["sessions"], ["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("delivery.hook_run.finished.v1", {
@@ -217,6 +217,71 @@ describe("live timeline", () => {
       expect(offsets(client)).toEqual([0, 1, 2, 3, 4]);
     });
     expect(requests.map((r) => r.search.get("after"))).toEqual(["2"]);
+  });
+});
+
+describe("a tab that comes back", () => {
+  function visibility() {
+    let listener: (() => void) | undefined;
+    return {
+      onVisible: (next: () => void) => {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+      show: () => {
+        listener?.();
+      },
+      watching: () => listener !== undefined,
+    };
+  }
+
+  it("reads the activity it missed while hidden, without repeating any", async () => {
+    const { requests } = liveServer(() => 6);
+    const client = seeded();
+    const tab = visibility();
+    const stop = startEventStream(
+      client,
+      () => fakeStream().stream,
+      tab.onVisible,
+    );
+    tab.show();
+    await vi.waitFor(() => {
+      expect(offsets(client)).toEqual([0, 1, 2, 3, 4, 5]);
+    });
+    tab.show();
+    await vi.waitFor(() => {
+      expect(
+        requests.filter((r) => r.search.get("after") === "5"),
+      ).toHaveLength(1);
+    });
+    expect(offsets(client)).toEqual([0, 1, 2, 3, 4, 5]);
+    stop();
+    expect(tab.watching()).toBe(false);
+  });
+
+  it("refreshes the lists the events keep current", async () => {
+    const client = new QueryClient();
+    await client.query({
+      queryKey: ["sessions", "active"],
+      queryFn: () => [],
+    });
+    await client.query({
+      queryKey: ["inbox", "list"],
+      queryFn: () => [],
+    });
+    const tab = visibility();
+    startEventStream(client, () => fakeStream().stream, tab.onVisible);
+    tab.show();
+    for (const key of [
+      ["sessions", "active"],
+      ["inbox", "list"],
+    ]) {
+      expect(
+        client.getQueryCache().find({ queryKey: key })?.state.isInvalidated,
+      ).toBe(true);
+    }
   });
 });
 

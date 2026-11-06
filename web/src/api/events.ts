@@ -155,12 +155,14 @@ const AFFECTS: Record<string, readonly string[]> = {
   permission_request: [
     QUERY_ROOTS.permissions,
     QUERY_ROOTS.workItems,
+    QUERY_ROOTS.sessions,
     QUERY_ROOTS.inbox,
   ],
   decision_request: [
     QUERY_ROOTS.decisions,
     QUERY_ROOTS.workItems,
     QUERY_ROOTS.specDrafts,
+    QUERY_ROOTS.sessions,
     QUERY_ROOTS.inbox,
   ],
 };
@@ -360,9 +362,12 @@ function streamTypeOf(data: string): string | undefined {
   return undefined;
 }
 
+const AFFECTED_ROOTS = [...new Set(Object.values(AFFECTS).flat())];
+
 export function startEventStream(
   queryClient: QueryClient,
   open: (url: string) => EventStream = platform.eventSource,
+  onVisible: (listener: () => void) => () => void = platform.onVisible,
 ): () => void {
   const stream = open("/api/v1/events");
   const handle = (event: MessageEvent<string>) => {
@@ -387,7 +392,14 @@ export function startEventStream(
     }
     opened = true;
   });
+  const stopWatching = onVisible(() => {
+    for (const root of AFFECTED_ROOTS) {
+      void queryClient.invalidateQueries({ queryKey: [root] });
+    }
+    catchUpAll(queryClient);
+  });
   return () => {
     stream.close();
+    stopWatching();
   };
 }

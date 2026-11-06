@@ -2729,6 +2729,7 @@ export interface components {
       owner: components["schemas"]["RunOwner"];
       /** Format: uuid */
       project_id: string;
+      project_name: string;
       /** @description `lost | retry | null` */
       resume_cause?: string | null;
       /**
@@ -2736,10 +2737,14 @@ export interface components {
        * @description The session this one continues.
        */
       resumed_from_session_id?: string | null;
+      /** @description The stage of the owning run (`dev`, `review`, `fix`, `merge`, `sync`) or `architect` for a draft. */
+      role: string;
       /** Format: int64 */
       running_ms: number;
       started_at?: string | null;
       state: string;
+      /** @description The task key, or the slug of the draft. */
+      title: string;
       /** Format: int32 */
       turns: number;
     };

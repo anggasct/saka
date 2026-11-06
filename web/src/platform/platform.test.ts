@@ -35,3 +35,21 @@ describe("web platform", () => {
     await expect(webPlatform.ready()).resolves.toBeUndefined();
   });
 });
+
+describe("onVisible", () => {
+  it("calls back only when the page becomes visible, until it is stopped", () => {
+    const listener = vi.fn();
+    const stop = webPlatform.onVisible(listener);
+    const state = vi.spyOn(document, "visibilityState", "get");
+    state.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(listener).not.toHaveBeenCalled();
+    state.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    stop();
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    state.mockRestore();
+  });
+});

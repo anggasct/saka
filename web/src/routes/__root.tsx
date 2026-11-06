@@ -50,6 +50,12 @@ function Layout() {
                 {t("nav.delivery")}
               </Link>
               <Link
+                to="/sessions"
+                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+              >
+                {t("nav.sessions")}
+              </Link>
+              <Link
                 to="/settings"
                 className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
               >

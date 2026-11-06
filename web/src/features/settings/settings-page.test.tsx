@@ -108,14 +108,20 @@ describe("Settings navigation", () => {
     expect(calls.filter((c) => c === PROJECT)).toHaveLength(2);
   });
 
-  it("puts Settings after Delivery in the header", async () => {
+  it("puts Settings after Sessions in the header", async () => {
     fakeApi(routes());
     renderApp(SETTINGS);
     const nav = await screen.findByRole("navigation");
     const links = within(nav)
       .getAllByRole("link")
       .map((l) => l.textContent);
-    expect(links).toEqual(["Inbox", "Docs", "Delivery", "Settings"]);
+    expect(links).toEqual([
+      "Inbox",
+      "Docs",
+      "Delivery",
+      "Sessions",
+      "Settings",
+    ]);
   });
 
   it("links the Delivery project header to its settings", async () => {

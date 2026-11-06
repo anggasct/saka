@@ -72,6 +72,17 @@ export const webPlatform: Platform = {
   navigateTo: (path) => {
     location.assign(path);
   },
+  onVisible: (listener) => {
+    const handle = () => {
+      if (document.visibilityState === "visible") {
+        listener();
+      }
+    };
+    document.addEventListener("visibilitychange", handle);
+    return () => {
+      document.removeEventListener("visibilitychange", handle);
+    };
+  },
   observeVisible: (element, onVisible) => {
     if (typeof IntersectionObserver === "undefined") {
       return () => undefined;

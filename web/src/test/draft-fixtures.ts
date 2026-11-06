@@ -1,4 +1,4 @@
-import type { Session } from "@/features/delivery/queries";
+import type { Session } from "@/features/sessions/queries";
 import type { SpecDraft, SpecDraftContent } from "@/features/drafts/queries";
 
 import { PROJECT_ID } from "./fixtures";
@@ -210,6 +210,9 @@ export function draftSession(extra: Partial<Session> = {}): Session {
   return {
     id: DRAFT_SESSION_ID,
     project_id: PROJECT_ID,
+    project_name: "tasks",
+    role: "architect",
+    title: "export",
     owner: {
       kind: "draft_attempt",
       spec_draft_id: DRAFT_ID,
