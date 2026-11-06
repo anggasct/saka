@@ -543,6 +543,7 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
             "spec": true,
             "change_request": null,
             "stages": [{ "stage": "dev", "trigger": "auto" }],
+            "fix_rounds": 2,
         })
     );
 

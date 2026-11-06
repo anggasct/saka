@@ -83,7 +83,7 @@ fn a_blocker_can_be_resolved_by_taking_the_task_over_and_old_blockers_survive() 
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![22, 23, 24, 25, 26]);
+    assert_eq!(store.migration().applied, vec![22, 23, 24, 25, 26, 27]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

@@ -278,6 +278,12 @@ pub struct ExternalChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FixRound {
+    pub number: u32,
+    pub cause: Coded,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StageRun {
     pub id: StageRunId,
     pub work_item_id: WorkItemId,
@@ -291,6 +297,7 @@ pub struct StageRun {
     pub docs_head_sha: Option<String>,
     pub queued_at: Option<Timestamp>,
     pub queue_native: bool,
+    pub fix: Option<FixRound>,
     pub failure: Option<Coded>,
     pub budget: Option<Budget>,
     pub budget_warnings: Vec<BudgetDimension>,
@@ -734,6 +741,27 @@ impl Task {
         self.item.state == WorkItemState::InStage
             && self.item.stage == Some(stage)
             && self.item.stage_phase == Some(phase)
+    }
+
+    pub fn is_writing_at(&self, phase: StagePhase) -> bool {
+        self.is_at(Stage::Dev, phase) || self.is_at(Stage::Fix, phase)
+    }
+
+    pub fn is_writing(&self) -> bool {
+        self.is_at_stage(Stage::Dev) || self.is_at_stage(Stage::Fix)
+    }
+
+    pub fn fix_rounds_used(&self) -> u32 {
+        self.retired_runs
+            .iter()
+            .chain(self.stage_run.iter())
+            .filter_map(|r| r.fix.as_ref().map(|f| f.number))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn fix_rounds_left(&self) -> bool {
+        self.fix_rounds_used() < self.workflow.fix_rounds
     }
 
     pub fn is_queued(&self) -> bool {

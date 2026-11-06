@@ -96,6 +96,12 @@ pub fn without_review() -> saka_core::workflow::Workflow {
     workflow
 }
 
+pub fn without_fix() -> saka_core::workflow::Workflow {
+    let mut workflow = saka_core::workflow::Workflow::default();
+    workflow.remove_stage(saka_core::vocab::Stage::Fix);
+    workflow
+}
+
 pub fn draft_config() -> DraftConfig {
     DraftConfig {
         max_active: 1,
@@ -117,6 +123,13 @@ pub fn draft_config() -> DraftConfig {
 }
 
 impl SimConfig {
+    pub fn without_fix() -> SimConfig {
+        SimConfig {
+            workflow: without_fix(),
+            ..SimConfig::default()
+        }
+    }
+
     pub fn without_review() -> SimConfig {
         SimConfig {
             workflow: without_review(),
@@ -147,6 +160,15 @@ impl Default for SimConfig {
                         saka_core::model::Budget {
                             running_minutes: 20,
                             turns: 3,
+                            tokens: 0,
+                            cost_usd_micros: 0,
+                        },
+                    ),
+                    (
+                        saka_core::vocab::Stage::Fix,
+                        saka_core::model::Budget {
+                            running_minutes: 30,
+                            turns: 6,
                             tokens: 0,
                             cost_usd_micros: 0,
                         },

@@ -31,6 +31,7 @@ export const project: ProjectItem = {
       { stage: "fix", trigger: "auto" },
       { stage: "merge", trigger: "manual" },
     ],
+    fix_rounds: 2,
   },
   config_commit: "9f1c".padEnd(40, "0"),
   config_sha256: `sha256:${"4b8e".padEnd(64, "0")}`,

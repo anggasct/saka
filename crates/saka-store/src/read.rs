@@ -531,6 +531,7 @@ pub(crate) fn stage_run(row: &Row<'_>) -> Result<StageRun> {
         docs_head_sha: row.get("docs_head_sha")?,
         queued_at: opt_ts(row, "queued_at")?,
         queue_native: row.get::<_, i64>("queue_native")? != 0,
+        fix: opt_json(row, "fix")?,
         failure: opt_json(row, "failure")?,
         budget: budget_col(row, "budget")?,
         budget_warnings: json(row, "budget_warnings")?,

@@ -382,6 +382,20 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_review_format_rejected_total", &[("code", code)], n);
     }
     t.family(
+        "saka_fix_rounds_total",
+        "counter",
+        "Fix rounds started, by what asked for them.",
+    );
+    for (cause, n) in &m.fix_rounds {
+        t.sample("saka_fix_rounds_total", &[("cause", cause)], n);
+    }
+    t.family(
+        "saka_fix_exhausted_total",
+        "counter",
+        "Tasks stopped because their fix rounds ran out.",
+    );
+    t.sample("saka_fix_exhausted_total", &[], m.fix_exhausted);
+    t.family(
         "saka_review_posts_total",
         "counter",
         "Native reviews posted, by review event.",

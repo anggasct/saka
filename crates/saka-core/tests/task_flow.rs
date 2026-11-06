@@ -1740,8 +1740,6 @@ fn the_primary_action_follows_the_code_and_carries_what_the_client_needs() {
         A::Retry,
         "a rejected verdict goes back to the agent"
     );
-    let w = blocked_with(BlockerCode::ReviewRoundsExhausted, json!({}));
-    assert_eq!(primary(&w).0, A::Cancel, "no retry path exists yet");
 }
 
 #[test]

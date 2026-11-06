@@ -9251,7 +9251,8 @@
         "required": [
           "preset",
           "spec",
-          "stages"
+          "stages",
+          "fix_rounds"
         ],
         "properties": {
           "change_request": {
@@ -9264,6 +9265,12 @@
                 "type": "null"
               }
             ]
+          },
+          "fix_rounds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.",
+            "minimum": 0
           },
           "preset": {
             "type": "string",

@@ -92,6 +92,8 @@ pub struct Workflow {
     pub change_request: Option<WorkflowEntry>,
     /// The stages in pipeline order, each with its trigger.
     pub stages: Vec<WorkflowStage>,
+    /// How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
+    pub fix_rounds: u32,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -143,6 +145,7 @@ impl From<&saka_core::workflow::Workflow> for Workflow {
                     trigger: s.trigger.as_str().to_string(),
                 })
                 .collect(),
+            fix_rounds: w.fix_rounds,
         }
     }
 }

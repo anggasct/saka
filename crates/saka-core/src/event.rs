@@ -13,8 +13,8 @@ use crate::ids::{
 };
 use crate::job::JobKind;
 use crate::model::{
-    Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, ProjectRepo, RunOwner,
-    SpecLink, ToolchainUse,
+    Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, FixRound, ProjectRepo,
+    RunOwner, SpecLink, ToolchainUse,
 };
 use crate::review::Finding;
 use crate::time::Timestamp;
@@ -291,6 +291,8 @@ pub enum Event {
         budget: Option<Budget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         head_sha: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fix: Option<FixRound>,
     },
     #[serde(rename = "delivery.stage_run.cancelled")]
     StageRunCancelled {

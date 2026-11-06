@@ -6,6 +6,8 @@ use crate::vocab::{Stage, Trigger, WorkflowPreset};
 pub const MAX_FILTER_ENTRIES: usize = 16;
 pub const MAX_FILTER_BYTES: usize = 100;
 pub const DEFAULT_TRIGGER_LABEL: &str = "saka:review";
+pub const DEFAULT_FIX_ROUNDS: u32 = 2;
+pub const MAX_FIX_ROUNDS: u32 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSetting {
@@ -46,6 +48,12 @@ pub struct Workflow {
     pub spec: bool,
     pub change_request: Option<ChangeEntry>,
     pub stages: Vec<StageSetting>,
+    #[serde(default = "default_fix_rounds")]
+    pub fix_rounds: u32,
+}
+
+fn default_fix_rounds() -> u32 {
+    DEFAULT_FIX_ROUNDS
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +122,7 @@ impl Workflow {
                 preset,
                 spec: true,
                 change_request: None,
+                fix_rounds: DEFAULT_FIX_ROUNDS,
                 stages: vec![
                     stage(Stage::Dev, Trigger::Auto),
                     stage(Stage::Review, Trigger::Auto),
@@ -125,18 +134,21 @@ impl Workflow {
                 preset,
                 spec: true,
                 change_request: None,
+                fix_rounds: DEFAULT_FIX_ROUNDS,
                 stages: vec![stage(Stage::Dev, Trigger::Auto)],
             },
             WorkflowPreset::ReviewOnly => Workflow {
                 preset,
                 spec: false,
                 change_request: Some(ChangeEntry::default()),
+                fix_rounds: DEFAULT_FIX_ROUNDS,
                 stages: vec![stage(Stage::Review, Trigger::Auto)],
             },
             WorkflowPreset::Custom => Workflow {
                 preset,
                 spec: false,
                 change_request: None,
+                fix_rounds: DEFAULT_FIX_ROUNDS,
                 stages: Vec::new(),
             },
         }
@@ -151,6 +163,10 @@ impl Workflow {
 
     pub fn has_stage(&self, stage: Stage) -> bool {
         self.stage_trigger(stage).is_some()
+    }
+
+    pub fn remove_stage(&mut self, stage: Stage) {
+        self.stages.retain(|s| s.stage != stage);
     }
 
     pub fn set_stage(&mut self, stage: Stage, trigger: Trigger) {

@@ -148,6 +148,7 @@ fn review_run(
         retry_of: None,
         budget: None,
         head_sha: Some(head_sha.to_string()),
+        fix: None,
     }
 }
 

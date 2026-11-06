@@ -26,7 +26,9 @@ pub fn plan(view: &RunView<'_>) -> Option<ResumePlan> {
             retry_of: None,
         });
     }
-    if view.retry.trigger != Trigger::Manual || previous.environment_id != env {
+    if !(view.retry.trigger == Trigger::Manual || view.retry.follows_up)
+        || previous.environment_id != env
+    {
         return None;
     }
     let cli_session_id = previous.cli_session_id.clone()?;

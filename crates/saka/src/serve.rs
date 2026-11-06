@@ -540,6 +540,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
     let first = cfg.scm.first();
     let dev = &cfg.budget.dev;
     let review = &cfg.budget.review;
+    let fix = &cfg.budget.fix;
     LoopConfig {
         max_followup_turns: cfg.agent.max_followup_turns,
         permission_wait_ms: cfg.agent.permission_wait_hours * 3_600_000,
@@ -561,6 +562,15 @@ fn loop_config(cfg: &Config) -> LoopConfig {
                     turns: review.turns,
                     tokens: review.tokens,
                     cost_usd_micros: micros_of(review.cost_usd),
+                },
+            ),
+            (
+                Stage::Fix,
+                Budget {
+                    running_minutes: fix.running_minutes,
+                    turns: fix.turns,
+                    tokens: fix.tokens,
+                    cost_usd_micros: micros_of(fix.cost_usd),
                 },
             ),
         ]),

@@ -44,6 +44,8 @@ pub struct Counters {
     review_verdicts: Mutex<BTreeMap<(String, String), u64>>,
     review_format_rejected: Mutex<BTreeMap<(String, String), u64>>,
     review_posts: Mutex<BTreeMap<(String, String), u64>>,
+    fix_rounds: Mutex<BTreeMap<(String, String), u64>>,
+    fix_exhausted: Mutex<BTreeMap<(String, String), u64>>,
     intake_scan_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
@@ -190,6 +192,14 @@ impl Counters {
 
     pub(crate) fn review_post(&self, event: &str) {
         bump(&self.review_posts, event, "");
+    }
+
+    pub(crate) fn fix_round(&self, cause: &str) {
+        bump(&self.fix_rounds, cause, "");
+    }
+
+    pub(crate) fn fix_exhausted(&self) {
+        bump(&self.fix_exhausted, "", "");
     }
 
     pub(crate) fn review_request(&self, cause: &str) {
@@ -385,6 +395,8 @@ pub struct MetricsSnapshot {
     pub review_verdicts: Vec<(String, String, u64)>,
     pub review_format_rejected: Vec<(String, u64)>,
     pub review_posts: Vec<(String, u64)>,
+    pub fix_rounds: Vec<(String, u64)>,
+    pub fix_exhausted: u64,
     pub intake_scan_seconds: SecondsHistogram,
 }
 
@@ -583,6 +595,14 @@ impl Engine {
                 .into_iter()
                 .map(|(event, _, n)| (event, n))
                 .collect(),
+            fix_rounds: copy(&self.counters.fix_rounds)
+                .into_iter()
+                .map(|(cause, _, n)| (cause, n))
+                .collect(),
+            fix_exhausted: copy(&self.counters.fix_exhausted)
+                .into_iter()
+                .map(|(_, _, n)| n)
+                .sum(),
             review_requests: copy(&self.counters.review_requests)
                 .into_iter()
                 .map(|(cause, _, n)| (cause, n))
