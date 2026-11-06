@@ -56,6 +56,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         24,
         include_str!("../migrations/0024_branch_moved_blocker.sql"),
     ),
+    (25, include_str!("../migrations/0025_merge_queue.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {

@@ -308,6 +308,38 @@ pub(crate) fn retry_text(retry_of: &Coded) -> Option<String> {
                 _ => text,
             })
         }
+        "merge_conflict" => merge_conflict(&retry_of.params),
+        _ => None,
+    }
+}
+
+fn merge_conflict(params: &Value) -> Option<String> {
+    let base = params
+        .get("base_branch")
+        .and_then(Value::as_str)
+        .unwrap_or("the base branch");
+    match params.get("reason").and_then(Value::as_str)? {
+        "rebase_conflict" => {
+            let paths = strings(params.get("paths"));
+            let count = params
+                .get("count")
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(paths.len());
+            let more = count.saturating_sub(paths.len());
+            let rest = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            Some(format!(
+                "Your branch conflicts with `origin/{base}` in: {}{rest}. Bring the branch up to date with `origin/{base}` (merge or rebase), resolve the conflicts, run the Done when commands again, and commit. Do not push.",
+                paths.join(", ")
+            ))
+        }
+        "worktree_unclean" => Some(format!(
+            "Saka could not bring the branch up to date with `origin/{base}` because the worktree has uncommitted changes or commits that are not on the pull request. Commit or discard them, run the Done when commands again, and commit. Do not push."
+        )),
         _ => None,
     }
 }

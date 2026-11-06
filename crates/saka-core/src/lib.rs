@@ -13,6 +13,7 @@ pub mod model;
 pub mod paths;
 pub mod plan;
 pub mod policy;
+pub mod queue;
 pub mod react;
 pub mod reconcile;
 pub mod redact;

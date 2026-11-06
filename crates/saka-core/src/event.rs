@@ -379,6 +379,19 @@ pub enum Event {
         merge_method: MergeMethod,
         reason: Option<String>,
     },
+    #[serde(rename = "delivery.merge.rebased")]
+    MergeRebased {
+        work_item_id: WorkItemId,
+        from_sha: String,
+        head_sha: String,
+        base_sha: String,
+        base_branch: String,
+    },
+    #[serde(rename = "delivery.merge.dequeued")]
+    MergeDequeued {
+        work_item_id: WorkItemId,
+        reason: String,
+    },
     #[serde(rename = "delivery.work_item.blocked")]
     WorkItemBlocked {
         work_item_id: WorkItemId,
@@ -914,6 +927,8 @@ impl Event {
             | E::GateObserved { work_item_id, .. }
             | E::GateStarted { work_item_id, .. }
             | E::MergeRequested { work_item_id, .. }
+            | E::MergeRebased { work_item_id, .. }
+            | E::MergeDequeued { work_item_id, .. }
             | E::WorkItemBlocked { work_item_id, .. }
             | E::BlockerResolved { work_item_id, .. }
             | E::WorkItemCancelled { work_item_id, .. }

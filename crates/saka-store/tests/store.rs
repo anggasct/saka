@@ -20,7 +20,7 @@ use saka_core::task::{self, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus, EnvironmentState,
-    MergeMethod, SpecState, WorkItemState,
+    MergeMethod, SpecState, StagePhase, WorkItemState,
 };
 use saka_core::workspace;
 use saka_store::read::{self, TaskSet};
@@ -621,6 +621,19 @@ fn a_whole_task_round_trips_through_the_schema() {
             reason: None,
         },
     );
+    let queued = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    assert!(queued.stage_run.as_ref().unwrap().queued_at.is_some());
+    assert_eq!(queued.item.stage_phase, Some(StagePhase::Queued));
+    w.step(id, TaskInput::MergeTurn);
+    let head = queued.change_request.unwrap().head_sha;
+    w.step(
+        id,
+        TaskInput::Integrated(saka_core::task::Integration::Rebased {
+            from_sha: head.clone(),
+            head_sha: head,
+            base_sha: sha('d'),
+        }),
+    );
     w.step(
         id,
         TaskInput::MergeSucceeded {
@@ -1105,10 +1118,11 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
     assert_eq!(
         w.store.migration().applied,
         vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(24));
+    assert_eq!(w.store.schema_version().unwrap(), Some(25));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

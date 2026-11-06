@@ -448,6 +448,18 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ["ci_red", { source: "saka", reason: "runner_failed" }],
   ["merge_conflict", { reason: "not_mergeable", head_sha: HEAD }],
   ["merge_conflict", { reason: "head_changed", head_sha: HEAD }],
+  [
+    "merge_conflict",
+    {
+      reason: "rebase_conflict",
+      head_sha: HEAD,
+      base_sha: HEAD,
+      base_branch: "main",
+      paths: ["src/lib.rs", "Cargo.toml"],
+      count: 3,
+    },
+  ],
+  ["merge_conflict", { reason: "worktree_unclean", head_sha: HEAD }],
   ["change_closed", { number: 12 }],
   ["branch_moved", { number: 12, head_sha: HEAD, previous_head_sha: HEAD }],
   [

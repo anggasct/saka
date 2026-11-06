@@ -307,6 +307,23 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 }
             }
         }
+        (Stage::Merge, StagePhase::Integrating) => {
+            if let (Some(cr), Some(run)) = (cr, run) {
+                jobs.push(Job::new(
+                    JobKind::ScmIntegrate,
+                    format!("{}:{}", run.id, cr.head_sha),
+                    json!({
+                        "work_item_id": id,
+                        "stage_run_id": run.id,
+                        "repo_id": cr.repo_id,
+                        "number": cr.number,
+                        "base_branch": cr.base_branch,
+                        "head_sha": cr.head_sha,
+                    }),
+                    now,
+                ));
+            }
+        }
         (Stage::Merge, StagePhase::Merging) => {
             if let Some(cr) = cr {
                 jobs.push(Job::new(

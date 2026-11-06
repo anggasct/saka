@@ -1005,7 +1005,7 @@ fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     let etag = detail.headers["etag"].to_str().unwrap().to_string();
     let r = api.post(&merge, &[("if-match", &etag)], json!({ "reason": null }));
     assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
-    assert_eq!(r.body["stage_phase"], "merging");
+    assert_eq!(r.body["stage_phase"], "queued");
     assert!(
         api.sim
             .run_until(STEPS, |s| s.task(1).item.stage == Some(Stage::Sync)
@@ -5029,7 +5029,19 @@ fn a_task_that_cannot_be_taken_over_or_returned_is_refused_without_events() {
         &json!({ "reason": null }),
     );
     assert_eq!(merge.status, StatusCode::ACCEPTED, "{}", merge.body);
-    assert_eq!(merge.body["stage_phase"], "merging");
+    assert_eq!(merge.body["stage_phase"], "queued");
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::Integrating)
+    }));
+    let integrating = api.post(&take, &[], json!({ "reason": "too late" }));
+    problem(&integrating, StatusCode::CONFLICT, "stage_not_takeable");
+    assert_eq!(
+        integrating.body["params"],
+        json!({ "stage": "merge", "phase": "integrating" })
+    );
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::Merging)
+    }));
     let merging = api.post(&take, &[], json!({ "reason": "too late" }));
     problem(&merging, StatusCode::CONFLICT, "stage_not_takeable");
     assert_eq!(

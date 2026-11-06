@@ -45,6 +45,8 @@ export const EVENT_KINDS = [
   "delivery.gate.started",
   "delivery.gate.observed",
   "delivery.merge.requested",
+  "delivery.merge.rebased",
+  "delivery.merge.dequeued",
   "delivery.work_item.blocked",
   "delivery.blocker.resolved",
   "delivery.docs_change.skipped",

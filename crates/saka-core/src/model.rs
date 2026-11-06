@@ -289,6 +289,7 @@ pub struct StageRun {
     pub entry_phase: StagePhase,
     pub head_sha: Option<String>,
     pub docs_head_sha: Option<String>,
+    pub queued_at: Option<Timestamp>,
     pub failure: Option<Coded>,
     pub budget: Option<Budget>,
     pub budget_warnings: Vec<BudgetDimension>,
@@ -719,6 +720,12 @@ impl Task {
         self.item.state == WorkItemState::InStage
             && self.item.stage == Some(stage)
             && self.item.stage_phase == Some(phase)
+    }
+
+    pub fn is_queued(&self) -> bool {
+        self.stage_run
+            .as_ref()
+            .is_some_and(|r| r.queued_at.is_some())
     }
 }
 

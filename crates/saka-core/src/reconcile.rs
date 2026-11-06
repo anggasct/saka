@@ -195,6 +195,10 @@ pub fn reconcile(
         }
     }
 
+    for id in crate::queue::next_turns(tasks) {
+        actions.push(Action::Decide(id, TaskInput::MergeTurn));
+    }
+
     for spec in snapshot
         .specs
         .iter()
