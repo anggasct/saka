@@ -1,5 +1,6 @@
 mod auth;
 mod auth_routes;
+mod cors;
 pub mod dto;
 mod guard;
 mod hooks;
@@ -304,5 +305,6 @@ pub fn router(state: AppState) -> Router {
         .route_layer(from_fn(guard::label));
     api.fallback(spa::serve)
         .layer(from_fn_with_state(state.clone(), guard::guard))
+        .layer(from_fn_with_state(state.clone(), cors::cors))
         .with_state(state)
 }

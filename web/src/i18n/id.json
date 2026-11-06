@@ -1202,5 +1202,9 @@
   "diagnostic.auth_not_configured": "Masuk belum dikonfigurasi. Saka hanya menjawab di mesin ini, wajar untuk instalasi lokal; tambahkan bagian [auth] di config server untuk memakainya dari perangkat lain.",
   "diagnostic.auth_no_passkey": "Masuk aktif tetapi belum ada passkey terdaftar, jadi browser belum bisa masuk.",
   "diagnosticFix.run_auth_setup": "Jalankan perintahnya di host server lalu masukkan kodenya di halaman setup.",
-  "connection.offline": "Kamu sedang offline. Saka tidak bisa dijangkau, jadi yang kamu lihat mungkin sudah usang."
+  "connection.offline": "Kamu sedang offline. Saka tidak bisa dijangkau, jadi yang kamu lihat mungkin sudah usang.",
+  "connection.incompatible.title": "Server ini tidak cocok dengan app ini",
+  "connection.incompatible.server_too_old": "Server (versi {serverVersion}, API {apiVersion}) terlalu lama untuk app ini. Perbarui server, atau pakai app yang lebih lama.",
+  "connection.incompatible.client_too_old": "Server (versi {serverVersion}, API {apiVersion}) membutuhkan app yang lebih baru. Perbarui app ini.",
+  "connection.incompatible.unreadable": "Server (versi {serverVersion}) melaporkan versi API yang tidak bisa dibaca app ini. Perbarui keduanya ke versi yang cocok."
 }

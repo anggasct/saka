@@ -38,6 +38,16 @@ export const api = createClient<paths>({
   fetch: (request) => globalThis.fetch(request),
 });
 
+api.use({
+  onRequest: ({ request }) => {
+    const token = platform.apiToken();
+    if (token !== null) {
+      request.headers.set("Authorization", `Bearer ${token}`);
+    }
+    return request;
+  },
+});
+
 export function unwrap<T>(result: {
   data?: T;
   error?: unknown;

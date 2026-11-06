@@ -28,8 +28,23 @@ export type Connection = {
   subscribe: (listener: () => void) => () => void;
 };
 
+export type PlatformInfo = {
+  kind: "web" | "desktop";
+  os: string;
+};
+
+export type Notice = {
+  title: string;
+  body: string;
+  route: string;
+};
+
 export type Platform = {
+  ready: () => Promise<void>;
+  info: () => PlatformInfo;
   apiBaseUrl: () => string;
+  apiToken: () => string | null;
+  notify: (notice: Notice) => void;
   preferredLocales: () => readonly string[];
   eventSource: (url: string) => EventStream;
   rootElement: () => HTMLElement | null;

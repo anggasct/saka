@@ -5,7 +5,7 @@
 
 [server]
 listen = "127.0.0.1:7420"          # loopback unless [auth] is set; any other address then exits with code 2 (config_listen_not_loopback)
-allowed_origins = []               # extra browser origins, e.g. "http://localhost:5173" for the Vite dev server
+allowed_origins = []               # extra browser origins, e.g. "http://localhost:5173" for the Vite dev server, or "tauri://localhost" for the desktop app
 data_dir = "~/.local/share/saka"   # default $XDG_DATA_HOME/saka; no * ? [ ] { } ( ) ! + @ | \ in the path
 
 # Remove this section to run on loopback without credentials. With it, every request needs a passkey session or a
