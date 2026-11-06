@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useId, useState } from "react";
 
 import { QUERY_ROOTS } from "@/api/events";
 import { useT } from "@/i18n/use-t";
@@ -6,13 +7,15 @@ import { useT } from "@/i18n/use-t";
 import { ActionDialog } from "./action-dialog";
 import { useFormat } from "./format";
 import { codeOf } from "./page-error";
-import type { WorkItem } from "./queries";
+import type { WorkItem, WorkItemDetail } from "./queries";
 import {
   cancelTask,
   mergeTask,
   requestReview,
   retryTask,
+  returnTask,
   runPrimaryAction,
+  takeoverTask,
 } from "./queries";
 import { blockerText, label, record, sha } from "./text";
 
@@ -173,6 +176,80 @@ export function CancelDialog({
   );
 }
 
+export function TakeoverDialog({
+  task,
+  primary = false,
+}: {
+  task: WorkItem;
+  primary?: boolean;
+}) {
+  const t = useT();
+  const after = useAfterAction();
+  const run = primaryRun(task);
+  return (
+    <ActionDialog
+      trigger={t("task.takeover.trigger")}
+      triggerVariant={primary ? "default" : "outline"}
+      title={t("task.takeover.title")}
+      description={t("task.takeover.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      submit={t("task.takeover.submit")}
+      onSubmit={(reason, key) =>
+        after(() =>
+          primary && run
+            ? run(reason ?? "", key)
+            : takeoverTask(task.id, reason ?? "", key),
+        )
+      }
+    />
+  );
+}
+
+function ReturnDialog({ task }: { task: WorkItem | WorkItemDetail }) {
+  const t = useT();
+  const after = useAfterAction();
+  const stageId = useId();
+  const runs = "stage_runs" in task ? task.stage_runs : [];
+  const left = runs.at(-1)?.stage;
+  const canMerge =
+    task.change_request !== null && task.change_request !== undefined;
+  const [stage, setStage] = useState(
+    canMerge && left === "merge" ? "merge" : "dev",
+  );
+  return (
+    <ActionDialog
+      trigger={t("task.return.trigger")}
+      triggerVariant="default"
+      title={t("task.return.title")}
+      description={t("task.return.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      submit={t("task.return.submit")}
+      onSubmit={(reason, key) =>
+        after(() => returnTask(task.id, stage, reason ?? "", key))
+      }
+    >
+      <div className="space-y-1">
+        <label htmlFor={stageId} className="text-sm font-medium">
+          {t("task.return.stage")}
+        </label>
+        <select
+          id={stageId}
+          value={stage}
+          onChange={(event) => {
+            setStage(event.target.value);
+          }}
+          className="block min-h-11 w-full rounded-md border border-border bg-background px-2 text-sm"
+        >
+          <option value="dev">{label(t, "stage", "dev")}</option>
+          {canMerge && (
+            <option value="merge">{label(t, "stage", "merge")}</option>
+          )}
+        </select>
+      </div>
+    </ActionDialog>
+  );
+}
+
 function ReviewDialog({ task }: { task: WorkItem }) {
   const t = useT();
   const after = useAfterAction();
@@ -200,7 +277,7 @@ function ReviewDialog({ task }: { task: WorkItem }) {
   );
 }
 
-export function TaskActions({ task }: { task: WorkItem }) {
+export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
   const primary = task.blocker?.primary_action.kind;
   const actions = task.available_actions.filter((a) => a !== primary);
   if (actions.length === 0) {
@@ -211,6 +288,8 @@ export function TaskActions({ task }: { task: WorkItem }) {
       {actions.includes("review") && <ReviewDialog task={task} />}
       {actions.includes("merge") && <MergeDialog task={task} />}
       {actions.includes("retry") && <RetryDialog task={task} />}
+      {actions.includes("return") && <ReturnDialog task={task} />}
+      {actions.includes("takeover") && <TakeoverDialog task={task} />}
       {actions.includes("cancel") && <CancelDialog task={task} />}
     </div>
   );

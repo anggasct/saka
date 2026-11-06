@@ -324,6 +324,39 @@ export async function cancelTask(
   );
 }
 
+export async function takeoverTask(
+  workItemId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/takeover", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
+}
+
+export async function returnTask(
+  workItemId: string,
+  stage: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/return", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: { stage, reason },
+    }),
+  );
+}
+
 export async function requestReview(
   workItemId: string,
   idempotencyKey: string,

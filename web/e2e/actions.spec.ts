@@ -125,6 +125,14 @@ const blocked = task(2, {
   available_actions: ["retry", "cancel"],
 });
 
+const taken = task(3, {
+  state: "taken_over",
+  stage: null,
+  stage_phase: null,
+  session: null,
+  available_actions: ["cancel", "return"],
+});
+
 const request = {
   id: PERMISSION_ID,
   project_id: PROJECT_ID,
@@ -200,7 +208,7 @@ async function mockApi(page: Page, server: Server) {
     } else if (path === "/api/v1/work-items") {
       await json(page_(tasks()));
     } else if (path.startsWith("/api/v1/work-items/")) {
-      const found = tasks().find((t) => path.endsWith(t.id));
+      const found = [...tasks(), taken].find((t) => path.endsWith(t.id));
       await (found === undefined
         ? json({ code: "not_found", params: {} }, 404)
         : json(found));
@@ -334,6 +342,21 @@ for (const width of [375, 1280]) {
       page,
       retry.getByRole("button", { name: "Retry" }),
       "Retry the blocked stage",
+    );
+
+    await page.goto(`/delivery/tasks/${taken.id}`);
+    await expect(
+      page.getByRole("region", { name: "Taken over" }),
+    ).toBeVisible();
+    await noOverflow(page);
+    await touchable(page.getByRole("main").getByRole("button"));
+    await accessible(page);
+    await checkDialog(
+      page,
+      page
+        .getByRole("main")
+        .getByRole("button", { name: "Return to the loop" }),
+      "Return the task to the loop",
     );
 
     await page.goto(`/delivery/tasks/${ready.id}`);
