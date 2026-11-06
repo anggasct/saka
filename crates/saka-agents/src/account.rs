@@ -11,7 +11,6 @@ use crate::launch::ClaudeSettings;
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
-// Only these two fields are read; email and organisation in the same output are never kept.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthStatus {

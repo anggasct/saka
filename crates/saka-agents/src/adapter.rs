@@ -189,7 +189,6 @@ impl ClaudeAgents {
         for (k, v) in &self.cfg.extra_env {
             spec.env.insert(k.clone(), v.clone());
         }
-        // An architect session reads docs: no recipe env, ports, toolchains, or secrets reach it.
         if launch.profile != LaunchProfile::Task {
             return Ok((spec, paths));
         }

@@ -436,7 +436,6 @@ impl Scm for GitHub {
             .await?;
         match reply.status {
             s if s.is_success() => Ok(()),
-            // Already gone.
             StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => Ok(()),
             _ => Err(self.app.unexpected("delete_branch", &reply)),
         }
