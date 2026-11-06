@@ -11,3 +11,5 @@ export const all = [
 ];
 
 export const copy = navigator.clipboard.writeText("code");
+
+export const passkey = navigator.credentials.get({});

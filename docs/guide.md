@@ -129,6 +129,8 @@ saka auth revoke <device-id>     # takes effect on the next request
 saka auth revoke <passkey-id> --passkey   # also ends that passkey's sessions; the last passkey cannot be revoked
 ```
 
+In the browser, open the `origin` address. With `[auth]` on and no passkey yet, Saka shows the setup page: run `saka auth setup` on the host, enter the code and a name for the device, and confirm the prompt of the browser or the phone. Later visits show the sign-in page; any page that answers `401` (for example after a session ends) leads there and returns to the page you asked for after you sign in. **Settings, Devices** (the Devices link in the navigation bar) lists passkeys and paired devices, revokes either one, adds a passkey to the browser you are signed in on, and creates a pairing code to register another browser or pair a CLI or app. A pairing code is shown once. Sign-out is the button next to it.
+
 A pairing code is ten characters of Crockford base32 (`I`, `L`, `O` and `U` are never used; typing them as `1` or `0` works), is stored only as a hash, and works once. Five wrong guesses void every live code of the same kind. After ten failed attempts in a minute from the same address, the sign-in endpoints answer `429` with `Retry-After`; the address is the direct peer, so `X-Forwarded-For` is ignored. A token, a code, and a cookie are never written to logs, events, or error messages.
 
 ## Development

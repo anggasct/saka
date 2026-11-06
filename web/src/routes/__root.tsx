@@ -3,8 +3,10 @@ import {
   Link,
   Outlet,
   createRootRouteWithContext,
+  useLocation,
 } from "@tanstack/react-router";
 
+import { AuthNav } from "@/features/auth/auth-nav";
 import { InboxNavLink } from "@/features/inbox/nav-link";
 import { LanguageSelect } from "@/i18n/language-select";
 import { initialLocale } from "@/i18n/locale";
@@ -13,8 +15,12 @@ import { Providers } from "@/providers";
 
 export type RouterContext = { queryClient: QueryClient };
 
+const BARE_PATHS = ["/login", "/setup"];
+
 function Layout() {
   const t = useT();
+  const pathname = useLocation({ select: (l) => l.pathname });
+  const bare = BARE_PATHS.includes(pathname);
   return (
     <div className="min-h-dvh">
       <a
@@ -26,25 +32,30 @@ function Layout() {
       <header className="border-b border-border">
         <nav className="mx-auto flex max-w-4xl flex-wrap items-center gap-x-4 px-4">
           <span className="py-3 font-semibold">{t("app.name")}</span>
-          <InboxNavLink />
-          <Link
-            to="/docs"
-            className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-          >
-            {t("nav.docs")}
-          </Link>
-          <Link
-            to="/delivery"
-            className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-          >
-            {t("nav.delivery")}
-          </Link>
-          <Link
-            to="/settings"
-            className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
-          >
-            {t("nav.settings")}
-          </Link>
+          {!bare && (
+            <>
+              <InboxNavLink />
+              <Link
+                to="/docs"
+                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+              >
+                {t("nav.docs")}
+              </Link>
+              <Link
+                to="/delivery"
+                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+              >
+                {t("nav.delivery")}
+              </Link>
+              <Link
+                to="/settings"
+                className="inline-flex min-h-11 items-center text-sm [&.active]:font-semibold [&.active]:underline"
+              >
+                {t("nav.settings")}
+              </Link>
+              <AuthNav />
+            </>
+          )}
           <LanguageSelect />
         </nav>
       </header>

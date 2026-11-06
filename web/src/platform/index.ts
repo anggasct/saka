@@ -13,6 +13,16 @@ export type Preferences = {
   set: (key: string, value: string) => void;
 };
 
+export type CredentialResult =
+  | { status: "ok"; credential: Record<string, unknown> }
+  | { status: "cancelled" | "unsupported" | "duplicate" | "failed" };
+
+export type Credentials = {
+  supported: () => boolean;
+  create: (options: unknown) => Promise<CredentialResult>;
+  get: (options: unknown) => Promise<CredentialResult>;
+};
+
 export type Platform = {
   apiBaseUrl: () => string;
   preferredLocales: () => readonly string[];
@@ -22,6 +32,8 @@ export type Platform = {
   setDocumentLanguage: (locale: string) => void;
   copyText: (text: string) => Promise<boolean>;
   observeVisible: (element: Element, onVisible: () => void) => () => void;
+  credentials: Credentials;
+  navigateTo: (path: string) => void;
 };
 
 export const platform: Platform = webPlatform;

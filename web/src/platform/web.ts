@@ -1,3 +1,4 @@
+import { webCredentials } from "./credentials";
 import type { EventStream, Platform } from "./index";
 
 export const webPlatform: Platform = {
@@ -32,6 +33,10 @@ export const webPlatform: Platform = {
     } catch {
       return false;
     }
+  },
+  credentials: webCredentials,
+  navigateTo: (path) => {
+    location.assign(path);
   },
   observeVisible: (element, onVisible) => {
     if (typeof IntersectionObserver === "undefined") {

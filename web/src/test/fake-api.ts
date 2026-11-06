@@ -44,7 +44,7 @@ export function fakeApi(routes: Routes) {
     }
     const answer = typeof route === "function" ? await route(recorded) : route;
     const status = answer.status ?? 200;
-    return new Response(JSON.stringify(answer.body), {
+    return new Response(status === 204 ? null : JSON.stringify(answer.body), {
       status,
       headers: {
         "content-type":
