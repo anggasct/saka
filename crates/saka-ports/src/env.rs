@@ -166,6 +166,23 @@ pub struct WorktreeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rebase {
+    Current {
+        head_sha: String,
+        base_sha: String,
+    },
+    Rebased {
+        head_sha: String,
+        base_sha: String,
+    },
+    Conflict {
+        base_sha: String,
+        paths: Vec<String>,
+    },
+    Unclean,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangedPaths {
     pub paths: Vec<String>,
     pub truncated: bool,
@@ -230,6 +247,8 @@ pub trait Environments: Send + Sync {
     ) -> PortResult<ChangeDiff>;
 
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()>;
+
+    async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase>;
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()>;
 

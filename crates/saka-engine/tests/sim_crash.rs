@@ -83,6 +83,9 @@ fn a_job_leased_by_a_crashed_process_runs_again_after_its_lease_without_a_second
         )
         .unwrap();
     drop(engine);
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::Merging)
+    }));
 
     assert!(sim.crash_mid_job());
     assert_eq!(sim.stats().merges, 1);

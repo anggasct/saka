@@ -20,7 +20,7 @@ use saka_core::reconcile::{Action, Snapshot, reconcile};
 use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
-use saka_core::task::{self, LoopConfig, TaskInput};
+use saka_core::task::{self, Integration, LoopConfig, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     BlockerAction, BlockerCode, ChangeState, CheckConclusion, CheckKind, CheckStatus,
@@ -258,6 +258,37 @@ impl World {
         (i.state, i.stage, i.stage_phase)
     }
 
+    fn queue_integrated(&mut self, step: u32) {
+        let head = self
+            .task(step)
+            .change_request
+            .as_ref()
+            .unwrap()
+            .head_sha
+            .clone();
+        self.decide(
+            step,
+            TaskInput::Integrated(Integration::Rebased {
+                from_sha: head.clone(),
+                head_sha: head,
+                base_sha: sha('c'),
+            }),
+        );
+    }
+
+    fn queue_merge(&mut self, step: u32) {
+        let version = self.task(step).item.version;
+        self.decide(
+            step,
+            TaskInput::RequestMerge {
+                expected_version: version,
+                reason: None,
+            },
+        );
+        self.decide(step, TaskInput::MergeTurn);
+        self.queue_integrated(step);
+    }
+
     fn run_to_awaiting_ci(&mut self, step: u32) {
         self.decide(step, TaskInput::Admit);
         self.decide(step, prepared(step));
@@ -285,14 +316,7 @@ impl World {
             step,
             observed('b', vec![check("test", Some(CheckConclusion::Success))]),
         );
-        let version = self.task(step).item.version;
-        self.decide(
-            step,
-            TaskInput::RequestMerge {
-                expected_version: version,
-                reason: None,
-            },
-        );
+        self.queue_merge(step);
         self.decide(
             step,
             TaskInput::MergeSucceeded {
@@ -659,6 +683,17 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
             expected_version: version,
             reason: None,
         },
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::Queued));
+    w.decide(1, TaskInput::MergeTurn);
+    assert_eq!(w.place(1).2, Some(StagePhase::Integrating));
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Rebased {
+            from_sha: sha('b'),
+            head_sha: sha('b'),
+            base_sha: sha('c'),
+        }),
     );
     assert_eq!(w.place(1).2, Some(StagePhase::Merging));
     let merge = w.jobs.iter().find(|j| j.kind == JobKind::ScmMerge).unwrap();
@@ -1201,14 +1236,7 @@ fn push_rejection_merge_conflict_closed_change_and_missing_merge() {
         1,
         observed('b', vec![check("t", Some(CheckConclusion::Success))]),
     );
-    let version = w.task(1).item.version;
-    w.decide(
-        1,
-        TaskInput::RequestMerge {
-            expected_version: version,
-            reason: None,
-        },
-    );
+    w.queue_merge(1);
     w.decide(
         1,
         TaskInput::MergeRejected {
@@ -1497,6 +1525,19 @@ fn a_change_being_merged_by_saka_is_not_polled() {
             expected_version: version,
             reason: None,
         },
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::Queued));
+    assert_eq!(polls(&w), 1, "merge/queued");
+    w.decide(1, TaskInput::MergeTurn);
+    assert_eq!(polls(&w), 1, "merge/integrating");
+    let head = sha('b');
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Rebased {
+            from_sha: head.clone(),
+            head_sha: head,
+            base_sha: sha('c'),
+        }),
     );
     assert_eq!(w.place(1).2, Some(StagePhase::Merging));
     assert_eq!(polls(&w), 0);
@@ -1902,6 +1943,19 @@ fn a_task_can_be_taken_over_only_where_nothing_is_in_flight_at_the_provider() {
             reason: None,
         },
     );
+    assert_eq!(w.task(1).item.stage_phase, Some(StagePhase::Queued));
+    assert!(task::available_actions(w.task(1)).contains(&"takeover"));
+    w.decide(1, TaskInput::MergeTurn);
+    assert_eq!(w.task(1).item.stage_phase, Some(StagePhase::Integrating));
+    assert!(!task::available_actions(w.task(1)).contains(&"takeover"));
+    assert_eq!(
+        w.try_decide(1, takeover("mid rebase")),
+        Err(Rejection::StageNotTakeable {
+            stage: "merge",
+            phase: Some("integrating"),
+        })
+    );
+    w.queue_integrated(1);
     assert_eq!(w.task(1).item.stage_phase, Some(StagePhase::Merging));
     assert!(!task::available_actions(w.task(1)).contains(&"takeover"));
     assert_eq!(
@@ -2265,4 +2319,338 @@ fn a_head_pushed_by_hand_is_only_recorded_when_no_agent_is_working() {
         w.task(1).change_request.as_ref().unwrap().head_sha,
         sha('d')
     );
+}
+
+fn queued_world() -> World {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Success))]),
+    );
+    let version = w.task(1).item.version;
+    let events = w.decide(
+        1,
+        TaskInput::RequestMerge {
+            expected_version: version,
+            reason: None,
+        },
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::MergeRequested { .. }))
+    );
+    w
+}
+
+fn rebased(from: char, head: char) -> TaskInput {
+    TaskInput::Integrated(Integration::Rebased {
+        from_sha: sha(from),
+        head_sha: sha(head),
+        base_sha: sha('c'),
+    })
+}
+
+#[test]
+fn a_merge_request_waits_in_the_queue_and_cannot_be_made_twice() {
+    let mut w = queued_world();
+    assert_eq!(w.place(1).2, Some(StagePhase::Queued));
+    assert!(w.task(1).is_queued());
+    assert!(!task::available_actions(w.task(1)).contains(&"merge"));
+    let version = w.task(1).item.version;
+    assert!(matches!(
+        w.try_decide(
+            1,
+            TaskInput::RequestMerge {
+                expected_version: version,
+                reason: None
+            }
+        ),
+        Err(Rejection::MergeNotReady { .. })
+    ));
+    assert!(w.take_jobs().contains(&JobKind::ScmPollChangeRequest));
+}
+
+#[test]
+fn the_turn_goes_to_one_task_per_branch_by_priority_then_arrival() {
+    let w = queued_world();
+    let first = w.task(1).clone();
+    assert_eq!(
+        saka_core::queue::next_turns(std::slice::from_ref(&first)),
+        vec![first.item.id]
+    );
+
+    let copy = |n: u128, priority: i64, at: i64| {
+        let mut t = first.clone();
+        t.item.id = saka_core::ids::WorkItemId(Uuid::from_u128(n));
+        t.item.priority = priority;
+        t.stage_run.as_mut().unwrap().queued_at = Some(Timestamp(at));
+        t
+    };
+    let early = copy(11, 0, 10);
+    let late = copy(12, 0, 20);
+    let urgent = copy(13, 5, 30);
+    let id = |t: &Task| t.item.id;
+    assert_eq!(
+        saka_core::queue::next_turns(&[late.clone(), early.clone()]),
+        vec![id(&early)]
+    );
+    assert_eq!(
+        saka_core::queue::next_turns(&[late.clone(), early.clone(), urgent.clone()]),
+        vec![id(&urgent)]
+    );
+
+    let mut holder = copy(14, 0, 5);
+    holder.item.stage_phase = Some(StagePhase::Integrating);
+    assert!(saka_core::queue::next_turns(&[holder.clone(), early.clone()]).is_empty());
+    holder.item.state = WorkItemState::Blocked;
+    holder.item.stage = None;
+    holder.item.stage_phase = None;
+    assert_eq!(
+        saka_core::queue::next_turns(&[holder.clone(), early.clone()]),
+        vec![id(&early)]
+    );
+
+    let mut other_branch = copy(15, 0, 1);
+    other_branch.change_request.as_mut().unwrap().base_branch = "release".into();
+    let mut merging = copy(16, 0, 2);
+    merging.item.stage_phase = Some(StagePhase::Merging);
+    assert_eq!(
+        saka_core::queue::next_turns(&[merging, other_branch.clone(), early.clone()]),
+        vec![id(&other_branch)]
+    );
+
+    let mut outside = copy(17, 0, 3);
+    outside.item.origin = saka_core::vocab::WorkItemOrigin::ExternalChange;
+    assert!(saka_core::queue::next_turns(&[outside]).is_empty());
+}
+
+#[test]
+fn the_reconciler_hands_out_the_turn() {
+    let w = queued_world();
+    assert!(
+        w.reconcile()
+            .iter()
+            .any(|a| matches!(a, Action::Decide(_, TaskInput::MergeTurn)))
+    );
+}
+
+#[test]
+fn a_clean_integration_of_the_same_head_merges_and_a_red_head_blocks() {
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    assert!(w.take_jobs().contains(&JobKind::ScmIntegrate));
+    assert!(w.decide(1, TaskInput::MergeTurn).is_empty());
+    let events = w.decide(1, rebased('b', 'b'));
+    assert_eq!(w.place(1).2, Some(StagePhase::Merging));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::MergeRebased { .. }))
+    );
+    assert!(w.take_jobs().contains(&JobKind::ScmMerge));
+
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Failure))]),
+    );
+    w.decide(1, rebased('b', 'b'));
+    assert_eq!(w.task(1).open_blocker().unwrap().code, BlockerCode::CiRed);
+}
+
+#[test]
+fn a_rebased_head_waits_for_its_gate_and_then_merges_without_a_second_request() {
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    let events = w.decide(1, rebased('b', 'd'));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::MergeRebased { from_sha, head_sha, base_branch, .. }
+            if *from_sha == sha('b') && *head_sha == sha('d') && base_branch == "main"
+    )));
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingCi));
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('d')
+    );
+    assert!(w.task(1).is_queued());
+    assert!(!task::available_actions(w.task(1)).contains(&"merge"));
+    assert!(saka_core::queue::next_turns(&w.tasks).is_empty());
+
+    let pending = w.decide(1, observed('d', vec![check("test", None)]));
+    assert!(
+        pending
+            .iter()
+            .all(|e| !matches!(e, Event::StagePhaseChanged { .. }))
+    );
+    let events = w.decide(
+        1,
+        observed('d', vec![check("test", Some(CheckConclusion::Success))]),
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::MergeRequested { head_sha, reason, .. }
+            if *head_sha == sha('d') && reason.as_deref() == Some("merge queue")
+    )));
+    assert_eq!(w.place(1).2, Some(StagePhase::Merging));
+    let merge = w
+        .jobs
+        .iter()
+        .rfind(|j| j.kind == JobKind::ScmMerge)
+        .unwrap();
+    assert_eq!(merge.payload["head_sha"], json!(sha('d')));
+}
+
+#[test]
+fn a_head_pushed_from_outside_drops_the_request_instead_of_blocking() {
+    let mut w = queued_world();
+    let events = w.decide(1, observed('e', vec![check("test", None)]));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::MergeDequeued { reason, .. } if reason == "head_moved"))
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingCi));
+    assert!(!w.task(1).is_queued());
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('e')
+    );
+    assert!(w.task(1).open_blocker().is_none());
+
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    let events = w.decide(1, observed('e', vec![check("test", None)]));
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e, Event::MergeDequeued { .. }))
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::Integrating));
+    w.decide(1, rebased('b', 'd'));
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingCi));
+    assert!(!w.task(1).is_queued());
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('e')
+    );
+
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Moved {
+            remote_sha: sha('f'),
+        }),
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingCi));
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('f')
+    );
+    assert!(!w.task(1).is_queued());
+
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(1, rebased('b', 'd'));
+    let events = w.decide(1, observed('e', vec![check("test", None)]));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::MergeDequeued { .. }))
+    );
+    let events = w.decide(
+        1,
+        observed('e', vec![check("test", Some(CheckConclusion::Success))]),
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e, Event::MergeRequested { .. }))
+    );
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingMerge));
+}
+
+#[test]
+fn a_rebase_conflict_blocks_with_the_paths_and_retries_through_dev() {
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Conflict {
+            head_sha: sha('b'),
+            base_sha: sha('c'),
+            paths: vec!["src/lib.rs".into(), "Cargo.toml".into()],
+        }),
+    );
+    let blocker = w.task(1).open_blocker().unwrap().clone();
+    assert_eq!(blocker.code, BlockerCode::MergeConflict);
+    assert_eq!(
+        blocker.params,
+        json!({
+            "reason": "rebase_conflict", "head_sha": sha('b'), "base_sha": sha('c'),
+            "base_branch": "main", "paths": ["src/lib.rs", "Cargo.toml"], "count": 2,
+        })
+    );
+    assert!(!task::auto_retryable(blocker.code, &blocker.params));
+    w.decide(
+        1,
+        TaskInput::Retry {
+            reason: "resolve it".into(),
+        },
+    );
+    assert_eq!(
+        w.place(1),
+        (
+            WorkItemState::InStage,
+            Some(Stage::Dev),
+            Some(StagePhase::RunningSession)
+        )
+    );
+    assert!(!w.task(1).is_queued());
+
+    let mut w = queued_world();
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        TaskInput::Integrated(Integration::Unclean { head_sha: sha('b') }),
+    );
+    let blocker = w.task(1).open_blocker().unwrap().clone();
+    assert_eq!(blocker.params["reason"], json!("worktree_unclean"));
+    w.decide(
+        1,
+        TaskInput::Retry {
+            reason: "commit it".into(),
+        },
+    );
+    assert_eq!(w.place(1).1, Some(Stage::Dev));
+}
+
+#[test]
+fn a_queued_task_can_leave_the_queue_by_takeover_and_asks_again_after_returning() {
+    let mut w = queued_world();
+    w.decide(1, takeover("by hand"));
+    assert_eq!(w.task(1).item.state, WorkItemState::TakenOver);
+    assert!(saka_core::queue::next_turns(&w.tasks).is_empty());
+    w.decide(1, give_back(Some(Stage::Merge), 'b'));
+    assert_eq!(w.place(1).2, Some(StagePhase::AwaitingCi));
+    assert!(!w.task(1).is_queued());
+}
+
+#[test]
+fn a_late_integration_result_is_dropped_outside_the_integrating_phase() {
+    let mut w = queued_world();
+    assert!(w.decide(1, rebased('b', 'd')).is_empty());
+    w.decide(1, TaskInput::MergeTurn);
+    w.decide(
+        1,
+        TaskInput::Cancel {
+            reason: "stop".into(),
+        },
+    );
+    assert!(w.decide(1, rebased('b', 'd')).is_empty());
 }

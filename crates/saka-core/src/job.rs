@@ -64,6 +64,7 @@ job_kinds! {
     ScmScanChanges => "scm.scan_changes", 3;
     EnvPrepareReview => "env.prepare_review", 3;
     ScmPostReview => "scm.post_review", 3;
+    ScmIntegrate => "scm.integrate", 5;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -87,6 +88,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         JobKind::ScmOpenChangeRequest => scm(StagePhase::OpeningChange),
         JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
         JobKind::ScmMerge => scm(StagePhase::Merging),
+        JobKind::ScmIntegrate => scm(StagePhase::Integrating),
         JobKind::ScmPostReview => scm(StagePhase::PostingReview),
         JobKind::ScmPushDocsBranch => Some((
             BlockerCode::ScmUnavailable,
@@ -196,5 +198,6 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmScanChanges => "scm.scan",
         JobKind::EnvPrepareReview => "env.prepare_review",
         JobKind::ScmPostReview => "scm.post_review",
+        JobKind::ScmIntegrate => "scm.integrate",
     }
 }

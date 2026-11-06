@@ -25,8 +25,8 @@ pub use docs::{
 pub use env::{
     ChangeDiff, ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest, EnvRef,
     Environments, ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest, PreparedDocs,
-    PreparedEnvironment, RecipeCommand, RecipeCommandOutcome, RecipePhase, Release, ReleaseIndex,
-    WorktreeFile, WorktreeState, output_tail,
+    PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome, RecipePhase, Release,
+    ReleaseIndex, WorktreeFile, WorktreeState, output_tail,
 };
 pub use git::{
     Blob, CommitOne, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos, TreeEntry,

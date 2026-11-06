@@ -23,10 +23,10 @@ use saka_ports::{
     DocWrite, DocsRequest, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession,
     Link, MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
-    Reattached, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo,
-    RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed,
-    SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains,
-    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
+    Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess,
+    RepoInfo, RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities,
+    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh,
+    Toolchains, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeFile, WorktreeState,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -309,6 +309,8 @@ struct State {
     merge_scripts: HashMap<u64, VecDeque<String>>,
     merge_calls: Vec<(String, u64)>,
     lost_merge_repos: BTreeSet<String>,
+    rebased: BTreeMap<(String, String), String>,
+    rebases: Vec<(EnvironmentId, String, String)>,
 }
 
 impl State {
@@ -465,6 +467,8 @@ impl FakeWorld {
                 scope_checks: Vec::new(),
                 scm_calls: Vec::new(),
                 docs_checkouts: BTreeMap::new(),
+                rebased: BTreeMap::new(),
+                rebases: Vec::new(),
                 docs_refusal: None,
                 docs_turns: VecDeque::new(),
                 merge_scripts: HashMap::new(),
@@ -845,6 +849,10 @@ impl FakeWorld {
 
     pub fn checkouts(&self) -> Vec<(EnvironmentId, String)> {
         self.state().checkouts.clone()
+    }
+
+    pub fn rebases(&self) -> Vec<(EnvironmentId, String, String)> {
+        self.state().rebases.clone()
     }
 
     pub fn push_to_base(&self) -> String {
@@ -1247,6 +1255,38 @@ impl State {
                 return;
             };
             let edits = s.next_edits();
+            let resolving = s
+                .prompts
+                .last()
+                .is_some_and(|p| p.contains("conflicts with `origin/"));
+            let prepared = s.prepared.iter().find(|p| p.environment_id == env).cloned();
+            if let (true, Some(p)) = (resolving, prepared) {
+                let base = s.refs(&p.repo).get(&p.base_branch).cloned();
+                if let Some(base) = base {
+                    let fork = s.merge_base(&base, &w.head).unwrap_or_default();
+                    let mut tree = s.tree(&base);
+                    let mine = s.tree(&w.head);
+                    for path in s.diff(&fork, &w.head) {
+                        match mine.get(&path) {
+                            Some(text) => tree.insert(path, text.clone()),
+                            None => tree.remove(&path),
+                        };
+                    }
+                    for (path, content) in edits.unwrap_or_default() {
+                        match content {
+                            Some(text) => tree.insert(path, text),
+                            None => tree.remove(&path),
+                        };
+                    }
+                    let merge = s.new_commit(vec![w.head.clone(), base]);
+                    s.trees.insert(merge.clone(), tree);
+                    if let Some(w) = s.worktrees.get_mut(&env) {
+                        w.head = merge;
+                        w.dirty = false;
+                    }
+                    return;
+                }
+            }
             if edits.is_some() || s.commits_ahead(&w.base_sha, &w.head) == 0 {
                 let c = s.commit_edits(&w.head, &edits.unwrap_or_default());
                 if let Some(w) = s.worktrees.get_mut(&env) {
@@ -1552,6 +1592,84 @@ impl Environments for FakeWorld {
         w.dirty = false;
         s.checkouts.push((env.environment_id, commit.to_string()));
         Ok(())
+    }
+
+    async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase> {
+        let mut s = self.state();
+        let base = s
+            .refs(&env.repo.full_name)
+            .get(base_branch)
+            .cloned()
+            .ok_or_else(|| PortError::permanent("base_branch_missing", json!({})))?;
+        if !s.parents.contains_key(head_sha) {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            ));
+        }
+        let dirty = s
+            .worktrees
+            .get(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?
+            .dirty;
+        if dirty {
+            return Ok(Rebase::Unclean);
+        }
+        s.rebases
+            .push((env.environment_id, head_sha.to_string(), base.clone()));
+        let fork = s.merge_base(&base, head_sha).unwrap_or_default();
+        let ours = s.diff(&fork, head_sha);
+        let (theirs_tree, mine_tree) = (s.tree(&base), s.tree(head_sha));
+        let outcome = if s.is_ancestor(&base, head_sha) {
+            Rebase::Current {
+                head_sha: head_sha.to_string(),
+                base_sha: base,
+            }
+        } else {
+            let touched: BTreeSet<String> = s.diff(&fork, &base).into_iter().collect();
+            let conflicts: Vec<String> = ours
+                .iter()
+                .filter(|p| touched.contains(*p) && theirs_tree.get(*p) != mine_tree.get(*p))
+                .cloned()
+                .collect();
+            if conflicts.is_empty() {
+                let key = (head_sha.to_string(), base.clone());
+                let head = match s.rebased.get(&key).cloned() {
+                    Some(head) => head,
+                    None => {
+                        let mut tree = theirs_tree;
+                        for path in &ours {
+                            match mine_tree.get(path) {
+                                Some(text) => tree.insert(path.clone(), text.clone()),
+                                None => tree.remove(path),
+                            };
+                        }
+                        let head = s.new_commit(vec![base.clone()]);
+                        s.trees.insert(head.clone(), tree);
+                        s.rebased.insert(key, head.clone());
+                        head
+                    }
+                };
+                Rebase::Rebased {
+                    head_sha: head,
+                    base_sha: base,
+                }
+            } else {
+                Rebase::Conflict {
+                    base_sha: base,
+                    paths: conflicts,
+                }
+            }
+        };
+        let landed = match &outcome {
+            Rebase::Current { head_sha, .. } | Rebase::Rebased { head_sha, .. } => head_sha.clone(),
+            _ => head_sha.to_string(),
+        };
+        if let Some(w) = s.worktrees.get_mut(&env.environment_id) {
+            w.head = landed;
+        }
+        Ok(outcome)
     }
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()> {

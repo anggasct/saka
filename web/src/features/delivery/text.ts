@@ -127,6 +127,7 @@ export function blockerText(
     phase: label(t, "phase", phase),
     dirty: params.dirty === true ? "yes" : "no",
     scope_stage: text(params.stage) || "other",
+    base_branch: text(params.base_branch),
     paths: text(params.paths),
     count: number(params.count),
     more: Math.max(

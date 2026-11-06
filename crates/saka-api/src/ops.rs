@@ -238,6 +238,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_auto_retries_total", &[("code", code)], n);
     }
     t.family(
+        "saka_merge_queue_turns_total",
+        "counter",
+        "Merge queue turns, by outcome.",
+    );
+    for (outcome, n) in &m.merge_turns {
+        t.sample("saka_merge_queue_turns_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_project_config_reloads_total",
         "counter",
         "Reloads of a project's saka.toml, by outcome.",

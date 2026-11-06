@@ -13,7 +13,7 @@ use saka_core::model::{
 use saka_core::rejection::Rejection;
 use saka_core::scope::{PathScope, ScopeViolation};
 use saka_core::session::SessionInput;
-use saka_core::task::{DocsInspection, TaskInput};
+use saka_core::task::{DocsInspection, Integration, TaskInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     AuthorshipMode, BlockerCode, ChangeCredentialKind, ChangeRole, ChangeState, CheckConclusion,
@@ -23,8 +23,8 @@ use saka_core::vocab::{
 use saka_ports::{
     ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnvRef, ExtraDir, LaunchProfile,
     MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult, PrepareRequest,
-    PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef, SessionLaunch, SessionRef,
-    StatusReport, StatusState,
+    PushOutcome, PushRequest, Rebase, RecipeCommand, RecipePhase, RepoRef, SessionLaunch,
+    SessionRef, StatusReport, StatusState,
 };
 use saka_store::{ClaimedJob, JobOutcome, LEASE_EXTEND_MS, StoreError, read};
 use serde::de::DeserializeOwned;
@@ -414,6 +414,7 @@ impl Engine {
             JobKind::ScmMergeDocs => self.merge_docs(&task).await,
             JobKind::ScmPollChangeRequest => self.poll(&task, field(p, "change_request_id")?).await,
             JobKind::ScmMerge => self.merge(&task, field(p, "head_sha")?).await,
+            JobKind::ScmIntegrate => self.integrate(&task).await,
             JobKind::EnvVerifyMerged => self.verify(&task, job).await,
             JobKind::EnvTeardown => self.teardown(&task, field(p, "environment_id")?).await,
             JobKind::ScmWebhookPrune => Ok(Effect::Skipped),
@@ -1993,6 +1994,88 @@ impl Engine {
             head_sha: sha,
             checks,
         }))
+    }
+
+    async fn integrate(&self, task: &Task) -> Execution {
+        let Some(change) = task
+            .change_request
+            .as_ref()
+            .filter(|_| task.is_at(Stage::Merge, StagePhase::Integrating))
+        else {
+            return Ok(Effect::Skipped);
+        };
+        let Some(env) = task.ready_environment() else {
+            return Err(PortError::permanent(
+                "environment_missing",
+                json!({ "work_item_id": task.item.id }),
+            ));
+        };
+        let env_ref = self.env_ref(task, env)?;
+        let head = change.head_sha.clone();
+        let (outcome, label) = match self
+            .ports
+            .env
+            .rebase(&env_ref, &change.base_branch, &head)
+            .await?
+        {
+            Rebase::Current { head_sha, base_sha } => (
+                Integration::Rebased {
+                    from_sha: head,
+                    head_sha,
+                    base_sha,
+                },
+                "current",
+            ),
+            Rebase::Rebased { head_sha, base_sha } => {
+                let pushed = self
+                    .ports
+                    .scm
+                    .push_branch(&PushRequest {
+                        repo: self.repo_ref(task)?,
+                        branch: task.item.branch.clone(),
+                        local_sha: head_sha.clone(),
+                        expected_remote_sha: Some(head.clone()),
+                    })
+                    .await?;
+                match pushed {
+                    PushOutcome::Rejected { remote_sha } if remote_sha != head_sha => {
+                        (Integration::Moved { remote_sha }, "moved")
+                    }
+                    _ => (
+                        Integration::Rebased {
+                            from_sha: head,
+                            head_sha,
+                            base_sha,
+                        },
+                        "rebased",
+                    ),
+                }
+            }
+            Rebase::Conflict { base_sha, paths } => {
+                tracing::warn!(
+                    work_item_id = %task.item.id,
+                    count = paths.len(),
+                    "delivery.merge.conflict"
+                );
+                (
+                    Integration::Conflict {
+                        head_sha: head,
+                        base_sha,
+                        paths,
+                    },
+                    "conflict",
+                )
+            }
+            Rebase::Unclean => (Integration::Unclean { head_sha: head }, "unclean"),
+        };
+        self.counters.merge_turn(label);
+        tracing::info!(
+            work_item_id = %task.item.id,
+            base_branch = change.base_branch,
+            outcome = label,
+            "delivery.merge.integrated"
+        );
+        Ok(Effect::Fact(TaskInput::Integrated(outcome)))
     }
 
     async fn merge(&self, task: &Task, head_sha: String) -> Execution {

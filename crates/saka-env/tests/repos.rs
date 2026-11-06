@@ -17,8 +17,8 @@ use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
     Blob, Checkout, DocsRequest, EnvRef, Environments, ExtraDir, GitAccess, GitRemote, PortResult,
-    PrepareRequest, PreparedDocs, PushOutcome, PushRequest, RecipeCommand, RecipePhase, RepoRef,
-    Repos, UnitLimits, WorktreeFile,
+    PrepareRequest, PreparedDocs, PushOutcome, PushRequest, Rebase, RecipeCommand, RecipePhase,
+    RepoRef, Repos, UnitLimits, WorktreeFile,
 };
 use uuid::Uuid;
 
@@ -1559,4 +1559,131 @@ async fn a_change_diff_is_the_clean_diff_from_the_merge_base_and_is_cut_at_the_l
         .await
         .unwrap_err();
     assert_eq!(invalid.code, "git_argument_invalid");
+}
+
+fn advance_base(w: &World, file: &str, text: &str) -> String {
+    git(&w.other, &["checkout", "-q", "main"]);
+    let sha = commit(&w.other, file, text);
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    sha
+}
+
+#[tokio::test]
+async fn a_rebase_replays_the_task_commits_on_the_latest_base_and_a_repeat_gives_the_same_commit() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let first = commit(&wt, "a.txt", "a\n");
+    assert!(matches!(
+        w.push(&first, None).await,
+        PushOutcome::Pushed { .. }
+    ));
+
+    let unmoved = w.repos.rebase(&env, "main", &first).await.unwrap();
+    assert!(matches!(unmoved, Rebase::Current { ref head_sha, .. } if *head_sha == first));
+
+    let base = advance_base(&w, "other.txt", "other\n");
+    let Rebase::Rebased { head_sha, base_sha } =
+        w.repos.rebase(&env, "main", &first).await.unwrap()
+    else {
+        panic!("the base moved, so the branch is rebased");
+    };
+    assert_eq!(base_sha, base);
+    assert_ne!(head_sha, first);
+    assert_eq!(git(&wt, &["rev-parse", &format!("{head_sha}^")]), base);
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), head_sha);
+    assert_eq!(
+        git(&wt, &["rev-parse", &format!("refs/heads/{BRANCH}")]),
+        head_sha
+    );
+    assert_eq!(git(&wt, &["symbolic-ref", "--short", "HEAD"]), BRANCH);
+    assert_eq!(
+        git(&wt, &["log", "-1", "--format=%an <%ae>"]),
+        "Test <test@saka.invalid>"
+    );
+    assert_eq!(git(&wt, &["log", "-1", "--format=%ce"]), "saka@localhost");
+    assert!(git(&wt, &["status", "--porcelain"]).is_empty());
+    assert!(wt.join("other.txt").exists() && wt.join("a.txt").exists());
+
+    assert_eq!(
+        w.push(&head_sha, Some(&first)).await,
+        PushOutcome::Pushed {
+            sha: head_sha.clone()
+        }
+    );
+    assert_eq!(w.remote_branch(BRANCH), Some(head_sha.clone()));
+    assert!(
+        w.log()
+            .contains(&format!("--force-with-lease=refs/heads/{BRANCH}:{first}")),
+        "{}",
+        w.log()
+    );
+
+    let again = w.repos.rebase(&env, "main", &first).await.unwrap();
+    assert_eq!(
+        again,
+        Rebase::Rebased {
+            head_sha: head_sha.clone(),
+            base_sha: base.clone()
+        }
+    );
+    let current = w.repos.rebase(&env, "main", &head_sha).await.unwrap();
+    assert!(matches!(current, Rebase::Current { head_sha: ref h, .. } if *h == head_sha));
+}
+
+#[tokio::test]
+async fn a_conflicting_rebase_names_the_paths_and_leaves_the_worktree_clean_on_its_branch() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let first = commit(&wt, "a.txt", "mine\n");
+    assert!(matches!(
+        w.push(&first, None).await,
+        PushOutcome::Pushed { .. }
+    ));
+    let base = advance_base(&w, "a.txt", "theirs\n");
+
+    assert_eq!(
+        w.repos.rebase(&env, "main", &first).await.unwrap(),
+        Rebase::Conflict {
+            base_sha: base,
+            paths: vec!["a.txt".into()],
+        }
+    );
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), first);
+    assert_eq!(git(&wt, &["symbolic-ref", "--short", "HEAD"]), BRANCH);
+    assert!(git(&wt, &["status", "--porcelain"]).is_empty());
+    assert!(!wt.join(".git").is_dir() || !wt.join(".git/rebase-merge").exists());
+    assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "mine\n");
+}
+
+#[tokio::test]
+async fn a_rebase_never_touches_uncommitted_work_or_commits_that_are_not_pushed() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let first = commit(&wt, "a.txt", "a\n");
+    assert!(matches!(
+        w.push(&first, None).await,
+        PushOutcome::Pushed { .. }
+    ));
+    advance_base(&w, "other.txt", "other\n");
+
+    std::fs::write(wt.join("scratch.txt"), "wip\n").unwrap();
+    assert_eq!(
+        w.repos.rebase(&env, "main", &first).await.unwrap(),
+        Rebase::Unclean
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.join("scratch.txt")).unwrap(),
+        "wip\n"
+    );
+    std::fs::remove_file(wt.join("scratch.txt")).unwrap();
+
+    let local_only = commit(&wt, "b.txt", "b\n");
+    assert_eq!(
+        w.repos.rebase(&env, "main", &first).await.unwrap(),
+        Rebase::Unclean
+    );
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), local_only);
 }

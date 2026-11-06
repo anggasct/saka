@@ -83,6 +83,8 @@ vocab!(
         AwaitingReview => "awaiting_review",
         PostingReview => "posting_review",
         Reviewed => "reviewed",
+        Queued => "queued",
+        Integrating => "integrating",
     }
 );
 vocab!(StageRunState {

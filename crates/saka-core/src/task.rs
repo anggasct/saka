@@ -51,6 +51,8 @@ pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
 pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
 pub const MERGED_ON_HOST: &str = "change merged on the host";
+pub const QUEUE_REASON: &str = "merge queue";
+const MAX_CONFLICT_PATHS: usize = 20;
 
 impl LoopConfig {
     pub fn session(&self) -> SessionConfig {
@@ -77,6 +79,26 @@ pub struct DocsInspection {
     pub commits_ahead: u32,
     pub head_sha: String,
     pub outside: Option<ScopeViolation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Integration {
+    Rebased {
+        from_sha: String,
+        head_sha: String,
+        base_sha: String,
+    },
+    Moved {
+        remote_sha: String,
+    },
+    Conflict {
+        head_sha: String,
+        base_sha: String,
+        paths: Vec<String>,
+    },
+    Unclean {
+        head_sha: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,6 +232,8 @@ pub enum TaskInput {
         change: Option<ObservedChange>,
     },
     StartReview,
+    MergeTurn,
+    Integrated(Integration),
     ReviewEnvironmentPrepared {
         environment_id: EnvironmentId,
         root_path: String,
@@ -470,6 +494,8 @@ pub fn decide(
             });
         }
         I::StartReview => d.start_review(),
+        I::MergeTurn => d.merge_turn(),
+        I::Integrated(outcome) => d.integrated(outcome, ctx),
         I::ReviewEnvironmentPrepared {
             environment_id,
             root_path,
@@ -492,7 +518,11 @@ pub fn decide(
 const RETURN_STAGES: [Stage; 2] = [Stage::Dev, Stage::Merge];
 
 pub fn takeable(stage: Stage, phase: Option<StagePhase>) -> bool {
-    stage != Stage::Sync && !matches!(phase, Some(StagePhase::Merging | StagePhase::PostingReview))
+    stage != Stage::Sync
+        && !matches!(
+            phase,
+            Some(StagePhase::Merging | StagePhase::Integrating | StagePhase::PostingReview)
+        )
 }
 
 fn takeover_place(task: &Task) -> Result<(Option<Stage>, Option<StagePhase>), Rejection> {
@@ -1117,7 +1147,13 @@ impl Decider<'_> {
             .stage_run
             .as_ref()
             .and_then(|r| r.started_at)
-            .is_some_and(|started| self.now.since(started) > self.cfg.ci_appear_timeout_ms)
+            .map(|started| match &self.task.change_request {
+                Some(cr) if self.task.is_at_stage(Stage::Merge) && cr.updated_at > started => {
+                    cr.updated_at
+                }
+                _ => started,
+            })
+            .is_some_and(|start| self.now.since(start) > self.cfg.ci_appear_timeout_ms)
     }
 
     fn scm_required(
@@ -1218,7 +1254,10 @@ impl Decider<'_> {
         saka: Option<(GateOutcome, &[Check], Option<&Value>)>,
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
-        if self.task.is_at(Stage::Merge, StagePhase::Merging) {
+        if self.task.is_at(Stage::Merge, StagePhase::Merging)
+            || self.task.is_at(Stage::Merge, StagePhase::Queued)
+            || self.task.is_at(Stage::Merge, StagePhase::Integrating)
+        {
             return vec![];
         }
         let verdict = self.verdict(head_sha, scm, saka, self.ci_timed_out());
@@ -1237,6 +1276,9 @@ impl Decider<'_> {
         let awaiting_merge = self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
         match verdict {
             Verdict::Failed(params) => self.block(BlockerCode::CiRed, params, ctx),
+            Verdict::Passed if self.task.is_queued() && !head_changed => {
+                self.queued_merge(head_sha, true)
+            }
             Verdict::Passed if !awaiting_merge || head_changed => {
                 self.phase(StagePhase::AwaitingMerge, Some(head_sha.to_string()))
             }
@@ -1617,6 +1659,8 @@ impl Decider<'_> {
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let in_merge = [
+            StagePhase::Queued,
+            StagePhase::Integrating,
             StagePhase::AwaitingCi,
             StagePhase::AwaitingMerge,
             StagePhase::Merging,
@@ -1669,6 +1713,19 @@ impl Decider<'_> {
                 role: ChangeRole::Code,
                 head_sha: head_sha.clone(),
             });
+        }
+        let holding = self.task.is_queued()
+            && (self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+                || self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge));
+        if head_changed && (holding || self.task.is_at(Stage::Merge, StagePhase::Queued)) {
+            events.push(Event::MergeDequeued {
+                work_item_id: self.item().id,
+                reason: "head_moved".to_string(),
+            });
+            if !holding {
+                events.extend(self.phase(StagePhase::AwaitingCi, Some(head_sha)));
+                return events;
+            }
         }
         let unchanged = self
             .task
@@ -1748,9 +1805,7 @@ impl Decider<'_> {
             });
         }
         let cr = self.task.change_request.as_ref();
-        let ready =
-            self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(self.task);
-        let (Some(cr), true) = (cr, ready) else {
+        let (Some(cr), true) = (cr, merge_ready(self.task)) else {
             let gate_outcome = cr
                 .and_then(|c| {
                     let mut at_head = self.task.gates.iter().filter(|g| g.head_sha == c.head_sha);
@@ -1772,8 +1827,125 @@ impl Decider<'_> {
             merge_method: self.cfg.merge_method,
             reason,
         }];
-        events.extend(self.phase(StagePhase::Merging, Some(cr.head_sha.clone())));
+        events.extend(self.phase(StagePhase::Queued, Some(cr.head_sha.clone())));
         Ok(events)
+    }
+
+    fn merge_turn(&self) -> Vec<Event> {
+        if !self.task.is_at(Stage::Merge, StagePhase::Queued) {
+            return vec![];
+        }
+        self.phase(StagePhase::Integrating, None)
+    }
+
+    fn queued_merge(&self, head_sha: &str, announce: bool) -> Vec<Event> {
+        let mut events = Vec::new();
+        if announce {
+            events.push(Event::MergeRequested {
+                work_item_id: self.item().id,
+                head_sha: head_sha.to_string(),
+                merge_method: self.cfg.merge_method,
+                reason: Some(QUEUE_REASON.to_string()),
+            });
+        }
+        events.extend(self.phase(StagePhase::Merging, Some(head_sha.to_string())));
+        events
+    }
+
+    fn leave_queue(&self, head_sha: String) -> Vec<Event> {
+        let Some(cr) = &self.task.change_request else {
+            return vec![];
+        };
+        let mut events = Vec::new();
+        if cr.head_sha != head_sha {
+            events.push(Event::ChangeRequestUpdated {
+                work_item_id: self.item().id,
+                change_request_id: cr.id,
+                role: ChangeRole::Code,
+                head_sha: head_sha.clone(),
+            });
+        }
+        events.push(Event::MergeDequeued {
+            work_item_id: self.item().id,
+            reason: "head_moved".to_string(),
+        });
+        events.extend(self.phase(StagePhase::AwaitingCi, Some(head_sha)));
+        events
+    }
+
+    fn integrated(&self, outcome: Integration, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Some(cr) = &self.task.change_request else {
+            return vec![];
+        };
+        if !self.task.is_at(Stage::Merge, StagePhase::Integrating) {
+            return vec![];
+        }
+        match outcome {
+            Integration::Moved { remote_sha } => self.leave_queue(remote_sha),
+            Integration::Conflict {
+                head_sha,
+                base_sha,
+                paths,
+            } => {
+                let count = paths.len();
+                let shown: Vec<&String> = paths.iter().take(MAX_CONFLICT_PATHS).collect();
+                self.block(
+                    BlockerCode::MergeConflict,
+                    json!({
+                        "reason": "rebase_conflict",
+                        "head_sha": head_sha,
+                        "base_sha": base_sha,
+                        "base_branch": cr.base_branch,
+                        "paths": shown,
+                        "count": count,
+                    }),
+                    ctx,
+                )
+            }
+            Integration::Unclean { head_sha } => self.block(
+                BlockerCode::MergeConflict,
+                json!({ "reason": "worktree_unclean", "head_sha": head_sha }),
+                ctx,
+            ),
+            Integration::Rebased {
+                from_sha,
+                head_sha,
+                base_sha,
+            } => {
+                if cr.head_sha != from_sha && cr.head_sha != head_sha {
+                    return self.leave_queue(cr.head_sha.clone());
+                }
+                let rebased = from_sha != head_sha;
+                let mut events = Vec::new();
+                if cr.head_sha != head_sha {
+                    events.push(Event::ChangeRequestUpdated {
+                        work_item_id: self.item().id,
+                        change_request_id: cr.id,
+                        role: ChangeRole::Code,
+                        head_sha: head_sha.clone(),
+                    });
+                }
+                if rebased {
+                    events.push(Event::MergeRebased {
+                        work_item_id: self.item().id,
+                        from_sha,
+                        head_sha: head_sha.clone(),
+                        base_sha,
+                        base_branch: cr.base_branch.clone(),
+                    });
+                }
+                match self.verdict(&head_sha, None, None, !rebased) {
+                    Verdict::Passed => events.extend(self.queued_merge(&head_sha, rebased)),
+                    Verdict::Failed(params) => {
+                        events.extend(self.block(BlockerCode::CiRed, params, ctx))
+                    }
+                    Verdict::Pending => {
+                        events.extend(self.phase(StagePhase::AwaitingCi, Some(head_sha)))
+                    }
+                }
+                events
+            }
+        }
     }
 
     fn merged(
@@ -2215,6 +2387,7 @@ impl Decider<'_> {
                 .task
                 .is_at(Stage::Review, StagePhase::PreparingEnvironment),
             JobKind::ScmPostReview => !self.task.is_at(Stage::Review, StagePhase::PostingReview),
+            JobKind::ScmIntegrate => !self.task.is_at(Stage::Merge, StagePhase::Integrating),
             _ => false,
         };
         if stale {
@@ -2426,6 +2599,14 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         B::CiRed => (Stage::Dev, StagePhase::RunningSession),
         B::PushRejected => (Stage::Dev, StagePhase::Pushing),
         B::BranchMoved => (Stage::Dev, StagePhase::RunningSession),
+        B::MergeConflict
+            if matches!(
+                params.get("reason").and_then(Value::as_str),
+                Some("rebase_conflict" | "worktree_unclean")
+            ) =>
+        {
+            (Stage::Dev, StagePhase::RunningSession)
+        }
         B::MergeConflict => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
         B::HookFailed => (Stage::Sync, StagePhase::TearingDown),
@@ -2436,9 +2617,11 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
                 | StagePhase::RunningSession
                 | StagePhase::Pushing
                 | StagePhase::OpeningChange => Stage::Dev,
-                StagePhase::AwaitingCi | StagePhase::AwaitingMerge | StagePhase::Merging => {
-                    Stage::Merge
-                }
+                StagePhase::AwaitingCi
+                | StagePhase::AwaitingMerge
+                | StagePhase::Queued
+                | StagePhase::Integrating
+                | StagePhase::Merging => Stage::Merge,
                 StagePhase::MergingDocs | StagePhase::Verifying | StagePhase::TearingDown => {
                     Stage::Sync
                 }
@@ -2448,7 +2631,10 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
                 | StagePhase::Reviewed => Stage::Review,
             };
             // Merging again needs a fresh look at the change and its checks.
-            let phase = if phase == StagePhase::Merging {
+            let phase = if matches!(
+                phase,
+                StagePhase::Merging | StagePhase::Queued | StagePhase::Integrating
+            ) {
                 StagePhase::AwaitingCi
             } else {
                 phase
@@ -2681,6 +2867,7 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 entry_phase: *entry_phase,
                 head_sha: head_sha.clone(),
                 docs_head_sha: None,
+                queued_at: None,
                 failure: None,
                 budget: *budget,
                 budget_warnings: Vec::new(),
@@ -2798,7 +2985,17 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 },
             );
         }
-        E::MergeRequested { .. } => {}
+        E::MergeRequested { .. } => {
+            if let Some(run) = &mut t.stage_run {
+                run.queued_at.get_or_insert(now);
+            }
+        }
+        E::MergeRebased { .. } => {}
+        E::MergeDequeued { .. } => {
+            if let Some(run) = &mut t.stage_run {
+                run.queued_at = None;
+            }
+        }
         E::ReviewRecorded {
             review_id,
             stage_run_id,
@@ -3088,10 +3285,13 @@ pub fn can_retry(task: &Task) -> bool {
         })
 }
 
+pub fn merge_ready(task: &Task) -> bool {
+    task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(task) && !task.is_queued()
+}
+
 pub fn available_actions(task: &Task) -> Vec<&'static str> {
     let mut actions = Vec::new();
-    let merge_ready = task.is_at(Stage::Merge, StagePhase::AwaitingMerge) && gates_clear(task);
-    if merge_ready {
+    if merge_ready(task) {
         actions.push("merge");
     }
     if can_retry(task) {
@@ -3224,6 +3424,8 @@ pub fn watches_change(task: &Task) -> bool {
             task.item.stage == Some(Stage::Dev)
                 || task.is_at(Stage::Merge, StagePhase::AwaitingCi)
                 || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+                || task.is_at(Stage::Merge, StagePhase::Queued)
+                || task.is_at(Stage::Merge, StagePhase::Integrating)
         }
         _ => false,
     }

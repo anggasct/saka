@@ -13,14 +13,16 @@ use saka_ports::{
     Blob, ChangeDiff, ChangedPaths, Checkout, CommandUnit, CommitOne, CommitPush, DOCS_MAX_BYTES,
     DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, GitAccess, GitRemote, PortError,
     PortResult, PrepareRequest, PreparedDocs, PreparedEnvironment, PushCommit, PushOutcome,
-    PushRequest, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor, TreeEntry,
-    UnitLimits, WorktreeFile, WorktreeState,
+    PushRequest, Rebase, RecipeCommand, RecipeCommandOutcome, RepoRef, Repos, Supervisor,
+    TreeEntry, UnitLimits, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
 use crate::git::{Extra, Git, GitOutput, auth_refused, failed};
 
 const FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
+const REBASE_COMMITTER_NAME: &str = "Saka";
+const REBASE_COMMITTER_EMAIL: &str = "saka@localhost";
 const BASE_FILE: &str = "base-sha";
 const DOCS_DIR: &str = "docs";
 const DOCS_FILE: &str = "docs-sha";
@@ -1555,6 +1557,139 @@ impl Environments for GitRepos {
         .await?;
         self.git_ok(&wt, &["clean", "-fd"], "clean").await?;
         Ok(())
+    }
+
+    async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase> {
+        sha_arg(head_sha, "head_sha")?;
+        arg(base_branch, "base_branch")?;
+        let branch = env.branch.as_deref().ok_or_else(|| {
+            PortError::permanent(
+                "branch_missing",
+                json!({ "environment_id": env.environment_id }),
+            )
+        })?;
+        arg(branch, "branch")?;
+        let wt = PathBuf::from(&env.worktree_path);
+        if !wt.join(".git").exists() {
+            return Err(PortError::permanent(
+                "worktree_missing",
+                json!({ "environment_id": env.environment_id }),
+            ));
+        }
+        let lock = self.lock(env.repo.repo_id);
+        let _guard = lock.lock().await;
+        self.fetch_locked(&env.repo).await?;
+        let bare = self.mirror_path(env.repo.repo_id);
+        if !self.has_commit(&bare, head_sha).await? {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            ));
+        }
+        let base_ref = format!("refs/remotes/origin/{base_branch}^{{commit}}");
+        let base = self
+            .git_ok(&wt, &["rev-parse", "--verify", &base_ref], "rev_parse")
+            .await
+            .map_err(|_| {
+                PortError::permanent("base_branch_missing", json!({ "branch": base_branch }))
+            })?
+            .text();
+        let status = self
+            .git_ok(
+                &wt,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+                "status",
+            )
+            .await?;
+        let branch_ref = format!("refs/heads/{branch}");
+        let local = self
+            .cfg
+            .git
+            .local(&wt, &["rev-parse", "--verify", "--quiet", &branch_ref])
+            .await?;
+        let ours_only = if local.ok() {
+            let (not_head, not_base) = (format!("^{head_sha}"), format!("^{base}"));
+            let committers = self
+                .git_ok(
+                    &wt,
+                    &["log", "--format=%ce", &local.text(), &not_head, &not_base],
+                    "log",
+                )
+                .await?;
+            committers
+                .text()
+                .lines()
+                .all(|email| email == REBASE_COMMITTER_EMAIL)
+        } else {
+            true
+        };
+        if !status.stdout.iter().all(u8::is_ascii_whitespace) || !ours_only {
+            return Ok(Rebase::Unclean);
+        }
+        self.git_ok(
+            &wt,
+            &["checkout", "--quiet", "-B", branch, head_sha],
+            "checkout",
+        )
+        .await?;
+        let up_to_date = self
+            .cfg
+            .git
+            .local(&wt, &["merge-base", "--is-ancestor", &base, head_sha])
+            .await?;
+        if up_to_date.ok() {
+            return Ok(Rebase::Current {
+                head_sha: head_sha.to_string(),
+                base_sha: base,
+            });
+        }
+        let stamp = self
+            .git_ok(&wt, &["show", "-s", "--format=%ct", head_sha], "show")
+            .await?
+            .text();
+        let date = format!("{stamp} +0000");
+        let committer = [
+            ("GIT_COMMITTER_NAME", REBASE_COMMITTER_NAME),
+            ("GIT_COMMITTER_EMAIL", REBASE_COMMITTER_EMAIL),
+            ("GIT_COMMITTER_DATE", date.as_str()),
+        ];
+        let out = self
+            .cfg
+            .git
+            .local_with(
+                &wt,
+                &["-c", "core.hooksPath=/dev/null", "rebase", &base],
+                Extra {
+                    env: &committer,
+                    input: None,
+                },
+            )
+            .await?;
+        if out.ok() {
+            let head = self
+                .git_ok(&wt, &["rev-parse", "HEAD"], "rev_parse")
+                .await?;
+            return Ok(Rebase::Rebased {
+                head_sha: head.text(),
+                base_sha: base,
+            });
+        }
+        let unmerged = self
+            .git_ok(&wt, &["diff", "--name-only", "--diff-filter=U"], "diff")
+            .await?;
+        let paths: Vec<String> = String::from_utf8_lossy(&unmerged.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        self.git_ok(&wt, &["rebase", "--abort"], "rebase_abort")
+            .await?;
+        if paths.is_empty() {
+            return Err(failed("rebase", &out));
+        }
+        Ok(Rebase::Conflict {
+            base_sha: base,
+            paths,
+        })
     }
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()> {
