@@ -1,19 +1,50 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
+const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({
   invoke,
   isTauri: () => false,
 }));
+vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 import { ConnectionError } from "./connection-error";
 import { tauriPlatform } from "./tauri";
 
 const ACTIVE = {
   connections: [
-    { id: "a", name: "Office", url: "https://saka.example.com", active: true },
+    {
+      id: "a",
+      name: "Office",
+      url: "https://saka.example.com",
+      active: true,
+      kind: "remote",
+      running: false,
+    },
   ],
-  active: { id: "a", url: "https://saka.example.com", token: "sdt_abc" },
+  active: {
+    id: "a",
+    url: "https://saka.example.com",
+    token: "sdt_abc",
+    kind: "remote",
+  },
+};
+
+const LOCAL_ENTRY = {
+  id: "local",
+  name: "This computer",
+  url: "http://127.0.0.1:41000",
+  active: true,
+  kind: "local",
+  running: false,
+};
+const LOCAL_DOWN = {
+  connections: [LOCAL_ENTRY],
+  active: { id: "local", url: LOCAL_ENTRY.url, token: null, kind: "local" },
+};
+const LOCAL_UP = {
+  ...LOCAL_DOWN,
+  connections: [{ ...LOCAL_ENTRY, running: true }],
 };
 
 describe("tauri platform", () => {
@@ -94,5 +125,73 @@ describe("tauri platform", () => {
       ?.remove("a")
       .catch((e: unknown) => e);
     expect((unknown as ConnectionError).code).toBe("unknown");
+  });
+
+  it("starts the local Saka before the app opens when it is the active connection", async () => {
+    let started = false;
+    invoke.mockImplementation((command: string): Promise<unknown> => {
+      if (command === "local_start") {
+        started = true;
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(started ? LOCAL_UP : LOCAL_DOWN);
+    });
+    await tauriPlatform.ready();
+    expect(invoke.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      "connections_list",
+      "local_start",
+      "connections_list",
+    ]);
+    expect(tauriPlatform.apiBaseUrl()).toBe("http://127.0.0.1:41000");
+    expect(tauriPlatform.apiToken()).toBeNull();
+    expect(tauriPlatform.connections()?.hasActive()).toBe(true);
+  });
+
+  it("keeps the app on the servers page and remembers why when the local Saka cannot start", async () => {
+    invoke.mockImplementation((command: string) =>
+      command === "local_start"
+        ? Promise.reject(
+            Object.assign(new Error("x"), { code: "local_start_failed" }),
+          )
+        : Promise.resolve(LOCAL_DOWN),
+    );
+    await tauriPlatform.ready();
+    expect(tauriPlatform.connections()?.hasActive()).toBe(false);
+    expect(tauriPlatform.connections()?.startError()).toBe(
+      "local_start_failed",
+    );
+  });
+
+  it("sends a notification to the shell with its route", () => {
+    invoke.mockResolvedValue(undefined);
+    tauriPlatform.notify({ title: "Saka", body: "1 item", route: "/inbox/x" });
+    expect(invoke).toHaveBeenCalledWith("notify", {
+      title: "Saka",
+      body: "1 item",
+      route: "/inbox/x",
+    });
+  });
+
+  it("hands the shell's navigation requests to the app until it stops listening", async () => {
+    const unlisten = vi.fn();
+    let deliver: (event: { payload: string }) => void = () => undefined;
+    listen.mockImplementation(
+      (_name: string, handler: (event: { payload: string }) => void) => {
+        deliver = handler;
+        return Promise.resolve(unlisten);
+      },
+    );
+    const seen: string[] = [];
+    const stop = tauriPlatform.onNavigate((path) => seen.push(path));
+    await vi.waitFor(() => {
+      expect(listen).toHaveBeenCalledWith(
+        "saka://navigate",
+        expect.any(Function),
+      );
+    });
+    deliver({ payload: "/inbox/x" });
+    expect(seen).toEqual(["/inbox/x"]);
+    stop();
+    expect(unlisten).toHaveBeenCalled();
   });
 });

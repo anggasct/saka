@@ -14,12 +14,24 @@ const OFFICE: SavedConnection = {
   name: "Office",
   url: "https://saka.example.com",
   active: true,
+  kind: "remote",
+  running: false,
+};
+const LOCAL: SavedConnection = {
+  id: "local",
+  name: "This computer",
+  url: "http://127.0.0.1:41000",
+  active: false,
+  kind: "local",
+  running: false,
 };
 const HOME: SavedConnection = {
   id: "b",
   name: "Home",
   url: "http://127.0.0.1:7420",
   active: false,
+  kind: "remote",
+  running: false,
 };
 
 function shell(
@@ -29,6 +41,9 @@ function shell(
   let list = initial;
   const fake: Connections = {
     hasActive: () => list.some((c) => c.active),
+    startError: () => null,
+    localStart: vi.fn(() => Promise.resolve()),
+    localStop: vi.fn(() => Promise.resolve()),
     list: vi.fn(() => Promise.resolve(list)),
     add: vi.fn((input: NewConnection) => {
       const saved = {
@@ -36,6 +51,8 @@ function shell(
         name: input.name,
         url: input.url,
         active: list.length === 0,
+        kind: "remote" as const,
+        running: false,
       };
       list = [...list, saved];
       return Promise.resolve(saved);
@@ -148,6 +165,38 @@ describe("Connections page", () => {
       );
     });
     expect(screen.getByLabelText("Name")).toHaveValue("Office");
+  });
+
+  it("lists this computer with its state and starts it from the page", async () => {
+    const fake = shell([LOCAL, OFFICE]);
+    renderWithProviders(<ConnectionsPage mode="manage" />);
+    expect(await screen.findByText("This computer")).toBeVisible();
+    expect(screen.getByText("Stopped")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /Remove This computer/ }),
+    ).toBeNull();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Start" }));
+    expect(fake.localStart).toHaveBeenCalled();
+  });
+
+  it("stops a running local Saka", async () => {
+    const fake = shell([{ ...LOCAL, running: true, active: true }]);
+    renderWithProviders(<ConnectionsPage mode="manage" />);
+    expect(await screen.findByText("Running")).toBeVisible();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Stop" }));
+    expect(fake.localStop).toHaveBeenCalled();
+  });
+
+  it("explains why the local Saka did not start", async () => {
+    shell([{ ...LOCAL, active: true }], {
+      startError: () => "local_start_failed",
+    });
+    renderWithProviders(<ConnectionsPage mode="setup" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Saka did not start on this computer",
+    );
   });
 
   it("renders nothing on the web platform", () => {

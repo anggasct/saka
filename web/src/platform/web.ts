@@ -3,6 +3,7 @@ import type { EventStream, Platform } from "./index";
 
 export const webPlatform: Platform = {
   connections: () => null,
+  onNavigate: () => () => undefined,
   ready: () => Promise.resolve(),
   info: () => ({ kind: "web", os: navigator.platform }),
   apiBaseUrl: () => location.origin,

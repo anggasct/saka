@@ -46,6 +46,8 @@ export type SavedConnection = {
   name: string;
   url: string;
   active: boolean;
+  kind: "remote" | "local";
+  running: boolean;
 };
 
 export type NewConnection = {
@@ -56,6 +58,9 @@ export type NewConnection = {
 
 export type Connections = {
   hasActive: () => boolean;
+  startError: () => string | null;
+  localStart: () => Promise<void>;
+  localStop: () => Promise<void>;
   list: () => Promise<SavedConnection[]>;
   add: (input: NewConnection) => Promise<SavedConnection>;
   remove: (id: string) => Promise<void>;
@@ -64,6 +69,7 @@ export type Connections = {
 
 export type Platform = {
   connections: () => Connections | null;
+  onNavigate: (handler: (path: string) => void) => () => void;
   ready: () => Promise<void>;
   info: () => PlatformInfo;
   apiBaseUrl: () => string;
