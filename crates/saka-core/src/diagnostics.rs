@@ -16,6 +16,7 @@ pub const MIGRATE_COMMAND: &str = "saka migrate";
 pub const SERVE_COMMAND: &str = "saka serve";
 pub const AGENT_LOGIN_COMMAND: &str = "saka agent login";
 pub const LINGER_COMMAND: &str = "loginctl enable-linger";
+pub const AUTH_SETUP_COMMAND: &str = "saka auth setup";
 
 impl CheckId {
     pub fn subject_kind(self) -> SubjectKind {
@@ -30,7 +31,8 @@ impl CheckId {
             | CheckId::DbMigrations
             | CheckId::RuntimeSupervisor
             | CheckId::ToolchainCache
-            | CheckId::ToolchainSources => SubjectKind::Instance,
+            | CheckId::ToolchainSources
+            | CheckId::AuthConfig => SubjectKind::Instance,
             CheckId::ScmApp | CheckId::ScmWebhook | CheckId::ScmUserLink => {
                 SubjectKind::Integration
             }
@@ -347,6 +349,20 @@ pub fn migrations(state: MigrationState) -> Finding {
             json!({ "applied": applied, "latest": latest }),
             fix("upgrade_saka", json!({})),
         )
+    }
+}
+
+pub fn auth_config(enabled: bool, passkeys: i64) -> Finding {
+    if !enabled {
+        Finding::warn("auth_off", json!({}), None)
+    } else if passkeys == 0 {
+        Finding::fail(
+            "auth_no_passkey",
+            json!({}),
+            command("run_auth_setup", AUTH_SETUP_COMMAND),
+        )
+    } else {
+        Finding::pass("auth_ready", json!({ "passkeys": passkeys }))
     }
 }
 
@@ -1035,6 +1051,31 @@ pub fn toolchain_repo(tools: &[RepoToolchain]) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_auth_check_follows_the_section_and_the_passkeys() {
+        let off = auth_config(false, 0);
+        assert_eq!(
+            (off.status, off.code.as_str()),
+            (DiagnosticStatus::Warn, "auth_off")
+        );
+        assert!(off.fix.is_none());
+        let none = auth_config(true, 0);
+        assert_eq!(
+            (none.status, none.code.as_str()),
+            (DiagnosticStatus::Fail, "auth_no_passkey")
+        );
+        assert_eq!(
+            none.fix.map(|f| f.params),
+            Some(json!({ "command": "saka auth setup" }))
+        );
+        let ready = auth_config(true, 2);
+        assert_eq!(
+            (ready.status, ready.code.as_str()),
+            (DiagnosticStatus::Pass, "auth_ready")
+        );
+        assert_eq!(ready.params, json!({ "passkeys": 2 }));
+    }
+
     use super::*;
 
     const APP: AppRequirements = AppRequirements {
@@ -2245,6 +2286,7 @@ mod tests {
                 "agent.quota",
                 "toolchain.cache",
                 "toolchain.sources",
+                "auth.config",
                 "scm.app",
                 "scm.installation",
                 "scm.webhook",

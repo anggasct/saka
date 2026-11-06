@@ -34,6 +34,9 @@ declare module "@tanstack/react-router" {
 }
 
 startEventStream(queryClient);
+if (import.meta.env.PROD) {
+  platform.registerServiceWorker("/sw.js");
+}
 
 const root = platform.rootElement();
 if (root !== null) {

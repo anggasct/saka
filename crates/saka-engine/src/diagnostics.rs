@@ -730,6 +730,14 @@ impl Engine {
                 }
                 .boxed(),
                 CheckId::ToolchainSources => sources(&*self.ports.releases).boxed(),
+                CheckId::AuthConfig => async move {
+                    one(self
+                        .store
+                        .read(saka_store::identity::active_credentials)
+                        .map(|passkeys| eval::auth_config(self.cfg.auth_enabled, passkeys))
+                        .map_err(|e| PortError::permanent(e.code(), serde_json::json!({}))))
+                }
+                .boxed(),
                 _ => match host_check(&refs, id, account) {
                     Some(run) => run,
                     None => continue,

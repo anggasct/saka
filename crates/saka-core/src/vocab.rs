@@ -193,6 +193,7 @@ vocab!(CheckId {
     AgentQuota => "agent.quota",
     ToolchainCache => "toolchain.cache",
     ToolchainSources => "toolchain.sources",
+    AuthConfig => "auth.config",
     ScmApp => "scm.app",
     ScmInstallation => "scm.installation",
     ScmWebhook => "scm.webhook",

@@ -108,6 +108,7 @@ pub struct EngineConfig {
     pub config_poll_secs: u32,
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
+    pub auth_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

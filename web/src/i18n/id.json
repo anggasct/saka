@@ -1183,5 +1183,10 @@
   "auth.pairing.close": "Selesai",
   "auth.login.error": "Status masuk tidak bisa dimuat",
   "auth.setup.error": "Status masuk tidak bisa dimuat",
-  "auth.nav.devices": "Perangkat dan masuk"
+  "auth.nav.devices": "Perangkat dan masuk",
+  "diagnostic.auth_ready": "Masuk aktif dan {passkeys, plural, other {# passkey}} terdaftar.",
+  "diagnostic.auth_off": "Masuk dimatikan. Saka hanya menjawab di mesin ini; tambahkan bagian [auth] di config server untuk memakainya dari perangkat lain.",
+  "diagnostic.auth_no_passkey": "Masuk aktif tetapi belum ada passkey terdaftar, jadi browser belum bisa masuk.",
+  "diagnosticFix.run_auth_setup": "Jalankan perintahnya di host server lalu masukkan kodenya di halaman setup.",
+  "connection.offline": "Kamu sedang offline. Saka tidak bisa dijangkau, jadi yang kamu lihat mungkin sudah usang."
 }

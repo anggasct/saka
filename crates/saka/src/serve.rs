@@ -990,6 +990,7 @@ async fn run(
             config_poll_secs: cfg.workspace.config_poll_secs,
             diagnostics: DiagnosticLimits::default(),
             hooks: hooks_cfg,
+            auth_enabled: cfg.auth.is_some(),
         },
     ));
     match engine.recover() {

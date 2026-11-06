@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 
 import { AuthNav } from "@/features/auth/auth-nav";
+import { OfflineBanner } from "@/features/connection/offline-banner";
 import { InboxNavLink } from "@/features/inbox/nav-link";
 import { LanguageSelect } from "@/i18n/language-select";
 import { initialLocale } from "@/i18n/locale";
@@ -59,6 +60,7 @@ function Layout() {
           <LanguageSelect />
         </nav>
       </header>
+      <OfflineBanner />
       <main id="content">
         <Outlet />
       </main>

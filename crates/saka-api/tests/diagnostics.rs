@@ -110,6 +110,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
         ("agent.quota", "claude:default"),
         ("toolchain.cache", "instance"),
         ("toolchain.sources", "instance"),
+        ("auth.config", "instance"),
         ("scm.app", "ghes"),
         ("scm.app", "github"),
         ("scm.installation", "acme/tasks"),
@@ -200,7 +201,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
     );
     assert_eq!(
         r.body["summary"],
-        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 7 })
+        json!({ "pass": 10, "warn": 1, "fail": 1, "skip": 7 })
     );
     assert_eq!(
         rows(&sim),
@@ -391,7 +392,7 @@ fn a_report_is_counted_in_metrics_and_logged() {
     assert!(text.contains("diagnostics.ran"), "{text}");
     for field in [
         "\"pass\":10",
-        "\"warn\":0",
+        "\"warn\":1",
         "\"fail\":1",
         "\"skip\":7",
         "\"duration_ms\":",
@@ -756,4 +757,51 @@ fn an_adapter_without_diagnostics_skips_its_scm_checks_and_no_report_holds_a_sec
             "an email in the {name} report"
         );
     }
+}
+
+fn auth_finding(auth_enabled: bool, passkeys: u32) -> (String, String) {
+    let sim = Sim::new(SimConfig {
+        auth_enabled,
+        ..SimConfig::default()
+    });
+    for n in 0..passkeys {
+        sim.engine()
+            .store()
+            .transact(|tx| {
+                tx.execute(
+                    "INSERT INTO credential (id, name, passkey, created_at) VALUES (?1, 'key', '{}', 1)",
+                    [format!("00000000-0000-0000-0000-00000000a{n:03}")],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+    let app = api(&sim);
+    let r = get(&sim, &app, "/api/v1/diagnostics?check=auth.config");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let found = check(&r.body, "auth.config");
+    (
+        found["status"].as_str().unwrap().to_string(),
+        found["code"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn the_auth_check_warns_without_an_auth_section_fails_without_a_passkey_and_passes_with_one() {
+    assert_eq!(auth_finding(false, 0), ("warn".into(), "auth_off".into()));
+    assert_eq!(auth_finding(false, 1), ("warn".into(), "auth_off".into()));
+    assert_eq!(
+        auth_finding(true, 0),
+        ("fail".into(), "auth_no_passkey".into())
+    );
+    assert_eq!(auth_finding(true, 1), ("pass".into(), "auth_ready".into()));
+    let sim = Sim::new(SimConfig {
+        auth_enabled: true,
+        ..SimConfig::default()
+    });
+    let app = api(&sim);
+    let r = get(&sim, &app, "/api/v1/diagnostics?check=auth.config");
+    let found = check(&r.body, "auth.config");
+    assert_eq!(found["fix"]["code"], "run_auth_setup");
+    assert_eq!(found["fix"]["params"]["command"], "saka auth setup");
 }
