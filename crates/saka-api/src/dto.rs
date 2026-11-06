@@ -1772,6 +1772,7 @@ pub const CAPABILITIES: &[&str] = &[
     "events_sse",
     "spec_draft",
     "work_item_primary_action",
+    "work_item_takeover",
 ];
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -2024,6 +2025,16 @@ pub struct OptionalReason {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequiredReason {
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnBody {
+    /// `dev` or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// 1 to 500 characters.
     pub reason: String,
 }
 

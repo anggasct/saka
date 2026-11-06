@@ -49,6 +49,8 @@ export const EVENT_KINDS = [
   "delivery.blocker.resolved",
   "delivery.docs_change.skipped",
   "delivery.work_item.cancelled",
+  "delivery.work_item.taken_over",
+  "delivery.work_item.returned",
   "delivery.work_item.done",
   "runtime.environment.prepared",
   "runtime.environment.torn_down",

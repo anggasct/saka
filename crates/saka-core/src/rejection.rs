@@ -110,6 +110,16 @@ pub enum Rejection {
     EntryPointDisabled { entry: &'static str },
     #[error("the project workflow has no {stage} stage")]
     StageNotInWorkflow { stage: &'static str },
+    #[error("a task cannot be taken over at this point of its stage")]
+    StageNotTakeable {
+        stage: &'static str,
+        phase: Option<&'static str>,
+    },
+    #[error("the task cannot be returned to the loop at {stage}")]
+    ReturnTargetInvalid {
+        stage: &'static str,
+        reason: &'static str,
+    },
     #[error("blocker is not open")]
     BlockerNotOpen { blocker_id: String },
     #[error("the primary action is not the one that was shown")]
@@ -184,6 +194,8 @@ impl Rejection {
             Rejection::ChangeRequestOwned { .. } => "change_request_owned",
             Rejection::EntryPointDisabled { .. } => "entry_point_disabled",
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
+            Rejection::StageNotTakeable { .. } => "stage_not_takeable",
+            Rejection::ReturnTargetInvalid { .. } => "return_target_invalid",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
             Rejection::BlockerActionChanged { .. } => "blocker_action_changed",
             Rejection::ActionNeedsInput { .. } => "action_needs_input",
@@ -274,6 +286,12 @@ impl Rejection {
             }
             Rejection::EntryPointDisabled { entry } => json!({ "entry": entry }),
             Rejection::StageNotInWorkflow { stage } => json!({ "stage": stage }),
+            Rejection::StageNotTakeable { stage, phase } => {
+                json!({ "stage": stage, "phase": phase })
+            }
+            Rejection::ReturnTargetInvalid { stage, reason } => {
+                json!({ "stage": stage, "reason": reason })
+            }
             Rejection::Invalid { field, code } => {
                 json!({ "errors": [{ "field": field, "code": code }] })
             }

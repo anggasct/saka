@@ -16,7 +16,7 @@ use saka_core::ids::{
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode,
+    AuthorshipMode, BlockerAction, CheckId, DraftLocale, ReloadTrigger, ReportMode, Stage,
 };
 use saka_engine::{
     AddProject, CheckConfig, DiagnosticFilter, EngineError, HookRunFilter, NewSpecDraft,
@@ -1022,6 +1022,8 @@ enum TaskAction {
     Retry,
     Cancel,
     Primary,
+    Takeover,
+    Return,
 }
 
 #[allow(clippy::too_many_arguments, reason = "the request parts of one action")]
@@ -1039,6 +1041,7 @@ async fn task_action(
     let engine = tri!(s.engine().cloned());
     let mut blocker = None;
     let mut expected = None;
+    let mut return_stage = None;
     let (version, reason) = match which {
         TaskAction::Merge => {
             let tag = tri!(if_match(&headers));
@@ -1051,8 +1054,17 @@ async fn task_action(
                 .ok();
             (Some(version), req.reason)
         }
-        TaskAction::Retry | TaskAction::Cancel => {
+        TaskAction::Retry | TaskAction::Cancel | TaskAction::Takeover => {
             let req: dto::RequiredReason = tri!(body(&raw));
+            (None, Some(req.reason))
+        }
+        TaskAction::Return => {
+            let req: dto::ReturnBody = tri!(body(&raw));
+            return_stage = match req.stage.as_deref().map(str::parse::<Stage>) {
+                None => None,
+                Some(Ok(stage @ (Stage::Dev | Stage::Merge))) => Some(stage),
+                Some(_) => return ApiError::validation("stage", "invalid").into_response(),
+            };
             (None, Some(req.reason))
         }
         TaskAction::Primary => {
@@ -1083,6 +1095,8 @@ async fn task_action(
         TaskAction::Retry => "work_item.retry",
         TaskAction::Cancel => "work_item.cancel",
         TaskAction::Primary => "work_item.primary_action",
+        TaskAction::Takeover => "work_item.takeover",
+        TaskAction::Return => "work_item.return",
     };
     let m = Mutation {
         name,
@@ -1120,6 +1134,23 @@ async fn task_action(
                     &cause,
                     Some(&action),
                 ),
+                TaskAction::Takeover => engine.takeover_with(
+                    item,
+                    reason.as_deref().unwrap_or_default(),
+                    &cause,
+                    Some(&action),
+                ),
+                TaskAction::Return => {
+                    engine
+                        .return_with(
+                            item,
+                            return_stage,
+                            reason.as_deref().unwrap_or_default(),
+                            &cause,
+                            Some(&action),
+                        )
+                        .await
+                }
                 TaskAction::Primary => match blocker {
                     Some(blocker_id) => engine.resolve_blocker_with(
                         item,
@@ -1187,6 +1218,38 @@ pub async fn cancel(
     raw: Bytes,
 ) -> Response {
     task_action(s, id, method, uri, headers, raw, TaskAction::Cancel).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/takeover", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn takeover(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::Takeover).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/return", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::ReturnBody,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"), (status = 502, body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn return_to_loop(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::Return).await
 }
 
 #[utoipa::path(

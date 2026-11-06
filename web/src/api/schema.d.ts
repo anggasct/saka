@@ -820,6 +820,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/return": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["return_to_loop"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/review": {
     parameters: {
       query?: never;
@@ -830,6 +846,22 @@ export interface paths {
     get?: never;
     put?: never;
     post: operations["review"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/work-items/{work_item_id}/actions/takeover": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["takeover"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1827,6 +1859,12 @@ export interface components {
       note?: string | null;
       /** @description 1 to 500 characters. */
       reason: string;
+    };
+    ReturnBody: {
+      /** @description 1 to 500 characters. */
+      reason: string;
+      /** @description `dev` or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`. */
+      stage?: string | null;
     };
     /** @description Request body of a review request; no fields. */
     ReviewBody: Record<string, never>;
@@ -4675,6 +4713,50 @@ export interface operations {
       };
     };
   };
+  return_to_loop: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReturnBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   review: {
     parameters: {
       query?: never;
@@ -4707,6 +4789,42 @@ export interface operations {
         };
         content: {
           "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  takeover: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
         };
       };
       "4XX": {

@@ -97,6 +97,8 @@
   "error.precondition_required": "Request butuh versi task yang dituju.",
   "error.merge_not_ready": "Gate di {head} berstatus {outcome}, jadi pull request belum bisa di-merge.",
   "error.entry_point_disabled": "Workflow project ini tidak punya titik masuk {entry}.",
+  "error.stage_not_takeable": "Task tidak bisa diambil alih saat sedang merge atau setelah di-merge.",
+  "error.return_target_invalid": "{reason, select, no_change_request {Task belum punya pull request, jadi tidak bisa kembali ke {stage}.} other {Task tidak bisa kembali ke {stage}.}}",
   "error.stage_not_in_workflow": "Workflow project ini tidak punya stage {stage}, jadi Saka tidak melakukannya.",
   "error.review_already_requested": "Review sudah diminta di {head}.",
   "error.change_request_not_found": "Pull request {number} tidak ditemukan.",

@@ -11,7 +11,7 @@ use saka_core::rejection::Rejection;
 use saka_core::session::SessionInput;
 use saka_core::spec::{self, NewRevision};
 use saka_core::task::{self, TaskInput};
-use saka_core::vocab::{BlockerAction, SpecOrigin, Stage};
+use saka_core::vocab::{BlockerAction, SpecOrigin, Stage, WorkItemState};
 use saka_core::workflow::Workflow;
 use saka_core::workspace;
 use saka_ports::{IdsSource, RepoRef};
@@ -709,6 +709,63 @@ impl Engine {
         self.decide(
             id,
             Some(TaskInput::Cancel { reason }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+
+    pub fn takeover_with(
+        &self,
+        id: WorkItemId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let reason = reason(why)?;
+        self.decide(
+            id,
+            Some(TaskInput::Takeover { reason }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+
+    pub async fn return_with(
+        &self,
+        id: WorkItemId,
+        stage: Option<Stage>,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let reason = reason(why)?;
+        let task = self.load_task(id)?;
+        let change = match task.change_request.as_ref() {
+            Some(cr) if task.item.state == WorkItemState::TakenOver => {
+                let repo = self.repo_ref_stored(task.item.repo_id)?;
+                let seen = self.ports.scm.change_request(&repo, cr.number).await?;
+                Some(task::ObservedChange {
+                    state: seen.state,
+                    head_sha: seen.head_sha,
+                })
+            }
+            _ => None,
+        };
+        self.decide(
+            id,
+            Some(TaskInput::Return {
+                stage,
+                reason,
+                change,
+            }),
             Mode::Command,
             cause,
             Extra {

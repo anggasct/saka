@@ -1812,3 +1812,339 @@ fn the_primary_cancel_cancels_the_task() {
     );
     assert_eq!(w.task(1).item.state, WorkItemState::Cancelled);
 }
+
+fn in_dev_session(w: &mut World) {
+    w.approve();
+    w.decide(1, TaskInput::Admit);
+    w.decide(1, prepared(1));
+    w.decide(1, launched(1));
+    w.decide(
+        1,
+        TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
+    );
+    w.jobs.clear();
+}
+
+fn takeover(reason: &str) -> TaskInput {
+    TaskInput::Takeover {
+        reason: reason.into(),
+    }
+}
+
+fn give_back(stage: Option<Stage>, head: char) -> TaskInput {
+    TaskInput::Return {
+        stage,
+        reason: "fixed by hand".into(),
+        change: Some(task::ObservedChange {
+            state: ChangeState::Open,
+            head_sha: sha(head),
+        }),
+    }
+}
+
+#[test]
+fn taking_over_a_running_session_stops_it_and_pauses_the_task() {
+    let mut w = World::new();
+    in_dev_session(&mut w);
+    let events = w.decide(1, takeover("I will do this one"));
+    assert!(matches!(
+        events.last(),
+        Some(Event::WorkItemTakenOver {
+            stage: Some(Stage::Dev),
+            phase: Some(StagePhase::RunningSession),
+            ..
+        })
+    ));
+    assert_eq!(w.place(1), (WorkItemState::TakenOver, None, None));
+    assert_eq!(w.take_jobs(), vec![JobKind::SessionStop]);
+    let t = w.task(1);
+    assert_eq!(
+        t.stage_run.as_ref().unwrap().state,
+        StageRunState::Cancelled
+    );
+    assert!(t.live_session().is_none());
+    assert_eq!(task::available_actions(t), vec!["cancel", "return"]);
+}
+
+#[test]
+fn taking_over_a_blocked_task_closes_its_blocker() {
+    let mut w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    assert!(task::available_actions(w.task(1)).contains(&"takeover"));
+    w.decide(1, takeover("by hand"));
+    let t = w.task(1);
+    assert_eq!(t.item.state, WorkItemState::TakenOver);
+    assert!(t.open_blocker().is_none());
+    assert_eq!(
+        t.blocker.as_ref().unwrap().resolution,
+        Some(saka_core::vocab::BlockerResolution::TakenOver)
+    );
+}
+
+#[test]
+fn a_task_can_be_taken_over_only_where_nothing_is_in_flight_at_the_provider() {
+    let mut w = World::new();
+    w.approve();
+    assert!(matches!(
+        w.try_decide(1, takeover("early")),
+        Err(Rejection::InvalidState { .. })
+    ));
+    w.run_to_awaiting_ci(1);
+    assert!(task::available_actions(w.task(1)).contains(&"takeover"));
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Success))]),
+    );
+    let version = w.task(1).item.version;
+    w.decide(
+        1,
+        TaskInput::RequestMerge {
+            expected_version: version,
+            reason: None,
+        },
+    );
+    assert_eq!(w.task(1).item.stage_phase, Some(StagePhase::Merging));
+    assert!(!task::available_actions(w.task(1)).contains(&"takeover"));
+    assert_eq!(
+        w.try_decide(1, takeover("too late")),
+        Err(Rejection::StageNotTakeable {
+            stage: "merge",
+            phase: Some("merging"),
+        })
+    );
+
+    let mut w = World::new();
+    w.approve();
+    w.run_to_tearing_down(1);
+    assert!(matches!(
+        w.try_decide(1, takeover("after merge")),
+        Err(Rejection::StageNotTakeable { stage: "sync", .. })
+    ));
+}
+
+#[test]
+fn a_taken_over_task_produces_nothing_until_it_is_returned_or_cancelled() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, takeover("by hand"));
+    w.jobs.clear();
+    let before = w.task(1).clone();
+
+    for input in [
+        observed('d', vec![]),
+        inspected(1, false, 1),
+        TaskInput::Tick,
+        TaskInput::AutoRetry,
+        TaskInput::MergeSucceeded {
+            role: saka_core::vocab::ChangeRole::Code,
+            merge_commit_sha: sha('c'),
+            merged_at: None,
+        },
+        teardown_exhausted(),
+    ] {
+        assert_eq!(w.decide(1, input), vec![]);
+    }
+    assert_eq!(w.task(1), &before);
+    assert!(
+        w.reconcile().iter().all(|a| match a {
+            Action::Decide(id, _) => *id != before.item.id,
+            Action::Enqueue(job) => job.payload.get("work_item_id") != Some(&json!(before.item.id)),
+            Action::ShipSpec(_) => true,
+        }),
+        "{:?}",
+        w.reconcile()
+    );
+    for input in [
+        TaskInput::Retry {
+            reason: "again".into(),
+        },
+        TaskInput::RequestMerge {
+            expected_version: 1,
+            reason: None,
+        },
+        takeover("twice"),
+    ] {
+        assert!(matches!(
+            w.try_decide(1, input),
+            Err(Rejection::InvalidState { .. })
+        ));
+    }
+    assert_eq!(
+        w.try_decide(
+            1,
+            TaskInput::Session(SessionInput::Stop {
+                session_id: SessionId(Uuid::from_u128(601)),
+                reason: "x".into(),
+            })
+        ),
+        Err(Rejection::NotFound)
+    );
+}
+
+#[test]
+fn a_taken_over_task_frees_its_slot_but_keeps_the_spec_open() {
+    let mut w = World::new();
+    w.approve();
+    w.decide(1, TaskInput::Admit);
+    w.decide(1, prepared(1));
+    assert_eq!(w.admits(), Vec::<u32>::new());
+    w.decide(1, takeover("by hand"));
+    assert_eq!(
+        w.reconcile()
+            .iter()
+            .filter(|a| matches!(a, Action::ShipSpec(_)))
+            .count(),
+        0
+    );
+    assert!(w.task(1).ready_environment().is_some());
+}
+
+#[test]
+fn returning_to_dev_starts_a_new_run_at_the_latest_head_without_using_a_retry() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, takeover("by hand"));
+    let retries = w.task(1).retries.clone();
+    w.jobs.clear();
+
+    let events = w.decide(1, give_back(Some(Stage::Dev), 'd'));
+    assert!(
+        matches!(&events[0], Event::ChangeRequestUpdated { head_sha, .. } if *head_sha == sha('d'))
+    );
+    assert!(matches!(
+        &events[1],
+        Event::WorkItemReturned {
+            stage: Stage::Dev,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &events[2],
+        Event::StageRunCreated {
+            stage: Stage::Dev,
+            trigger: Trigger::Auto,
+            entry_phase: StagePhase::RunningSession,
+            reason: Some(r),
+            ..
+        } if r == "fixed by hand"
+    ));
+    assert_eq!(
+        w.place(1),
+        (
+            WorkItemState::InStage,
+            Some(Stage::Dev),
+            Some(StagePhase::RunningSession)
+        )
+    );
+    assert_eq!(
+        w.task(1).change_request.as_ref().unwrap().head_sha,
+        sha('d')
+    );
+    assert_eq!(w.task(1).retries, retries);
+    assert!(w.task(1).gates.is_empty());
+    assert!(w.take_jobs().contains(&JobKind::SessionStart));
+}
+
+#[test]
+fn returning_to_merge_computes_the_gates_again_and_defaults_to_the_stage_it_left() {
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(
+        1,
+        observed('b', vec![check("test", Some(CheckConclusion::Success))]),
+    );
+    assert!(!w.task(1).gates.is_empty());
+    w.decide(1, takeover("by hand"));
+    w.decide(1, give_back(None, 'b'));
+    assert_eq!(
+        w.place(1),
+        (
+            WorkItemState::InStage,
+            Some(Stage::Merge),
+            Some(StagePhase::AwaitingCi)
+        )
+    );
+    assert!(w.task(1).gates.is_empty());
+    assert!(w.take_jobs().contains(&JobKind::ScmPollChangeRequest));
+}
+
+#[test]
+fn a_task_returns_to_dev_with_a_fresh_environment_when_the_old_one_is_gone() {
+    let mut w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    w.decide(1, takeover("by hand"));
+    w.jobs.clear();
+    w.decide(
+        1,
+        TaskInput::Return {
+            stage: None,
+            reason: "ready".into(),
+            change: None,
+        },
+    );
+    assert_eq!(w.place(1).0, WorkItemState::Admitted);
+    assert_eq!(w.take_jobs(), vec![JobKind::EnvPrepare]);
+}
+
+#[test]
+fn returning_is_refused_when_the_target_or_the_change_does_not_allow_it() {
+    let mut w = blocked_with(BlockerCode::EnvSetupFailed, json!({}));
+    assert!(matches!(
+        w.try_decide(1, give_back(Some(Stage::Dev), 'b')),
+        Err(Rejection::InvalidState { .. })
+    ));
+    w.decide(1, takeover("by hand"));
+    assert_eq!(
+        w.try_decide(1, give_back(Some(Stage::Merge), 'b')),
+        Err(Rejection::ReturnTargetInvalid {
+            stage: "merge",
+            reason: "no_change_request",
+        })
+    );
+    for stage in [Stage::Review, Stage::Fix, Stage::Sync] {
+        assert!(matches!(
+            w.try_decide(1, give_back(Some(stage), 'b')),
+            Err(Rejection::ReturnTargetInvalid {
+                reason: "stage_unsupported",
+                ..
+            })
+        ));
+    }
+    assert_eq!(w.place(1).0, WorkItemState::TakenOver);
+
+    let mut w = World::new();
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, takeover("by hand"));
+    let closed = TaskInput::Return {
+        stage: Some(Stage::Dev),
+        reason: "x".into(),
+        change: Some(task::ObservedChange {
+            state: ChangeState::Merged,
+            head_sha: sha('b'),
+        }),
+    };
+    assert_eq!(
+        w.try_decide(1, closed),
+        Err(Rejection::ChangeRequestNotOpen {
+            number: 11,
+            state: "merged",
+        })
+    );
+}
+
+#[test]
+fn a_taken_over_task_can_be_cancelled() {
+    let mut w = World::new();
+    in_dev_session(&mut w);
+    w.decide(1, takeover("by hand"));
+    w.decide(
+        1,
+        TaskInput::Cancel {
+            reason: "gave up".into(),
+        },
+    );
+    assert_eq!(w.task(1).item.state, WorkItemState::Cancelled);
+    assert!(w.take_jobs().contains(&JobKind::EnvTeardown));
+}

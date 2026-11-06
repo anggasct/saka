@@ -68,7 +68,7 @@ fn existing_projects_get_the_full_loop_workflow_and_lose_the_preset_column() {
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![19, 20, 21]);
+    assert_eq!(store.migration().applied, vec![19, 20, 21, 22]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();
