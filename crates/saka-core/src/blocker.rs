@@ -12,7 +12,10 @@ pub struct PrimaryAction {
 
 impl BlockerAction {
     pub fn runs_directly(self) -> bool {
-        matches!(self, BlockerAction::Retry | BlockerAction::Cancel)
+        matches!(
+            self,
+            BlockerAction::Retry | BlockerAction::Cancel | BlockerAction::Takeover
+        )
     }
 }
 
@@ -43,6 +46,7 @@ pub fn designated(code: BlockerCode) -> BlockerAction {
         | B::DocsMergeFailed
         | B::HookFailed => A::Retry,
         B::ChangeClosed => A::Cancel,
+        B::BranchMoved => A::Takeover,
         B::SecretMissing | B::SecretUnreadable => A::SetSecret,
         B::UserLinkRequired => A::LinkAccount,
         B::UserTokenInvalid => A::SetUserToken,

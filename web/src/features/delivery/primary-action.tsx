@@ -25,6 +25,8 @@ export function PrimaryAction({
       return <RetryDialog task={task} primary />;
     case "cancel":
       return <CancelDialog task={task} primary />;
+    case "takeover":
+      return null;
     case "edit_spec":
       return specPath === undefined ? null : (
         <Link

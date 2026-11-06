@@ -157,7 +157,7 @@ fn the_run_owner_migration_keeps_every_task_row_and_guards_the_owner_arc() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+        vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
     );
     assert!(store.migration().backup.is_some());
     drop(store);

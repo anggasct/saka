@@ -141,3 +141,84 @@ fn a_closed_change_cannot_be_returned_to_the_loop() {
     );
     assert_eq!(sim.task(1).item.state, WorkItemState::TakenOver);
 }
+
+use saka_core::vocab::BlockerCode;
+use saka_testkit::{CiScript, HOME_REPO};
+
+fn second_dev_run_with_a_session(ci_then: CiScript) -> Sim {
+    let mut cfg = SimConfig {
+        ci: CiScript::Fail(vec!["test".into()]),
+        ..SimConfig::default()
+    };
+    cfg.operator.retry = vec![];
+    let mut sim = Sim::new(cfg);
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Blocked));
+    sim.world.set_script(hanging());
+    sim.world.set_ci(ci_then);
+    let engine = sim.engine();
+    let cause = engine.cause("human:operator:local");
+    engine
+        .retry(sim.task(1).item.id, "try again", &cause)
+        .unwrap();
+    assert!(sim.run_until(STEPS, in_session));
+    sim
+}
+
+fn push_by_hand(sim: &Sim) -> String {
+    let number = sim.task(1).change_request.unwrap().number;
+    sim.world.push_to_change(HOME_REPO, number)
+}
+
+#[test]
+fn a_push_by_hand_stops_the_agent_and_a_retry_continues_on_top_of_the_commit() {
+    let mut sim = second_dev_run_with_a_session(CiScript::Pass);
+    let human = push_by_hand(&sim);
+
+    assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Blocked));
+    let t = sim.task(1);
+    assert_eq!(t.open_blocker().unwrap().code, BlockerCode::BranchMoved);
+    assert_eq!(t.change_request.as_ref().unwrap().head_sha, human);
+    assert_eq!(sim.sessions(1).pop().unwrap().state, SessionState::Ended);
+
+    sim.world.set_script(AgentScript::default());
+    let engine = sim.engine();
+    let cause = engine.cause("human:operator:local");
+    engine.retry(t.item.id, "keep going", &cause).unwrap();
+    assert!(sim.run_to_shipped(STEPS));
+    assert!(sim.world.checkouts().iter().any(|(_, sha)| *sha == human));
+    assert_eq!(sim.task(1).item.state, WorkItemState::Done);
+}
+
+#[test]
+fn a_push_by_hand_can_be_taken_over_through_the_primary_action() {
+    let mut sim = second_dev_run_with_a_session(CiScript::Pass);
+    push_by_hand(&sim);
+    assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Blocked));
+
+    let task = sim.task(1);
+    let blocker = task.open_blocker().unwrap().id;
+    let engine = sim.engine();
+    let cause = engine.cause("human:operator:local");
+    engine
+        .resolve_blocker_with(task.item.id, blocker, None, "mine now", &cause, None)
+        .unwrap();
+    assert_eq!(sim.task(1).item.state, WorkItemState::TakenOver);
+}
+
+#[test]
+fn a_worktree_with_uncommitted_work_is_never_moved_to_the_commit_pushed_by_hand() {
+    let mut sim = second_dev_run_with_a_session(CiScript::Pass);
+    let human = push_by_hand(&sim);
+    assert!(sim.run_until(STEPS, |s| s.task(1).item.state == WorkItemState::Blocked));
+
+    sim.world.dirty_worktrees();
+    sim.world.set_script(AgentScript::default());
+    let engine = sim.engine();
+    let cause = engine.cause("human:operator:local");
+    let id = sim.task(1).item.id;
+    engine.retry(id, "keep going", &cause).unwrap();
+    assert!(sim.run_until(STEPS, |s| s.task(1).is_at_stage(Stage::Merge)
+        || s.task(1).item.state == WorkItemState::Blocked));
+    assert!(sim.world.checkouts().iter().all(|(_, sha)| *sha != human));
+}

@@ -83,7 +83,7 @@ fn a_blocker_can_be_resolved_by_taking_the_task_over_and_old_blockers_survive() 
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![22, 23]);
+    assert_eq!(store.migration().applied, vec![22, 23, 24]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();
@@ -97,4 +97,10 @@ fn a_blocker_can_be_resolved_by_taking_the_task_over_and_old_blockers_survive() 
     conn.execute("DELETE FROM blocker", []).unwrap();
     assert_eq!(resolved(&conn, "b2", "taken_over").unwrap(), 1);
     assert!(resolved(&conn, "b3", "abandoned").is_err());
+    let moved = conn.execute(
+        "INSERT INTO blocker (id, work_item_id, project_id, code, params, state, opened_at)
+         VALUES ('b4', 'w1', 'p1', 'branch_moved', '{}', 'open', 3)",
+        [],
+    );
+    assert_eq!(moved.unwrap(), 1);
 }
