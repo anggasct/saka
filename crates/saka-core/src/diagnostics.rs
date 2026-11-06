@@ -354,7 +354,7 @@ pub fn migrations(state: MigrationState) -> Finding {
 
 pub fn auth_config(enabled: bool, passkeys: i64) -> Finding {
     if !enabled {
-        Finding::warn("auth_off", json!({}), None)
+        Finding::skip("auth_not_configured", json!({}))
     } else if passkeys == 0 {
         Finding::fail(
             "auth_no_passkey",
@@ -1056,7 +1056,7 @@ mod tests {
         let off = auth_config(false, 0);
         assert_eq!(
             (off.status, off.code.as_str()),
-            (DiagnosticStatus::Warn, "auth_off")
+            (DiagnosticStatus::Skip, "auth_not_configured")
         );
         assert!(off.fix.is_none());
         let none = auth_config(true, 0);
