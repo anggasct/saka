@@ -1520,6 +1520,53 @@ impl Client {
         }
     }
 
+    pub async fn decision_list(&self, state: &str) -> ExitCode {
+        match self
+            .get(&format!(
+                "/api/v1/decision-requests?state={state}&limit=200"
+            ))
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                lines(b, |d| {
+                    format!(
+                        "{}  {}  {}",
+                        text(&d["id"]),
+                        text(&d["state"]),
+                        text(&d["question"])
+                    )
+                })
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn decision_show(&self, id: &str) -> ExitCode {
+        match self.get(&format!("/api/v1/decision-requests/{id}")).await {
+            Ok(a) => self.finish(&a, decision_text),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn decision_answer(
+        &self,
+        id: &str,
+        option: Option<u32>,
+        note: Option<&str>,
+    ) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/decision-requests/{id}/answer"),
+                &json!({ "option": option, "note": note }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| format!("{} {}", text(&b["id"]), text(&b["state"]))),
+            Err(code) => code,
+        }
+    }
+
     pub async fn permission_answer(
         &self,
         id: &str,
@@ -1543,6 +1590,37 @@ impl Client {
 
 fn text(v: &Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), String::from)
+}
+
+fn decision_text(d: &Value) -> String {
+    let mut out = vec![
+        format!("{}  {}", text(&d["id"]), text(&d["state"])),
+        text(&d["question"]),
+    ];
+    if let Some(context) = d["context"].as_str() {
+        out.push(context.to_string());
+    }
+    for (i, option) in d["options"].as_array().into_iter().flatten().enumerate() {
+        let mark = if i == 0 { " (recommended)" } else { "" };
+        let detail = option["detail"]
+            .as_str()
+            .map_or_else(String::new, |t| format!(" - {t}"));
+        out.push(format!(
+            "  {}. {}{mark}{detail}",
+            i + 1,
+            text(&option["label"])
+        ));
+    }
+    if !d["answer"].is_null() {
+        let chosen = d["answer"]["option"]
+            .as_u64()
+            .map_or_else(|| "no option".to_string(), |o| format!("option {}", o + 1));
+        let note = d["answer"]["note"]
+            .as_str()
+            .map_or_else(String::new, |n| format!(": {n}"));
+        out.push(format!("answered: {chosen}{note}"));
+    }
+    out.join("\n")
 }
 
 fn rule_line(r: &Value) -> String {

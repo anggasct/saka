@@ -1,16 +1,19 @@
 use rusqlite::{Connection, Row, ToSql};
 use saka_core::ids::{
-    PermissionRequestId, ProjectId, RepoId, SessionId, SpecDraftId, SpecId, WorkItemId,
+    DecisionRequestId, PermissionRequestId, ProjectId, RepoId, SessionId, SpecDraftId, SpecId,
+    WorkItemId,
 };
-use saka_core::model::{PermissionRequest, Project, Repo, Session, Spec, StageRun};
+use saka_core::model::{
+    DecisionRequest, PermissionRequest, Project, Repo, Session, Spec, StageRun,
+};
 use saka_core::workspace::RepoTask;
 use uuid::Uuid;
 
 use crate::codec::{uuid, vocab};
 use crate::error::Result;
 use crate::read::{
-    PERMISSION_SELECT, load_project, permission, project_row, repo_row, session, spec_row,
-    stage_run, ts,
+    DECISION_SELECT, PERMISSION_SELECT, decision, load_project, permission, project_row, repo_row,
+    session, spec_row, stage_run, ts,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -348,6 +351,52 @@ pub struct PermissionFilter {
 pub enum AnswerKind {
     Policy,
     Human,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DecisionFilter {
+    pub states: Vec<String>,
+    pub project: Option<ProjectId>,
+    pub work_item: Option<WorkItemId>,
+    pub spec_draft: Option<SpecDraftId>,
+}
+
+pub type DecisionRow = (DecisionRequest, ProjectId);
+
+fn decision_row(row: &Row<'_>) -> Result<DecisionRow> {
+    Ok((decision(row)?, ProjectId(uuid(row, "project_id")?)))
+}
+
+pub fn decisions(
+    conn: &Connection,
+    filter: &DecisionFilter,
+    page: &Page,
+) -> Result<Vec<DecisionRow>> {
+    let mut q = Query::new();
+    q.any_of("state", &filter.states);
+    if let Some(p) = filter.project {
+        q.eq("project_id", p.0.to_string());
+    }
+    if let Some(w) = filter.work_item {
+        q.eq("json_extract(owner, '$.work_item_id')", w.0.to_string());
+    }
+    if let Some(d) = filter.spec_draft {
+        q.eq("json_extract(owner, '$.spec_draft_id')", d.0.to_string());
+    }
+    q.after("asked_at", page, false);
+    q.run(conn, DECISION_SELECT, "asked_at, id", page, decision_row)
+}
+
+pub fn load_decision(conn: &Connection, id: DecisionRequestId) -> Result<Option<DecisionRow>> {
+    let mut q = Query::new();
+    q.eq("id", id.0.to_string());
+    let page = Page {
+        after: None,
+        limit: 1,
+    };
+    Ok(q.run(conn, DECISION_SELECT, "id", &page, decision_row)?
+        .into_iter()
+        .next())
 }
 
 pub type PermissionRow = (PermissionRequest, ProjectId);

@@ -114,6 +114,9 @@ enum Command {
     #[command(about = "Permission requests from agent sessions")]
     #[command(subcommand)]
     Permission(PermissionCmd),
+    #[command(about = "Questions agent sessions ask you, and your answers")]
+    #[command(subcommand)]
+    Decision(DecisionCmd),
     #[command(about = "Project secrets for environment recipes (write-only)")]
     #[command(subcommand)]
     Secret(SecretCmd),
@@ -595,6 +598,43 @@ enum Decision {
 }
 
 #[derive(Subcommand)]
+enum DecisionCmd {
+    #[command(
+        about = "Lists the questions agents asked",
+        after_help = "Exit codes: 0 ok, 1 failed, 3 problems."
+    )]
+    List {
+        #[arg(
+            default_value = "asked",
+            help = "asked, answered, delivered or expired; comma-separated",
+            long
+        )]
+        state: String,
+    },
+    #[command(
+        about = "Shows a question with its numbered options; option 1 is the agent's recommendation",
+        after_help = "Exit codes: 0 ok, 1 failed or not found, 3 problems."
+    )]
+    Show { id: String },
+    #[command(
+        about = "Answers a question; the agent gets the answer as its next message",
+        after_help = "Exit codes: 0 answered, 1 failed or refused, 2 usage, 4 the question is already answered."
+    )]
+    Answer {
+        id: String,
+        #[arg(
+            help = "The option you choose, numbered from 1 as `decision show` lists them",
+            long,
+            required_unless_present = "note",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        option: Option<u32>,
+        #[arg(help = "Text for the agent, at most 2000 characters", long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PermissionCmd {
     List {
         #[arg(long, default_value = "pending")]
@@ -984,6 +1024,20 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .await
                     }
                     TaskCmd::Timeline { id } => client.task_timeline(&id).await,
+                }
+            })
+        }
+        Command::Decision(cmd) => {
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            current_thread()?.block_on(async {
+                match cmd {
+                    DecisionCmd::List { state } => client.decision_list(&state).await,
+                    DecisionCmd::Show { id } => client.decision_show(&id).await,
+                    DecisionCmd::Answer { id, option, note } => {
+                        client
+                            .decision_answer(&id, option.map(|n| n - 1), note.as_deref())
+                            .await
+                    }
                 }
             })
         }

@@ -196,6 +196,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/decision-requests": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_decisions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/decision-requests/{decision_request_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_decision"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/decision-requests/{decision_request_id}/answer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["answer_decision"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/diagnostics": {
     parameters: {
       query?: never;
@@ -1262,6 +1310,14 @@ export interface components {
       /** @description With `allow` only: also allow the same tool (and, for Bash, the same whole command) in this project from now on. */
       remember?: boolean;
     };
+    AnswerDecisionBody: {
+      note?: string | null;
+      /**
+       * Format: int64
+       * @description Index into `options`. At least one of `option` and `note` is required.
+       */
+      option?: number | null;
+    };
     AuthDevices: {
       credentials: components["schemas"]["PasskeyCredential"][];
       devices: components["schemas"]["Device"][];
@@ -1409,10 +1465,39 @@ export interface components {
     };
     /** @enum {string} */
     Decision: "allow" | "deny";
+    DecisionAnswer: {
+      answered_at?: string | null;
+      answered_by: string;
+      note?: string | null;
+      /**
+       * Format: int32
+       * @description Index into `options`; 0 is the agent's recommendation. Null when only a note was given.
+       */
+      option?: number | null;
+    };
+    DecisionOption: {
+      detail?: string | null;
+      label: string;
+    };
     /** @description Who decided: `builtin`, `rule` (operator config), `project` (a project rule, `name` is its id), `default` (nothing matched, so ask). */
     DecisionOrigin: {
       kind: string;
       name?: string | null;
+    };
+    DecisionRequest: {
+      answer?: components["schemas"]["DecisionAnswer"] | null;
+      asked_at: string;
+      context?: string | null;
+      expires_at: string;
+      /** Format: uuid */
+      id: string;
+      options: components["schemas"]["DecisionOption"][];
+      owner: components["schemas"]["RunOwner"];
+      /** Format: uuid */
+      project_id: string;
+      question: string;
+      /** @description `asked | answered | delivered | expired` */
+      state: string;
     };
     Device: {
       created_at: string;
@@ -1849,6 +1934,25 @@ export interface components {
     };
     OptionalReason: {
       reason?: string | null;
+    };
+    /** @description A list page. */
+    Page_DecisionRequest: {
+      items: {
+        answer?: components["schemas"]["DecisionAnswer"] | null;
+        asked_at: string;
+        context?: string | null;
+        expires_at: string;
+        /** Format: uuid */
+        id: string;
+        options: components["schemas"]["DecisionOption"][];
+        owner: components["schemas"]["RunOwner"];
+        /** Format: uuid */
+        project_id: string;
+        question: string;
+        /** @description `asked | answered | delivered | expired` */
+        state: string;
+      }[];
+      next_cursor?: string | null;
     };
     /** @description A list page. */
     Page_HookRun: {
@@ -3613,6 +3717,107 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_decisions: {
+    parameters: {
+      query?: {
+        /** @description One or more of `asked, answered, delivered, expired`, comma-separated. */
+        state?: string;
+        project_id?: string;
+        /** @description Exclusive with `spec_draft_id`. */
+        work_item_id?: string;
+        spec_draft_id?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_DecisionRequest"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  get_decision: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        decision_request_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DecisionRequest"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  answer_decision: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        decision_request_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AnswerDecisionBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DecisionRequest"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

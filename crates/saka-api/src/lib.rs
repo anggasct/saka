@@ -35,7 +35,7 @@ pub use state::{ApiConfig, AppState};
         routes::spec_template,
         routes::list_files, routes::get_file, routes::put_file,
         routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::start, routes::merge, routes::retry, routes::cancel, routes::takeover, routes::return_to_loop, routes::primary_action, routes::review, routes::fix, routes::take_external_change,
-        routes::list_permissions, routes::answer_permission, routes::get_session,
+        routes::list_permissions, routes::answer_permission, routes::list_decisions, routes::get_decision, routes::answer_decision, routes::get_session,
         routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
         routes::list_permission_rules, routes::add_permission_rule, routes::preview_permission_rule, routes::evaluate_permission, routes::revoke_rule, routes::list_agent_accounts,
         routes::list_usage_records,
@@ -188,6 +188,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/permission-requests/{permission_request_id}/answer",
             post(routes::answer_permission),
+        )
+        .route("/api/v1/decision-requests", get(routes::list_decisions))
+        .route(
+            "/api/v1/decision-requests/{decision_request_id}",
+            get(routes::get_decision),
+        )
+        .route(
+            "/api/v1/decision-requests/{decision_request_id}/answer",
+            post(routes::answer_decision),
         )
         .route("/api/v1/sessions", get(routes::list_sessions))
         .route("/api/v1/sessions/{session_id}", get(routes::get_session))

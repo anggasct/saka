@@ -82,12 +82,15 @@ pub use saka_ports::{RunnerEvent, RunnerEventKind};
 pub use saka_store::StoredEvent;
 pub use saka_store::hook_run::HookRunFilter;
 pub use saka_store::inbox::{InboxFilter, InboxItem, InboxSummary};
-pub use saka_store::list::{AnswerKind, Key, Page, PermissionFilter, WorkItemFilter};
+pub use saka_store::list::{
+    AnswerKind, DecisionFilter, Key, Page, PermissionFilter, WorkItemFilter,
+};
 pub use saka_store::read::{RunOf, TimelineCursor, TimelinePage};
 pub use secrets::SecretInfo;
 pub use views::{
-    AccountView, BudgetView, DependencyView, Paged, PermissionView, ProjectView, RevisionInfo,
-    RevisionRef, ScopeWarning, SessionView, SpecView, StepItem, TaskDetail, TaskView, UsageView,
+    AccountView, BudgetView, DecisionView, DependencyView, Paged, PermissionView, ProjectView,
+    RevisionInfo, RevisionRef, ScopeWarning, SessionView, SpecView, StepItem, TaskDetail, TaskView,
+    UsageView,
 };
 pub use worker::{JobReport, JobResult};
 
@@ -194,6 +197,7 @@ enum Shows {
     Taken(bool),
     Draft,
     Permission(saka_core::ids::PermissionRequestId),
+    Decision(saka_core::ids::DecisionRequestId),
     Session(saka_core::ids::SessionId),
 }
 
@@ -326,6 +330,21 @@ impl Engine {
                         project_id: after.item.project_id,
                     };
                     (action.respond)(Produced::Permission(&view))
+                }
+                Shows::Decision(did) => {
+                    let request = after
+                        .decisions
+                        .iter()
+                        .find(|d| d.id == did)
+                        .cloned()
+                        .ok_or_else(|| {
+                            EngineError::Internal("answered question not in the task".into())
+                        })?;
+                    let view = DecisionView {
+                        request,
+                        project_id: after.item.project_id,
+                    };
+                    (action.respond)(Produced::Decision(&view))
                 }
                 Shows::Session(sid) => {
                     let session = after

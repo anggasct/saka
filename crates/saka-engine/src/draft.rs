@@ -28,7 +28,7 @@ use crate::commands::{SpecFile, reason};
 use crate::docs::Precondition;
 use crate::packet::{self, ArchitectInput, ArchitectPacket, PreviousAttempt};
 use crate::register::{invalid, path_code};
-use crate::views::{self, PermissionView};
+use crate::views::{self, DecisionView, PermissionView};
 use crate::worker::{Effect, Execution, field, internal, session_ref};
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
 
@@ -388,6 +388,21 @@ impl Engine {
                         project_id: after.draft.project_id,
                     };
                     (action.respond)(Produced::Permission(&view))
+                }
+                Shows::Decision(did) => {
+                    let request = after
+                        .decisions
+                        .iter()
+                        .find(|d| d.id == did)
+                        .cloned()
+                        .ok_or_else(|| {
+                            EngineError::Internal("answered question not in the draft".into())
+                        })?;
+                    let view = DecisionView {
+                        request,
+                        project_id: after.draft.project_id,
+                    };
+                    (action.respond)(Produced::Decision(&view))
                 }
                 Shows::Session(sid) => {
                     let session = after

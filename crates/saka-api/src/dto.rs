@@ -10,9 +10,9 @@ use saka_core::task::available_actions;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{Effect as CoreEffect, EnvironmentState, MatchKind as CoreMatch};
 use saka_engine::{
-    AccountView, BudgetView, DocContentView, DocTreeView, DocWriteView, DraftBudgetView,
-    DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView, ReloadView,
-    SessionView, SpecView, TaskDetail, TaskView, UsageView,
+    AccountView, BudgetView, DecisionView, DocContentView, DocTreeView, DocWriteView,
+    DraftBudgetView, DraftContentView, DraftPacketView, DraftView, PermissionView, ProjectView,
+    ReloadView, SessionView, SpecView, TaskDetail, TaskView, UsageView,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1739,6 +1739,89 @@ impl PermissionRequest {
             answered_at: opt_time(p.answered_at),
         }
     }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DecisionOption {
+    pub label: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DecisionAnswer {
+    /// Index into `options`; 0 is the agent's recommendation. Null when only a note was given.
+    pub option: Option<u32>,
+    pub note: Option<String>,
+    pub answered_by: String,
+    pub answered_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DecisionRequest {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub owner: RunOwner,
+    /// `asked | answered | delivered | expired`
+    pub state: String,
+    pub question: String,
+    pub context: Option<String>,
+    pub options: Vec<DecisionOption>,
+    pub answer: Option<DecisionAnswer>,
+    pub asked_at: String,
+    pub expires_at: String,
+}
+
+impl DecisionRequest {
+    pub fn from_view(v: &DecisionView) -> DecisionRequest {
+        let d = &v.request;
+        DecisionRequest {
+            id: d.id.0,
+            project_id: v.project_id.0,
+            owner: RunOwner::from(&d.owner),
+            state: d.state.as_str().to_string(),
+            question: d.question.clone(),
+            context: d.context.clone(),
+            options: d
+                .options
+                .iter()
+                .map(|o| DecisionOption {
+                    label: o.label.clone(),
+                    detail: o.detail.clone(),
+                })
+                .collect(),
+            answer: d.answer.as_ref().map(|a| DecisionAnswer {
+                option: a.option,
+                note: a.note.clone(),
+                answered_by: a.answered_by.clone(),
+                answered_at: opt_time(d.answered_at),
+            }),
+            asked_at: time(d.asked_at),
+            expires_at: time(d.expires_at),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerDecisionBody {
+    /// Index into `options`. At least one of `option` and `note` is required.
+    #[serde(default)]
+    pub option: Option<i64>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DecisionQuery {
+    /// One or more of `asked, answered, delivered, expired`, comma-separated.
+    pub state: Option<String>,
+    pub project_id: Option<String>,
+    /// Exclusive with `spec_draft_id`.
+    pub work_item_id: Option<String>,
+    pub spec_draft_id: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
