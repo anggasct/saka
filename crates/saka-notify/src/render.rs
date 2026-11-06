@@ -76,6 +76,7 @@ fn headline(lang: Lang, event: &str, subject: &str, project: &str) -> String {
         "merged" => ("Merged", "Di-merge"),
         "task_done" => ("Done", "Selesai"),
         "change_opened" => ("Pull request opened", "Pull request dibuka"),
+        "review_done" => ("Review done", "Review selesai"),
         "spec_shipped" => ("Spec shipped", "Spec selesai"),
         _ => ("Saka event", "Event Saka"),
     };
@@ -102,6 +103,15 @@ pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>)
                     "{}: {}",
                     lang.pick("Reason", "Penyebab"),
                     clean(code, 64)
+                ));
+            }
+            if event == "review_done"
+                && let Some(outcome) = text_at(params, &["review", "outcome"])
+            {
+                lines.push(format!(
+                    "{}: {}",
+                    lang.pick("Verdict", "Putusan"),
+                    clean(outcome, 32)
                 ));
             }
             lines.extend(link(public_url, params));

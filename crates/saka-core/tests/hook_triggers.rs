@@ -172,3 +172,52 @@ fn docs_changes_and_unrelated_events_trigger_nothing() {
         .is_none()
     );
 }
+
+#[test]
+fn a_recorded_verdict_becomes_a_review_done_context_with_the_head_it_judged() {
+    use saka_core::ids::{ReviewId, SessionId, StageRunId};
+    use saka_core::review::Finding;
+    use saka_core::vocab::{ReviewBasis, ReviewOutcome, Severity};
+
+    let facts = Facts {
+        project_id: ProjectId(Uuid::from_u128(2)),
+        project_name: "tasks".into(),
+        repo: Some(RepoRef {
+            id: RepoId(Uuid::from_u128(4)),
+            name: "api".into(),
+            full_name: "acme/api".into(),
+        }),
+        spec_path: Some("specs/auth.md".into()),
+    };
+    let long = "x".repeat(900);
+    let event = Event::ReviewRecorded {
+        work_item_id: WORK,
+        stage_run_id: StageRunId(Uuid::from_u128(6)),
+        review_id: ReviewId(Uuid::from_u128(7)),
+        session_id: SessionId(Uuid::from_u128(8)),
+        head_sha: SHA.into(),
+        outcome: ReviewOutcome::ChangesRequested,
+        basis: ReviewBasis::Step,
+        summary: long,
+        findings: vec![Finding {
+            path: None,
+            line: None,
+            severity: Severity::Major,
+            body: "Add a test.".into(),
+        }],
+        questions: Vec::new(),
+    };
+    let ctx = hook::task_context(&event, &task(), &facts, Timestamp(1)).unwrap();
+    assert_eq!(ctx.event, HookEvent::ReviewDone);
+    assert_eq!(ctx.sha.as_deref(), Some(SHA));
+    assert_eq!(ctx.branch.as_deref(), Some("release/1"));
+    let review = ctx.review.as_ref().unwrap();
+    assert_eq!(review.outcome, ReviewOutcome::ChangesRequested);
+    assert_eq!(review.findings, 1);
+    assert_eq!(review.summary.chars().count(), hook::REVIEW_SUMMARY_CHARS);
+    let vars = ctx.env_vars(saka_core::ids::HookRunId(Uuid::from_u128(9)), "judged");
+    assert!(vars.contains(&(
+        "SAKA_REVIEW_OUTCOME".to_string(),
+        "changes_requested".to_string()
+    )));
+}

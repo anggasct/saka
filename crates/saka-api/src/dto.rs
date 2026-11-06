@@ -2994,7 +2994,7 @@ pub struct HookTarget {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Hook {
     pub name: String,
-    /// `change_opened`, `merged`, `task_done`, `spec_shipped`, or `blocked`.
+    /// `change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, or `blocked`.
     pub on: String,
     /// `after` or `gate`.
     pub mode: String,

@@ -7,12 +7,13 @@ use uuid::Uuid;
 
 use crate::blocker::primary_action;
 use crate::event::Event;
-use crate::ids::{BlockerId, HookRunId, IdSource, ProjectId, RepoId, SpecId, WorkItemId};
+use crate::ids::{BlockerId, HookRunId, IdSource, ProjectId, RepoId, ReviewId, SpecId, WorkItemId};
 use crate::model::{Coded, Spec, Task};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerAction, BlockerCode, ChangeRole, HookActionKind, HookEvent, HookMode, HookRunState,
+    ReviewOutcome,
 };
 
 pub const MAX_PER_PROJECT: usize = 32;
@@ -241,9 +242,7 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
     let on: HookEvent = raw
         .on
         .parse()
-        .ok()
-        .filter(|e| *e != HookEvent::ReviewDone)
-        .ok_or_else(|| issue("hook_event_unsupported", name, Some("on")))?;
+        .map_err(|_| issue("hook_event_unsupported", name, Some("on")))?;
     let mode: HookMode = match raw.mode.as_deref() {
         None => HookMode::After,
         Some(m) => m
@@ -430,6 +429,17 @@ pub struct BlockerRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewRef {
+    pub id: ReviewId,
+    pub outcome: ReviewOutcome,
+    pub head_sha: String,
+    pub findings: usize,
+    pub summary: String,
+}
+
+pub const REVIEW_SUMMARY_CHARS: usize = 500;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookContext {
     pub event: HookEvent,
     pub project: NamedRef,
@@ -440,6 +450,7 @@ pub struct HookContext {
     pub branch: Option<String>,
     pub sha: Option<String>,
     pub blocker: Option<BlockerRef>,
+    pub review: Option<Box<ReviewRef>>,
     pub occurred_at: String,
 }
 
@@ -461,6 +472,7 @@ pub fn task_context(
         .change_request
         .as_ref()
         .filter(|c| c.role == ChangeRole::Code);
+    let mut review = None;
     let (on, sha, blocker) = match event {
         Event::ChangeRequestOpened {
             role: ChangeRole::Code,
@@ -475,6 +487,23 @@ pub fn task_context(
         Event::WorkItemDone {
             merge_commit_sha, ..
         } => (HookEvent::TaskDone, Some(merge_commit_sha.clone()), None),
+        Event::ReviewRecorded {
+            review_id,
+            head_sha,
+            outcome,
+            summary,
+            findings,
+            ..
+        } => {
+            review = Some(Box::new(ReviewRef {
+                id: *review_id,
+                outcome: *outcome,
+                head_sha: head_sha.clone(),
+                findings: findings.len(),
+                summary: summary.chars().take(REVIEW_SUMMARY_CHARS).collect(),
+            }));
+            (HookEvent::ReviewDone, Some(head_sha.clone()), None)
+        }
         Event::WorkItemBlocked {
             blocker_id, code, ..
         } if *code != BlockerCode::HookFailed => (
@@ -511,6 +540,7 @@ pub fn task_context(
         branch: code_change.map(|c| c.base_branch.clone()),
         sha,
         blocker,
+        review,
         occurred_at: now.to_rfc3339(),
     })
 }
@@ -532,6 +562,7 @@ pub fn spec_context(spec: &Spec, project_name: &str, now: Timestamp) -> HookCont
         branch: None,
         sha: None,
         blocker: None,
+        review: None,
         occurred_at: now.to_rfc3339(),
     }
 }
@@ -562,6 +593,10 @@ impl HookContext {
         set("SAKA_TASK_KEY", self.task.as_ref().map(|t| t.key.clone()));
         set("SAKA_SPEC", self.spec.as_ref().map(|s| s.path.clone()));
         set("SAKA_BRANCH", self.branch.clone());
+        set(
+            "SAKA_REVIEW_OUTCOME",
+            self.review.as_ref().map(|r| r.outcome.as_str().to_string()),
+        );
         vars
     }
 
@@ -857,9 +892,9 @@ mod tests {
         let mut bad = raw("notify");
         bad.name = "Bad Name".into();
         assert_eq!(code(bad), "hook_name_invalid");
-        let mut bad = raw("notify");
-        bad.on = "review_done".into();
-        assert_eq!(code(bad), "hook_event_unsupported");
+        let mut ok = raw("notify");
+        ok.on = "review_done".into();
+        assert_eq!(parse_one(&ok).unwrap().on, HookEvent::ReviewDone);
         let mut bad = raw("notify");
         bad.on = "nope".into();
         assert_eq!(code(bad), "hook_event_unsupported");
@@ -1060,6 +1095,7 @@ mod tests {
                 code: BlockerCode::CiRed,
                 action: Some(BlockerAction::Retry),
             }),
+            review: None,
             occurred_at: Timestamp(0).to_rfc3339(),
         }
     }
