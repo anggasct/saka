@@ -5049,3 +5049,50 @@ fn a_task_that_cannot_be_taken_over_or_returned_is_refused_without_events() {
         json!({ "stage": "merge", "phase": "merging" })
     );
 }
+
+#[test]
+fn a_task_in_the_merge_queue_shows_its_place_on_reads_only() {
+    let mut cfg = SimConfig::default();
+    cfg.operator.merge = false;
+    let mut api = Api::new(cfg);
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    let task = api.sim.task(1);
+    let id = task.item.id.0;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["merge_queue"], Value::Null);
+
+    let merge = api.post_with(
+        &format!("/api/v1/work-items/{id}/actions/merge"),
+        Some("queue-1"),
+        &[("if-match", &format!("W/\"{}\"", task.item.version))],
+        &json!({ "reason": null }),
+    );
+    assert_eq!(merge.status, StatusCode::ACCEPTED, "{}", merge.body);
+    assert_eq!(merge.body["merge_queue"], Value::Null);
+
+    let waiting = json!({ "base_branch": "main", "position": 1, "size": 1 });
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["stage_phase"], "queued");
+    assert_eq!(detail.body["merge_queue"], waiting);
+    let listed = api.get("/api/v1/work-items?state=in_stage");
+    assert_eq!(listed.body["items"][0]["merge_queue"], waiting);
+
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::Integrating)
+    }));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["merge_queue"],
+        json!({ "base_branch": "main", "position": 0, "size": 1 })
+    );
+
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| s.task(1).item.stage == Some(Stage::Sync))
+    );
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["merge_queue"], Value::Null);
+}

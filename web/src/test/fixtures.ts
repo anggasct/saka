@@ -93,6 +93,7 @@ export function task(step: number, extra: Partial<WorkItem>): WorkItem {
     stage_phase: null,
     priority: 0,
     waiting_on: [],
+    merge_queue: null,
     change_request: null,
     gates: [],
     blocker: null,

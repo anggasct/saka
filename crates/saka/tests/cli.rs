@@ -1974,3 +1974,42 @@ fn review_takes_a_pull_request_and_exits_with_the_documented_codes() {
     );
     assert_eq!(code(&named), 4);
 }
+
+#[test]
+fn the_task_list_shows_where_a_merge_request_stands_in_the_queue() {
+    let mut cfg = SimConfig::default();
+    cfg.operator.merge = false;
+    let mut sim = Sim::new(cfg);
+    sim.approve();
+    assert!(sim.run_until(5_000, |s| {
+        s.task(1).is_at(
+            saka_core::vocab::Stage::Merge,
+            saka_core::vocab::StagePhase::AwaitingMerge,
+        )
+    }));
+    let task = sim.task(1);
+    let engine = sim.engine();
+    engine
+        .request_merge(
+            task.item.id,
+            task.item.version,
+            None,
+            &engine.cause("human:operator:local"),
+        )
+        .unwrap();
+    drop(engine);
+    let server = serve(&sim);
+
+    let listed = saka(&server, &["task", "list", "--state", "in_stage"]);
+    assert_eq!(code(&listed), 0);
+    assert!(
+        stdout(&listed).contains("merge/queued  queue: main 1 of 1"),
+        "{}",
+        stdout(&listed)
+    );
+    let raw = json(&saka(
+        &server,
+        &["--json", "task", "list", "--state", "in_stage"],
+    ));
+    assert_eq!(raw["items"][0]["merge_queue"]["size"], 1);
+}

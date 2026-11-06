@@ -7,6 +7,7 @@ use saka_core::model::{
     SessionActivity, Spec, StageRun, StepPlan, Task, Usage, UsageRecord, step_repo,
 };
 use saka_core::plan::RevisionPlan;
+use saka_core::queue::{self, Position};
 use saka_core::spec as core_spec;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{SpecState, Stage, WorkItemState};
@@ -136,6 +137,7 @@ pub struct TaskView {
     pub repo_name: Option<String>,
     pub merges: bool,
     pub waiting_on: Vec<Waiting>,
+    pub merge_queue: Option<Position>,
     pub budget: Option<BudgetView>,
 }
 
@@ -174,6 +176,7 @@ pub struct TaskDetail {
     pub merges: bool,
     pub stage_runs: Vec<StageRun>,
     pub waiting_on: Vec<Waiting>,
+    pub merge_queue: Option<Position>,
     pub budget: Option<BudgetView>,
 }
 
@@ -631,21 +634,52 @@ impl Engine {
         tasks.sort_by_key(|t| ids.iter().position(|id| *id == t.item.id));
         let waiting = self.waiting(&tasks)?;
         let facts = self.project_facts(&tasks)?;
+        let queue = self.merge_queue_positions(&tasks)?;
         Ok(Paged {
             items: tasks
                 .into_iter()
                 .zip(waiting)
                 .zip(facts)
-                .map(|((task, waiting_on), (repo_name, merges))| TaskView {
-                    budget: self.budget_view(&task),
-                    task,
-                    repo_name,
-                    merges,
-                    waiting_on,
-                })
+                .zip(queue)
+                .map(
+                    |(((task, waiting_on), (repo_name, merges)), merge_queue)| TaskView {
+                        budget: self.budget_view(&task),
+                        task,
+                        repo_name,
+                        merges,
+                        waiting_on,
+                        merge_queue,
+                    },
+                )
                 .collect(),
             next: paged.next,
         })
+    }
+
+    fn merge_queue_positions(&self, tasks: &[Task]) -> Result<Vec<Option<Position>>> {
+        let mut lines: Vec<((RepoId, String), Vec<Task>)> = Vec::new();
+        let mut places = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let key = task
+                .change_request
+                .as_ref()
+                .filter(|_| queue::holds(task) || queue::waiting(task))
+                .map(|cr| (cr.repo_id, cr.base_branch.clone()));
+            let Some(key) = key else {
+                places.push(None);
+                continue;
+            };
+            if !lines.iter().any(|(k, _)| *k == key) {
+                let members = self.store.read(|c| {
+                    let ids = read::merge_queue_members(c, key.0, &key.1)?;
+                    read::load_tasks(c, TaskSet::Ids(&ids))
+                })?;
+                lines.push((key.clone(), members));
+            }
+            let members = lines.iter().find(|(k, _)| *k == key).map(|(_, m)| m);
+            places.push(members.and_then(|m| queue::position(m, task.item.id)));
+        }
+        Ok(places)
     }
 
     fn project_facts(&self, tasks: &[Task]) -> Result<Vec<(Option<String>, bool)>> {
@@ -686,7 +720,13 @@ impl Engine {
             .into_iter()
             .next()
             .unwrap_or((None, true));
+        let merge_queue = self
+            .merge_queue_positions(std::slice::from_ref(&task))?
+            .into_iter()
+            .next()
+            .flatten();
         Ok(Some(TaskDetail {
+            merge_queue,
             budget: self.budget_view(&task),
             task,
             repo_name,

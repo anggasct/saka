@@ -20,6 +20,7 @@ import {
 import { ReviewSection } from "./review-section";
 import { SessionSection } from "./session-section";
 import { StageRunsSection } from "./stage-runs-section";
+import { MergeQueueSection } from "./merge-queue-section";
 import { TakenOverBanner } from "./taken-over-banner";
 import { TaskActions } from "./task-actions";
 import { TaskHeader } from "./task-header";
@@ -97,6 +98,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       )}
       <TakenOverBanner task={item} />
       <WaitingSection task={item} tasks={tasks} />
+      <MergeQueueSection task={item} />
       <ChangeSection task={item} />
       <GatesSection task={item} />
       <ReviewSection task={item} />
