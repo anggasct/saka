@@ -74,7 +74,7 @@ fn existing_bindings_take_the_project_base_branch_and_an_unknown_config_hash() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+        vec![12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
     );
     let id = ProjectId("0193f0c4-0000-7000-8000-000000000002".parse().unwrap());
     let project = store.read(|c| read::load_project(c, id)).unwrap().unwrap();

@@ -696,6 +696,8 @@ const ERRORS = [
   "change_request_owned",
   "change_request_tracked",
   "stage_not_in_workflow",
+  "stage_not_takeable",
+  "return_target_invalid",
   "permission_already_answered",
   "idempotency_key_reused",
   "work_packet_unavailable",

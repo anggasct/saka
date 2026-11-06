@@ -97,6 +97,8 @@
   "error.precondition_required": "The request needs the version of the task it acts on.",
   "error.merge_not_ready": "The gate at {head} is {outcome}, so the pull request cannot be merged yet.",
   "error.entry_point_disabled": "The workflow of this project has no {entry} entry point.",
+  "error.stage_not_takeable": "The task cannot be taken over while it is merging or after it has merged.",
+  "error.return_target_invalid": "{reason, select, no_change_request {The task has no pull request yet, so it cannot return to {stage}.} other {The task cannot return to {stage}.}}",
   "error.stage_not_in_workflow": "The workflow of this project has no {stage} stage, so Saka does not do it.",
   "error.review_already_requested": "A review is already requested at {head}.",
   "error.change_request_not_found": "Pull request {number} was not found.",

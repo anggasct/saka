@@ -409,6 +409,30 @@ enum TaskCmd {
         #[arg(long)]
         reason: String,
     },
+    #[command(
+        about = "Takes the task over: the agent stops, the task pauses, and you work on its branch",
+        after_help = "Exit codes: 0 taken over, 4 the task cannot be taken over now."
+    )]
+    Takeover {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    #[command(
+        about = "Hands a taken over task back to the loop at the latest head of its change",
+        after_help = "Exit codes: 0 returned, 4 the task is not taken over or its change is no longer open."
+    )]
+    Return {
+        id: String,
+        #[arg(
+            help = "Stage to re-enter (default: the stage the task left)",
+            long,
+            value_parser = ["dev", "merge"]
+        )]
+        stage: Option<String>,
+        #[arg(long)]
+        reason: String,
+    },
     #[command(about = "Sends a message to the task's running or idle agent session")]
     Steer { id: String, text: String },
     #[command(about = "Stops the agent's current turn; the session waits for a steer")]
@@ -750,6 +774,12 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     }
                     TaskCmd::Cancel { id, reason } => {
                         client.task_action(&id, "cancel", &reason).await
+                    }
+                    TaskCmd::Takeover { id, reason } => {
+                        client.task_action(&id, "takeover", &reason).await
+                    }
+                    TaskCmd::Return { id, stage, reason } => {
+                        client.task_return(&id, stage.as_deref(), &reason).await
                     }
                     TaskCmd::Steer { id, text } => {
                         client

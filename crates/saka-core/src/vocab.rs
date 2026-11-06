@@ -215,7 +215,7 @@ vocab!(UserTokenCause { Missing => "missing", Expired => "expired", Rejected => 
 vocab!(UserTokenState { Active => "active", Invalid => "invalid" });
 vocab!(ResumeTrigger { CredentialRenewed => "credential renewed", AuthorshipModeChanged => "authorship mode changed" });
 vocab!(ContextOrigin { Link => "link", Always => "always" });
-vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto" });
+vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto", TakenOver => "taken_over" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });
 vocab!(SessionState {
     Starting => "starting",

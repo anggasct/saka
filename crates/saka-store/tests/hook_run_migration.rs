@@ -87,7 +87,7 @@ fn hook_runs_are_added_without_touching_existing_rows_and_the_table_guards_its_i
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![20, 21]);
+    assert_eq!(store.migration().applied, vec![20, 21, 22]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

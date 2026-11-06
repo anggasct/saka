@@ -552,7 +552,10 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
     }));
     let id = api.sim.task(1).item.id.0;
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
-    assert_eq!(detail.body["available_actions"], json!(["cancel"]));
+    assert_eq!(
+        detail.body["available_actions"],
+        json!(["cancel", "takeover"])
+    );
     let listed = api.get(&format!("/api/v1/work-items?project_id={project}"));
     assert_eq!(
         listed.body["items"][0]["available_actions"],
@@ -857,7 +860,10 @@ fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
     let etag = detail.headers["etag"].to_str().unwrap().to_string();
     assert_eq!(etag, format!("W/\"{}\"", detail.body["version"]));
-    assert_eq!(detail.body["available_actions"], json!(["cancel"]));
+    assert_eq!(
+        detail.body["available_actions"],
+        json!(["cancel", "takeover"])
+    );
     assert_eq!(detail.body["stage_runs"][0]["stage"], "dev");
 
     let merge = format!("/api/v1/work-items/{id}/actions/merge");
@@ -884,7 +890,10 @@ fn merge_waits_for_the_gate_and_actions_check_state_and_reason() {
         s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
     }));
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
-    assert_eq!(detail.body["available_actions"], json!(["merge", "cancel"]));
+    assert_eq!(
+        detail.body["available_actions"],
+        json!(["merge", "cancel", "takeover"])
+    );
     let gates = detail.body["gates"].as_array().unwrap();
     let sources: Vec<(&str, &str, bool)> = gates
         .iter()
@@ -1063,7 +1072,7 @@ fn guards_errors_meta_and_pagination_follow_the_conventions() {
             "server_version": "0.1.0-test",
             "api_version": "1",
             "min_client_api_version": "1",
-            "capabilities": ["projects", "spec_approve", "work_item_merge", "work_item_retry", "work_item_cancel", "permission_answer", "events_sse", "spec_draft", "work_item_primary_action"],
+            "capabilities": ["projects", "spec_approve", "work_item_merge", "work_item_retry", "work_item_cancel", "permission_answer", "events_sse", "spec_draft", "work_item_primary_action", "work_item_takeover"],
         })
     );
 
@@ -2963,7 +2972,10 @@ fn a_fourth_manual_retry_in_a_stage_is_refused_and_cancel_still_works() {
     assert!(api.sim.run_until(STEPS, blocked));
     let before = api.last_seq();
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
-    assert_eq!(detail.body["available_actions"], json!(["cancel"]));
+    assert_eq!(
+        detail.body["available_actions"],
+        json!(["cancel", "takeover"])
+    );
     let r = api.post(&retry, &[], json!({ "reason": "once more" }));
     problem(&r, StatusCode::CONFLICT, "retry_limit_reached");
     assert_eq!(r.body["params"], json!({ "stage": "dev", "limit": 3 }));
@@ -4812,7 +4824,10 @@ fn a_primary_action_that_needs_input_names_itself_and_is_not_run() {
     let action = &detail.body["blocker"]["primary_action"];
     assert_eq!(action["kind"], "set_secret");
     assert_eq!(action["params"]["names"].as_array().unwrap().len(), 2);
-    assert_eq!(detail.body["available_actions"], json!(["retry", "cancel"]));
+    assert_eq!(
+        detail.body["available_actions"],
+        json!(["retry", "cancel", "takeover"])
+    );
 
     let before = api.last_seq();
     let r = api.post(
@@ -4823,4 +4838,107 @@ fn a_primary_action_that_needs_input_names_itself_and_is_not_run() {
     problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "action_needs_input");
     assert_eq!(r.body["params"], json!({ "action": "set_secret" }));
     assert_eq!(api.last_seq(), before);
+}
+
+fn takeover_api() -> Api {
+    let mut cfg = SimConfig {
+        ci: CiScript::Pass,
+        ..SimConfig::default()
+    };
+    cfg.operator.merge = false;
+    let api = Api::new(cfg);
+    let (spec, revision) = (api.sim.spec_id, api.sim.revision_id);
+    api.sim.approve_spec(spec, revision).unwrap();
+    api
+}
+
+#[test]
+fn a_task_is_taken_over_and_handed_back_through_the_actions() {
+    let mut api = takeover_api();
+    let id = api.sim.task(1).item.id.0;
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["available_actions"],
+        json!(["merge", "cancel", "takeover"])
+    );
+
+    let path = format!("/api/v1/work-items/{id}/actions/takeover");
+    let bad = api.post(&path, &[], json!({ "reason": "" }));
+    problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let r = api.post_with(&path, Some("take-1"), &[], &json!({ "reason": "by hand" }));
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["state"], "taken_over");
+    assert_eq!(r.body["stage"], Value::Null);
+    assert_eq!(r.body["available_actions"], json!(["cancel", "return"]));
+    let seq = api.last_seq();
+    let replay = api.post_with(&path, Some("take-1"), &[], &json!({ "reason": "by hand" }));
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(api.last_seq(), seq);
+    let twice = api.post(&path, &[], json!({ "reason": "again" }));
+    problem(&twice, StatusCode::CONFLICT, "invalid_state");
+    let retry = api.post(
+        &format!("/api/v1/work-items/{id}/actions/retry"),
+        &[],
+        json!({ "reason": "again" }),
+    );
+    problem(&retry, StatusCode::CONFLICT, "invalid_state");
+
+    let back = format!("/api/v1/work-items/{id}/actions/return");
+    let bad = api.post(&back, &[], json!({ "stage": "sync", "reason": "x" }));
+    problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let unsupported = api.post(&back, &[], json!({ "stage": "review", "reason": "x" }));
+    problem(
+        &unsupported,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let r = api.post(&back, &[], json!({ "stage": "merge", "reason": "done" }));
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["state"], "in_stage");
+    assert_eq!(r.body["stage"], "merge");
+    assert_eq!(r.body["stage_phase"], "awaiting_ci");
+    let again = api.post(&back, &[], json!({ "reason": "again" }));
+    problem(&again, StatusCode::CONFLICT, "invalid_state");
+}
+
+#[test]
+fn a_task_that_cannot_be_taken_over_or_returned_is_refused_without_events() {
+    let mut api = takeover_api();
+    let id = api.sim.task(1).item.id.0;
+    let take = format!("/api/v1/work-items/{id}/actions/takeover");
+    let back = format!("/api/v1/work-items/{id}/actions/return");
+    let seq = api.last_seq();
+    let queued = api.post(&take, &[], json!({ "reason": "early" }));
+    problem(&queued, StatusCode::CONFLICT, "invalid_state");
+    let never = api.post(&back, &[], json!({ "reason": "early" }));
+    problem(&never, StatusCode::CONFLICT, "invalid_state");
+    let missing = api.post(
+        "/api/v1/work-items/00000000-0000-7000-8000-000000000000/actions/takeover",
+        &[],
+        json!({ "reason": "x" }),
+    );
+    problem(&missing, StatusCode::NOT_FOUND, "not_found");
+    assert_eq!(api.last_seq(), seq);
+
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    let task = api.sim.task(1);
+    let merge = api.post_with(
+        &format!("/api/v1/work-items/{id}/actions/merge"),
+        Some("merge-1"),
+        &[("if-match", &format!("W/\"{}\"", task.item.version))],
+        &json!({ "reason": null }),
+    );
+    assert_eq!(merge.status, StatusCode::ACCEPTED, "{}", merge.body);
+    assert_eq!(merge.body["stage_phase"], "merging");
+    let merging = api.post(&take, &[], json!({ "reason": "too late" }));
+    problem(&merging, StatusCode::CONFLICT, "stage_not_takeable");
+    assert_eq!(
+        merging.body["params"],
+        json!({ "stage": "merge", "phase": "merging" })
+    );
 }

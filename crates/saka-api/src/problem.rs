@@ -100,6 +100,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserTokenRejected { .. }
         | R::UserTokenRepoInaccessible { .. }
         | R::ActionNeedsInput { .. }
+        | R::ReturnTargetInvalid { .. }
         | R::Invalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
         R::InvalidState { .. }
         | R::Unsupported
@@ -133,6 +134,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::ChangeRequestOwned { .. }
         | R::ChangeRequestNotOpen { .. }
         | R::StageNotInWorkflow { .. }
+        | R::StageNotTakeable { .. }
         | R::HookRunPending
         | R::HookNotConfigured { .. }
         | R::HookRunGated { .. }

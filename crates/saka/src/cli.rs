@@ -925,6 +925,22 @@ impl Client {
         }
     }
 
+    pub async fn task_return(&self, id: &str, stage: Option<&str>, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/work-items/{id}/actions/return"),
+                &json!({ "stage": stage, "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |b| {
+                format!("{} {}", text(&b["task_key"]), text(&b["state"]))
+            }),
+            Err(code) => code,
+        }
+    }
+
     pub async fn permission_list(&self, state: &str) -> ExitCode {
         match self
             .get(&format!(

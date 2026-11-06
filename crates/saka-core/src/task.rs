@@ -77,6 +77,12 @@ pub struct DocsInspection {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ObservedChange {
+    pub state: ChangeState,
+    pub head_sha: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TaskInput {
     Admit,
     EnvironmentPrepared {
@@ -192,6 +198,14 @@ pub enum TaskInput {
         cause: ExternalCause,
         actor: Option<String>,
     },
+    Takeover {
+        reason: String,
+    },
+    Return {
+        stage: Option<Stage>,
+        reason: String,
+        change: Option<ObservedChange>,
+    },
 }
 
 pub fn decide(
@@ -214,6 +228,9 @@ pub fn decide(
         now: ctx.now,
     };
     use TaskInput as I;
+    if task.item.state == WorkItemState::TakenOver {
+        return d.paused(input, ctx);
+    }
     Ok(match input {
         I::Admit => d.admit(ctx),
         I::EnvironmentPrepared {
@@ -407,7 +424,54 @@ pub fn decide(
         }
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
         I::ReviewRequested { .. } => return Err(Rejection::Unsupported),
+        I::Takeover { reason } => return d.takeover(reason),
+        I::Return { .. } => {
+            return Err(Rejection::InvalidState {
+                state: d.state_name(),
+            });
+        }
     })
+}
+
+const RETURN_STAGES: [Stage; 2] = [Stage::Dev, Stage::Merge];
+
+pub fn takeable(stage: Stage, phase: Option<StagePhase>) -> bool {
+    stage != Stage::Sync && phase != Some(StagePhase::Merging)
+}
+
+fn takeover_place(task: &Task) -> Result<(Option<Stage>, Option<StagePhase>), Rejection> {
+    if task.item.origin != WorkItemOrigin::SpecStep {
+        return Err(Rejection::Unsupported);
+    }
+    let place = match task.item.state {
+        WorkItemState::InStage => (task.item.stage, task.item.stage_phase),
+        WorkItemState::Blocked => (task.stage_run.as_ref().map(|r| r.stage), None),
+        other => {
+            return Err(Rejection::InvalidState {
+                state: other.as_str().to_string(),
+            });
+        }
+    };
+    match place {
+        (Some(stage), phase) if !takeable(stage, phase) => Err(Rejection::StageNotTakeable {
+            stage: stage.as_str(),
+            phase: phase.map(StagePhase::as_str),
+        }),
+        place => Ok(place),
+    }
+}
+
+pub fn can_takeover(task: &Task) -> bool {
+    takeover_place(task).is_ok()
+}
+
+pub fn return_entry(stage: Stage, environment_ready: bool) -> Option<StagePhase> {
+    match stage {
+        Stage::Dev if environment_ready => Some(StagePhase::RunningSession),
+        Stage::Dev => Some(StagePhase::PreparingEnvironment),
+        Stage::Merge => Some(StagePhase::AwaitingCi),
+        Stage::Review | Stage::Fix | Stage::Sync => None,
+    }
 }
 
 struct Inspected {
@@ -1792,6 +1856,7 @@ impl Decider<'_> {
                 | WorkItemState::Admitted
                 | WorkItemState::InStage
                 | WorkItemState::Blocked
+                | WorkItemState::TakenOver
         ) {
             return Err(Rejection::InvalidState {
                 state: self.state_name(),
@@ -1860,6 +1925,114 @@ impl Decider<'_> {
         }
         events.extend(self.block(code, params, ctx));
         events
+    }
+
+    // Late facts for the run the operator left are dropped; only returning or cancelling changes it.
+    fn paused(&self, input: TaskInput, ctx: &mut Ctx<'_>) -> Result<Vec<Event>, Rejection> {
+        use TaskInput as I;
+        match input {
+            I::Return {
+                stage,
+                reason,
+                change,
+            } => self.give_back(stage, reason, change, ctx),
+            I::Cancel { reason } => self.cancel(reason),
+            I::Takeover { .. }
+            | I::Retry { .. }
+            | I::ResolveBlocker { .. }
+            | I::RequestMerge { .. } => Err(Rejection::InvalidState {
+                state: self.state_name(),
+            }),
+            I::Session(
+                SessionInput::Steer { .. }
+                | SessionInput::Interrupt { .. }
+                | SessionInput::Stop { .. }
+                | SessionInput::AnswerPermission { .. },
+            ) => Err(Rejection::NotFound),
+            _ => Ok(vec![]),
+        }
+    }
+
+    fn takeover(&self, reason: String) -> Result<Vec<Event>, Rejection> {
+        let (stage, phase) = takeover_place(self.task)?;
+        let mut events = Vec::new();
+        if let Some(b) = self.task.open_blocker() {
+            events.push(Event::BlockerResolved {
+                work_item_id: self.item().id,
+                blocker_id: b.id,
+                resolution: BlockerResolution::TakenOver,
+                reason: Some(reason.clone()),
+            });
+        }
+        events.extend(self.end_session(SessionState::Ended, "taken_over", json!({})));
+        events.push(Event::WorkItemTakenOver {
+            work_item_id: self.item().id,
+            reason,
+            stage,
+            phase,
+        });
+        Ok(events)
+    }
+
+    fn give_back(
+        &self,
+        stage: Option<Stage>,
+        reason: String,
+        change: Option<ObservedChange>,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let last = self.task.stage_run.as_ref().map(|r| r.stage);
+        let stage = stage.unwrap_or(match last {
+            Some(stage) if RETURN_STAGES.contains(&stage) => stage,
+            _ => Stage::Dev,
+        });
+        let env_ready = self.task.ready_environment().is_some();
+        let (true, Some(entry)) = (
+            RETURN_STAGES.contains(&stage),
+            return_entry(stage, env_ready),
+        ) else {
+            return Err(Rejection::ReturnTargetInvalid {
+                stage: stage.as_str(),
+                reason: "stage_unsupported",
+            });
+        };
+        let mut events = Vec::new();
+        match &self.task.change_request {
+            Some(cr) => {
+                let (state, head) = match change {
+                    Some(c) => (c.state, c.head_sha),
+                    None => (cr.state, cr.head_sha.clone()),
+                };
+                if state != ChangeState::Open {
+                    return Err(Rejection::ChangeRequestNotOpen {
+                        number: cr.number,
+                        state: state.as_str(),
+                    });
+                }
+                if head != cr.head_sha {
+                    events.push(Event::ChangeRequestUpdated {
+                        work_item_id: self.item().id,
+                        change_request_id: cr.id,
+                        role: ChangeRole::Code,
+                        head_sha: head,
+                    });
+                }
+            }
+            None if stage == Stage::Merge => {
+                return Err(Rejection::ReturnTargetInvalid {
+                    stage: stage.as_str(),
+                    reason: "no_change_request",
+                });
+            }
+            None => {}
+        }
+        events.push(Event::WorkItemReturned {
+            work_item_id: self.item().id,
+            reason: reason.clone(),
+            stage,
+        });
+        events.push(self.new_run(stage, Trigger::Auto, entry, Some(reason), None, ctx));
+        Ok(events)
     }
 
     fn state_name(&self) -> String {
@@ -2318,6 +2491,19 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
             set_place(&mut t.item, WorkItemState::Cancelled, None);
         }
+        E::WorkItemTakenOver { .. } => {
+            if let Some(run) = t
+                .stage_run
+                .as_mut()
+                .filter(|r| matches!(r.state, StageRunState::Pending | StageRunState::Running))
+            {
+                run.state = StageRunState::Cancelled;
+                run.ended_at = Some(now);
+                run.updated_at = now;
+            }
+            set_place(&mut t.item, WorkItemState::TakenOver, None);
+        }
+        E::WorkItemReturned { .. } => {}
         E::WorkItemDone { .. } => {
             set_place(&mut t.item, WorkItemState::Done, None);
             t.item.done_at = Some(now);
@@ -2520,8 +2706,15 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
             | WorkItemState::Admitted
             | WorkItemState::InStage
             | WorkItemState::Blocked
+            | WorkItemState::TakenOver
     ) {
         actions.push("cancel");
+    }
+    if can_takeover(task) {
+        actions.push("takeover");
+    }
+    if task.item.state == WorkItemState::TakenOver {
+        actions.push("return");
     }
     if external::awaiting_request(task) {
         actions.push("review");

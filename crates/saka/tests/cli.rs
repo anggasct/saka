@@ -151,6 +151,30 @@ fn operator_commands_call_the_api_and_exit_with_documented_codes() {
         code(&saka(&server, &["task", "retry", &id, "--reason", "again"])),
         4
     );
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["task", "takeover", &id, "--reason", "early"]
+        )),
+        4,
+        "a queued task is not taken over"
+    );
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["task", "return", &id, "--reason", "early"]
+        )),
+        4,
+        "only a taken over task returns"
+    );
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["task", "return", &id, "--stage", "review", "--reason", "x"]
+        )),
+        2,
+        "usage: the stage is dev or merge"
+    );
     let cancelled = saka(
         &server,
         &["--json", "task", "cancel", &id, "--reason", "not needed"],

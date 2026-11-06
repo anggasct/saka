@@ -378,6 +378,19 @@ pub enum Event {
         work_item_id: WorkItemId,
         reason: String,
     },
+    #[serde(rename = "delivery.work_item.taken_over")]
+    WorkItemTakenOver {
+        work_item_id: WorkItemId,
+        reason: String,
+        stage: Option<Stage>,
+        phase: Option<StagePhase>,
+    },
+    #[serde(rename = "delivery.work_item.returned")]
+    WorkItemReturned {
+        work_item_id: WorkItemId,
+        reason: String,
+        stage: Stage,
+    },
     #[serde(rename = "delivery.work_item.done")]
     WorkItemDone {
         work_item_id: WorkItemId,
@@ -879,6 +892,8 @@ impl Event {
             | E::WorkItemBlocked { work_item_id, .. }
             | E::BlockerResolved { work_item_id, .. }
             | E::WorkItemCancelled { work_item_id, .. }
+            | E::WorkItemTakenOver { work_item_id, .. }
+            | E::WorkItemReturned { work_item_id, .. }
             | E::WorkItemDone { work_item_id, .. }
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }

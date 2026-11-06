@@ -1443,11 +1443,13 @@ impl Engine {
         let env_ref = self
             .env_ref_with_secrets(task, env)
             .map_err(Refusal::into_error)?;
-        if in_sync {
-            self.ports.env.check_out(&env_ref, &head).await?;
-        }
         let base = env.base_sha.clone().unwrap_or_default();
-        let worktree = self.ports.env.inspect(&env_ref, &base).await?;
+        let mut worktree = self.ports.env.inspect(&env_ref, &base).await?;
+        // A head the operator pushed is not in the worktree; a dirty one is never overwritten.
+        if in_sync || (!worktree.dirty && worktree.head_sha != head) {
+            self.ports.env.check_out(&env_ref, &head).await?;
+            worktree = self.ports.env.inspect(&env_ref, &base).await?;
+        }
         if worktree.head_sha != head || worktree.dirty {
             return Ok(Effect::Fact(TaskInput::SakaGateObserved {
                 head_sha: head,
