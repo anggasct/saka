@@ -3388,6 +3388,7 @@ name = "saka-testkit"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "saka-core",
  "saka-engine",
  "saka-ports",

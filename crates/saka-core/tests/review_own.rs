@@ -44,6 +44,7 @@ fn cfg() -> LoopConfig {
         delete_branch_after_merge: true,
         commit_status: true,
         permission_wait_ms: 3_600_000,
+        decision_wait_ms: 72 * 3_600_000,
         idle_ms: 1_800_000,
         budgets: BTreeMap::new(),
         budget_warn_percent: 80,

@@ -36,6 +36,7 @@ fn a_restart_reattaches_live_sessions_and_the_task_keeps_its_session() {
             merge: true,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::without_review()
     });
@@ -137,6 +138,7 @@ fn a_crash_while_checking_the_merge_does_not_block_the_task() {
             merge: true,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     });

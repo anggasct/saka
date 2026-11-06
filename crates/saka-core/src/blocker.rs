@@ -31,6 +31,7 @@ pub fn designated(code: BlockerCode) -> BlockerAction {
         | B::SessionLost
         | B::SessionTimeout
         | B::PermissionExpired
+        | B::DecisionExpired
         | B::QuotaExhausted
         | B::BudgetExhausted
         | B::NoChanges

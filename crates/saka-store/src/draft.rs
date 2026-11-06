@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::codec::{json, opt_json, opt_uuid, u32_col, u64_col, uuid, vocab};
 use crate::error::Result;
 use crate::read::{
-    ENVIRONMENT_SELECT, PERMISSION_SELECT, SESSION_SELECT, environment, one, opt_ts, permission,
-    rows_of, running_since, session, ts,
+    DECISION_SELECT, ENVIRONMENT_SELECT, PERMISSION_SELECT, SESSION_SELECT, decision, environment,
+    one, opt_ts, permission, rows_of, running_since, session, ts,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -229,6 +229,19 @@ pub fn load_drafts(conn: &Connection, set: DraftSet<'_>) -> Result<Vec<Draft>> {
             && let Some(d) = owner.and_then(|id| drafts.get_mut(&id))
         {
             d.permissions.push(p);
+        }
+    }
+    for r in rows_of(
+        conn,
+        DECISION_SELECT,
+        "json_extract(owner, '$.spec_draft_id')",
+        selection,
+        "asked_at, id",
+        b,
+        decision,
+    )? {
+        if let Some(d) = r.owner.spec_draft_id().and_then(|id| drafts.get_mut(&id)) {
+            d.decisions.push(r);
         }
     }
     let marks = "SELECT r.attempt_id, r.round, r.session_id, r.turn, r.outcome, r.spec_draft_id

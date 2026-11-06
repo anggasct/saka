@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use saka_core::authorship::GitIdentity;
+use saka_core::decision::Question;
 use saka_core::diagnostics::{
     AgentCli, AgentLogin, AppStatus, Installation, SupervisorProbe, ToolchainCache, WebhookStatus,
 };
 use saka_core::gate::Check;
-use saka_core::ids::{EnvironmentId, SessionId};
+use saka_core::ids::{DecisionRequestId, EnvironmentId, SessionId};
 use saka_core::model::{RunOwner, ToolchainUse};
 use saka_core::policy::RequestPath;
 use saka_core::review::Finding;
@@ -55,6 +57,7 @@ pub struct AgentScript {
     pub outcome: AgentOutcome,
     pub ask: Option<(String, Value)>,
     pub reviewer_ask: Option<(String, Value)>,
+    pub decisions: VecDeque<Vec<Question>>,
     pub usage: TurnUsage,
     pub rate_limit: Option<Value>,
 }
@@ -82,6 +85,7 @@ impl Default for AgentScript {
             outcome: AgentOutcome::Commit,
             ask: None,
             reviewer_ask: None,
+            decisions: VecDeque::new(),
             usage: TurnUsage::default(),
             rate_limit: None,
         }
@@ -278,6 +282,7 @@ struct State {
     doc_commits: Vec<DocCommit>,
     inaccessible: BTreeSet<String>,
     prompts: Vec<String>,
+    ask_results: Vec<AskResult>,
     resumes: Vec<Option<String>>,
     recipe: Option<String>,
     recipe_runs: Vec<RecipeRun>,
@@ -389,9 +394,12 @@ pub struct ScopeCheck {
     pub fetch: bool,
 }
 
+pub type AskResult = Result<DecisionRequestId, saka_ports::AskRefusal>;
+
 pub struct FakeWorld {
     clock: Arc<FakeClock>,
     state: Mutex<State>,
+    decisions: Mutex<Option<Weak<dyn saka_ports::Decisions>>>,
     accounts: crate::accounts::FakeAccounts,
     host: crate::diagnostics::FakeHost,
 }
@@ -438,6 +446,7 @@ impl FakeWorld {
             accounts: crate::accounts::FakeAccounts::new(Arc::clone(&clock)),
             host: crate::diagnostics::FakeHost::default(),
             clock,
+            decisions: Mutex::new(None),
             state: Mutex::new(State {
                 script,
                 ci,
@@ -508,6 +517,7 @@ impl FakeWorld {
                 doc_history: HashMap::new(),
                 inaccessible: BTreeSet::new(),
                 prompts: Vec::new(),
+                ask_results: Vec::new(),
                 resumes: Vec::new(),
             }),
         }
@@ -527,6 +537,34 @@ impl FakeWorld {
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap()
+    }
+
+    pub fn connect_decisions(&self, engine: Weak<dyn saka_ports::Decisions>) {
+        *self.decisions.lock().unwrap() = Some(engine);
+    }
+
+    pub fn ask_results(&self) -> Vec<AskResult> {
+        self.state().ask_results.clone()
+    }
+
+    fn ask_decisions(&self, session: SessionId, questions: Vec<Question>) {
+        for question in questions {
+            let engine = self
+                .decisions
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(Weak::upgrade);
+            let result = match engine {
+                Some(engine) => engine
+                    .ask(session, question)
+                    .now_or_never()
+                    .unwrap_or(Err(saka_ports::AskRefusal::Unavailable))
+                    .map(|asked| asked.decision_id),
+                None => Err(saka_ports::AskRefusal::Unavailable),
+            };
+            self.state().ask_results.push(result);
+        }
     }
 
     pub fn stats(&self) -> Stats {
@@ -2780,6 +2818,32 @@ impl Agents for FakeWorld {
                     model: Some("fake-model".into()),
                 },
             );
+        }
+        let reviewer = s.sessions.get(&id).is_some_and(|f| f.reviewer);
+        let questions = if reviewer {
+            None
+        } else {
+            s.script.decisions.pop_front().filter(|q| !q.is_empty())
+        };
+        if let Some(questions) = questions {
+            drop(s);
+            self.ask_decisions(id, questions);
+            let mut s = self.state();
+            let usage = s.script.usage;
+            s.emit(
+                id,
+                at,
+                RunnerEventKind::TurnEnded {
+                    turn,
+                    status: "success".to_string(),
+                    cost_usd_micros: Some(usage.cost_usd_micros),
+                    input_tokens: Some(usage.input_tokens),
+                    output_tokens: Some(usage.output_tokens),
+                    result_summary: Some(format!("turn {turn} asked")),
+                    result_text: None,
+                },
+            );
+            return Ok(());
         }
         if let Some((tool, input)) = ask_now {
             s.next_request += 1;

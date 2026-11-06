@@ -48,7 +48,7 @@ pub fn plan(view: &RunView<'_>) -> Option<ResumePlan> {
 }
 
 pub fn wants_session(view: &RunView<'_>) -> bool {
-    if view.live_session().is_some() {
+    if view.live_session().is_some() || view.asked_decision().is_some() {
         return false;
     }
     match view.session {
@@ -69,6 +69,7 @@ pub fn reason_of(code: BlockerCode, params: &Value) -> ResumeReason {
         }
         BlockerCode::SessionTimeout => ResumeReason::IdleTimeout,
         BlockerCode::PermissionExpired => ResumeReason::PermissionExpired,
+        BlockerCode::DecisionExpired => ResumeReason::DecisionExpired,
         BlockerCode::BudgetExhausted => ResumeReason::BudgetExhausted,
         BlockerCode::QuotaExhausted => ResumeReason::QuotaExhausted,
         _ => ResumeReason::Retried,
@@ -81,6 +82,7 @@ pub fn text(reason: ResumeReason) -> String {
         ResumeReason::OperatorStopped => "the operator stopped it",
         ResumeReason::IdleTimeout => "the operator interrupted it and did not answer in time",
         ResumeReason::PermissionExpired => "a permission request expired",
+        ResumeReason::DecisionExpired => "a question you asked was not answered in time",
         ResumeReason::BudgetExhausted => "its budget ran out",
         ResumeReason::QuotaExhausted => "the agent account hit its rate limit",
         ResumeReason::Retried => "the operator sent the step back for another attempt",

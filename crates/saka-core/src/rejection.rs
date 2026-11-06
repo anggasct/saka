@@ -36,6 +36,16 @@ pub enum Rejection {
     },
     #[error("permission request is already answered")]
     PermissionAlreadyAnswered,
+    #[error("decision request not found")]
+    DecisionNotFound,
+    #[error("decision request is already answered")]
+    DecisionAlreadyAnswered,
+    #[error("decision answer is not valid")]
+    DecisionAnswerInvalid,
+    #[error("the session already has a question waiting")]
+    DecisionOnePerSession,
+    #[error("the run asked its last question")]
+    DecisionLimitReached,
     #[error("not found")]
     NotFound,
     #[error("project is already registered")]
@@ -183,6 +193,11 @@ impl Rejection {
             Rejection::SpecHasActiveTasks { .. } => "spec_has_active_tasks",
             Rejection::MergeNotReady { .. } => "merge_not_ready",
             Rejection::PermissionAlreadyAnswered => "permission_already_answered",
+            Rejection::DecisionNotFound => "decision_not_found",
+            Rejection::DecisionAlreadyAnswered => "decision_already_answered",
+            Rejection::DecisionAnswerInvalid => "decision_answer_invalid",
+            Rejection::DecisionOnePerSession => "decision_one_per_session",
+            Rejection::DecisionLimitReached => "decision_limit_reached",
             Rejection::NotFound => "not_found",
             Rejection::ProjectExists { .. } => "project_exists",
             Rejection::SpecSlugConflict { .. } => "spec_slug_conflict",

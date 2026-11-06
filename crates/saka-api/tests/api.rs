@@ -2960,6 +2960,7 @@ fn the_history_filters_by_who_answered_and_pages_with_a_cursor() {
             merge: true,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     });

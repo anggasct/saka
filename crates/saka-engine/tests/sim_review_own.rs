@@ -20,6 +20,7 @@ fn hand_merge() -> SimConfig {
             merge: false,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     }

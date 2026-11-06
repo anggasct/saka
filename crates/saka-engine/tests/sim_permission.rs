@@ -38,6 +38,7 @@ fn sim(agent: AgentScript, rules: Vec<RuleSpec>) -> Sim {
             merge: true,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     });

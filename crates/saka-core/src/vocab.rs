@@ -135,6 +135,7 @@ vocab!(
         UserAccessDenied => "user_access_denied",
         DocsMergeFailed => "docs_merge_failed",
         BranchMoved => "branch_moved",
+        DecisionExpired => "decision_expired",
     }
 );
 vocab!(BlockerAction {
@@ -275,6 +276,7 @@ vocab!(
         OperatorStopped => "operator_stopped",
         IdleTimeout => "idle_timeout",
         PermissionExpired => "permission_expired",
+        DecisionExpired => "decision_expired",
         BudgetExhausted => "budget_exhausted",
         QuotaExhausted => "quota_exhausted",
         Retried => "retried",
@@ -283,6 +285,7 @@ vocab!(
 vocab!(BudgetDimension { RunningMinutes => "running_minutes", Turns => "turns", Tokens => "tokens", CostUsd => "cost_usd" });
 vocab!(Effect { Allow => "allow", Deny => "deny", Ask => "ask" });
 vocab!(MatchKind { Exact => "exact", Glob => "glob" });
+vocab!(DecisionState { Asked => "asked", Answered => "answered", Delivered => "delivered", Expired => "expired" });
 vocab!(PermissionState { Pending => "pending", Allowed => "allowed", Denied => "denied", Expired => "expired" });
 vocab!(ChangeState { Open => "open", Merged => "merged", Closed => "closed" });
 vocab!(GateSource { Scm => "scm", Saka => "saka" });
@@ -326,6 +329,7 @@ vocab!(
         SessionLost => "session_lost",
         SessionTimeout => "session_timeout",
         PermissionExpired => "permission_expired",
+        DecisionExpired => "decision_expired",
         EnvSetupFailed => "env_setup_failed",
         ContextUnavailable => "context_unavailable",
         WorktreeUnreadable => "worktree_unreadable",
@@ -392,6 +396,7 @@ impl DraftFailureCode {
             BlockerCode::SessionLost => DraftFailureCode::SessionLost,
             BlockerCode::SessionTimeout => DraftFailureCode::SessionTimeout,
             BlockerCode::PermissionExpired => DraftFailureCode::PermissionExpired,
+            BlockerCode::DecisionExpired => DraftFailureCode::DecisionExpired,
             BlockerCode::EnvSetupFailed => DraftFailureCode::EnvSetupFailed,
             BlockerCode::ScmUnavailable => DraftFailureCode::ScmUnavailable,
             BlockerCode::PushRejected => DraftFailureCode::PushRejected,

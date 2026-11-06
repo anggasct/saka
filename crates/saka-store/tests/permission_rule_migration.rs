@@ -117,7 +117,7 @@ fn the_permission_rule_migration_keeps_old_rules_as_exact_allows_and_opens_the_n
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![32, 33, 34]);
+    assert_eq!(store.migration().applied, vec![32, 33, 34, 35]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

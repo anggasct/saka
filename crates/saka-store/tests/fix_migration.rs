@@ -84,7 +84,7 @@ fn the_fix_round_migration_keeps_runs_and_stores_a_round_as_valid_json() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![27, 28, 29, 30, 31, 32, 33, 34]
+        vec![27, 28, 29, 30, 31, 32, 33, 34, 35]
     );
     drop(store);
 

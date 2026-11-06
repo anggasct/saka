@@ -3,14 +3,15 @@ use std::collections::{BTreeMap, HashMap};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use saka_core::autonomy::RepoPolicy;
 use saka_core::ids::{
-    BlockerId, ChangeRequestId, EnvironmentId, GateResultId, PermissionRequestId, ProjectId,
-    RepoId, ReviewId, SessionId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, WorkItemId,
+    BlockerId, ChangeRequestId, DecisionRequestId, EnvironmentId, GateResultId,
+    PermissionRequestId, ProjectId, RepoId, ReviewId, SessionId, SpecDraftId, SpecId,
+    SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
-    AccountQuota, Blocker, ChangeRequest, ContextRef, Environment, ExternalChange, GateResult,
-    PermissionRequest, PermissionRule, Project, ProjectRepo, Repo, Review, ReviewPosted,
-    RevisionView, RunOwner, Session, Spec, SpecDependency, SpecLink, StageRun, StepPlan, Task,
-    WorkItem, WorkItemDependency,
+    AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionAnswer, DecisionRequest, Environment,
+    ExternalChange, GateResult, PermissionRequest, PermissionRule, Project, ProjectRepo, Repo,
+    Review, ReviewPosted, RevisionView, RunOwner, Session, Spec, SpecDependency, SpecLink,
+    StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger};
@@ -40,6 +41,8 @@ pub(crate) const SESSION_SELECT: &str = "SELECT s.*,
 pub(crate) const ENVIRONMENT_SELECT: &str = "SELECT e.*,
     CASE WHEN e.work_item_id IS NOT NULL THEN e.id END AS stage_run_id
   FROM environment e";
+
+pub(crate) const DECISION_SELECT: &str = "SELECT * FROM decision_request";
 
 pub(crate) const PERMISSION_SELECT: &str = "SELECT p.*,
     (SELECT s.stage_run_id FROM session s WHERE s.id = p.session_id) AS stage_run_id,
@@ -443,6 +446,19 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             && let Some(t) = work_item.and_then(|id| tasks.get_mut(&id))
         {
             t.permissions.push(p);
+        }
+    }
+    for d in rows_of(
+        conn,
+        DECISION_SELECT,
+        "json_extract(owner, '$.work_item_id')",
+        selection,
+        "asked_at, id",
+        b,
+        decision,
+    )? {
+        if let Some(t) = d.owner.work_item_id().and_then(|id| tasks.get_mut(&id)) {
+            t.decisions.push(d);
         }
     }
     Ok(tasks.into_values().collect())
@@ -948,6 +964,44 @@ pub fn account_quotas(conn: &Connection) -> Result<Vec<AccountQuota>> {
         });
     }
     Ok(out)
+}
+
+pub(crate) fn decision(row: &Row<'_>) -> Result<DecisionRequest> {
+    let owner: String = row.get("owner")?;
+    let options: String = row.get("options")?;
+    let answered_by: Option<String> = row.get("answered_by")?;
+    let answer_option: Option<i64> = row.get("answer_option")?;
+    let answer_note: Option<String> = row.get("answer_note")?;
+    Ok(DecisionRequest {
+        id: DecisionRequestId(uuid(row, "id")?),
+        owner: serde_json::from_str(&owner)?,
+        session_id: SessionId(uuid(row, "session_id")?),
+        state: vocab(row, "state")?,
+        question: row.get("question")?,
+        context: row.get("context")?,
+        options: serde_json::from_str(&options)?,
+        answer: answered_by.map(|answered_by| DecisionAnswer {
+            option: answer_option.and_then(|o| u32::try_from(o).ok()),
+            note: answer_note,
+            answered_by,
+        }),
+        asked_at: ts(row, "asked_at")?,
+        answered_at: opt_ts(row, "answered_at")?,
+        delivered_at: opt_ts(row, "delivered_at")?,
+        expires_at: ts(row, "expires_at")?,
+    })
+}
+
+pub fn decision_owner(conn: &Connection, id: DecisionRequestId) -> Result<Option<RunOwner>> {
+    let found: Option<String> = one(
+        conn,
+        "SELECT owner FROM decision_request WHERE id = ?1",
+        &[&id.0.to_string()],
+        |r| Ok(r.get::<_, String>("owner")?),
+    )?;
+    Ok(found
+        .map(|owner| serde_json::from_str(&owner))
+        .transpose()?)
 }
 
 pub(crate) fn permission(row: &Row<'_>) -> Result<PermissionRequest> {

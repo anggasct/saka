@@ -74,6 +74,10 @@ export const EVENT_KINDS = [
   "runtime.permission.requested",
   "runtime.permission.answered",
   "runtime.permission.delivered",
+  "runtime.decision.asked",
+  "runtime.decision.answered",
+  "runtime.decision.delivered",
+  "runtime.decision.expired",
   "runtime.permission_rule.added",
   "runtime.permission_rule.revoked",
   "runtime.budget.warned",
@@ -150,6 +154,11 @@ const AFFECTS: Record<string, readonly string[]> = {
   permission_request: [
     QUERY_ROOTS.permissions,
     QUERY_ROOTS.workItems,
+    QUERY_ROOTS.inbox,
+  ],
+  decision_request: [
+    QUERY_ROOTS.workItems,
+    QUERY_ROOTS.specDrafts,
     QUERY_ROOTS.inbox,
   ],
 };

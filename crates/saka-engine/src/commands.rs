@@ -920,7 +920,7 @@ impl Engine {
         Ok(events)
     }
 
-    fn decide_owner(
+    pub(crate) fn decide_owner(
         &self,
         owner: RunOwner,
         input: SessionInput,

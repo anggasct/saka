@@ -82,7 +82,7 @@ impl SessionPaths {
     }
 
     pub fn mcp_token_file(&self) -> PathBuf {
-        self.session_dir.join("mcp.token")
+        self.session_dir.join(MCP_TOKEN_FILE)
     }
 
     pub fn home(&self) -> PathBuf {
@@ -163,6 +163,11 @@ fn session_settings(worktree: &Path, isolated: bool) -> Result<String, Unsupport
 }
 
 pub const MCP_SERVER: &str = "saka";
+const MCP_TOKEN_FILE: &str = "mcp.token";
+
+pub fn mcp_token_path(sessions_dir: &Path, session_id: &str) -> PathBuf {
+    sessions_dir.join(session_id).join(MCP_TOKEN_FILE)
+}
 
 pub fn mcp_config(command: &Path, session_id: &str, socket: &Path, token: &str) -> String {
     serde_json::json!({

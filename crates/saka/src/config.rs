@@ -424,6 +424,8 @@ pub struct Agent {
     pub max_followup_turns: u32,
     #[serde(default = "twenty_four")]
     pub permission_wait_hours: i64,
+    #[serde(default = "seventy_two")]
+    pub decision_wait_hours: i64,
     #[serde(default = "thirty")]
     pub idle_minutes: i64,
     #[serde(default = "rate_limit_pause")]
@@ -605,6 +607,7 @@ impl Default for Agent {
             path: default_path(),
             max_followup_turns: one(),
             permission_wait_hours: twenty_four(),
+            decision_wait_hours: seventy_two(),
             idle_minutes: thirty(),
             rate_limit_pause: rate_limit_pause(),
             limits: Limits::default(),
@@ -637,6 +640,9 @@ fn eighty() -> u32 {
 }
 fn twenty_four() -> i64 {
     24
+}
+fn seventy_two() -> i64 {
+    72
 }
 fn thirty() -> i64 {
     30
@@ -984,10 +990,14 @@ impl Config {
         }
         let a = &self.agent;
         let b = &self.budget;
-        let checks: [(bool, &str); 8] = [
+        let checks: [(bool, &str); 9] = [
             (
                 (1..=168).contains(&a.permission_wait_hours),
                 "agent.permission_wait_hours must be 1..=168",
+            ),
+            (
+                (1..=168).contains(&a.decision_wait_hours),
+                "agent.decision_wait_hours must be 1..=168",
             ),
             (
                 (1..=1440).contains(&a.idle_minutes),
@@ -1331,6 +1341,7 @@ mod tests {
         let rules = "[[permission.rule]]\nid = \"read\"\neffect = \"allow\"\ntools = [\"Read\"]\n";
         assert_eq!(Config::parse(rules).unwrap().permission.rule.len(), 1);
         assert_eq!(cfg.agent.permission_wait_hours, 24);
+        assert_eq!(cfg.agent.decision_wait_hours, 72);
         assert_eq!(cfg.agent.idle_minutes, 30);
         assert_eq!(cfg.budget.warn_percent, 80);
         assert_eq!(
@@ -1339,6 +1350,8 @@ mod tests {
         );
         for bad in [
             "[agent]\npermission_wait_hours = 0\n",
+            "[agent]\ndecision_wait_hours = 0\n",
+            "[agent]\ndecision_wait_hours = 169\n",
             "[agent]\nidle_minutes = 1441\n",
             "[agent]\nrate_limit_pause = 0.4\n",
             "[budget]\nwarn_percent = 100\n",
@@ -1616,6 +1629,7 @@ mod tests {
         assert_eq!(gitlab.api_url, "https://git.example.com/api/v4");
         assert_eq!(gitlab.merge_method, MergeMethod::Merge);
         assert_eq!(cfg.agent.limits.cpu_quota, "200%");
+        assert_eq!(cfg.agent.decision_wait_hours, 72);
         assert_eq!(cfg.budget.review.running_minutes, 20);
         assert_eq!(cfg.budget.fix.running_minutes, 30);
         assert_eq!(cfg.budget.fix.turns, 6);

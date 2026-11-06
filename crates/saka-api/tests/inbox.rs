@@ -91,6 +91,7 @@ fn waiting() -> Api {
             merge: true,
             retry: vec![],
             answer: None,
+            decide: None,
         },
         ..SimConfig::default()
     });

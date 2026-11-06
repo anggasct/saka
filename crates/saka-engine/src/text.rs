@@ -103,6 +103,12 @@ impl Engine {
                 })
             }
             Prompt::Steer { text } => Ok(text.clone()),
+            Prompt::Decision { decision_id } => task
+                .decisions
+                .iter()
+                .find(|d| d.id == *decision_id)
+                .map(saka_core::decision::answer_text)
+                .ok_or_else(|| EngineError::Internal("decision not in the task".into())),
             Prompt::VerdictFormat { reason } => {
                 Ok(crate::review_packet::verdict_format_text(reason))
             }
@@ -310,8 +316,18 @@ pub(crate) fn retry_text(retry_of: &Coded) -> Option<String> {
             })
         }
         "merge_conflict" => merge_conflict(&retry_of.params),
+        "decision_expired" => decision_expired(&retry_of.params),
         _ => None,
     }
+}
+
+fn decision_expired(params: &Value) -> Option<String> {
+    let text = |key: &str| params.get(key).and_then(Value::as_str);
+    Some(saka_core::decision::expired_text(
+        text("question")?,
+        text("recommended")?,
+        params.get("hours").and_then(Value::as_i64)?,
+    ))
 }
 
 fn merge_conflict(params: &Value) -> Option<String> {

@@ -2,9 +2,9 @@ use rusqlite::{Transaction, params};
 use saka_core::ids::{ProjectId, RepoId, SpecDraftAttemptId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
-    AccountQuota, Blocker, ChangeRequest, ContextRef, Draft, Environment, GateResult, LintRound,
-    PermissionRequest, PermissionRule, Project, Repo, Review, Session, SessionActivity, Spec,
-    SpecDependency, StageRun, Task, UsageRecord, WorkItemDependency,
+    AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionRequest, Draft, Environment,
+    GateResult, LintRound, PermissionRequest, PermissionRule, Project, Repo, Review, Session,
+    SessionActivity, Spec, SpecDependency, StageRun, Task, UsageRecord, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::GateSource;
@@ -769,6 +769,7 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
             sessions: &t.retired_sessions,
             session: t.session.as_ref(),
             permissions: &t.permissions,
+            decisions: &t.decisions,
             usage_records: &t.usage_records,
             quotas: &t.quota_observations,
         },
@@ -784,6 +785,7 @@ struct RunRows<'a> {
     sessions: &'a [Session],
     session: Option<&'a Session>,
     permissions: &'a [PermissionRequest],
+    decisions: &'a [DecisionRequest],
     usage_records: &'a [UsageRecord],
     quotas: &'a [AccountQuota],
 }
@@ -797,6 +799,9 @@ fn run(tx: &Transaction<'_>, project: ProjectId, rows: RunRows<'_>) -> Result<()
     }
     for p in rows.permissions {
         permission(tx, project, p)?;
+    }
+    for d in rows.decisions {
+        decision(tx, project, d)?;
     }
     for u in rows.usage_records {
         usage_record(tx, project, u)?;
@@ -890,6 +895,7 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
             sessions: &d.retired_sessions,
             session: d.session.as_ref(),
             permissions: &d.permissions,
+            decisions: &d.decisions,
             usage_records: &d.usage_records,
             quotas: &d.quota_observations,
         },
@@ -1217,6 +1223,35 @@ fn session(tx: &Transaction<'_>, project: ProjectId, s: &Session) -> Result<()> 
             s.interrupt_requested.map(|i| i.as_str()),
             owner.spec_draft_id,
             owner.spec_draft_attempt_id,
+        ],
+    )?;
+    Ok(())
+}
+
+fn decision(tx: &Transaction<'_>, project: ProjectId, d: &DecisionRequest) -> Result<()> {
+    tx.execute(
+        "INSERT INTO decision_request (id, project_id, session_id, owner, state, question, context, options,
+           answer_option, answer_note, answered_by, asked_at, answered_at, delivered_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         ON CONFLICT (id) DO UPDATE SET state = excluded.state, answer_option = excluded.answer_option,
+           answer_note = excluded.answer_note, answered_by = excluded.answered_by,
+           answered_at = excluded.answered_at, delivered_at = excluded.delivered_at",
+        params![
+            d.id.to_string(),
+            project.to_string(),
+            d.session_id.to_string(),
+            to_json(&d.owner)?,
+            d.state.as_str(),
+            d.question,
+            d.context,
+            to_json(&d.options)?,
+            d.answer.as_ref().and_then(|a| a.option),
+            d.answer.as_ref().and_then(|a| a.note.clone()),
+            d.answer.as_ref().map(|a| a.answered_by.clone()),
+            d.asked_at.0,
+            d.answered_at.map(|x| x.0),
+            d.delivered_at.map(|x| x.0),
+            d.expires_at.0,
         ],
     )?;
     Ok(())

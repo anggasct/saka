@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+futures-util.workspace = true
 saka-core = { path = "../saka-core" }
 saka-engine = { path = "../saka-engine" }
 saka-ports = { path = "../saka-ports" }

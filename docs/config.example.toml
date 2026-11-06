@@ -63,6 +63,7 @@ model = ""                         # empty = the CLI default
 path = ["~/.local/bin", "/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin"]
 max_followup_turns = 1
 permission_wait_hours = 24         # 1..=168; a permission request pending longer blocks the task
+decision_wait_hours = 72           # 1..=168; a question to the operator pending longer blocks the task
 idle_minutes = 30                  # 1..=1440; an interrupted session idle longer blocks the task
 rate_limit_pause = 0.9             # 0.5..=1.0; new tasks wait while an account window is this full
 limits = { memory_max = "4G", cpu_quota = "200%", tasks_max = 512 }

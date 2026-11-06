@@ -42,6 +42,7 @@ pub struct LoopConfig {
     pub delete_branch_after_merge: bool,
     pub commit_status: bool,
     pub permission_wait_ms: i64,
+    pub decision_wait_ms: i64,
     pub idle_ms: i64,
     pub budgets: BTreeMap<Stage, Budget>,
     pub budget_warn_percent: u32,
@@ -63,6 +64,7 @@ impl LoopConfig {
     pub fn session(&self) -> SessionConfig {
         SessionConfig {
             permission_wait_ms: self.permission_wait_ms,
+            decision_wait_ms: self.decision_wait_ms,
             idle_ms: self.idle_ms,
             budget_warn_percent: self.budget_warn_percent,
             rate_limit_pause: self.rate_limit_pause,
@@ -744,7 +746,9 @@ impl Decider<'_> {
                 SessionInput::Steer { .. }
                 | SessionInput::Interrupt { .. }
                 | SessionInput::Stop { .. }
-                | SessionInput::AnswerPermission { .. } => Err(Rejection::NotFound),
+                | SessionInput::AnswerPermission { .. }
+                | SessionInput::AskDecision { .. } => Err(Rejection::NotFound),
+                SessionInput::AnswerDecision { .. } => Err(Rejection::DecisionNotFound),
                 _ => Ok(vec![]),
             };
         };
@@ -3082,6 +3086,7 @@ pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(S
         | B::SessionLost
         | B::SessionTimeout
         | B::PermissionExpired
+        | B::DecisionExpired
         | B::BudgetExhausted
         | B::QuotaExhausted
         | B::SpecUnclear => Some((Stage::Review, StagePhase::AwaitingReview)),
@@ -3110,6 +3115,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::SessionLost
         | B::SessionTimeout
         | B::PermissionExpired
+        | B::DecisionExpired
         | B::BudgetExhausted
         | B::QuotaExhausted
         | B::NoChanges => (Stage::Dev, StagePhase::RunningSession),
@@ -3826,7 +3832,11 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SessionLost { .. }
         | E::PermissionRequested { .. }
         | E::PermissionAnswered { .. }
-        | E::PermissionDelivered { .. } => {}
+        | E::PermissionDelivered { .. }
+        | E::DecisionAsked { .. }
+        | E::DecisionAnswered { .. }
+        | E::DecisionDelivered { .. }
+        | E::DecisionExpired { .. } => {}
     }
 }
 
@@ -4081,6 +4091,7 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
         project_id: task.item.project_id,
         session,
         permissions: &task.permissions,
+        decisions: &task.decisions,
         prior_usage: task.prior_usage,
         budget: run.budget,
         budget_warnings: &run.budget_warnings,
