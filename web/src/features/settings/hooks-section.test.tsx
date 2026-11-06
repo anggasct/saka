@@ -48,6 +48,21 @@ async function section() {
 }
 
 describe("Hooks", () => {
+  it("says which operator hooks the repo file switched off", async () => {
+    fakeApi(
+      routes({
+        [PROJECT]: { body: { ...project, hooks_skipped: ["announce"] } },
+      }),
+    );
+    renderApp(SETTINGS);
+    const hooks = await section();
+    expect(
+      await hooks.findByText(
+        "Switched off for this project by saka.toml: announce.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("lists the configured hooks with their target but no secret value", async () => {
     fakeApi(routes());
     renderApp(SETTINGS);

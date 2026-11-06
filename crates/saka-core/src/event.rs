@@ -65,6 +65,7 @@ pub enum Event {
         config_commit: String,
         config_sha256: String,
         workflow: Workflow,
+        hook_skip: Vec<String>,
         repos: Vec<ProjectRepo>,
     },
     #[serde(rename = "workspace.project.config_changed")]
@@ -74,6 +75,7 @@ pub enum Event {
         config_commit: String,
         config_sha256: String,
         workflow: Workflow,
+        hook_skip: Vec<String>,
         repos: Vec<ProjectRepo>,
         trigger: ReloadTrigger,
     },

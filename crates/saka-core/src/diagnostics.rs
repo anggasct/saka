@@ -1530,6 +1530,7 @@ mod tests {
             config_sha256: "sha256:0".into(),
             config_error,
             workflow: crate::workflow::Workflow::default(),
+            hook_skip: Vec::new(),
             repos: Vec::new(),
             created_at: NOW,
             updated_at: NOW,

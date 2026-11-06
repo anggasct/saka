@@ -158,7 +158,7 @@ fn the_run_owner_migration_keeps_every_task_row_and_guards_the_owner_arc() {
     assert_eq!(
         store.migration().applied,
         vec![
-            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+            11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
         ]
     );
     assert!(store.migration().backup.is_some());

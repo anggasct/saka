@@ -364,6 +364,9 @@ impl Engine {
         let commit = file.commit.clone();
         let bytes = file.bytes()?;
         let config = project_config::parse(&bytes).map_err(|issues| config_invalid(&issues))?;
+        let hook_names = self
+            .checked_hook_skip(None, &config)
+            .map_err(|issues| config_invalid(&issues))?;
         let workspace = WorkspaceRepo {
             repo: &repo,
             host: &host,
@@ -375,6 +378,7 @@ impl Engine {
         let new = NewProject {
             name: config.name,
             workflow: config.workflow,
+            hook_skip: hook_names,
             workspace: NewRepo {
                 repo_id: Some(repo_id),
                 integration_id: integration.id.clone(),

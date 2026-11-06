@@ -50,7 +50,7 @@ const project = {
     base_branch: "main",
   },
   repos: [],
-  autonomy: "standard",
+  hooks_skipped: [],
   authorship_mode: "bot",
   workflow: FULL_LOOP,
   config_commit: COMMIT,

@@ -1518,6 +1518,8 @@ export interface components {
         /** @description `sha256:<hex>` of the `saka.toml` content in force. */
         config_sha256: string;
         created_at: string;
+        /** @description Operator hooks that `[hooks] skip` in `saka.toml` turns off for this project. */
+        hooks_skipped: string[];
         /** Format: uuid */
         id: string;
         name: string;
@@ -1808,6 +1810,8 @@ export interface components {
       /** @description `sha256:<hex>` of the `saka.toml` content in force. */
       config_sha256: string;
       created_at: string;
+      /** @description Operator hooks that `[hooks] skip` in `saka.toml` turns off for this project. */
+      hooks_skipped: string[];
       /** Format: uuid */
       id: string;
       name: string;

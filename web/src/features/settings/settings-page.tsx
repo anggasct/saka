@@ -30,7 +30,10 @@ export function SettingsPage({ projectId }: { projectId: string }) {
           <ReposSection project={project.data} />
           <ConfigSection project={project.data} />
           <WorkflowSection project={project.data} />
-          <HooksSection projectId={project.data.id} />
+          <HooksSection
+            projectId={project.data.id}
+            skipped={project.data.hooks_skipped}
+          />
           <SecretsSection projectId={project.data.id} />
           <AuthorshipSection projectId={project.data.id} />
           <DiagnosticsSection projectId={project.data.id} />

@@ -109,6 +109,7 @@ pub struct NewConfig<'a> {
     pub commit: &'a str,
     pub sha256: &'a str,
     pub workflow: Workflow,
+    pub hook_skip: Vec<String>,
     pub repos: Vec<ProjectRepo>,
     pub trigger: ReloadTrigger,
 }
@@ -120,6 +121,7 @@ pub fn config_changed(project_id: ProjectId, config: NewConfig<'_>) -> Option<Ev
         config_commit: config.commit.to_string(),
         config_sha256: config.sha256.to_string(),
         workflow: config.workflow,
+        hook_skip: config.hook_skip,
         repos: config.repos,
         trigger: config.trigger,
     })
@@ -159,6 +161,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_commit,
             config_sha256,
             workflow,
+            hook_skip,
             repos,
         } => Some(Project {
             id: *project_id,
@@ -170,6 +173,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_sha256: config_sha256.clone(),
             config_error: None,
             workflow: workflow.clone(),
+            hook_skip: hook_skip.clone(),
             repos: sorted(repos),
             created_at: project.as_ref().map_or(now, |p| p.created_at),
             updated_at: now,
@@ -179,6 +183,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_commit,
             config_sha256,
             workflow,
+            hook_skip,
             repos,
             ..
         } => project.map(|p| Project {
@@ -186,6 +191,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_commit: config_commit.clone(),
             config_sha256: config_sha256.clone(),
             workflow: workflow.clone(),
+            hook_skip: hook_skip.clone(),
             config_error: None,
             repos: sorted(repos),
             updated_at: now,

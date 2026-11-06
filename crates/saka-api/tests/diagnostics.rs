@@ -593,6 +593,7 @@ fn add_web_project(sim: &Sim) -> saka_core::ids::ProjectId {
                 config_commit: sim.world.base_head(),
                 config_sha256: saka_testkit::ZERO_SHA256.into(),
                 workflow: saka_core::workflow::Workflow::default(),
+                hook_skip: Vec::new(),
                 bindings: vec![
                     binding("acme/tasks", "api", true),
                     binding("acme/web", "site", false),

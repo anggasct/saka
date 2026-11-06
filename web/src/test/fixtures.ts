@@ -19,6 +19,7 @@ export const project: ProjectItem = {
     base_branch: "main",
   },
   repos: [],
+  hooks_skipped: [],
   authorship_mode: "bot",
   workflow: {
     preset: "full_loop",

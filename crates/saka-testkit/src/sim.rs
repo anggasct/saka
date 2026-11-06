@@ -294,6 +294,7 @@ impl Sim {
                     config_commit: sim.world.base_head(),
                     config_sha256: ZERO_SHA256.into(),
                     workflow: sim.cfg.workflow.clone(),
+                    hook_skip: Vec::new(),
                     bindings: vec![NewBinding {
                         repo: home_repo(),
                         name: "app".into(),

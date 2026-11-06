@@ -5523,6 +5523,7 @@
                 "workspace",
                 "repos",
                 "workflow",
+                "hooks_skipped",
                 "authorship_mode",
                 "config_commit",
                 "config_sha256",
@@ -5554,6 +5555,13 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "hooks_skipped": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Operator hooks that `[hooks] skip` in `saka.toml` turns off for this project."
                 },
                 "id": {
                   "type": "string",
@@ -6591,6 +6599,7 @@
           "workspace",
           "repos",
           "workflow",
+          "hooks_skipped",
           "authorship_mode",
           "config_commit",
           "config_sha256",
@@ -6622,6 +6631,13 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "hooks_skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Operator hooks that `[hooks] skip` in `saka.toml` turns off for this project."
           },
           "id": {
             "type": "string",

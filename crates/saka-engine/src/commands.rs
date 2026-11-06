@@ -74,6 +74,7 @@ pub struct NewProject {
     pub config_commit: String,
     pub config_sha256: String,
     pub workflow: Workflow,
+    pub hook_skip: Vec<String>,
     pub bindings: Vec<NewBinding>,
 }
 
@@ -213,6 +214,7 @@ impl Engine {
             config_commit: p.config_commit.clone(),
             config_sha256: p.config_sha256.clone(),
             workflow: p.workflow.clone(),
+            hook_skip: p.hook_skip.clone(),
             repos,
         });
         let mut batch = Batch::new(now);

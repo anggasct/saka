@@ -107,6 +107,10 @@ impl Engine {
             Ok(c) => c,
             Err(issues) => return Err(reject(crate::register::config_invalid(&issues))),
         };
+        let hook_names = match self.checked_hook_skip(Some(project_id), &config) {
+            Ok(names) => names,
+            Err(issues) => return Err(reject(crate::register::config_invalid(&issues))),
+        };
         let host = parse_repo_url(&repo.url)
             .map(|(h, _, _)| h)
             .unwrap_or_default();
@@ -127,6 +131,7 @@ impl Engine {
             commit: &commit,
             sha256: &sha256,
             workflow: config.workflow.clone(),
+            hook_skip: hook_names,
             repos: Vec::new(),
             trigger,
         };
