@@ -767,7 +767,7 @@ fn the_end_to_end_fixture_spec_is_ready() {
                 "S1",
                 vec![
                     "test -f e2e-runs/20261101-093000-1a2b/s1.md",
-                    "cd cli && go test ./..."
+                    "go -C cli test ./..."
                 ]
             ),
             ("S2", vec!["test -f e2e-runs/20261101-093000-1a2b/s2.md"]),

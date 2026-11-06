@@ -1,5 +1,8 @@
+mod gate;
 mod github;
+mod outside;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::net::TcpListener;
@@ -16,7 +19,7 @@ use github::GitHub;
 
 const TEMPLATE: &str = include_str!("e2e/fixture-spec.md.tmpl");
 const CONTEXT_TEMPLATE: &str = "# End-to-end context {run_id}\n\ncontext-marker: {run_id}\n";
-const RUN_LIMIT: Duration = Duration::from_secs(30 * 60);
+const RUN_LIMIT: Duration = Duration::from_secs(40 * 60);
 const READY_LIMIT: Duration = Duration::from_secs(60);
 const CLEANUP_LIMIT: Duration = Duration::from_secs(3 * 60);
 const STOP_LIMIT: Duration = Duration::from_secs(30);
@@ -24,6 +27,7 @@ const POLL: Duration = Duration::from_secs(1);
 const DEFAULT_MODEL: &str = "haiku";
 const SLOW_COMMAND: &str = "sleep 30";
 const ADVANCE_LIMIT: Duration = Duration::from_secs(5 * 60);
+const TOUCH_LIMIT: usize = 3;
 const DRAFT_IDEA: &str = "Add a `tasks count` command to the CLI that prints how many tasks are open and how many are done, one number per line.";
 const ARCHITECT_TOOLS: &[&str] = &[
     "Read",
@@ -120,6 +124,13 @@ data_dir = {data_dir}
 [scheduler]
 max_active_tasks = 1
 
+[autonomy]
+default = "standard"
+
+[[autonomy.repo]]
+repo = {repo}
+level = "autonomous"
+
 [[scm]]
 id = "github"
 provider = "github"
@@ -150,9 +161,10 @@ paths = ["**"]
 id = "safe-commands"
 effect = "allow"
 tools = ["Bash"]
-commands = ["go test *", "go vet *", "go build *", "gofmt *", "test -f *", "mkdir *", "git status*", "git diff*", "git add *", "git commit *", "git log*", "ls *", "cat *"]
+commands = ["go -C cli *", "go version", "which go", "go test *", "go vet *", "go build *", "gofmt *", "test -f *", "mkdir *", "git status*", "git diff*", "git add *", "git commit *", "git log*", "ls *", "cat *"]
 "#,
         data_dir = toml_string(&data_dir.to_string_lossy()),
+        repo = toml_string(&settings.repo),
         app_id = settings.app_id,
         key_file = toml_string(&settings.key_file.to_string_lossy()),
         claude_dir = toml_string(&settings.claude_dir.to_string_lossy()),
@@ -236,6 +248,22 @@ impl Api {
             .map(|r| r.status().as_u16())
     }
 
+    fn get_text(&self, path: &str) -> Result<String> {
+        let request = self.http.get(format!("{}{path}", self.base));
+        self.runtime.block_on(async {
+            let response = request
+                .send()
+                .await
+                .with_context(|| format!("GET {path}"))?;
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                bail!("GET {path}: {status}");
+            }
+            Ok(body)
+        })
+    }
+
     fn get(&self, path: &str) -> Result<Value> {
         let request = self.http.get(format!("{}{path}", self.base));
         self.runtime.block_on(async {
@@ -256,9 +284,26 @@ impl Api {
 struct Cli<'a> {
     saka: &'a Path,
     config: &'a Path,
+    touches: RefCell<Vec<String>>,
+    prompts: RefCell<Vec<String>>,
 }
 
 impl Cli<'_> {
+    // An action the loop needs from the operator; the scenarios' own injections go through `run`.
+    fn touch(&self, label: String, args: &[&str]) -> Result<Value> {
+        let reply = self.run(args)?;
+        self.touches.borrow_mut().push(label);
+        Ok(reply)
+    }
+
+    // A tool permission the agent asked for. It is policy, not a decision about the delivery, so it
+    // is listed beside the touches and not counted in them.
+    fn prompt(&self, label: String, args: &[&str]) -> Result<Value> {
+        let reply = self.run(args)?;
+        self.prompts.borrow_mut().push(label);
+        Ok(reply)
+    }
+
     fn run(&self, args: &[&str]) -> Result<Value> {
         let out = Command::new(self.saka)
             .arg("--json")
@@ -296,26 +341,41 @@ fn answer_permissions(
     for request in page["items"].as_array().into_iter().flatten() {
         let id = text(&request["id"]);
         let command = text(&request["input"]["command"]);
-        if text(&request["tool"]) == "Bash" && allowed.contains(command) {
+        let injected = command == SLOW_COMMAND;
+        let answer = |label: String, args: &[&str]| {
+            if injected {
+                cli.run(args).map(|_| ())
+            } else {
+                cli.prompt(label, args).map(|_| ())
+            }
+        };
+        if text(&request["tool"]) == "Bash" && (allowed.contains(command) || injected) {
             println!("  allow  {command}");
-            cli.run(&["permission", "answer", id, "allow"])?;
+            answer(
+                format!("allow {command}"),
+                &["permission", "answer", id, "allow"],
+            )?;
         } else {
-            println!(
-                "  deny   {} {}",
-                text(&request["tool"]),
-                text(&request["summary"])
-            );
-            cli.run(&[
-                "permission",
-                "answer",
-                id,
-                "deny",
-                "--message",
-                DENY_MESSAGE,
-            ])?;
+            let summary = text(&request["summary"]);
+            println!("  deny   {} {summary}", text(&request["tool"]));
+            answer(
+                format!("deny {summary}"),
+                &[
+                    "permission",
+                    "answer",
+                    id,
+                    "deny",
+                    "--message",
+                    DENY_MESSAGE,
+                ],
+            )?;
         }
     }
     Ok(())
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 fn progress(task: &Value) -> String {
@@ -477,20 +537,57 @@ fn check_packet(api: &Api, task: &str, spec: &str, context: &ContextDoc) -> Resu
     Ok(())
 }
 
+struct Target<'a> {
+    project: &'a str,
+    spec: &'a str,
+    run_id: &'a str,
+    allowed: &'a BTreeSet<String>,
+    context: &'a ContextDoc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rework {
+    Waiting,
+    Interrupted,
+    Steered,
+}
+
+fn rework_steer(run_id: &str) -> String {
+    format!(
+        "Change of plan from the operator, for this first commit only: write `e2e-runs/{run_id}/s2.md` as a single line, `placeholder`, and do not quote anything from `e2e-runs/{run_id}/s1.md` yet. Commit it and stop. A later review round will ask for the real content; do what that review asks then."
+    )
+}
+
+fn rework_step(phase: &mut Rework, task: &Value, cli: &Cli<'_>, run_id: &str) -> Result<()> {
+    let (id, key) = (text(&task["id"]), text(&task["task_key"]));
+    match (*phase, session_state(task)) {
+        (Rework::Waiting, "running") => {
+            println!("  interrupt {key}, to leave its requirement unmet");
+            cli.run(&["task", "interrupt", id])?;
+            *phase = Rework::Interrupted;
+        }
+        (Rework::Interrupted, "idle") => {
+            println!("  steer   {key} to write a placeholder");
+            cli.run(&["task", "steer", id, &rework_steer(run_id)])?;
+            *phase = Rework::Steered;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn deliver(
     api: &Api,
     cli: &Cli<'_>,
-    project: &str,
-    spec: &str,
-    allowed: &BTreeSet<String>,
-    context: &ContextDoc,
+    target: &Target<'_>,
     restart: &mut dyn FnMut() -> Result<()>,
 ) -> Result<()> {
+    let spec = target.spec;
     let mut packet_checked = false;
     let started = Instant::now();
-    let mut merged = BTreeSet::new();
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     let mut stage = Scenario::SteerRunning;
+    let mut rework = Rework::Waiting;
     let mut first: Option<String> = None;
     loop {
         if started.elapsed() > RUN_LIMIT {
@@ -499,7 +596,7 @@ fn deliver(
                 RUN_LIMIT.as_secs() / 60
             );
         }
-        answer_permissions(api, cli, project, allowed)?;
+        answer_permissions(api, cli, target.project, target.allowed)?;
         let tasks = api.get(&format!("/api/v1/work-items?spec_id={spec}&limit=200"))?;
         for task in tasks["items"].as_array().into_iter().flatten() {
             let id = text(&task["id"]).to_string();
@@ -508,14 +605,37 @@ fn deliver(
                 println!("  {line}");
                 seen.insert(id.clone(), line);
             }
+            if task["merge_auto"] != true {
+                bail!(
+                    "{} would wait for a merge tap: merge_auto is {} at autonomy {}",
+                    text(&task["task_key"]),
+                    task["merge_auto"],
+                    task["autonomy"]
+                );
+            }
             if task["step_id"] == "S1" {
                 first.get_or_insert_with(|| id.clone());
                 if !packet_checked && text(&task["stage_phase"]) == "running_session" {
-                    check_packet(api, &id, spec, context)?;
+                    check_packet(api, &id, spec, target.context)?;
                     packet_checked = true;
                 }
                 if stage != Scenario::Done && text(&task["stage_phase"]) == "running_session" {
                     exercise(&mut stage, task, cli, api, restart)?;
+                }
+            }
+            if task["step_id"] == "S2" {
+                let writing =
+                    task["stage"] == "dev" && text(&task["stage_phase"]) == "running_session";
+                if writing {
+                    rework_step(&mut rework, task, cli, target.run_id)?;
+                } else if rework != Rework::Steered
+                    && !task["stage"].is_null()
+                    && task["stage"] != "dev"
+                {
+                    bail!(
+                        "S2 left its dev stage ({}) before the scenario could leave its requirement unmet",
+                        progress(task)
+                    );
                 }
             }
             if text(&task["state"]) == "blocked" {
@@ -524,13 +644,6 @@ fn deliver(
                     text(&task["task_key"]),
                     task["blocker"]
                 );
-            }
-            let can_merge = task["available_actions"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|x| x == "merge"));
-            if can_merge && merged.insert(id.clone()) {
-                println!("  merge  {}", text(&task["task_key"]));
-                cli.run(&["task", "merge", &id, "--reason", "end-to-end run"])?;
             }
         }
         if text(&api.get(&format!("/api/v1/specs/{spec}"))?["state"]) == "shipped" {
@@ -653,6 +766,8 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
     let cli = Cli {
         saka: &run.saka,
         config: &config_path,
+        touches: RefCell::new(Vec::new()),
+        prompts: RefCell::new(Vec::new()),
     };
     let url = format!("https://github.com/{}", run.settings.repo);
     let project = cli.run(&[
@@ -665,14 +780,17 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
         &run.base,
     ])?;
     let project_id = text(&project["id"]).to_string();
-    let spec = cli.run(&[
-        "spec",
-        "approve",
-        &project_id,
-        &run.spec_path,
-        "--reason",
-        "end-to-end run",
-    ])?;
+    let spec = cli.touch(
+        "approve the spec".to_string(),
+        &[
+            "spec",
+            "approve",
+            &project_id,
+            &run.spec_path,
+            "--reason",
+            "end-to-end run",
+        ],
+    )?;
     let spec_id = text(&spec["id"]).to_string();
     println!(
         "  approved {} ({} steps)",
@@ -682,17 +800,19 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
     deliver(
         &api,
         &cli,
-        &project_id,
-        &spec_id,
-        &done_when_commands(&run.spec)
-            .into_iter()
-            .chain([SLOW_COMMAND.to_string()])
-            .collect(),
-        &run.context,
+        &Target {
+            project: &project_id,
+            spec: &spec_id,
+            run_id: &run.run_id,
+            allowed: &done_when_commands(&run.spec),
+            context: &run.context,
+        },
         &mut restart,
     )?;
     println!("  spec shipped");
     verify(github, &run.base)?;
+    gate::check(&api, &cli, github, &spec_id)?;
+    outside::review_only(&api, &cli, run)?;
     draft(&api, &cli, github, &project_id, run)
 }
 
@@ -795,6 +915,13 @@ pub fn run() -> Result<()> {
         "docs: add end-to-end context",
     )?;
     github.put_file(&base, &spec_path, &spec, "docs: add an end-to-end spec")?;
+    let review_config = outside::saka_toml(&settings.repo, &run_id);
+    github.put_file(
+        &base,
+        &format!("{}/saka.toml", outside::PROJECT_PATH),
+        &review_config,
+        "docs: add a review-only project",
+    )?;
     println!("  base branch {base} with {spec_path}");
 
     let run = Run {
@@ -835,10 +962,11 @@ mod tests {
         assert!(!spec.contains("{run_id}"));
         assert!(spec.contains("](../e2e-context-r1.md)"));
         assert!(!spec.contains("context-marker"));
+        assert!(spec.contains("| S2 |"));
         assert_eq!(
             done_when_commands(&spec),
             BTreeSet::from([
-                "cd cli && go test ./...".to_string(),
+                "go -C cli test ./...".to_string(),
                 "test -f e2e-runs/r1/s1.md".to_string(),
                 "test -f e2e-runs/r1/s2.md".to_string(),
             ])
@@ -857,5 +985,60 @@ mod tests {
         let text = config(&settings, "127.0.0.1:1", Path::new("/d"));
         assert!(text.contains("private_key_file = \"/k \\\"x\\\".pem\""));
         assert!(text.contains("app_id = 7"));
+    }
+
+    #[test]
+    fn the_generated_config_lifts_the_repo_to_autonomous() {
+        let settings = Settings {
+            app_id: 7,
+            key_file: PathBuf::from("/k.pem"),
+            repo: "acme/app".into(),
+            claude_dir: PathBuf::from("/c"),
+            model: "haiku".into(),
+        };
+        let text = config(&settings, "127.0.0.1:1", Path::new("/d"));
+        let parsed: toml::Table = text.parse().unwrap_or_default();
+        assert_eq!(parsed["autonomy"]["default"].as_str(), Some("standard"));
+        let repos = parsed["autonomy"]["repo"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0]["repo"].as_str(), Some("acme/app"));
+        assert_eq!(repos[0]["level"].as_str(), Some("autonomous"));
+        assert!(text.contains("\"go -C cli *\""));
+    }
+
+    #[test]
+    fn the_rework_steer_names_the_file_and_defers_to_the_review() {
+        let steer = rework_steer("r1");
+        assert!(steer.contains("e2e-runs/r1/s2.md"));
+        assert!(steer.contains("e2e-runs/r1/s1.md"));
+        assert!(steer.contains("later review round"));
+    }
+
+    #[test]
+    fn decisions_are_touches_prompts_are_listed_and_injections_are_not() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let fake = dir.path().join("saka");
+        std::fs::write(&fake, "#!/bin/sh\necho '{}'\n").unwrap_or_else(|e| panic!("write: {e}"));
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("chmod: {e}"));
+        let cli = Cli {
+            saka: &fake,
+            config: Path::new("/c"),
+            touches: RefCell::new(Vec::new()),
+            prompts: RefCell::new(Vec::new()),
+        };
+        assert!(cli.run(&["task", "steer"]).is_ok());
+        assert!(cli.touches.borrow().is_empty());
+        assert!(cli.touch("approve".into(), &["spec", "approve"]).is_ok());
+        assert_eq!(*cli.touches.borrow(), vec!["approve".to_string()]);
+        assert!(
+            cli.prompt("allow ls".into(), &["permission", "answer"])
+                .is_ok()
+        );
+        assert_eq!(cli.touches.borrow().len(), 1);
+        assert_eq!(cli.prompts.borrow().len(), 1);
     }
 }

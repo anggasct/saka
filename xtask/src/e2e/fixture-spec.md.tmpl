@@ -16,5 +16,5 @@ The run's notes are in [the context doc](../e2e-context-{run_id}.md).
 
 | Step | Work | AC | Done when |
 |------|------|----|-----------|
-| S1 | Create `e2e-runs/{run_id}/s1.md` with one line of text, and a Go test `cli/internal/e2e/s1_test.go` (package `e2e`) that reads that file and fails when it is missing or empty | AC-01 | `test -f e2e-runs/{run_id}/s1.md` `cd cli && go test ./...` |
+| S1 | Create `e2e-runs/{run_id}/s1.md` with one line of text, and a Go test `cli/internal/e2e/s1_test.go` (package `e2e`) that reads that file and fails when it is missing or empty | AC-01 | `test -f e2e-runs/{run_id}/s1.md` `go -C cli test ./...` |
 | S2 | Create `e2e-runs/{run_id}/s2.md` that quotes the line in `e2e-runs/{run_id}/s1.md` | AC-02 | `test -f e2e-runs/{run_id}/s2.md` |
