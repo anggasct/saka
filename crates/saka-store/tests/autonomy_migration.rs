@@ -79,7 +79,7 @@ fn the_autonomy_migration_moves_the_level_to_the_repo_binding_and_keeps_every_ro
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![28, 29, 30, 31, 32]);
+    assert_eq!(store.migration().applied, vec![28, 29, 30, 31, 32, 33]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

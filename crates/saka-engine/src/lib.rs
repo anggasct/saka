@@ -514,7 +514,9 @@ impl Engine {
 
     fn commit(&self, batch: &Batch) -> Result<Vec<i64>> {
         let inbox = self.inbox_syncs(batch);
-        let seqs = self.store.commit_synced(batch, &inbox)?;
+        let seqs = self.store.commit_synced(batch, &inbox, &|opened| {
+            self.plan_inbox_hooks(opened, batch.now)
+        })?;
         if !batch.events.is_empty()
             || !batch.jobs.is_empty()
             || batch.action.is_some()

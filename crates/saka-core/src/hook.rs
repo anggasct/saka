@@ -7,13 +7,15 @@ use uuid::Uuid;
 
 use crate::blocker::primary_action;
 use crate::event::Event;
-use crate::ids::{BlockerId, HookRunId, IdSource, ProjectId, RepoId, ReviewId, SpecId, WorkItemId};
+use crate::ids::{
+    BlockerId, HookRunId, IdSource, InboxItemId, ProjectId, RepoId, ReviewId, SpecId, WorkItemId,
+};
 use crate::model::{Coded, Spec, Task};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerAction, BlockerCode, ChangeRole, HookActionKind, HookEvent, HookMode, HookRunState,
-    ReviewOutcome,
+    InboxKind, InboxSubject, ReviewOutcome,
 };
 
 pub const MAX_PER_PROJECT: usize = 32;
@@ -275,6 +277,9 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
         return Err(issue("hook_filter_invalid", name, Some("repos")));
     }
     let branches = filter_list(name, "branches", &raw.branches)?;
+    if on == HookEvent::InboxItemOpened && !(repos.is_empty() && branches.is_empty()) {
+        return Err(issue("hook_filter_invalid", name, Some("repos")));
+    }
     for pattern in branches {
         let built = GlobBuilder::new(pattern)
             .literal_separator(true)
@@ -429,6 +434,13 @@ pub struct BlockerRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxRef {
+    pub id: InboxItemId,
+    pub kind: InboxKind,
+    pub subject: InboxSubject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewRef {
     pub id: ReviewId,
     pub outcome: ReviewOutcome,
@@ -451,6 +463,7 @@ pub struct HookContext {
     pub sha: Option<String>,
     pub blocker: Option<BlockerRef>,
     pub review: Option<Box<ReviewRef>>,
+    pub inbox: Option<InboxRef>,
     pub occurred_at: String,
 }
 
@@ -541,6 +554,7 @@ pub fn task_context(
         sha,
         blocker,
         review,
+        inbox: None,
         occurred_at: now.to_rfc3339(),
     })
 }
@@ -563,6 +577,30 @@ pub fn spec_context(spec: &Spec, project_name: &str, now: Timestamp) -> HookCont
         sha: None,
         blocker: None,
         review: None,
+        inbox: None,
+        occurred_at: now.to_rfc3339(),
+    }
+}
+
+pub fn inbox_context(
+    inbox: InboxRef,
+    project: NamedRef,
+    task: Option<TaskRef>,
+    spec: Option<SpecRef>,
+    now: Timestamp,
+) -> HookContext {
+    HookContext {
+        event: HookEvent::InboxItemOpened,
+        project,
+        repo: None,
+        task,
+        spec,
+        change: None,
+        branch: None,
+        sha: None,
+        blocker: None,
+        review: None,
+        inbox: Some(inbox),
         occurred_at: now.to_rfc3339(),
     }
 }
@@ -593,6 +631,14 @@ impl HookContext {
         set("SAKA_TASK_KEY", self.task.as_ref().map(|t| t.key.clone()));
         set("SAKA_SPEC", self.spec.as_ref().map(|s| s.path.clone()));
         set("SAKA_BRANCH", self.branch.clone());
+        set(
+            "SAKA_INBOX_KIND",
+            self.inbox.as_ref().map(|i| i.kind.as_str().to_string()),
+        );
+        set(
+            "SAKA_INBOX_SUBJECT",
+            self.inbox.as_ref().map(|i| i.subject.as_str().to_string()),
+        );
         set(
             "SAKA_REVIEW_OUTCOME",
             self.review.as_ref().map(|r| r.outcome.as_str().to_string()),
@@ -880,6 +926,24 @@ mod tests {
     }
 
     #[test]
+    fn the_inbox_event_takes_a_notification_but_no_repo_filter_and_no_command_in_a_checkout() {
+        let on_inbox = |action: &str| RawHook {
+            on: "inbox_item_opened".into(),
+            command: (action != "notify").then(|| "echo".into()),
+            channel: (action == "notify").then(|| "ops".into()),
+            ..raw(action)
+        };
+        assert_eq!(code(on_inbox("notify")), "ok");
+        assert_eq!(code(on_inbox("run_host")), "ok");
+        assert_eq!(code(on_inbox("run")), "hook_run_event_invalid");
+        let filtered = RawHook {
+            repos: vec!["app".into()],
+            ..on_inbox("notify")
+        };
+        assert_eq!(code(filtered), "hook_filter_invalid");
+    }
+
+    #[test]
     fn a_valid_notify_hook_parses_with_defaults() {
         let hooks = parse_all(&[raw("notify")]).unwrap_or_default();
         assert_eq!(hooks.len(), 1);
@@ -1096,6 +1160,7 @@ mod tests {
                 action: Some(BlockerAction::Retry),
             }),
             review: None,
+            inbox: None,
             occurred_at: Timestamp(0).to_rfc3339(),
         }
     }

@@ -59,13 +59,23 @@ impl Store {
     }
 
     pub fn commit(&self, batch: &Batch) -> Result<Vec<i64>> {
-        self.commit_synced(batch, &[])
+        self.commit_synced(batch, &[], &|_| None)
     }
 
-    pub fn commit_synced(&self, batch: &Batch, inbox: &[inbox::InboxSync]) -> Result<Vec<i64>> {
+    pub fn commit_synced(
+        &self,
+        batch: &Batch,
+        inbox: &[inbox::InboxSync],
+        follow: &dyn Fn(&[inbox::OpenedItem]) -> Option<Batch>,
+    ) -> Result<Vec<i64>> {
         let mut conn = self.writer.lock().map_err(|_| StoreError::Poisoned)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let seqs = write::write(&tx, batch, inbox)?;
+        let (mut seqs, opened) = write::write(&tx, batch, inbox)?;
+        if !opened.is_empty()
+            && let Some(extra) = follow(&opened)
+        {
+            seqs.extend(write::write(&tx, &extra, &[])?.0);
+        }
         tx.commit()?;
         Ok(seqs)
     }

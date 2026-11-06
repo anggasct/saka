@@ -18,7 +18,11 @@ saka draft list <project>                             # also: show, timeline, st
 saka task list
 saka task steer <task> "<message>"                     # also: interrupt, stop --reason, timeline
 saka permission answer <request> allow --remember      # allow the same request in this project from now on
+saka inbox list [--project <project>]                  # what waits for you across projects, newest first
+saka inbox dismiss <item> --reason "<why>"             # only a spec approval; it returns with the spec's next revision
 ```
+
+The web app opens on the Inbox: one card per permission, blocker, spec approval, step start, or merge that waits for you, with a badge in the header. Each card has one main action that calls the same endpoint as the task page. A `notify` hook with `on = "inbox_item_opened"` sends a message when an item starts waiting; with `[notify] public_url` set it links to `/inbox/<id>`.
 
 `saka init` runs inside a local clone of a code repo. It asks where the docs live (this repo, or the local clone of a separate docs repo), writes `saka.toml` there or adds this repo to an existing one without touching its comments, and reports the Go, Node, pnpm, Rust, and Python versions the repo pins. For a version that is not exact, it offers a version file (`.nvmrc`, `.python-version`, `rust-toolchain.toml`) or prints the official command (`npm pkg set …`, `go mod edit …`); `package.json` and `go.mod` are never edited. It also offers a `.saka/environment.toml` with setup commands from the root lockfiles. Then it checks the file with the server (`POST /api/v1/projects/actions/check-config`): integration, App access, and base branches, all problems at once. Saka never commits, pushes, or fetches in your repo; once the same `saka.toml` is on the remote base branch, the next `saka init` registers the project, or reloads it when it is already registered. Every choice is a flag (`--docs repo --docs-repo <dir> --docs-path <folder>`, `--project-name`, `--repo-name`, `--base-branch`, `--path-scope`, `--default`, `--write-version-files`, `--write-recipe`, `--no-register`, `--dry-run`, `--yes`, `--json`). Exit codes: 0 done, 1 failed, 2 usage or environment, 3 config problems, 5 waiting for a push. `saka project add <url> --path <folder>` still registers a project whose `saka.toml` is already pushed.
 

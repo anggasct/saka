@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
+import { Route as InboxItemIdRouteImport } from './routes/inbox.$itemId'
 import { Route as SettingsIndexRouteImport } from './routes/settings.index'
 import { Route as SettingsProjectIdRouteImport } from './routes/settings.$projectId'
 import { Route as DeliveryTasksWorkItemIdRouteImport } from './routes/delivery.tasks.$workItemId'
@@ -37,6 +38,11 @@ const DocsIndexRoute = DocsIndexRouteImport.update({
 const DocsProjectIdRoute = DocsProjectIdRouteImport.update({
   id: '/docs/$projectId',
   path: '/docs/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InboxItemIdRoute = InboxItemIdRouteImport.update({
+  id: '/inbox/$itemId',
+  path: '/inbox/$itemId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
@@ -70,6 +76,7 @@ const DocsProjectIdDraftsDraftIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
+  '/inbox/$itemId': typeof InboxItemIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
@@ -81,6 +88,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
+  '/inbox/$itemId': typeof InboxItemIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/delivery': typeof DeliveryIndexRoute
   '/docs': typeof DocsIndexRoute
@@ -93,6 +101,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
+  '/inbox/$itemId': typeof InboxItemIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/delivery/': typeof DeliveryIndexRoute
   '/docs/': typeof DocsIndexRoute
@@ -106,6 +115,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/docs/$projectId'
+    | '/inbox/$itemId'
     | '/settings/$projectId'
     | '/delivery/'
     | '/docs/'
@@ -117,6 +127,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/docs/$projectId'
+    | '/inbox/$itemId'
     | '/settings/$projectId'
     | '/delivery'
     | '/docs'
@@ -128,6 +139,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/docs/$projectId'
+    | '/inbox/$itemId'
     | '/settings/$projectId'
     | '/delivery/'
     | '/docs/'
@@ -140,6 +152,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DocsProjectIdRoute: typeof DocsProjectIdRoute
+  InboxItemIdRoute: typeof InboxItemIdRoute
   SettingsProjectIdRoute: typeof SettingsProjectIdRoute
   DeliveryIndexRoute: typeof DeliveryIndexRoute
   DocsIndexRoute: typeof DocsIndexRoute
@@ -177,6 +190,13 @@ declare module '@tanstack/react-router' {
       path: '/docs/$projectId'
       fullPath: '/docs/$projectId'
       preLoaderRoute: typeof DocsProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inbox/$itemId': {
+      id: '/inbox/$itemId'
+      path: '/inbox/$itemId'
+      fullPath: '/inbox/$itemId'
+      preLoaderRoute: typeof InboxItemIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/': {
@@ -220,6 +240,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DocsProjectIdRoute: DocsProjectIdRoute,
+  InboxItemIdRoute: InboxItemIdRoute,
   SettingsProjectIdRoute: SettingsProjectIdRoute,
   DeliveryIndexRoute: DeliveryIndexRoute,
   DocsIndexRoute: DocsIndexRoute,

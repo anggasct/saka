@@ -67,6 +67,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (30, include_str!("../migrations/0030_hook_skip.sql")),
     (31, include_str!("../migrations/0031_inbox_item.sql")),
     (32, include_str!("../migrations/0032_permission_rule.sql")),
+    (33, include_str!("../migrations/0033_hook_inbox_event.sql")),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {

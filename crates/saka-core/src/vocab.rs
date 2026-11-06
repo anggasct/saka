@@ -217,6 +217,7 @@ vocab!(HookEvent {
     TaskDone => "task_done",
     SpecShipped => "spec_shipped",
     Blocked => "blocked",
+    InboxItemOpened => "inbox_item_opened",
 });
 vocab!(HookMode { After => "after", Gate => "gate" });
 vocab!(HookActionKind { Run => "run", RunHost => "run_host", Webhook => "webhook", Notify => "notify" });
