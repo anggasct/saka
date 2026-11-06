@@ -101,7 +101,7 @@
   "error.invalid_state": "The task or session is no longer in a state that allows this.",
   "error.version_stale": "The task changed since it was loaded. Review it and try again.",
   "error.precondition_required": "The request needs the version of the task it acts on.",
-  "error.merge_not_ready": "The gate at {head} is {outcome}, so the pull request cannot be merged yet.",
+  "error.merge_not_ready": "{reason, select, review {{review_case, select, none {The pull request at {head} has not been reviewed yet, so it cannot be merged yet.} same {The review of {head} is {verdict}, so the pull request cannot be merged until a review approves it.} other {The last review ({verdict}) judged {review_head}, not the current head {head}. The pull request needs an approving review at its current head before it can be merged.}}} other {The gate at {head} is {outcome}, so the pull request cannot be merged yet.}}",
   "error.entry_point_disabled": "The workflow of this project has no {entry} entry point.",
   "error.stage_not_takeable": "The task cannot be taken over while it is merging or after it has merged.",
   "error.return_target_invalid": "{reason, select, no_change_request {The task has no pull request yet, so it cannot return to {stage}.} stage_not_in_workflow {The workflow of this project has no {stage} stage, so the task cannot return to it.} no_findings {No review asks for changes at the current head of the pull request, so there is nothing to fix.} environment_missing {The environment of the task is gone, so it cannot return to {stage}.} other {The task cannot return to {stage}.}}",

@@ -3,13 +3,15 @@
 use saka_core::blocker::primary_action;
 use saka_core::model::Task;
 use saka_core::vocab::{
-    BlockerAction, BlockerCode, SessionState, Stage, StagePhase, StageRunState, WorkItemState,
+    BlockerAction, BlockerCode, SessionState, Stage, StagePhase, StageRunState, Trigger,
+    WorkItemState,
 };
-use saka_engine::SessionCommand;
+use saka_core::workflow::Workflow;
+use saka_engine::{EngineError, SessionCommand};
 use saka_ports::Clock;
 use saka_testkit::{
-    AgentOutcome, AgentScript, ChangeSpec, CiScript, FileEdit, Layout, Operator, ReviewReply,
-    SHOP_REPO, Sim, SimConfig, repo_entry, saka_toml,
+    AgentOutcome, AgentScript, ChangeSpec, CiScript, FileEdit, HOME_REPO, Layout, Operator,
+    ReviewReply, SHOP_REPO, Sim, SimConfig, repo_entry, saka_toml,
 };
 
 const STEPS: usize = 20_000;
@@ -380,4 +382,86 @@ fn a_stage_unblocked_by_hand_shows_its_real_stage_and_never_the_old_failed_state
     assert_eq!(task.item.state, WorkItemState::InStage);
     assert_eq!(task.item.stage, Some(Stage::Merge));
     assert!(task.open_blocker().is_none());
+}
+
+fn request_merge(sim: &Sim) -> Result<(), EngineError> {
+    let engine = sim.engine();
+    let task = sim.task(1);
+    engine
+        .request_merge(
+            task.item.id,
+            task.item.version,
+            None,
+            &engine.cause("human:operator:local"),
+        )
+        .map(|_| ())
+}
+
+fn not_ready(result: Result<(), EngineError>) -> serde_json::Value {
+    match result {
+        Err(EngineError::Rejected(rejection)) => {
+            assert_eq!(rejection.code(), "merge_not_ready", "{rejection:?}");
+            rejection.params()
+        }
+        other => panic!("expected a refused merge, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_blocking_verdict_never_applies_to_a_moved_head_and_the_refused_merge_says_why() {
+    let mut workflow = Workflow::default();
+    workflow.set_stage(Stage::Fix, Trigger::Manual);
+    let mut sim = Sim::new(SimConfig {
+        workflow,
+        ..hand_merge()
+    });
+    fresh_commits(&sim);
+    sim.world.script_reviews(vec![
+        ReviewReply::request_changes("Cover the empty list."),
+        ReviewReply::approve(),
+    ]);
+    sim.approve();
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1)
+            .open_blocker()
+            .is_some_and(|b| b.code == BlockerCode::VerdictFailed)
+    }));
+    let judged = head(&sim.task(1));
+    let number = sim.task(1).change_request.unwrap().number;
+
+    let human = sim.world.push_to_change(HOME_REPO, number);
+    assert!(sim.run_until(STEPS, |s| head(&s.task(1)) == human));
+    let task = sim.task(1);
+    assert!(
+        task.rejected_at(&human).is_none(),
+        "the verdict is for the old head"
+    );
+    assert!(!task.approved_at(&human));
+
+    let params = not_ready(request_merge(&sim));
+    assert_eq!(params["reason"], "review");
+    assert_eq!(params["head_sha"], human.as_str());
+    assert_eq!(params["review_head_sha"], judged.as_str());
+    assert_eq!(params["review_outcome"], "changes_requested");
+    assert!(sim.world.merge_calls().is_empty());
+
+    let engine = sim.engine();
+    engine
+        .retry(
+            task.item.id,
+            "one more round",
+            &engine.cause("human:operator:local"),
+        )
+        .unwrap();
+    assert!(sim.run_until(STEPS, |s| {
+        s.task(1).is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    }));
+    let task = sim.task(1);
+    assert!(task.approved_at(&head(&task)));
+    assert_ne!(
+        head(&task),
+        human,
+        "the review judged the head after the fix"
+    );
+    request_merge(&sim).unwrap();
 }

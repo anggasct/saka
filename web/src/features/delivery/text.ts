@@ -158,6 +158,14 @@ export function blockerText(
   return t(key, values);
 }
 
+function reviewCase(params: Record<string, unknown>): string {
+  const judged = text(params.review_head_sha);
+  if (judged === "") {
+    return "none";
+  }
+  return judged === text(params.head_sha) ? "same" : "other";
+}
+
 export function errorText(
   t: T,
   code: string,
@@ -172,6 +180,9 @@ export function errorText(
     issue: text(params.code),
     head: sha(params.head_sha),
     outcome: label(t, "gate.outcome", text(params.gate_outcome)),
+    verdict: label(t, "task.review.outcome", text(params.review_outcome)),
+    review_head: sha(params.review_head_sha),
+    review_case: reviewCase(params),
     stage: label(t, "stage", text(params.stage)),
     entry: label(t, "workflowEntry", text(params.entry)),
     number: text(params.number),

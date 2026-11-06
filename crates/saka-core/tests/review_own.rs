@@ -170,6 +170,22 @@ fn request_merge(task: &Task) -> Result<Vec<Event>, Rejection> {
     )
 }
 
+fn refusal(task: &Task) -> (&'static str, Option<String>, Option<&'static str>) {
+    match request_merge(task) {
+        Err(Rejection::MergeNotReady {
+            reason,
+            head_sha,
+            review_head_sha,
+            review_outcome,
+            ..
+        }) => {
+            assert_eq!(head_sha.as_deref(), Some(HEAD));
+            (reason, review_head_sha, review_outcome)
+        }
+        other => panic!("expected a refused merge, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_task_with_a_review_stage_merges_only_at_a_head_with_an_approving_verdict() {
     let mut task = task_at_merge(Workflow::of(WorkflowPreset::FullLoop));
@@ -181,20 +197,26 @@ fn a_task_with_a_review_stage_merges_only_at_a_head_with_an_approving_verdict() 
     assert!(task.has_review_stage());
     assert!(!task::merge_ready(&task));
     assert!(!task::available_actions(&task).contains(&"merge"));
-    assert!(matches!(
-        request_merge(&task),
-        Err(Rejection::MergeNotReady { .. })
-    ));
+    assert_eq!(refusal(&task), ("review", None, None));
 
     task.reviews = vec![review(OTHER, ReviewOutcome::Approved)];
     assert!(
         !task::merge_ready(&task),
         "a verdict at another head is not enough"
     );
+    assert_eq!(
+        refusal(&task),
+        ("review", Some(OTHER.to_string()), Some("approved")),
+        "the refusal names the head the verdict judged"
+    );
     task.reviews = vec![review(HEAD, ReviewOutcome::ChangesRequested)];
     assert!(
         !task::merge_ready(&task),
         "only an approval opens the merge"
+    );
+    assert_eq!(
+        refusal(&task),
+        ("review", Some(HEAD.to_string()), Some("changes_requested"))
     );
 
     task.reviews = vec![review(HEAD, ReviewOutcome::Approved)];
