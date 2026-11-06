@@ -127,6 +127,9 @@ fn crash_config() -> SimConfig {
         BlockerCode::ScmUnavailable,
         BlockerCode::DodFailed,
     ];
+    // After a merge the loop polls the base commit every 15 s until checks appear or this
+    // window ends. Three polls reach the same states as forty, so a run stays short.
+    cfg.loop_cfg.ci_appear_timeout_ms = 45_000;
     cfg
 }
 
