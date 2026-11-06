@@ -1350,10 +1350,10 @@ impl Decider<'_> {
         let awaiting_merge = self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
         match verdict {
             Verdict::Failed(params) => self.block(BlockerCode::CiRed, params, ctx),
+            Verdict::Passed if self.needs_review(head_sha) => self.request_review(head_sha, ctx),
             Verdict::Passed if self.task.is_queued() && !head_changed => {
                 self.queued_merge(head_sha, true)
             }
-            Verdict::Passed if self.needs_review(head_sha) => self.request_review(head_sha, ctx),
             Verdict::Passed if !awaiting_merge || head_changed => {
                 self.phase(StagePhase::AwaitingMerge, Some(head_sha.to_string()))
             }
@@ -2121,6 +2121,9 @@ impl Decider<'_> {
                     });
                 }
                 match self.verdict(&head_sha, None, None, !rebased) {
+                    Verdict::Passed if self.needs_review(&head_sha) => {
+                        events.extend(self.request_review(&head_sha, ctx))
+                    }
                     Verdict::Passed => events.extend(self.queued_merge(&head_sha, rebased)),
                     Verdict::Failed(params) => {
                         events.extend(self.block(BlockerCode::CiRed, params, ctx))
