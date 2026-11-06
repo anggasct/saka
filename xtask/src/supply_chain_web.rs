@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
@@ -8,6 +9,14 @@ use serde_json::Value;
 use crate::supply_chain::{Finding, expect_rejected};
 
 const FIXTURES: &str = "xtask/fixtures/supply-chain";
+
+const SIGNATURE_ATTEMPTS: usize = 3;
+const SIGNATURE_PAUSE: Duration = Duration::from_secs(3);
+const TRANSPORT_ERRORS: &[&str] = &[
+    "ERR_PNPM_AUDIT_SIGNATURE_KEYS_FETCH_FAIL",
+    "ERR_PNPM_AUDIT_SIGNATURE_PACKUMENT_FETCH_FAIL",
+];
+const TRANSPORT_REASON: &str = "Failed to request the";
 
 const POLICY: &[(&str, &str)] = &[
     ("minimumReleaseAge", "1440"),
@@ -100,7 +109,15 @@ impl Web {
     }
 
     fn signatures(&self) -> Result<()> {
-        self.passes(&["audit", "signatures"])
+        retry_transport(SIGNATURE_ATTEMPTS, SIGNATURE_PAUSE, || {
+            let out = self.output(&self.dir(), &["audit", "signatures", "--json"])?;
+            let attempt = signature_attempt(&out);
+            match &attempt {
+                Attempt::Verified => print!("{}", String::from_utf8_lossy(&out.stdout)),
+                _ => eprint!("{}", with_output(anyhow!("pnpm audit signatures"), &out)),
+            }
+            Ok(attempt)
+        })
     }
 
     fn unused(&self) -> Result<()> {
@@ -169,6 +186,74 @@ impl Web {
         )
         .map_err(|err| with_output(err, &out))
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Attempt {
+    Verified,
+    Transport,
+    Rejected(String),
+}
+
+fn signature_attempt(out: &Output) -> Attempt {
+    classify_signatures(
+        out.status.success(),
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    )
+}
+
+// pnpm reports a registry request that failed as an `invalid` entry whose reason is the request
+// error, so the report is read entry by entry: only a report made of nothing but such entries is
+// transient, and one real invalid signature or missing signature fails the step at once.
+fn classify_signatures(success: bool, stdout: &str, stderr: &str) -> Attempt {
+    if success {
+        return Attempt::Verified;
+    }
+    if TRANSPORT_ERRORS.iter().any(|code| stderr.contains(code)) {
+        return Attempt::Transport;
+    }
+    let report = serde_json::from_str::<Value>(stdout).ok();
+    let invalid = report
+        .as_ref()
+        .and_then(|r| r["invalid"].as_array())
+        .filter(|invalid| !invalid.is_empty());
+    let nothing_missing = report
+        .as_ref()
+        .is_some_and(|r| r["missing"].as_array().is_none_or(Vec::is_empty));
+    let all_transport = invalid.is_some_and(|invalid| {
+        invalid.iter().all(|entry| {
+            entry["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.starts_with(TRANSPORT_REASON))
+        })
+    });
+    if nothing_missing && all_transport {
+        Attempt::Transport
+    } else {
+        Attempt::Rejected(format!("{}\n{}", stdout.trim(), stderr.trim()))
+    }
+}
+
+fn retry_transport(
+    attempts: usize,
+    pause: Duration,
+    mut run: impl FnMut() -> Result<Attempt>,
+) -> Result<()> {
+    for attempt in 1..=attempts {
+        match run()? {
+            Attempt::Verified => return Ok(()),
+            Attempt::Rejected(report) => bail!("pnpm audit signatures failed\n{report}"),
+            Attempt::Transport if attempt == attempts => {
+                bail!("pnpm audit signatures could not reach the registry in {attempts} attempts")
+            }
+            Attempt::Transport => {
+                eprintln!("pnpm audit signatures could not reach the registry, retrying");
+                std::thread::sleep(pause);
+            }
+        }
+    }
+    bail!("pnpm audit signatures was not attempted")
 }
 
 fn with_output(err: anyhow::Error, out: &Output) -> anyhow::Error {
@@ -375,6 +460,7 @@ fn satisfied(license: &str, permitted: &BTreeSet<String>) -> std::result::Result
 mod tests {
     use super::*;
     use crate::metadata;
+    use serde_json::json;
 
     fn allow() -> BTreeSet<String> {
         allowed_licenses(&metadata::workspace_root().unwrap().join("deny.toml")).unwrap()
@@ -515,6 +601,72 @@ mod tests {
             "{err}"
         );
         assert!(check_policy("strictDepBuilds", "false", "true").is_err());
+    }
+
+    #[test]
+    fn only_a_registry_transport_error_is_retried_and_only_a_bounded_number_of_times() {
+        let keys = "Error: ERR_PNPM_AUDIT_SIGNATURE_KEYS_FETCH_FAIL\n\n  x Failed to request";
+        assert_eq!(classify_signatures(false, "", keys), Attempt::Transport);
+        assert_eq!(
+            classify_signatures(true, r#"{"invalid":[],"missing":[]}"#, ""),
+            Attempt::Verified
+        );
+
+        let entry =
+            |reason: &str| json!({ "name": "typescript", "version": "6.0.3", "reason": reason });
+        let report = |invalid: Vec<Value>, missing: Vec<Value>| {
+            json!({ "audited": 3, "invalid": invalid, "missing": missing }).to_string()
+        };
+        let down = entry(
+            "Failed to request the packument endpoint (at https://registry.npmjs.org/typescript): error decoding response body",
+        );
+        let tampered =
+            entry("left-pad@1.3.0 has an invalid registry signature with keyid SHA256:abc");
+        assert_eq!(
+            classify_signatures(false, &report(vec![down.clone(), down.clone()], vec![]), ""),
+            Attempt::Transport
+        );
+        for mixed in [
+            report(vec![down.clone(), tampered.clone()], vec![]),
+            report(vec![tampered], vec![]),
+            report(vec![down], vec![json!({ "name": "x" })]),
+            report(vec![], vec![]),
+            "not json".to_string(),
+        ] {
+            assert!(
+                matches!(classify_signatures(false, &mixed, ""), Attempt::Rejected(_)),
+                "{mixed}"
+            );
+        }
+
+        let pause = Duration::ZERO;
+        let mut calls = 0;
+        let rejected = retry_transport(3, pause, || {
+            calls += 1;
+            Ok(Attempt::Rejected("tampered".into()))
+        });
+        assert!(rejected.unwrap_err().to_string().contains("tampered"));
+        assert_eq!(calls, 1);
+
+        calls = 0;
+        retry_transport(3, pause, || {
+            calls += 1;
+            Ok(if calls < 3 {
+                Attempt::Transport
+            } else {
+                Attempt::Verified
+            })
+        })
+        .unwrap();
+        assert_eq!(calls, 3);
+
+        calls = 0;
+        let down = retry_transport(3, pause, || {
+            calls += 1;
+            Ok(Attempt::Transport)
+        });
+        assert!(down.unwrap_err().to_string().contains("3 attempts"));
+        assert_eq!(calls, 3);
     }
 
     #[test]
