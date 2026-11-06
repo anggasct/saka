@@ -1372,6 +1372,19 @@ export interface components {
       limit: unknown;
       used: unknown;
     };
+    MergeQueue: {
+      base_branch: string;
+      /**
+       * Format: int32
+       * @description `0` when the task holds the turn, otherwise its place among those waiting, starting at `1`.
+       */
+      position: number;
+      /**
+       * Format: int32
+       * @description Tasks holding the turn plus tasks waiting for it.
+       */
+      size: number;
+    };
     Meta: {
       api_version: string;
       capabilities: string[];
@@ -1602,6 +1615,7 @@ export interface components {
         gates: components["schemas"]["Gate"][];
         /** Format: uuid */
         id: string;
+        merge_queue?: components["schemas"]["MergeQueue"] | null;
         origin: string;
         /** Format: int32 */
         pending_permission_count: number;
@@ -2499,6 +2513,7 @@ export interface components {
       gates: components["schemas"]["Gate"][];
       /** Format: uuid */
       id: string;
+      merge_queue?: components["schemas"]["MergeQueue"] | null;
       origin: string;
       /** Format: int32 */
       pending_permission_count: number;

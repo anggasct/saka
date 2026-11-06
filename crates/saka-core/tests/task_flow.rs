@@ -2654,3 +2654,33 @@ fn a_late_integration_result_is_dropped_outside_the_integrating_phase() {
     );
     assert!(w.decide(1, rebased('b', 'd')).is_empty());
 }
+
+#[test]
+fn a_queued_task_knows_its_place_in_line() {
+    let w = queued_world();
+    let first = w.task(1).clone();
+    let copy = |n: u128, priority: i64, at: i64, phase: StagePhase| {
+        let mut t = first.clone();
+        t.item.id = saka_core::ids::WorkItemId(Uuid::from_u128(n));
+        t.item.priority = priority;
+        t.item.stage_phase = Some(phase);
+        t.stage_run.as_mut().unwrap().queued_at = Some(Timestamp(at));
+        t
+    };
+    let holder = copy(21, 0, 5, StagePhase::Integrating);
+    let early = copy(22, 0, 10, StagePhase::Queued);
+    let urgent = copy(23, 3, 30, StagePhase::Queued);
+    let all = [holder.clone(), early.clone(), urgent.clone()];
+    let place = |t: &Task| saka_core::queue::position(&all, t.item.id).unwrap();
+    assert_eq!((place(&holder).position, place(&holder).size), (0, 3));
+    assert_eq!(place(&urgent).position, 1);
+    assert_eq!(place(&early).position, 2);
+    assert_eq!(place(&early).base_branch, "main");
+    assert_eq!(saka_core::queue::position(&all, first.item.id), None);
+    let mut elsewhere = first.clone();
+    elsewhere.item.state = WorkItemState::Blocked;
+    assert_eq!(
+        saka_core::queue::position(&[elsewhere.clone()], elsewhere.item.id),
+        None
+    );
+}

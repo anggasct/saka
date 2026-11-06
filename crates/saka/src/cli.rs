@@ -827,13 +827,25 @@ impl Client {
                         _ => String::new(),
                     };
                     let blocker = t["blocker"]["code"].as_str().unwrap_or_default();
+                    let queue = match (
+                        t["merge_queue"]["base_branch"].as_str(),
+                        t["merge_queue"]["position"].as_u64(),
+                        t["merge_queue"]["size"].as_u64(),
+                    ) {
+                        (Some(branch), Some(0), _) => format!("queue: {branch}, its turn"),
+                        (Some(branch), Some(n), Some(size)) => {
+                            format!("queue: {branch} {n} of {size}")
+                        }
+                        _ => String::new(),
+                    };
                     format!(
-                        "{}  {}  {} {} {}",
+                        "{}  {}  {} {} {} {}",
                         text(&t["id"]),
                         text(&t["task_key"]),
                         text(&t["state"]),
                         place,
-                        blocker
+                        blocker,
+                        queue
                     )
                     .trim_end()
                     .to_string()

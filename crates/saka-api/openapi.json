@@ -5055,6 +5055,31 @@
           "used": {}
         }
       },
+      "MergeQueue": {
+        "type": "object",
+        "required": [
+          "base_branch",
+          "position",
+          "size"
+        ],
+        "properties": {
+          "base_branch": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`0` when the task holds the turn, otherwise its place among those waiting, starting at `1`.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tasks holding the turn plus tasks waiting for it.",
+            "minimum": 0
+          }
+        }
+      },
       "Meta": {
         "type": "object",
         "required": [
@@ -5964,6 +5989,17 @@
                 "id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "merge_queue": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/MergeQueue",
+                      "description": "Where the task's merge request stands in the queue of its target branch; `null` when it has\nnone, and in the answer to an action."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "origin": {
                   "type": "string"
@@ -8873,6 +8909,17 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "merge_queue": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MergeQueue",
+                "description": "Where the task's merge request stands in the queue of its target branch; `null` when it has\nnone, and in the answer to an action."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "origin": {
             "type": "string"

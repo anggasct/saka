@@ -790,6 +790,9 @@ pub struct WorkItem {
     pub priority: i64,
     /// Steps and specs this task still waits for; empty unless the task is queued.
     pub waiting_on: Vec<WaitingOn>,
+    /// Where the task's merge request stands in the queue of its target branch; `null` when it has
+    /// none, and in the answer to an action.
+    pub merge_queue: Option<MergeQueue>,
     pub change_request: Option<ChangeRequest>,
     /// The docs pull request in the workspace repo, for a task in another repo; `null` when none
     /// was opened. Gates and merge readiness never read it.
@@ -814,6 +817,15 @@ pub struct WorkItem {
     pub updated_at: String,
     pub admitted_at: Option<String>,
     pub done_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MergeQueue {
+    pub base_branch: String,
+    /// `0` when the task holds the turn, otherwise its place among those waiting, starting at `1`.
+    pub position: u32,
+    /// Tasks holding the turn plus tasks waiting for it.
+    pub size: u32,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1051,6 +1063,16 @@ impl WorkItem {
             v.budget.as_ref(),
         )
         .merging(v.merges)
+        .queued(v.merge_queue.as_ref())
+    }
+
+    fn queued(mut self, place: Option<&saka_core::queue::Position>) -> WorkItem {
+        self.merge_queue = place.map(|p| MergeQueue {
+            base_branch: p.base_branch.clone(),
+            position: p.position,
+            size: p.size,
+        });
+        self
     }
 
     fn merging(mut self, merges: bool) -> WorkItem {
@@ -1085,6 +1107,7 @@ impl WorkItem {
             stage_phase: i.stage_phase.map(|x| x.as_str().to_string()),
             priority: i.priority,
             waiting_on: waiting_on.iter().map(WaitingOn::from).collect(),
+            merge_queue: None,
             change_request: t.change_request.as_ref().map(|c| ChangeRequest {
                 id: c.id.0,
                 number: c.number,
@@ -1207,7 +1230,8 @@ impl WorkItemDetail {
                 &d.waiting_on,
                 d.budget.as_ref(),
             )
-            .merging(d.merges),
+            .merging(d.merges)
+            .queued(d.merge_queue.as_ref()),
             stage_runs: d.stage_runs.iter().map(StageRunItem::from).collect(),
             reviews: {
                 let mut all: Vec<&saka_core::model::Review> = d.task.reviews.iter().collect();

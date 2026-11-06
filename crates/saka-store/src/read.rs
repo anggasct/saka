@@ -422,6 +422,27 @@ pub fn load_task(conn: &Connection, id: WorkItemId) -> Result<Option<Task>> {
     Ok(load_tasks(conn, TaskSet::Ids(&[id]))?.into_iter().next())
 }
 
+pub fn merge_queue_members(
+    conn: &Connection,
+    repo_id: RepoId,
+    base_branch: &str,
+) -> Result<Vec<WorkItemId>> {
+    let mut stmt = conn.prepare(
+        "SELECT w.id FROM work_item w
+           JOIN change_request c ON c.work_item_id = w.id AND c.role = 'code'
+           JOIN stage_run r ON r.work_item_id = w.id AND r.state IN ('pending', 'running')
+          WHERE w.state = 'in_stage' AND w.stage = 'merge' AND w.origin = 'spec_step'
+            AND r.queued_at IS NOT NULL AND w.repo_id = ?1 AND c.base_branch = ?2
+          ORDER BY w.id",
+    )?;
+    let mut rows = stmt.query(params![repo_id.to_string(), base_branch])?;
+    let mut ids = Vec::new();
+    while let Some(row) = rows.next()? {
+        ids.push(WorkItemId(uuid(row, "id")?));
+    }
+    Ok(ids)
+}
+
 pub fn blocker_work_item(conn: &Connection, id: BlockerId) -> Result<Option<WorkItemId>> {
     one(
         conn,

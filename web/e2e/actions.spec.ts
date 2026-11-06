@@ -126,6 +126,13 @@ const blocked = task(2, {
   available_actions: ["retry", "cancel"],
 });
 
+const queued = task(4, {
+  stage_phase: "queued",
+  merge_queue: { base_branch: "main", position: 2, size: 3 },
+  session: null,
+  available_actions: ["cancel", "takeover"],
+});
+
 const taken = task(3, {
   state: "taken_over",
   stage: null,
@@ -209,7 +216,9 @@ async function mockApi(page: Page, server: Server) {
     } else if (path === "/api/v1/work-items") {
       await json(page_(tasks()));
     } else if (path.startsWith("/api/v1/work-items/")) {
-      const found = [...tasks(), taken].find((t) => path.endsWith(t.id));
+      const found = [...tasks(), taken, queued].find((t) =>
+        path.endsWith(t.id),
+      );
       await (found === undefined
         ? json({ code: "not_found", params: {} }, 404)
         : json(found));
@@ -359,6 +368,13 @@ for (const width of [375, 1280]) {
         .getByRole("button", { name: "Return to the loop" }),
       "Return the task to the loop",
     );
+
+    await page.goto(`/delivery/tasks/${queued.id}`);
+    await expect(
+      page.getByRole("region", { name: "Merge queue" }),
+    ).toContainText("1 task ahead to merge into main, 3 tasks in the queue.");
+    await noOverflow(page);
+    await accessible(page);
 
     await page.goto(`/delivery/tasks/${ready.id}`);
     await expect(log.getByText("Waiting for an answer")).toBeVisible();
