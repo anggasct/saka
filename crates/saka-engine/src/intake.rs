@@ -555,6 +555,43 @@ impl Engine {
         Ok(events)
     }
 
+    pub async fn request_fix_with(
+        &self,
+        id: saka_core::ids::WorkItemId,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<saka_core::event::Event>> {
+        let task = self.load_task(id)?;
+        let (Some(change), true) = (
+            task.change_request.as_ref(),
+            task.item.origin == WorkItemOrigin::ExternalChange,
+        ) else {
+            return Err(Rejection::Unsupported.into());
+        };
+        let repo = self.repo_ref_stored(task.item.repo_id)?;
+        let summary = self.ports.scm.change_summary(&repo, change.number).await?;
+        if summary.state != saka_core::vocab::ChangeState::Open {
+            return Err(Rejection::ChangeRequestNotOpen {
+                number: change.number,
+                state: summary.state.as_str(),
+            }
+            .into());
+        }
+        self.decide(
+            id,
+            Some(TaskInput::FixRequested {
+                cause: ExternalCause::Operator,
+                actor: None,
+            }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+
     pub async fn take_change_with(
         &self,
         project_id: ProjectId,

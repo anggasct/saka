@@ -98,6 +98,8 @@ pub enum Rejection {
     UserTokenRepoInaccessible { repos: Value },
     #[error("a review was already requested at this head")]
     ReviewAlreadyRequested { head_sha: String },
+    #[error("the change cannot be fixed now")]
+    FixNotAvailable { reason: &'static str },
     #[error("the change request does not exist")]
     ChangeRequestNotFound { repo: String, number: u64 },
     #[error("the change request belongs to a task made from a spec step")]
@@ -188,6 +190,7 @@ impl Rejection {
             Rejection::UserTokenRejected { .. } => "user_token_rejected",
             Rejection::UserTokenRepoInaccessible { .. } => "user_token_repo_inaccessible",
             Rejection::ReviewAlreadyRequested { .. } => "review_already_requested",
+            Rejection::FixNotAvailable { .. } => "fix_not_available",
             Rejection::ChangeRequestNotOpen { .. } => "change_request_not_open",
             Rejection::ChangeRequestTracked { .. } => "change_request_tracked",
             Rejection::ChangeRequestNotFound { .. } => "change_request_not_found",
@@ -274,6 +277,7 @@ impl Rejection {
             Rejection::UserTokenRejected { status } => json!({ "status": status }),
             Rejection::UserTokenRepoInaccessible { repos } => json!({ "repos": repos }),
             Rejection::ReviewAlreadyRequested { head_sha } => json!({ "head_sha": head_sha }),
+            Rejection::FixNotAvailable { reason } => json!({ "reason": reason }),
             Rejection::ChangeRequestNotOpen { number, state } => {
                 json!({ "number": number, "state": state })
             }

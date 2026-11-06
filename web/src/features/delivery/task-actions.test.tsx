@@ -425,6 +425,68 @@ describe("task actions", () => {
   });
 });
 
+describe("fix request", () => {
+  const rejected = detail({
+    ...outsideTask,
+    stage_phase: "reviewed",
+    available_actions: ["cancel", "fix"],
+  });
+  const FIX = `/api/v1/work-items/${rejected.id}`;
+
+  it("asks for a fix round of the shown head with one key and closes", async () => {
+    const { requests } = fakeApi({
+      [FIX]: { body: rejected },
+      [`/api/v1/projects/${PROJECT_ID}`]: { body: project },
+      "/api/v1/work-items": { body: page([rejected]) },
+      "/api/v1/sessions": { body: page([]) },
+      "/api/v1/permission-requests": { body: page([]) },
+      [`${FIX}/actions/fix`]: { status: 202, body: rejected },
+    });
+    renderWithProviders(<TaskPage workItemId={rejected.id} />);
+    const header = await screen.findByRole("banner");
+    await userEvent.click(within(header).getByRole("button", { name: "Fix" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("PR #7")).toBeInTheDocument();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Start a fix round" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    const sent = requests.filter(
+      (r) => r.method === "POST" && r.path === `${FIX}/actions/fix`,
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(sent[0]?.body).toEqual({});
+  });
+
+  it("says why a fix cannot start and keeps the dialog open", async () => {
+    fakeApi({
+      [FIX]: { body: rejected },
+      [`/api/v1/projects/${PROJECT_ID}`]: { body: project },
+      "/api/v1/work-items": { body: page([rejected]) },
+      "/api/v1/sessions": { body: page([]) },
+      "/api/v1/permission-requests": { body: page([]) },
+      [`${FIX}/actions/fix`]: problem(409, "fix_not_available", {
+        reason: "rounds_exhausted",
+      }),
+    });
+    renderWithProviders(<TaskPage workItemId={rejected.id} />);
+    const header = await screen.findByRole("banner");
+    await userEvent.click(within(header).getByRole("button", { name: "Fix" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Start a fix round" }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "The fix rounds of this pull request are spent.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("review request", () => {
   const waiting = detail(outsideTask);
   const REVIEW = `/api/v1/work-items/${waiting.id}`;

@@ -772,6 +772,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/fix": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["fix"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/merge": {
     parameters: {
       query?: never;
@@ -1255,6 +1271,8 @@ export interface components {
       spec?: components["schemas"]["Spec"] | null;
       spec_problem?: components["schemas"]["SpecProblem"] | null;
     };
+    /** @description Request body of a fix request; no fields. */
+    FixBody: Record<string, never>;
     FixProgress: {
       /** @description `review | conflict`: what the round answered. */
       cause: string;
@@ -4671,6 +4689,50 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  fix: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FixBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
       "4XX": {

@@ -722,6 +722,7 @@ const ERRORS = [
   "retry_limit_reached",
   "entry_point_disabled",
   "review_already_requested",
+  "fix_not_available",
   "change_request_not_found",
   "change_request_not_open",
   "change_request_owned",

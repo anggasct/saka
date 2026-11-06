@@ -242,6 +242,10 @@ pub enum TaskInput {
         reason: String,
         change: Option<ObservedChange>,
     },
+    FixRequested {
+        cause: ExternalCause,
+        actor: Option<String>,
+    },
     StartReview,
     MergeTurn,
     Integrated(Integration),
@@ -276,6 +280,14 @@ pub fn decide(
                 return external::decide(task, input, ctx);
             }
             TaskInput::Session(_)
+            | TaskInput::FixRequested { .. }
+            | TaskInput::EnvironmentPrepared { .. }
+            | TaskInput::WorktreeInspected { .. }
+            | TaskInput::BranchPushed {
+                target: ChangeRole::Code,
+                ..
+            }
+            | TaskInput::PushRejected { .. }
             | TaskInput::StartReview
             | TaskInput::ReviewEnvironmentPrepared { .. }
             | TaskInput::EnvironmentFailed { .. }
@@ -501,6 +513,7 @@ pub fn decide(
         }
         I::JobExhausted { kind, error } => d.job_exhausted(kind, error, ctx),
         I::ReviewRequested { .. } => return Err(Rejection::Unsupported),
+        I::FixRequested { cause, actor } => return d.fix_requested(cause, actor.as_deref(), ctx),
         I::Takeover { reason } => return d.takeover(reason),
         I::Return { .. } => {
             return Err(Rejection::InvalidState {
@@ -677,7 +690,7 @@ impl Decider<'_> {
 
     // A round answers a verdict or a conflict; the automatic ones stop at the project's limit.
     fn start_fix(&self, cause: Coded, ctx: &mut Ctx<'_>) -> Option<Event> {
-        let auto = self.task.item.origin == WorkItemOrigin::SpecStep
+        let auto = self.task.fixable()
             && self.task.workflow.stage_trigger(Stage::Fix) == Some(Trigger::Auto)
             && self.task.fix_rounds_left();
         auto.then(|| {
@@ -880,7 +893,13 @@ impl Decider<'_> {
         {
             return vec![];
         }
-        let committed = !dirty && commits_ahead > 0;
+        let unchanged = self.task.is_at(Stage::Fix, StagePhase::RunningSession)
+            && self
+                .task
+                .change_request
+                .as_ref()
+                .is_some_and(|cr| cr.head_sha == head_sha);
+        let committed = !dirty && commits_ahead > 0 && !unchanged;
         let docs_dirty = docs.as_ref().is_some_and(|d| d.dirty);
         let docs_violation = docs
             .as_ref()
@@ -945,6 +964,49 @@ impl Decider<'_> {
         let mut events = self.end_session(SessionState::Ended, "no_changes", params.clone());
         events.extend(self.block(BlockerCode::NoChanges, params, ctx));
         events
+    }
+
+    fn fix_requested(
+        &self,
+        cause: ExternalCause,
+        actor: Option<&str>,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let (Some(cr), Some(_)) = (&self.task.change_request, &self.task.external) else {
+            return Err(Rejection::Unsupported);
+        };
+        if cr.state != ChangeState::Open {
+            return Err(Rejection::ChangeRequestNotOpen {
+                number: cr.number,
+                state: cr.state.as_str(),
+            });
+        }
+        if let Some(reason) = external::fix_blocker(self.task) {
+            return Err(Rejection::FixNotAvailable { reason });
+        }
+        let Some(verdict) = self.task.rejected_at(&cr.head_sha) else {
+            return Err(Rejection::FixNotAvailable {
+                reason: "no_findings",
+            });
+        };
+        let round = FixRound {
+            number: self.task.fix_rounds_used() + 1,
+            cause: Coded {
+                code: BlockerCode::VerdictFailed.as_str().to_string(),
+                params: verdict_params(verdict),
+            },
+        };
+        let trigger = if cause == ExternalCause::Auto {
+            Trigger::Auto
+        } else {
+            Trigger::Manual
+        };
+        Ok(vec![self.fix_run(
+            round,
+            trigger,
+            external::reason(cause, actor),
+            ctx,
+        )])
     }
 
     fn start_review(&self) -> Vec<Event> {
@@ -1210,6 +1272,18 @@ impl Decider<'_> {
             stage_run_id: run.id,
             head_sha: run.head_sha.clone(),
         });
+        let rejected = self
+            .task
+            .reviews
+            .iter()
+            .find(|r| r.id == review_id && r.outcome == ReviewOutcome::ChangesRequested);
+        if let Some(review) = rejected {
+            let cause = Coded {
+                code: BlockerCode::VerdictFailed.as_str().to_string(),
+                params: verdict_params(review),
+            };
+            events.extend(self.start_fix(cause, ctx));
+        }
         events
     }
 
@@ -1615,16 +1689,21 @@ impl Decider<'_> {
         events
     }
 
+    // A change from outside has no merge here: the head the round produced is reviewed again.
     fn dev_done(&self, head_sha: String, ctx: &mut Ctx<'_>) -> Vec<Event> {
         let Some(run) = &self.task.stage_run else {
             return vec![];
         };
-        vec![
-            Event::StageRunSucceeded {
-                work_item_id: self.item().id,
-                stage_run_id: run.id,
-                head_sha: Some(head_sha),
-            },
+        let next = if self.task.external.is_some() {
+            external::review_run(
+                self.item().id,
+                self.next_attempt(Stage::Review),
+                &head_sha,
+                ExternalCause::Auto,
+                None,
+                ctx,
+            )
+        } else {
             self.new_run(
                 Stage::Merge,
                 Trigger::Auto,
@@ -1632,7 +1711,15 @@ impl Decider<'_> {
                 None,
                 None,
                 ctx,
-            ),
+            )
+        };
+        vec![
+            Event::StageRunSucceeded {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                head_sha: Some(head_sha),
+            },
+            next,
         ]
     }
 
@@ -3138,15 +3225,23 @@ fn apply(t: &mut Task, event: &Event, now: Timestamp) {
     }
     match event {
         E::StageRunCancelled { stage_run_id, .. } => {
+            let mut fixing = false;
             if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
                 && matches!(run.state, StageRunState::Pending | StageRunState::Running)
             {
                 run.state = StageRunState::Cancelled;
                 run.ended_at = Some(now);
                 run.updated_at = now;
+                fixing = run.stage == Stage::Fix;
             }
             if t.item.state == WorkItemState::InStage && t.item.stage == Some(Stage::Review) {
                 t.item.stage_phase = Some(StagePhase::AwaitingTrigger);
+            } else if fixing && t.external.is_some() {
+                set_place(
+                    &mut t.item,
+                    WorkItemState::InStage,
+                    Some((Stage::Review, StagePhase::AwaitingTrigger)),
+                );
             }
         }
         E::WorkItemRepinned {
@@ -3681,6 +3776,9 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
     }
     if external::awaiting_request(task) {
         actions.push("review");
+    }
+    if external::fix_available(task) {
+        actions.push("fix");
     }
     actions
 }

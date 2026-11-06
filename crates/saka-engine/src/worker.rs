@@ -1002,6 +1002,11 @@ impl Engine {
             secrets: Vec::new(),
             extra_dirs: Vec::new(),
         };
+        if task.item.origin == WorkItemOrigin::ExternalChange
+            && let Some(cr) = &task.change_request
+        {
+            self.ports.env.check_out(&env, &cr.head_sha).await?;
+        }
         let request = self.docs_request(task, environment_id)?;
         let docs_repo = request.as_ref().map(|r| &r.repo);
         let docs = match &request {
@@ -1202,13 +1207,20 @@ impl Engine {
             };
             (LaunchProfile::Reviewer, bare, bot)
         } else {
-            let resolved = match self.session_author(task)? {
-                Ok(resolved) => resolved,
-                Err(block) => {
-                    return Ok(Effect::Fact(TaskInput::CredentialBlocked {
-                        target: saka_core::vocab::ChangeRole::Code,
-                        block,
-                    }));
+            let resolved = if task.external.is_some() {
+                ResolvedAuthor {
+                    identity: self.cfg.git_identity.clone(),
+                    author: SessionAuthor::saka(),
+                }
+            } else {
+                match self.session_author(task)? {
+                    Ok(resolved) => resolved,
+                    Err(block) => {
+                        return Ok(Effect::Fact(TaskInput::CredentialBlocked {
+                            target: saka_core::vocab::ChangeRole::Code,
+                            block,
+                        }));
+                    }
                 }
             };
             let environment = self
@@ -1400,6 +1412,18 @@ impl Engine {
             return Ok(Effect::Skipped);
         };
         let body = match &prompt {
+            Prompt::WorkPacket { retry_of } if task.external.is_some() => {
+                let retry = retry_of.as_ref().and_then(crate::text::retry_text);
+                let title = task.external.as_ref().map_or("", |e| e.title.as_str());
+                let text = crate::fix_packet::render(title, &task.item.branch, retry.as_deref());
+                tracing::info!(
+                    work_item_id = %task.item.id,
+                    session_id = %session.session_id,
+                    bytes = text.len(),
+                    "fix.packet"
+                );
+                text
+            }
             Prompt::WorkPacket { retry_of } => {
                 let retry = retry_of.as_ref().and_then(crate::text::retry_text);
                 let packet = self.packet_of(task, retry).map_err(internal)?;

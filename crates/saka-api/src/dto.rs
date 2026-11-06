@@ -264,6 +264,11 @@ pub struct ReloadBody {}
 #[serde(deny_unknown_fields)]
 pub struct ReviewBody {}
 
+/// Request body of a fix request; no fields.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FixBody {}
+
 /// Request body that takes a pull request opened outside Saka and asks for its review.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

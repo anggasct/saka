@@ -130,6 +130,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::UserTokenInUse
         | R::EntryPointDisabled { .. }
         | R::ReviewAlreadyRequested { .. }
+        | R::FixNotAvailable { .. }
         | R::ChangeRequestTracked { .. }
         | R::ChangeRequestOwned { .. }
         | R::ChangeRequestNotOpen { .. }

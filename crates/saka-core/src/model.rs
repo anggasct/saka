@@ -760,6 +760,20 @@ impl Task {
             .unwrap_or(0)
     }
 
+    pub fn rejected_at(&self, head_sha: &str) -> Option<&Review> {
+        self.reviews
+            .iter()
+            .rev()
+            .find(|r| r.head_sha == head_sha && r.outcome == ReviewOutcome::ChangesRequested)
+    }
+
+    pub fn fixable(&self) -> bool {
+        match &self.external {
+            Some(external) => !external.from_fork,
+            None => self.item.origin == WorkItemOrigin::SpecStep,
+        }
+    }
+
     pub fn fix_rounds_left(&self) -> bool {
         self.fix_rounds_used() < self.workflow.fix_rounds
     }
