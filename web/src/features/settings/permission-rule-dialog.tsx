@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
+import { useKeyedRun } from "@/api/use-keyed-run";
 import { fieldParams } from "@/features/delivery/action-dialog";
 import { label } from "@/features/delivery/text";
 import { useT } from "@/i18n/use-t";
@@ -20,7 +21,6 @@ import { Input } from "@/ui/input";
 import { addRule, invalidate, previewRule } from "./queries";
 import type { NewRule, RulePreview } from "./queries";
 import { settingsErrorText } from "./text";
-import { useKeyedRun } from "./use-keyed-run";
 
 const COMMAND_MAX = 2000;
 const NOTE_MAX = 500;

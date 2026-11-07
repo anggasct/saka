@@ -1,7 +1,8 @@
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 
 import { ApiError, newIdempotencyKey } from "@/api/client";
+import { useRetainedKey } from "@/api/use-keyed-run";
 import { useT } from "@/i18n/use-t";
 import { Button } from "@/ui/button";
 import {
@@ -58,11 +59,7 @@ export function ActionDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [noteValue, setNoteValue] = useState("");
-  const retained = useRef<{
-    key: string;
-    reason: string | null;
-    note: string | null;
-  } | null>(null);
+  const keys = useRetainedKey();
   const fieldId = useId();
   const countId = useId();
   const noteId = useId();
@@ -81,7 +78,7 @@ export function ActionDialog({
       setValue("");
       setNoteValue("");
       setError(null);
-      retained.current = null;
+      keys.forget();
     }
     setOpen(next);
   };
@@ -104,15 +101,11 @@ export function ActionDialog({
   const send = async () => {
     const sent = trimmed === "" ? null : trimmed;
     const sentNote = noteTrimmed === "" ? null : noteTrimmed;
-    const kept = retained.current;
-    const key =
-      kept !== null && kept.reason === sent && kept.note === sentNote
-        ? kept.key
-        : newIdempotencyKey();
-    retained.current = null;
+    const fingerprint = JSON.stringify([sent, sentNote]);
+    const key = keys.take(fingerprint);
     const failed = await attempt((k) => onSubmit(sent, k, sentNote), key);
-    if (failed !== null && !(failed instanceof ApiError)) {
-      retained.current = { key, reason: sent, note: sentNote };
+    if (failed !== null) {
+      keys.keep(key, fingerprint, failed);
     }
   };
 

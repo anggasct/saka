@@ -1,8 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 
-import { ApiError, newIdempotencyKey } from "@/api/client";
+import { ApiError } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
+import { useKeyedRun } from "@/api/use-keyed-run";
 import { ActionDialog } from "@/features/delivery/action-dialog";
 import { codeOf } from "@/features/delivery/page-error";
 import { Section } from "@/features/delivery/section";
@@ -76,9 +77,7 @@ export function MessageForm({ draft }: { draft: SpecDraft }) {
   const after = useAfterOperatorAction();
   const explain = useOperatorExplain();
   const [value, setValue] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const retained = useRef<{ key: string; text: string } | null>(null);
+  const { run, pending, error } = useKeyedRun();
   const fieldId = useId();
   const countId = useId();
   const trimmed = value.trim();
@@ -86,22 +85,11 @@ export function MessageForm({ draft }: { draft: SpecDraft }) {
   const blocked = pending || trimmed === "" || tooLong;
 
   const send = async () => {
-    const kept = retained.current;
-    const key =
-      kept !== null && kept.text === trimmed ? kept.key : newIdempotencyKey();
-    retained.current = null;
-    setPending(true);
-    setError(null);
-    try {
+    const sent = await run(trimmed, async (key) => {
       await after(() => messageDraft(draft.id, trimmed, key));
+    });
+    if (sent) {
       setValue("");
-    } catch (e) {
-      setError(e);
-      if (!(e instanceof ApiError)) {
-        retained.current = { key, text: trimmed };
-      }
-    } finally {
-      setPending(false);
     }
   };
 

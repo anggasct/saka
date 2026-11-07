@@ -5,8 +5,9 @@ import { useBlocker } from "@tanstack/react-router";
 import { useDeferredValue, useMemo, useRef, useState } from "react";
 import { useIntl } from "react-intl";
 
-import { ApiError, newIdempotencyKey } from "@/api/client";
+import { ApiError } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
+import { useRetainedKey } from "@/api/use-keyed-run";
 import type { Chip } from "@/editor/chips";
 import { MarkdownEditor } from "@/editor/markdown-editor";
 import { openDocument, saveDocument } from "@/editor/lossless";
@@ -110,7 +111,7 @@ export function FileView({
   const [preview, setPreview] = useState(
     () => platform.preferences.get(MODE_KEY) !== "source",
   );
-  const retained = useRef<{ key: string; content: string } | null>(null);
+  const keys = useRetainedKey();
   const view = useRef<EditorView | null>(null);
 
   const dirty =
@@ -229,10 +230,7 @@ export function FileView({
       return;
     }
     const sent = content;
-    const kept = retained.current;
-    const key =
-      kept !== null && kept.content === sent ? kept.key : newIdempotencyKey();
-    retained.current = null;
+    const key = keys.take(sent);
     setStatus({ kind: "saving" });
     setSaveError(null);
     let written: FileWrite;
@@ -252,9 +250,7 @@ export function FileView({
       } else {
         setSaveError(error);
       }
-      if (!(error instanceof ApiError)) {
-        retained.current = { key, content: sent };
-      }
+      keys.keep(key, sent, error);
       return;
     }
     const savedSource = {

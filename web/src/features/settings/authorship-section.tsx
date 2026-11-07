@@ -3,6 +3,7 @@ import { useCallback, useId, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
+import { useKeyedRun } from "@/api/use-keyed-run";
 import { ActionDialog } from "@/features/delivery/action-dialog";
 import { useFormat } from "@/features/delivery/format";
 import { PageError, codeOf } from "@/features/delivery/page-error";
@@ -28,7 +29,6 @@ import {
 import type { Authorization, Authorship, UserLink } from "./queries";
 import { expiresSoon, settingsErrorText } from "./text";
 import { UserTokenDialog } from "./user-token-dialog";
-import { useKeyedRun } from "./use-keyed-run";
 
 const MODES = ["bot", "user", "user_pat"] as const;
 
