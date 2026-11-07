@@ -26,28 +26,28 @@ pub use state::{ApiConfig, AppState};
 #[openapi(
     info(title = "Saka control API", version = "1", description = "Local control API of a Saka server."),
     paths(
-        routes::add_project, routes::check_project_config, routes::list_projects, routes::get_project, routes::reload_project,
-        routes::set_secret, routes::list_secrets, routes::remove_secret,
-        routes::get_authorship, routes::set_authorship, routes::set_user_token,
-        routes::remove_user_token,
-        routes::start_user_link, routes::get_user_link_authorization, routes::get_user_link,
-        routes::remove_user_link,
-        routes::add_spec, routes::list_specs, routes::get_spec, routes::approve_spec, routes::withdraw_spec,
-        routes::spec_template,
-        routes::list_files, routes::get_file, routes::put_file,
-        routes::list_work_items, routes::get_work_item, routes::get_work_packet, routes::start, routes::merge, routes::retry, routes::cancel, routes::takeover, routes::return_to_loop, routes::primary_action, routes::review, routes::fix, routes::take_external_change,
-        routes::list_permissions, routes::answer_permission, routes::list_decisions, routes::get_decision, routes::answer_decision, routes::get_session,
-        routes::list_sessions, routes::get_timeline, routes::steer, routes::interrupt, routes::stop,
-        routes::list_permission_rules, routes::add_permission_rule, routes::preview_permission_rule, routes::evaluate_permission, routes::revoke_rule, routes::list_agent_accounts,
-        routes::list_usage_records,
-        routes::create_spec_draft, routes::list_spec_drafts, routes::get_spec_draft,
-        routes::list_spec_draft_rounds, routes::get_spec_draft_content, routes::get_spec_draft_packet, routes::get_spec_draft_changes,
-        routes::retry_spec_draft, routes::cancel_spec_draft, routes::message_spec_draft,
-        routes::commit_spec_draft, routes::discard_spec_draft,
-        routes::list_project_hooks, routes::list_hook_runs, routes::get_hook_run, routes::list_inbox, routes::inbox_summary, routes::dismiss_inbox_item, routes::rerun_hook,
+        routes::projects::add_project, routes::projects::check_project_config, routes::projects::list_projects, routes::projects::get_project, routes::projects::reload_project,
+        routes::projects::set_secret, routes::projects::list_secrets, routes::projects::remove_secret,
+        routes::projects::get_authorship, routes::projects::set_authorship, routes::projects::set_user_token,
+        routes::projects::remove_user_token,
+        routes::user_links::start_user_link, routes::user_links::get_user_link_authorization, routes::user_links::get_user_link,
+        routes::user_links::remove_user_link,
+        routes::specs::add_spec, routes::specs::list_specs, routes::specs::get_spec, routes::specs::approve_spec, routes::specs::withdraw_spec,
+        routes::specs::spec_template,
+        routes::specs::list_files, routes::specs::get_file, routes::specs::put_file,
+        routes::tasks::list_work_items, routes::tasks::get_work_item, routes::tasks::get_work_packet, routes::tasks::start, routes::tasks::merge, routes::tasks::retry, routes::tasks::cancel, routes::tasks::takeover, routes::tasks::return_to_loop, routes::tasks::primary_action, routes::tasks::review, routes::tasks::fix, routes::tasks::take_external_change,
+        routes::approvals::list_permissions, routes::approvals::answer_permission, routes::approvals::list_decisions, routes::approvals::get_decision, routes::approvals::answer_decision, routes::sessions::get_session,
+        routes::sessions::list_sessions, routes::sessions::get_timeline, routes::sessions::steer, routes::sessions::interrupt, routes::sessions::stop,
+        routes::approvals::list_permission_rules, routes::approvals::add_permission_rule, routes::approvals::preview_permission_rule, routes::approvals::evaluate_permission, routes::approvals::revoke_rule, routes::system::list_agent_accounts,
+        routes::system::list_usage_records,
+        routes::drafts::create_spec_draft, routes::drafts::list_spec_drafts, routes::drafts::get_spec_draft,
+        routes::drafts::list_spec_draft_rounds, routes::drafts::get_spec_draft_content, routes::drafts::get_spec_draft_packet, routes::drafts::get_spec_draft_changes,
+        routes::drafts::retry_spec_draft, routes::drafts::cancel_spec_draft, routes::drafts::message_spec_draft,
+        routes::drafts::commit_spec_draft, routes::drafts::discard_spec_draft,
+        routes::operations::list_project_hooks, routes::operations::list_hook_runs, routes::operations::get_hook_run, routes::inbox::list_inbox, routes::inbox::inbox_summary, routes::dismiss_inbox_item, routes::operations::rerun_hook,
         auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
         auth_routes::register_start, auth_routes::register_finish, auth_routes::login_start, auth_routes::login_finish, auth_routes::logout, auth_routes::revoke_credential,
-        routes::meta, routes::events, routes::diagnostics,
+        routes::system::meta, routes::system::events, routes::operations::diagnostics,
         ops::healthz, ops::readyz, ops::metrics,
     ),
     components(schemas(dto::ActivityNotice)),
@@ -70,225 +70,253 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route(
             "/api/v1/projects",
-            post(routes::add_project).get(routes::list_projects),
+            post(routes::projects::add_project).get(routes::projects::list_projects),
         )
         .route(
             "/api/v1/projects/actions/check-config",
-            post(routes::check_project_config),
+            post(routes::projects::check_project_config),
         )
-        .route("/api/v1/projects/{project_id}", get(routes::get_project))
+        .route(
+            "/api/v1/projects/{project_id}",
+            get(routes::projects::get_project),
+        )
         .route(
             "/api/v1/projects/{project_id}/actions/reload",
-            post(routes::reload_project),
+            post(routes::projects::reload_project),
         )
         .route(
             "/api/v1/projects/{project_id}/authorship",
-            get(routes::get_authorship).put(routes::set_authorship),
+            get(routes::projects::get_authorship).put(routes::projects::set_authorship),
         )
         .route(
             "/api/v1/projects/{project_id}/authorship/user-token",
-            put(routes::set_user_token).delete(routes::remove_user_token),
+            put(routes::projects::set_user_token).delete(routes::projects::remove_user_token),
         )
         .route(
             "/api/v1/projects/{project_id}/secrets",
-            get(routes::list_secrets),
+            get(routes::projects::list_secrets),
         )
         .route(
             "/api/v1/projects/{project_id}/secrets/{name}",
-            put(routes::set_secret).delete(routes::remove_secret),
+            put(routes::projects::set_secret).delete(routes::projects::remove_secret),
         )
         .route(
             "/api/v1/projects/{project_id}/specs",
-            post(routes::add_spec).get(routes::list_specs),
+            post(routes::specs::add_spec).get(routes::specs::list_specs),
         )
         .route(
             "/api/v1/projects/{project_id}/files",
-            get(routes::list_files),
+            get(routes::specs::list_files),
         )
         .route(
             "/api/v1/projects/{project_id}/file",
-            get(routes::get_file)
-                .put(routes::put_file)
+            get(routes::specs::get_file)
+                .put(routes::specs::put_file)
                 .layer(DefaultBodyLimit::max(FILE_BODY_MAX_BYTES)),
         )
-        .route("/api/v1/specs/{spec_id}", get(routes::get_spec))
-        .route("/api/v1/spec-template", get(routes::spec_template))
+        .route("/api/v1/specs/{spec_id}", get(routes::specs::get_spec))
+        .route("/api/v1/spec-template", get(routes::specs::spec_template))
         .route(
             "/api/v1/projects/{project_id}/hooks",
-            get(routes::list_project_hooks),
+            get(routes::operations::list_project_hooks),
         )
-        .route("/api/v1/inbox", get(routes::list_inbox))
-        .route("/api/v1/inbox/summary", get(routes::inbox_summary))
+        .route("/api/v1/inbox", get(routes::inbox::list_inbox))
+        .route("/api/v1/inbox/summary", get(routes::inbox::inbox_summary))
         .route(
             "/api/v1/inbox/{inbox_item_id}/dismiss",
             post(routes::dismiss_inbox_item),
         )
-        .route("/api/v1/hook-runs", get(routes::list_hook_runs))
-        .route("/api/v1/hook-runs/{hook_run_id}", get(routes::get_hook_run))
+        .route("/api/v1/hook-runs", get(routes::operations::list_hook_runs))
+        .route(
+            "/api/v1/hook-runs/{hook_run_id}",
+            get(routes::operations::get_hook_run),
+        )
         .route(
             "/api/v1/hook-runs/{hook_run_id}/actions/rerun",
-            post(routes::rerun_hook),
+            post(routes::operations::rerun_hook),
         )
         .route(
             "/api/v1/specs/{spec_id}/approve",
-            post(routes::approve_spec),
+            post(routes::specs::approve_spec),
         )
         .route(
             "/api/v1/specs/{spec_id}/withdraw",
-            post(routes::withdraw_spec),
+            post(routes::specs::withdraw_spec),
         )
-        .route("/api/v1/work-items", get(routes::list_work_items))
+        .route("/api/v1/work-items", get(routes::tasks::list_work_items))
         .route(
             "/api/v1/work-items/{work_item_id}",
-            get(routes::get_work_item),
+            get(routes::tasks::get_work_item),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/work-packet",
-            get(routes::get_work_packet),
+            get(routes::tasks::get_work_packet),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/start",
-            post(routes::start),
+            post(routes::tasks::start),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/merge",
-            post(routes::merge),
+            post(routes::tasks::merge),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/retry",
-            post(routes::retry),
+            post(routes::tasks::retry),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/primary",
-            post(routes::primary_action),
+            post(routes::tasks::primary_action),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/cancel",
-            post(routes::cancel),
+            post(routes::tasks::cancel),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/takeover",
-            post(routes::takeover),
+            post(routes::tasks::takeover),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/return",
-            post(routes::return_to_loop),
+            post(routes::tasks::return_to_loop),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/review",
-            post(routes::review),
+            post(routes::tasks::review),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/fix",
-            post(routes::fix),
+            post(routes::tasks::fix),
         )
         .route(
             "/api/v1/projects/{project_id}/external-changes",
-            post(routes::take_external_change),
+            post(routes::tasks::take_external_change),
         )
-        .route("/api/v1/permission-requests", get(routes::list_permissions))
+        .route(
+            "/api/v1/permission-requests",
+            get(routes::approvals::list_permissions),
+        )
         .route(
             "/api/v1/permission-requests/{permission_request_id}/answer",
-            post(routes::answer_permission),
+            post(routes::approvals::answer_permission),
         )
-        .route("/api/v1/decision-requests", get(routes::list_decisions))
+        .route(
+            "/api/v1/decision-requests",
+            get(routes::approvals::list_decisions),
+        )
         .route(
             "/api/v1/decision-requests/{decision_request_id}",
-            get(routes::get_decision),
+            get(routes::approvals::get_decision),
         )
         .route(
             "/api/v1/decision-requests/{decision_request_id}/answer",
-            post(routes::answer_decision),
+            post(routes::approvals::answer_decision),
         )
-        .route("/api/v1/sessions", get(routes::list_sessions))
-        .route("/api/v1/sessions/{session_id}", get(routes::get_session))
+        .route("/api/v1/sessions", get(routes::sessions::list_sessions))
+        .route(
+            "/api/v1/sessions/{session_id}",
+            get(routes::sessions::get_session),
+        )
         .route(
             "/api/v1/sessions/{session_id}/timeline",
-            get(routes::get_timeline),
+            get(routes::sessions::get_timeline),
         )
-        .route("/api/v1/sessions/{session_id}/steer", post(routes::steer))
+        .route(
+            "/api/v1/sessions/{session_id}/steer",
+            post(routes::sessions::steer),
+        )
         .route(
             "/api/v1/sessions/{session_id}/interrupt",
-            post(routes::interrupt),
+            post(routes::sessions::interrupt),
         )
-        .route("/api/v1/sessions/{session_id}/stop", post(routes::stop))
+        .route(
+            "/api/v1/sessions/{session_id}/stop",
+            post(routes::sessions::stop),
+        )
         .route(
             "/api/v1/projects/{project_id}/permission-rules",
-            get(routes::list_permission_rules).post(routes::add_permission_rule),
+            get(routes::approvals::list_permission_rules)
+                .post(routes::approvals::add_permission_rule),
         )
         .route(
             "/api/v1/projects/{project_id}/permission-rules/preview",
-            post(routes::preview_permission_rule),
+            post(routes::approvals::preview_permission_rule),
         )
         .route(
             "/api/v1/projects/{project_id}/permission-rules/evaluate",
-            post(routes::evaluate_permission),
+            post(routes::approvals::evaluate_permission),
         )
         .route(
             "/api/v1/permission-rules/{rule_id}/revoke",
-            post(routes::revoke_rule),
+            post(routes::approvals::revoke_rule),
         )
         .route(
             "/api/v1/projects/{project_id}/spec-drafts",
-            post(routes::create_spec_draft).get(routes::list_spec_drafts),
+            post(routes::drafts::create_spec_draft).get(routes::drafts::list_spec_drafts),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}",
-            get(routes::get_spec_draft),
+            get(routes::drafts::get_spec_draft),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/lint-rounds",
-            get(routes::list_spec_draft_rounds),
+            get(routes::drafts::list_spec_draft_rounds),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/content",
-            get(routes::get_spec_draft_content),
+            get(routes::drafts::get_spec_draft_content),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/changes",
-            get(routes::get_spec_draft_changes),
+            get(routes::drafts::get_spec_draft_changes),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/packet",
-            get(routes::get_spec_draft_packet),
+            get(routes::drafts::get_spec_draft_packet),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/actions/retry",
-            post(routes::retry_spec_draft),
+            post(routes::drafts::retry_spec_draft),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/actions/cancel",
-            post(routes::cancel_spec_draft),
+            post(routes::drafts::cancel_spec_draft),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/message",
-            post(routes::message_spec_draft),
+            post(routes::drafts::message_spec_draft),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/commit",
-            post(routes::commit_spec_draft),
+            post(routes::drafts::commit_spec_draft),
         )
         .route(
             "/api/v1/spec-drafts/{spec_draft_id}/discard",
-            post(routes::discard_spec_draft),
+            post(routes::drafts::discard_spec_draft),
         )
         .route(
             "/api/v1/scm/{integration_id}/user-link/authorizations",
-            post(routes::start_user_link),
+            post(routes::user_links::start_user_link),
         )
         .route(
             "/api/v1/scm/{integration_id}/user-link/authorizations/{authorization_id}",
-            get(routes::get_user_link_authorization),
+            get(routes::user_links::get_user_link_authorization),
         )
         .route(
             "/api/v1/scm/{integration_id}/user-link",
-            get(routes::get_user_link).delete(routes::remove_user_link),
+            get(routes::user_links::get_user_link).delete(routes::user_links::remove_user_link),
         )
-        .route("/api/v1/agent-accounts", get(routes::list_agent_accounts))
-        .route("/api/v1/usage-records", get(routes::list_usage_records))
-        .route("/api/v1/meta", get(routes::meta))
-        .route("/api/v1/diagnostics", get(routes::diagnostics))
-        .route("/api/v1/events", get(routes::events))
+        .route(
+            "/api/v1/agent-accounts",
+            get(routes::system::list_agent_accounts),
+        )
+        .route(
+            "/api/v1/usage-records",
+            get(routes::system::list_usage_records),
+        )
+        .route("/api/v1/meta", get(routes::system::meta))
+        .route("/api/v1/diagnostics", get(routes::operations::diagnostics))
+        .route("/api/v1/events", get(routes::system::events))
         .route("/api/v1/auth/status", get(auth_routes::status))
         .route("/api/v1/auth/pairings", post(auth_routes::create_pairing))
         .route("/api/v1/auth/pair", post(auth_routes::pair))
@@ -314,7 +342,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/{*rest}",
-            get(routes::api_not_found).post(routes::api_not_found),
+            get(routes::system::api_not_found).post(routes::system::api_not_found),
         )
         .route("/healthz", get(ops::healthz))
         .route("/readyz", get(ops::readyz))
