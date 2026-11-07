@@ -1,3 +1,6 @@
+#[macro_use]
+mod columns;
+
 pub mod authorship;
 mod codec;
 mod conn;

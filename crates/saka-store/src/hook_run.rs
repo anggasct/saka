@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::list::{Key, Page};
 use crate::read::{opt_ts, ts};
 
-const SELECT: &str = "SELECT * FROM hook_run";
+const SELECT: &str = concat!("SELECT ", hook_run_columns!(), " FROM hook_run");
 
 fn hook_run_row(row: &Row<'_>) -> Result<HookRun> {
     Ok(HookRun {

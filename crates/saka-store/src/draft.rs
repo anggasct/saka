@@ -121,7 +121,7 @@ pub fn load_drafts(conn: &Connection, set: DraftSet<'_>) -> Result<Vec<Draft>> {
     let b = bind.as_slice();
     let mut drafts: BTreeMap<SpecDraftId, Draft> = rows_of(
         conn,
-        "SELECT * FROM spec_draft",
+        concat!("SELECT ", spec_draft_columns!(), " FROM spec_draft"),
         "id",
         selection,
         "created_at, id",
@@ -136,7 +136,11 @@ pub fn load_drafts(conn: &Connection, set: DraftSet<'_>) -> Result<Vec<Draft>> {
     }
     for a in rows_of(
         conn,
-        "SELECT * FROM spec_draft_attempt",
+        concat!(
+            "SELECT ",
+            spec_draft_attempt_columns!(),
+            " FROM spec_draft_attempt"
+        ),
         "spec_draft_id",
         selection,
         "attempt DESC",
@@ -400,7 +404,11 @@ pub fn previous_attempt(
 ) -> Result<Option<SpecDraftAttempt>> {
     one(
         conn,
-        "SELECT * FROM spec_draft_attempt WHERE spec_draft_id = ?1 AND attempt = ?2",
+        concat!(
+            "SELECT ",
+            spec_draft_attempt_columns!(),
+            " FROM spec_draft_attempt WHERE spec_draft_id = ?1 AND attempt = ?2"
+        ),
         params![id.0.to_string(), number],
         attempt,
     )

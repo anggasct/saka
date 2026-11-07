@@ -107,7 +107,7 @@ pub fn projects(conn: &Connection, page: &Page) -> Result<Vec<Project>> {
     q.after("created_at", page, true);
     let ids = q.run(
         conn,
-        "SELECT * FROM project",
+        concat!("SELECT ", project_columns!(), " FROM project"),
         "created_at DESC, id DESC",
         page,
         project_row,
@@ -134,7 +134,7 @@ pub fn repos(conn: &Connection, ids: &[RepoId]) -> Result<Vec<Repo>> {
     };
     q.run(
         conn,
-        "SELECT * FROM repo",
+        concat!("SELECT ", repo_columns!(), " FROM repo"),
         "created_at, id",
         &page,
         repo_row,
@@ -246,7 +246,7 @@ pub fn specs(
     q.after("updated_at", page, true);
     q.run(
         conn,
-        "SELECT * FROM spec",
+        concat!("SELECT ", spec_columns!(), " FROM spec"),
         "updated_at DESC, id DESC",
         page,
         spec_row,
@@ -261,9 +261,15 @@ pub fn spec_by_slug(conn: &Connection, project: ProjectId, slug: &str) -> Result
         after: None,
         limit: 1,
     };
-    Ok(q.run(conn, "SELECT * FROM spec", "id", &page, spec_row)?
-        .into_iter()
-        .next())
+    Ok(q.run(
+        conn,
+        concat!("SELECT ", spec_columns!(), " FROM spec"),
+        "id",
+        &page,
+        spec_row,
+    )?
+    .into_iter()
+    .next())
 }
 
 pub fn branches_in_use(
@@ -491,7 +497,7 @@ pub struct ActiveSessionRow {
     pub pending_decisions: u32,
 }
 
-const ACTIVE_SESSION_SELECT: &str = "SELECT s.*,
+const ACTIVE_SESSION_SELECT: &str = concat!("SELECT ", session_columns!("s."), ",
     COALESCE(s.started_at, s.created_at) AS shown_at,
     (SELECT name FROM project p WHERE p.id = s.project_id) AS project_name,
     COALESCE((SELECT task_key FROM work_item w WHERE w.id = s.work_item_id),
@@ -503,7 +509,7 @@ const ACTIVE_SESSION_SELECT: &str = "SELECT s.*,
       AS pending_permissions,
     (SELECT COUNT(*) FROM decision_request x WHERE x.session_id = s.id AND x.state = 'asked')
       AS pending_decisions
-  FROM session s";
+  FROM session s");
 
 fn active_session_row(row: &Row<'_>) -> Result<ActiveSessionRow> {
     Ok(ActiveSessionRow {
@@ -579,13 +585,15 @@ pub fn load_session(conn: &Connection, id: SessionId) -> Result<Option<(Session,
         after: None,
         limit: 1,
     };
-    Ok(
-        q.run(conn, "SELECT s.* FROM session s", "s.id", &page, |r| {
-            Ok((session(r)?, ProjectId(uuid(r, "project_id")?)))
-        })?
-        .into_iter()
-        .next(),
-    )
+    Ok(q.run(
+        conn,
+        concat!("SELECT ", session_columns!("s."), " FROM session s"),
+        "s.id",
+        &page,
+        |r| Ok((session(r)?, ProjectId(uuid(r, "project_id")?))),
+    )?
+    .into_iter()
+    .next())
 }
 
 pub fn stage_runs(conn: &Connection, id: WorkItemId) -> Result<Vec<StageRun>> {
@@ -597,7 +605,7 @@ pub fn stage_runs(conn: &Connection, id: WorkItemId) -> Result<Vec<StageRun>> {
     };
     q.run(
         conn,
-        "SELECT * FROM stage_run",
+        concat!("SELECT ", stage_run_columns!(), " FROM stage_run"),
         "created_at, id",
         &page,
         stage_run,
