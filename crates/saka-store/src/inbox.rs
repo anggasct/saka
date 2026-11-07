@@ -81,7 +81,7 @@ pub struct InboxSummary {
     pub merged_today: i64,
 }
 
-const SELECT: &str = "SELECT i.*, p.name AS project_name, w.task_key, w.stage AS stage,
+const SELECT: &str = concat!("SELECT ", inbox_item_columns!("i."), ", p.name AS project_name, w.task_key, w.stage AS stage,
     s.slug AS spec_slug, s.title AS spec_title, s.path AS spec_path, d.path AS draft_path
   FROM inbox_item i
   JOIN project p ON p.id = i.project_id
@@ -89,7 +89,7 @@ const SELECT: &str = "SELECT i.*, p.name AS project_name, w.task_key, w.stage AS
   LEFT JOIN spec s ON s.id = i.spec_id
   LEFT JOIN permission_request pr ON i.subject = 'permission' AND i.work_item_id IS NULL AND pr.id = i.source_id
   LEFT JOIN decision_request dr ON i.subject = 'decision' AND i.work_item_id IS NULL AND dr.id = i.source_id
-  LEFT JOIN spec_draft d ON d.id = COALESCE(pr.spec_draft_id, json_extract(dr.owner, '$.spec_draft_id'))";
+  LEFT JOIN spec_draft d ON d.id = COALESCE(pr.spec_draft_id, json_extract(dr.owner, '$.spec_draft_id'))");
 
 fn item_row(row: &Row<'_>) -> Result<InboxItem> {
     let action: Value = json(row, "action")?;

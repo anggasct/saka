@@ -31,28 +31,36 @@ pub enum TaskSet<'a> {
     Spec(SpecId),
 }
 
-pub(crate) const SESSION_SELECT: &str = "SELECT s.*,
+pub(crate) const SESSION_SELECT: &str = concat!("SELECT ", session_columns!("s."), ",
     (SELECT COUNT(*) FROM event e WHERE e.stream_type = 'session' AND e.stream_id = s.id
        AND e.kind = 'runtime.session.steered') AS steers,
     (SELECT ifnull(MAX(turn), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_turn,
     (SELECT ifnull(SUM(running_ms), 0) FROM usage_record u WHERE u.session_id = s.id) AS recorded_running_ms
-  FROM session s";
+  FROM session s");
 
-pub(crate) const ENVIRONMENT_SELECT: &str = "SELECT e.*,
+pub(crate) const ENVIRONMENT_SELECT: &str = concat!(
+    "SELECT ",
+    environment_columns!("e."),
+    ",
     CASE WHEN e.work_item_id IS NOT NULL THEN e.id END AS stage_run_id
-  FROM environment e";
+  FROM environment e"
+);
 
-pub(crate) const DECISION_SELECT: &str = "SELECT * FROM decision_request";
+pub(crate) const DECISION_SELECT: &str = concat!(
+    "SELECT ",
+    decision_request_columns!(),
+    " FROM decision_request"
+);
 
-pub(crate) const PERMISSION_SELECT: &str = "SELECT p.*,
+pub(crate) const PERMISSION_SELECT: &str = concat!("SELECT ", permission_request_columns!("p."), ",
     (SELECT s.stage_run_id FROM session s WHERE s.id = p.session_id) AS stage_run_id,
     (SELECT s.spec_draft_attempt_id FROM session s WHERE s.id = p.session_id) AS spec_draft_attempt_id
-  FROM permission_request p";
+  FROM permission_request p");
 
-const ACTIVITY_SELECT: &str = "SELECT a.*,
+const ACTIVITY_SELECT: &str = concat!("SELECT ", session_activity_columns!("a."), ",
     (SELECT s.stage_run_id FROM session s WHERE s.id = a.session_id) AS stage_run_id,
     (SELECT s.spec_draft_attempt_id FROM session s WHERE s.id = a.session_id) AS spec_draft_attempt_id
-  FROM session_activity a";
+  FROM session_activity a");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOf {
@@ -204,7 +212,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     let mut history: BTreeMap<WorkItemId, Vec<(Stage, Trigger, Option<String>)>> = BTreeMap::new();
     for run in rows(
         conn,
-        "SELECT * FROM stage_run",
+        concat!("SELECT ", stage_run_columns!(), " FROM stage_run"),
         selection,
         "created_at DESC, id DESC",
         b,
@@ -234,7 +242,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for x in rows(
         conn,
-        "SELECT * FROM blocker",
+        concat!("SELECT ", blocker_columns!(), " FROM blocker"),
         selection,
         "opened_at DESC, id DESC",
         b,
@@ -248,7 +256,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for c in rows(
         conn,
-        "SELECT * FROM change_request",
+        concat!("SELECT ", change_request_columns!(), " FROM change_request"),
         selection,
         "created_at DESC",
         b,
@@ -263,8 +271,8 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for (id, external) in rows_of(
         conn,
-        "SELECT e.*, p.workflow, s.slug AS spec_slug FROM external_change e JOIN project p ON p.id = e.project_id
-           LEFT JOIN spec s ON s.id = e.spec_id",
+        concat!("SELECT ", external_change_columns!("e."), ", p.workflow, s.slug AS spec_slug FROM external_change e JOIN project p ON p.id = e.project_id
+           LEFT JOIN spec s ON s.id = e.spec_id"),
         "e.work_item_id",
         selection,
         "e.created_at, e.work_item_id",
@@ -302,7 +310,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for r in rows(
         conn,
-        "SELECT * FROM review",
+        concat!("SELECT ", review_columns!(), " FROM review"),
         selection,
         "created_at, id",
         b,
@@ -315,7 +323,7 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     let mut seen = std::collections::HashSet::new();
     for g in rows(
         conn,
-        "SELECT * FROM gate_result",
+        concat!("SELECT ", gate_result_columns!(), " FROM gate_result"),
         selection,
         "observed_at DESC, id DESC",
         b,
@@ -344,7 +352,13 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     }
     for g in rows(
         conn,
-        "SELECT * FROM (SELECT * FROM hook_run WHERE mode = 'gate')",
+        concat!(
+            "SELECT ",
+            hook_run_columns!(),
+            " FROM (SELECT ",
+            hook_run_columns!(),
+            " FROM hook_run WHERE mode = 'gate')"
+        ),
         selection,
         "queued_at, id",
         b,
@@ -866,12 +880,14 @@ pub fn usage_records(
     of: Option<RunOf>,
     session: Option<SessionId>,
 ) -> Result<Vec<(saka_core::model::UsageRecord, ProjectId)>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM usage_record
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        usage_record_columns!(),
+        " FROM usage_record
           WHERE (?1 IS NULL OR work_item_id = ?1) AND (?2 IS NULL OR spec_draft_id = ?2)
             AND (?3 IS NULL OR session_id = ?3)
-         ORDER BY ended_at, id",
-    )?;
+         ORDER BY ended_at, id"
+    ))?;
     let (work_item, draft) = match of {
         Some(RunOf::WorkItem(id)) => (Some(id.to_string()), None),
         Some(RunOf::SpecDraft(id)) => (None, Some(id.to_string())),
@@ -905,9 +921,11 @@ pub fn active_permission_rules(
     conn: &Connection,
     project: ProjectId,
 ) -> Result<Vec<PermissionRule>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM permission_rule WHERE project_id = ?1 AND revoked_at IS NULL ORDER BY created_at, id",
-    )?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        permission_rule_columns!(),
+        " FROM permission_rule WHERE project_id = ?1 AND revoked_at IS NULL ORDER BY created_at, id"
+    ))?;
     let mut q = stmt.query([project.0.to_string()])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -922,7 +940,11 @@ pub fn load_permission_rule(
 ) -> Result<Option<PermissionRule>> {
     one(
         conn,
-        "SELECT * FROM permission_rule WHERE id = ?1",
+        concat!(
+            "SELECT ",
+            permission_rule_columns!(),
+            " FROM permission_rule WHERE id = ?1"
+        ),
         &[&id.0.to_string()],
         permission_rule,
     )
@@ -965,7 +987,11 @@ pub fn live_port_blocks(conn: &Connection) -> Result<Vec<(u16, u16)>> {
 }
 
 pub fn account_quotas(conn: &Connection) -> Result<Vec<AccountQuota>> {
-    let mut stmt = conn.prepare("SELECT * FROM account_quota ORDER BY account, window")?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        account_quota_columns!(),
+        " FROM account_quota ORDER BY account, window"
+    ))?;
     let mut q = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -1073,7 +1099,7 @@ pub(crate) fn one<T>(
 pub fn load_spec(conn: &Connection, id: SpecId) -> Result<Option<Spec>> {
     one(
         conn,
-        "SELECT * FROM spec WHERE id = ?1",
+        concat!("SELECT ", spec_columns!(), " FROM spec WHERE id = ?1"),
         &[&id.0.to_string()],
         spec_row,
     )
@@ -1082,18 +1108,24 @@ pub fn load_spec(conn: &Connection, id: SpecId) -> Result<Option<Spec>> {
 pub fn spec_by_path(conn: &Connection, project: ProjectId, path: &str) -> Result<Option<Spec>> {
     one(
         conn,
-        "SELECT * FROM spec WHERE project_id = ?1 AND path = ?2",
+        concat!(
+            "SELECT ",
+            spec_columns!(),
+            " FROM spec WHERE project_id = ?1 AND path = ?2"
+        ),
         &[&project.0.to_string(), &path],
         spec_row,
     )
 }
 
 pub fn reconcile_specs(conn: &Connection) -> Result<Vec<Spec>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM spec WHERE state = 'approved'
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        spec_columns!(),
+        " FROM spec WHERE state = 'approved'
            OR id IN (SELECT depends_on_spec_id FROM spec_dependency)
-         ORDER BY approved_at, id",
-    )?;
+         ORDER BY approved_at, id"
+    ))?;
     let mut q = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -1103,7 +1135,11 @@ pub fn reconcile_specs(conn: &Connection) -> Result<Vec<Spec>> {
 }
 
 pub fn project_specs(conn: &Connection, project: ProjectId) -> Result<Vec<Spec>> {
-    let mut stmt = conn.prepare("SELECT * FROM spec WHERE project_id = ?1 ORDER BY slug")?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        spec_columns!(),
+        " FROM spec WHERE project_id = ?1 ORDER BY slug"
+    ))?;
     let mut q = stmt.query([project.0.to_string()])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -1116,10 +1152,12 @@ pub fn spec_dependencies(
     conn: &Connection,
     project: Option<ProjectId>,
 ) -> Result<Vec<SpecDependency>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM spec_dependency WHERE ?1 IS NULL OR project_id = ?1
-         ORDER BY spec_id, depends_on_slug",
-    )?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        spec_dependency_columns!(),
+        " FROM spec_dependency WHERE ?1 IS NULL OR project_id = ?1
+         ORDER BY spec_id, depends_on_slug"
+    ))?;
     let mut q = stmt.query([project.map(|p| p.0.to_string())])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -1137,8 +1175,12 @@ pub fn spec_dependencies(
 pub fn queued_work_item_dependencies(conn: &Connection) -> Result<Vec<WorkItemDependency>> {
     work_item_dependencies(
         conn,
-        "SELECT d.* FROM work_item_dependency d JOIN work_item w ON w.id = d.work_item_id
-         WHERE w.state = 'queued' ORDER BY d.work_item_id, d.depends_on_work_item_id",
+        concat!(
+            "SELECT ",
+            work_item_dependency_columns!("d."),
+            " FROM work_item_dependency d JOIN work_item w ON w.id = d.work_item_id
+         WHERE w.state = 'queued' ORDER BY d.work_item_id, d.depends_on_work_item_id"
+        ),
         &[],
     )
 }
@@ -1151,8 +1193,12 @@ pub fn work_item_dependencies_of(
     for id in ids {
         out.extend(work_item_dependencies(
             conn,
-            "SELECT * FROM work_item_dependency WHERE work_item_id = ?1
-             ORDER BY depends_on_work_item_id",
+            concat!(
+                "SELECT ",
+                work_item_dependency_columns!(),
+                " FROM work_item_dependency WHERE work_item_id = ?1
+             ORDER BY depends_on_work_item_id"
+            ),
             &[&id.0.to_string()],
         )?);
     }
@@ -1249,7 +1295,11 @@ pub fn context_contents(
 pub fn load_revision(conn: &Connection, id: SpecRevisionId) -> Result<Option<SpecRevisionRow>> {
     let Some(mut row) = one(
         conn,
-        "SELECT * FROM spec_revision WHERE id = ?1",
+        concat!(
+            "SELECT ",
+            spec_revision_columns!(),
+            " FROM spec_revision WHERE id = ?1"
+        ),
         &[&id.0.to_string()],
         |row| {
             Ok(SpecRevisionRow {
@@ -1317,7 +1367,7 @@ pub fn revision_view_of(
 pub fn load_repo(conn: &Connection, id: RepoId) -> Result<Option<Repo>> {
     one(
         conn,
-        "SELECT * FROM repo WHERE id = ?1",
+        concat!("SELECT ", repo_columns!(), " FROM repo WHERE id = ?1"),
         &[&id.0.to_string()],
         repo_row,
     )
@@ -1330,7 +1380,11 @@ pub fn repo_by_name(
 ) -> Result<Option<Repo>> {
     one(
         conn,
-        "SELECT * FROM repo WHERE integration_id = ?1 AND full_name = ?2",
+        concat!(
+            "SELECT ",
+            repo_columns!(),
+            " FROM repo WHERE integration_id = ?1 AND full_name = ?2"
+        ),
         &[&integration_id, &full_name],
         repo_row,
     )
@@ -1361,7 +1415,11 @@ fn secret_row(row: &Row<'_>) -> Result<SecretRow> {
 }
 
 pub fn project_secrets(conn: &Connection, project: ProjectId) -> Result<Vec<SecretRow>> {
-    let mut stmt = conn.prepare("SELECT * FROM secret WHERE project_id = ?1 ORDER BY name")?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        secret_columns!(),
+        " FROM secret WHERE project_id = ?1 ORDER BY name"
+    ))?;
     let mut q = stmt.query([project.0.to_string()])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -1373,7 +1431,7 @@ pub fn project_secrets(conn: &Connection, project: ProjectId) -> Result<Vec<Secr
 pub fn load_project(conn: &Connection, id: ProjectId) -> Result<Option<Project>> {
     let Some(mut project) = one(
         conn,
-        "SELECT * FROM project WHERE id = ?1",
+        concat!("SELECT ", project_columns!(), " FROM project WHERE id = ?1"),
         &[&id.0.to_string()],
         project_row,
     )?
@@ -1433,7 +1491,11 @@ pub struct StoredEvent {
 }
 
 pub fn events_after(conn: &Connection, after: i64, limit: u32) -> Result<Vec<StoredEvent>> {
-    let mut stmt = conn.prepare("SELECT * FROM event WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        event_columns!(),
+        " FROM event WHERE seq > ?1 ORDER BY seq LIMIT ?2"
+    ))?;
     let mut q = stmt.query(params![after, limit])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -1458,7 +1520,11 @@ pub fn events_after(conn: &Connection, after: i64, limit: u32) -> Result<Vec<Sto
 pub fn find_action(conn: &Connection, actor: &str, key: &str) -> Result<Option<ActionRecord>> {
     one(
         conn,
-        "SELECT * FROM action_request WHERE actor = ?1 AND idempotency_key = ?2",
+        concat!(
+            "SELECT ",
+            action_request_columns!(),
+            " FROM action_request WHERE actor = ?1 AND idempotency_key = ?2"
+        ),
         &[&actor, &key],
         |row| {
             Ok(ActionRecord {

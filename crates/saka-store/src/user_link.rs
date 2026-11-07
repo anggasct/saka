@@ -93,7 +93,11 @@ pub fn user_link(
 ) -> Result<Option<UserLinkRow>> {
     one(
         conn,
-        "SELECT * FROM user_link WHERE owner = ?1 AND integration_id = ?2",
+        concat!(
+            "SELECT ",
+            user_link_columns!(),
+            " FROM user_link WHERE owner = ?1 AND integration_id = ?2"
+        ),
         &[&owner, &integration_id],
         link_row,
     )
@@ -102,15 +106,22 @@ pub fn user_link(
 pub fn user_link_by_id(conn: &Connection, id: UserLinkId) -> Result<Option<UserLinkRow>> {
     one(
         conn,
-        "SELECT * FROM user_link WHERE id = ?1",
+        concat!(
+            "SELECT ",
+            user_link_columns!(),
+            " FROM user_link WHERE id = ?1"
+        ),
         &[&id.0.to_string()],
         link_row,
     )
 }
 
 pub fn active_user_links(conn: &Connection) -> Result<Vec<UserLink>> {
-    let mut stmt = conn
-        .prepare("SELECT * FROM user_link WHERE state = 'active' ORDER BY integration_id, owner")?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        user_link_columns!(),
+        " FROM user_link WHERE state = 'active' ORDER BY integration_id, owner"
+    ))?;
     let mut q = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
@@ -125,7 +136,11 @@ pub fn authorization(
 ) -> Result<Option<AuthorizationRow>> {
     one(
         conn,
-        "SELECT * FROM user_link_authorization WHERE id = ?1",
+        concat!(
+            "SELECT ",
+            user_link_authorization_columns!(),
+            " FROM user_link_authorization WHERE id = ?1"
+        ),
         &[&id.0.to_string()],
         authorization_row,
     )
@@ -138,8 +153,12 @@ pub fn pending_authorization(
 ) -> Result<Option<AuthorizationRow>> {
     one(
         conn,
-        "SELECT * FROM user_link_authorization
-         WHERE owner = ?1 AND integration_id = ?2 AND state = 'pending'",
+        concat!(
+            "SELECT ",
+            user_link_authorization_columns!(),
+            " FROM user_link_authorization
+         WHERE owner = ?1 AND integration_id = ?2 AND state = 'pending'"
+        ),
         &[&owner, &integration_id],
         authorization_row,
     )
@@ -152,8 +171,12 @@ pub fn latest_authorization(
 ) -> Result<Option<UserLinkAuthorization>> {
     Ok(one(
         conn,
-        "SELECT * FROM user_link_authorization WHERE owner = ?1 AND integration_id = ?2
-         ORDER BY created_at DESC, id DESC LIMIT 1",
+        concat!(
+            "SELECT ",
+            user_link_authorization_columns!(),
+            " FROM user_link_authorization WHERE owner = ?1 AND integration_id = ?2
+         ORDER BY created_at DESC, id DESC LIMIT 1"
+        ),
         &[&owner, &integration_id],
         authorization_row,
     )?
@@ -161,9 +184,11 @@ pub fn latest_authorization(
 }
 
 pub fn pending_authorizations(conn: &Connection) -> Result<Vec<UserLinkAuthorization>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM user_link_authorization WHERE state = 'pending' ORDER BY created_at, id",
-    )?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        user_link_authorization_columns!(),
+        " FROM user_link_authorization WHERE state = 'pending' ORDER BY created_at, id"
+    ))?;
     let mut q = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = q.next()? {
