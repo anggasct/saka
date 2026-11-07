@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
+import { useKeyedRun } from "@/api/use-keyed-run";
 import { fieldParams } from "@/features/delivery/action-dialog";
 import { text } from "@/features/delivery/text";
 import type { MessageKey } from "@/i18n/messages";
@@ -22,7 +23,6 @@ import { Textarea } from "@/ui/textarea";
 
 import { invalidate, putSecret, SECRET_NAME } from "./queries";
 import { settingsErrorText } from "./text";
-import { useKeyedRun } from "./use-keyed-run";
 
 function secretErrorText(t: ReturnType<typeof useT>, error: unknown): string {
   if (!(error instanceof ApiError)) {

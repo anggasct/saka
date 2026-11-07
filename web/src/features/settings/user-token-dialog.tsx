@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
 import { QUERY_ROOTS } from "@/api/events";
+import { useKeyedRun } from "@/api/use-keyed-run";
 import { fieldParams } from "@/features/delivery/action-dialog";
 import { codeOf } from "@/features/delivery/page-error";
 import { useT } from "@/i18n/use-t";
@@ -19,7 +20,6 @@ import { Input } from "@/ui/input";
 
 import { invalidate, putUserToken } from "./queries";
 import { settingsErrorText } from "./text";
-import { useKeyedRun } from "./use-keyed-run";
 
 function TokenForm({
   projectId,

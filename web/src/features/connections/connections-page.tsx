@@ -1,9 +1,10 @@
-import { useEffect, useId, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useId, useState } from "react";
 
+import { QUERY_ROOTS } from "@/api/events";
 import { useT } from "@/i18n/use-t";
 import type { MessageKey } from "@/i18n/messages";
 import { platform } from "@/platform";
-import type { SavedConnection } from "@/platform";
 import { ConnectionError } from "@/platform/connection-error";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
@@ -60,9 +61,18 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
   const urlId = useId();
   const urlHintId = useId();
   const codeId = useId();
-  const [items, setItems] = useState<SavedConnection[] | null>(null);
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
+  const connections = useQuery({
+    queryKey: [QUERY_ROOTS.connections],
+    queryFn: () => shell?.list() ?? [],
+    enabled: shell !== null,
+  });
+  const items = connections.data ?? null;
+  const prefilled =
+    mode === "reauth" ? items?.find((item) => item.active) : undefined;
+  const [typedName, setName] = useState<string | null>(null);
+  const [typedUrl, setUrl] = useState<string | null>(null);
+  const name = typedName ?? prefilled?.name ?? "";
+  const url = typedUrl ?? prefilled?.url ?? "";
   const [code, setCode] = useState("");
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<ConnectionError["code"] | null>(() =>
@@ -70,28 +80,12 @@ export function ConnectionsPage({ mode }: { mode: ConnectionsMode }) {
   );
   const [removing, setRemoving] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (shell === null) {
-      return;
-    }
-    const load = async () => {
-      const list = await shell.list();
-      setItems(list);
-      const active = list.find((c) => c.active);
-      if (mode === "reauth" && active !== undefined) {
-        setName(active.name);
-        setUrl(active.url);
-      }
-    };
-    void load();
-  }, [shell, mode]);
-
   if (shell === null) {
     return null;
   }
 
   const reload = async () => {
-    setItems(await shell.list());
+    await connections.refetch();
   };
 
   const act = async (work: () => Promise<void>) => {

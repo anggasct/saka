@@ -127,6 +127,7 @@ export const QUERY_ROOTS = {
   hookRuns: "hook-runs",
   inbox: "inbox",
   auth: "auth",
+  connections: "connections",
 } as const;
 
 const AFFECTS: Record<string, readonly string[]> = {

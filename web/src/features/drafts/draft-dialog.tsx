@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 
-import { ApiError, newIdempotencyKey } from "@/api/client";
+import { ApiError } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
+import { useRetainedKey } from "@/api/use-keyed-run";
 import { fieldParams } from "@/features/delivery/action-dialog";
 import { errorText, text } from "@/features/delivery/text";
 import { checkNewPath, folderOf } from "@/features/docs/new-file-dialog";
@@ -39,10 +40,6 @@ function withExtension(typed: string, folder: string): string {
     : `${typed}.md`;
 }
 
-function sameBody(a: CreateSpecDraftBody, b: CreateSpecDraftBody): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 export function DraftDialog({
   projectId,
   projectPath,
@@ -73,9 +70,7 @@ export function DraftDialog({
   const [problems, setProblems] = useState<Problems>(NO_PROBLEMS);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const retained = useRef<{ key: string; body: CreateSpecDraftBody } | null>(
-    null,
-  );
+  const keys = useRetainedKey();
   const ideaId = useId();
   const ideaHelpId = useId();
   const ideaErrorId = useId();
@@ -102,7 +97,7 @@ export function DraftDialog({
       setRevise(false);
       setProblems(NO_PROBLEMS);
       setError(null);
-      retained.current = null;
+      keys.forget();
     }
     setOpen(next);
   };
@@ -136,12 +131,8 @@ export function DraftDialog({
       mode: conversation ? "session" : "draft",
       target_kind: revising ? "revise" : "new",
     };
-    const kept = retained.current;
-    const key =
-      kept !== null && sameBody(kept.body, body)
-        ? kept.key
-        : newIdempotencyKey();
-    retained.current = null;
+    const fingerprint = JSON.stringify(body);
+    const key = keys.take(fingerprint);
     setPending(true);
     setError(null);
     try {
@@ -156,9 +147,7 @@ export function DraftDialog({
       });
     } catch (e) {
       setError(e);
-      if (!(e instanceof ApiError)) {
-        retained.current = { key, body };
-      }
+      keys.keep(key, fingerprint, e);
     } finally {
       setPending(false);
     }
