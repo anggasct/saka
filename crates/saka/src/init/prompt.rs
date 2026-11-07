@@ -1,5 +1,6 @@
 use std::io::{BufRead, Write};
 
+use saka_ports::BestEffort;
 use serde_json::json;
 
 use super::InitError;
@@ -15,8 +16,8 @@ pub struct Terminal;
 impl Prompter for Terminal {
     fn ask(&mut self, question: &str) -> Option<String> {
         let mut stderr = std::io::stderr();
-        let _ = write!(stderr, "{question} ");
-        let _ = stderr.flush();
+        write!(stderr, "{question} ").best_effort("print the question");
+        stderr.flush().best_effort("flush the question");
         let mut line = String::new();
         match std::io::stdin().lock().read_line(&mut line) {
             Ok(0) | Err(_) => None,

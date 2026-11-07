@@ -14,6 +14,7 @@ use saka_engine::versions::{
     self, FileSkipped, Proposal, ProposalAction, ToolReport, VersionStatus,
 };
 use saka_env::HttpReleaseIndex;
+use saka_ports::BestEffort;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -854,11 +855,11 @@ async fn flow(
 }
 
 fn out(line: &str) {
-    let _ = writeln!(std::io::stdout(), "{line}");
+    writeln!(std::io::stdout(), "{line}").best_effort("print to stdout");
 }
 
 fn err(line: &str) {
-    let _ = writeln!(std::io::stderr(), "{line}");
+    writeln!(std::io::stderr(), "{line}").best_effort("print to stderr");
 }
 
 fn quoted(value: Option<&str>) -> String {

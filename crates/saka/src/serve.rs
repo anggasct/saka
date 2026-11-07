@@ -22,6 +22,7 @@ use saka_env::{
     AeadSecrets, Git, GitRepos, HttpReleaseIndex, Platform, RecipeRunner, ReleaseIndexConfig,
     ReposConfig, SystemdSupervisor, ToolchainConfig, ToolchainInstaller, runtime_dir,
 };
+use saka_ports::BestEffort;
 use saka_ports::{
     ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, Clock, DeviceCode, DevicePoll,
     EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest,
@@ -437,7 +438,7 @@ fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let temp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let _ = std::fs::remove_file(&temp);
+    std::fs::remove_file(&temp).best_effort("remove a temp file left by an earlier write");
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -450,7 +451,7 @@ fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
     match written.and_then(|()| std::fs::rename(&temp, path)) {
         Ok(()) => Ok(()),
         Err(e) => {
-            let _ = std::fs::remove_file(&temp);
+            std::fs::remove_file(&temp).best_effort("remove the temp file of a failed write");
             Err(e)
         }
     }
@@ -739,6 +740,11 @@ fn capability_refusal(
     })
 }
 
+async fn stop_http<T>(stop: &watch::Sender<bool>, http: tokio::task::JoinHandle<T>) {
+    stop.send(true).best_effort("signal the stop");
+    http.await.best_effort("wait for the HTTP server");
+}
+
 async fn run(
     cfg: &Config,
     listen: std::net::SocketAddr,
@@ -779,7 +785,10 @@ async fn run(
                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
-            let _ = http_stop.wait_for(|s| *s).await;
+            http_stop
+                .wait_for(|s| *s)
+                .await
+                .best_effort("wait for the stop signal");
         })
         .into_future(),
     );
@@ -792,15 +801,17 @@ async fn run(
                 Some(tokio::spawn(
                     axum::serve(l, saka_api::hooks_router(state.clone()))
                         .with_graceful_shutdown(async move {
-                            let _ = hooks_stop.wait_for(|s| *s).await;
+                            hooks_stop
+                                .wait_for(|s| *s)
+                                .await
+                                .best_effort("wait for the stop signal");
                         })
                         .into_future(),
                 ))
             }
             Err(e) => {
                 tracing::error!(code = "listen_failed", error = %e, listen = %at, "cannot listen for webhooks");
-                let _ = stop.send(true);
-                let _ = http.await;
+                stop_http(&stop, http).await;
                 return ExitCode::FAILURE;
             }
         },
@@ -812,16 +823,14 @@ async fn run(
     let store = match open_store(&data_dir, clock.now()) {
         Ok(s) => Arc::new(s),
         Err(code) => {
-            let _ = stop.send(true);
-            let _ = http.await;
+            stop_http(&stop, http).await;
             return code;
         }
     };
     let env_cfg = match env_config(cfg, &store) {
         Ok(c) => c,
         Err(e) => {
-            let _ = stop.send(true);
-            let _ = http.await;
+            stop_http(&stop, http).await;
             return refuse(&e);
         }
     };
@@ -833,8 +842,7 @@ async fn run(
             Ok(c) => c,
             Err(e) => {
                 tracing::error!(code = %e.code, "scm integration refused");
-                let _ = stop.send(true);
-                let _ = http.await;
+                stop_http(&stop, http).await;
                 return ExitCode::from(EXIT_REFUSED);
             }
         };
@@ -849,8 +857,7 @@ async fn run(
         Ok(t) => Arc::new(t),
         Err(e) => {
             tracing::error!(code = %e.code, "toolchain installer refused");
-            let _ = stop.send(true);
-            let _ = http.await;
+            stop_http(&stop, http).await;
             return ExitCode::from(EXIT_REFUSED);
         }
     };
@@ -890,8 +897,7 @@ async fn run(
     );
     if let Some((code, integration)) = capability_refusal(cfg, |id| scm.capabilities(id)) {
         tracing::error!(code, integration = %integration, "the integration lacks a capability the config asks for");
-        let _ = stop.send(true);
-        let _ = http.await;
+        stop_http(&stop, http).await;
         return ExitCode::from(EXIT_REFUSED);
     }
     let first_caps = cfg.scm.first().and_then(|s| scm.capabilities(&s.id));
@@ -904,8 +910,7 @@ async fn run(
         Ok(r) => Arc::new(r),
         Err(e) => {
             tracing::error!(code = %e.code, "release index refused");
-            let _ = stop.send(true);
-            let _ = http.await;
+            stop_http(&stop, http).await;
             return ExitCode::from(EXIT_REFUSED);
         }
     };
@@ -913,8 +918,7 @@ async fn run(
         Ok(h) => h,
         Err(e) => {
             tracing::error!(code = e.code, detail = %e.detail, "hook config refused");
-            let _ = stop.send(true);
-            let _ = http.await;
+            stop_http(&stop, http).await;
             return ExitCode::from(EXIT_REFUSED);
         }
     };
@@ -922,8 +926,7 @@ async fn run(
         Ok(w) => Arc::new(w),
         Err(e) => {
             tracing::error!(code = %e.code, "outbound webhooks refused");
-            let _ = stop.send(true);
-            let _ = http.await;
+            stop_http(&stop, http).await;
             return ExitCode::from(EXIT_REFUSED);
         }
     };
@@ -939,8 +942,7 @@ async fn run(
             }
             Err(e) => {
                 tracing::error!(code = e.code, detail = %e.detail, "notify config refused");
-                let _ = stop.send(true);
-                let _ = http.await;
+                stop_http(&stop, http).await;
                 return ExitCode::from(EXIT_REFUSED);
             }
         }
@@ -1001,8 +1003,7 @@ async fn run(
     if cfg.auth.is_some()
         && let Err(code) = publish_cli_token(&engine, &data_dir)
     {
-        let _ = stop.send(true);
-        let _ = http.await;
+        stop_http(&stop, http).await;
         return code;
     }
     state.set_engine(engine.clone());
@@ -1024,19 +1025,23 @@ async fn run(
     let running = tokio::spawn(engine.clone().run(WORKERS, stopped));
     shutdown_signal().await;
     tracing::info!("shutting down");
-    let _ = stop.send(true);
-    let _ = tokio::time::timeout(Duration::from_secs(30), running).await;
-    let _ = http.await;
+    stop.send(true).best_effort("signal the stop");
+    tokio::time::timeout(Duration::from_secs(30), running)
+        .await
+        .best_effort("wait for the running jobs");
+    http.await.best_effort("wait for the HTTP server");
     if let Some(hooks) = hooks_http {
-        let _ = hooks.await;
+        hooks.await.best_effort("wait for the webhook server");
     }
     for poller in chat_pollers {
-        let _ = tokio::time::timeout(Duration::from_secs(5), poller).await;
+        tokio::time::timeout(Duration::from_secs(5), poller)
+            .await
+            .best_effort("wait for the poller");
     }
     forwarder.abort();
     if let Some((task, socket)) = mcp {
         task.abort();
-        let _ = std::fs::remove_file(socket);
+        std::fs::remove_file(socket).best_effort("remove the MCP socket");
     }
     ExitCode::SUCCESS
 }

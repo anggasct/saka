@@ -15,4 +15,8 @@ async-trait.workspace = true
 saka-core = { path = "../saka-core" }
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

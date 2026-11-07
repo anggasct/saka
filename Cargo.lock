@@ -5101,6 +5101,8 @@ dependencies = [
  "saka-core",
  "serde_json",
  "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

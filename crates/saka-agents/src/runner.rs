@@ -6,6 +6,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use saka_ports::BestEffort;
 use saka_ports::MAX_RESULT_TEXT_BYTES;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -25,6 +26,7 @@ pub const EXIT_VERSION_MISMATCH: i32 = 3;
 pub const EXIT_LAUNCH_INVALID: i32 = 4;
 pub const EXIT_CLI_FAILED: i32 = 5;
 
+const CHANNEL_CAPACITY: usize = 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const STDIN_CLOSE_WAIT: Duration = Duration::from_secs(10);
 const TERM_WAIT: Duration = Duration::from_secs(5);
@@ -156,9 +158,9 @@ struct Runner {
     listener: UnixListener,
     child: Child,
     stdin: Option<ChildStdin>,
-    stdout: mpsc::UnboundedReceiver<String>,
-    frames_tx: mpsc::UnboundedSender<(u64, Incoming)>,
-    frames: mpsc::UnboundedReceiver<(u64, Incoming)>,
+    stdout: mpsc::Receiver<String>,
+    frames_tx: mpsc::Sender<(u64, Incoming)>,
+    frames: mpsc::Receiver<(u64, Incoming)>,
     conn: Option<Conn>,
     next_conn: u64,
     turn: u32,
@@ -200,20 +202,21 @@ impl Runner {
             Ok(child) => child,
             Err(e) => {
                 tracing::error!(code = "cli_spawn_failed", error = %e, "cannot start the CLI");
-                let _ = log.append(
+                log.append(
                     "runner_error",
                     json!({ "code": "cli_spawn_failed", "params": {} }),
-                );
+                )
+                .best_effort("record the failed start");
                 return Err(EXIT_CLI_FAILED);
             }
         };
         let stdin = child.stdin.take();
-        let (stdout_tx, stdout) = mpsc::unbounded_channel();
+        let (stdout_tx, stdout) = mpsc::channel(CHANNEL_CAPACITY);
         if let Some(out) = child.stdout.take() {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if stdout_tx.send(line).is_err() {
+                    if stdout_tx.send(line).await.is_err() {
                         break;
                     }
                 }
@@ -224,7 +227,7 @@ impl Runner {
             let path = PathBuf::from(&launch.stderr_path);
             tokio::spawn(async move { copy_stderr(err, &path, &redactor).await });
         }
-        let (frames_tx, frames) = mpsc::unbounded_channel();
+        let (frames_tx, frames) = mpsc::channel(CHANNEL_CAPACITY);
         let pid = child.id();
         let mut runner = Runner {
             launch,
@@ -303,7 +306,8 @@ impl Runner {
                 Flow::Continue => {}
                 Flow::Shutdown => return self.shutdown(exited).await,
                 Flow::Exit(code) => {
-                    let _ = std::fs::remove_file(&self.launch.socket_path);
+                    std::fs::remove_file(&self.launch.socket_path)
+                        .best_effort("remove the runner socket");
                     return code;
                 }
             }
@@ -404,12 +408,20 @@ impl Runner {
             // the other side would never see why.
             tokio::spawn(async move {
                 let mut lines = BufReader::new(read).lines();
-                let _ = tokio::time::timeout(HELLO_TIMEOUT, lines.next_line()).await;
+                tokio::time::timeout(HELLO_TIMEOUT, lines.next_line())
+                    .await
+                    .best_effort("read the hello of a second client");
                 let frame = RunnerFrame::Error {
                     code: "already_connected".into(),
                 };
-                let _ = writer.write_all(protocol::encode(&frame).as_bytes()).await;
-                let _ = writer.shutdown().await;
+                writer
+                    .write_all(protocol::encode(&frame).as_bytes())
+                    .await
+                    .best_effort("refuse a second client");
+                writer
+                    .shutdown()
+                    .await
+                    .best_effort("close a refused client");
             });
             return Flow::Continue;
         }
@@ -433,14 +445,20 @@ impl Runner {
                 let frame = RunnerFrame::Error {
                     code: "version_mismatch".into(),
                 };
-                let _ = writer.write_all(protocol::encode(&frame).as_bytes()).await;
+                writer
+                    .write_all(protocol::encode(&frame).as_bytes())
+                    .await
+                    .best_effort("report a version mismatch");
                 return Flow::Exit(EXIT_VERSION_MISMATCH);
             }
             _ => {
                 let frame = RunnerFrame::Error {
                     code: "hello_required".into(),
                 };
-                let _ = writer.write_all(protocol::encode(&frame).as_bytes()).await;
+                writer
+                    .write_all(protocol::encode(&frame).as_bytes())
+                    .await
+                    .best_effort("ask for the hello first");
                 return Flow::Continue;
             }
         };
@@ -468,11 +486,13 @@ impl Runner {
                     Ok(frame) => Incoming::Frame(frame),
                     Err(bad) => Incoming::Bad(bad),
                 };
-                if tx.send((id, incoming)).is_err() {
+                if tx.send((id, incoming)).await.is_err() {
                     return;
                 }
             }
-            let _ = tx.send((id, Incoming::Closed));
+            tx.send((id, Incoming::Closed))
+                .await
+                .best_effort("report the closed connection");
         });
         Flow::Continue
     }
@@ -563,16 +583,17 @@ impl Runner {
                 .id()
                 .and_then(|p| rustix::process::Pid::from_raw(p as i32))
             {
-                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+                rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+                    .best_effort("ask the CLI to stop");
             }
             if tokio::time::timeout(TERM_WAIT, self.child.wait())
                 .await
                 .is_err()
             {
-                let _ = self.child.kill().await;
+                self.child.kill().await.best_effort("kill the CLI");
             }
         }
-        let _ = std::fs::remove_file(&self.launch.socket_path);
+        std::fs::remove_file(&self.launch.socket_path).best_effort("remove the runner socket");
         EXIT_OK
     }
 }

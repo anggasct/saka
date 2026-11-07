@@ -2,6 +2,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use saka_core::secret::SecretText;
+use saka_ports::BestEffort;
 use serde_json::{Value, json};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -52,7 +53,7 @@ impl Answer {
 }
 
 pub(crate) fn out(text: &str) {
-    let _ = writeln!(std::io::stdout(), "{text}");
+    writeln!(std::io::stdout(), "{text}").best_effort("print to stdout");
 }
 
 fn out_text(text: &str) {
@@ -71,7 +72,7 @@ fn write_token(path: &std::path::Path, token: &str) -> std::io::Result<()> {
 }
 
 pub(crate) fn err(text: &str) {
-    let _ = writeln!(std::io::stderr(), "{text}");
+    writeln!(std::io::stderr(), "{text}").best_effort("print to stderr");
 }
 
 fn issue_line(issue: &Value) -> String {
@@ -110,8 +111,8 @@ pub fn read_secret(name: &str, multiline: bool) -> Result<SecretText, ExitCode> 
     let stdin = std::io::stdin();
     let typed = stdin.is_terminal();
     let restore = if typed {
-        let _ = write!(std::io::stderr(), "Value for {name}: ");
-        let _ = std::io::stderr().flush();
+        write!(std::io::stderr(), "Value for {name}: ").best_effort("print the prompt");
+        std::io::stderr().flush().best_effort("flush the prompt");
         hide_input()
     } else {
         None
@@ -123,11 +124,12 @@ pub fn read_secret(name: &str, multiline: bool) -> Result<SecretText, ExitCode> 
         stdin.lock().read_line(&mut raw).map(drop)
     };
     if let Some(saved) = restore {
-        let _ = rustix::termios::tcsetattr(
+        rustix::termios::tcsetattr(
             std::io::stdin(),
             rustix::termios::OptionalActions::Now,
             &saved,
-        );
+        )
+        .best_effort("restore the terminal");
         err("");
     }
     if let Err(e) = read {
@@ -1000,7 +1002,7 @@ impl Client {
         if !a.ok() || self.json {
             return self.finish(&a, |_| String::new());
         }
-        let _ = write!(std::io::stdout(), "{}", text(&a.body["content"]));
+        write!(std::io::stdout(), "{}", text(&a.body["content"])).best_effort("print the content");
         ExitCode::SUCCESS
     }
 

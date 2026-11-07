@@ -11,6 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::Url;
 use saka_core::diagnostics::install_url;
+use saka_ports::BestEffort;
 use saka_scm::github::manifest::{
     self, CONVERSION_TIMEOUT, CreatedApp, ManifestError, ManifestRequest,
 };
@@ -758,8 +759,14 @@ async fn flow(plan: Plan, warnings: &mut Vec<Note>) -> Result<ScmAppReport, Fail
             f.code
         ),
     };
-    let _ = claim.reply.send(text);
-    let _ = tokio::time::timeout(SERVER_DRAIN, listener.close()).await;
+    claim
+        .reply
+        .send(text)
+        .map_err(|_| "the browser left")
+        .best_effort("answer the callback");
+    tokio::time::timeout(SERVER_DRAIN, listener.close())
+        .await
+        .best_effort("drain the callback server");
     if let Some(opening) = opening
         && let Err(reason) = opening.outcome().await
     {

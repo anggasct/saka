@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use saka_core::workspace::MAX_BINDINGS;
 use saka_engine::project_config::{self, Issue};
 use saka_engine::versions::{self, FileUse, RepoFiles};
+use saka_ports::BestEffort;
 use serde::Serialize;
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, value};
@@ -280,7 +281,7 @@ pub fn write_atomic(root: &Path, rel: &str, bytes: &[u8], replace: bool) -> Resu
     temp.persist(&path)
         .map_err(|e| write_failed(&path, &e.error))?;
     if let Ok(dir) = std::fs::File::open(&parent) {
-        let _ = dir.sync_all();
+        dir.sync_all().best_effort("sync the config directory");
     }
     Ok(())
 }

@@ -10,6 +10,7 @@ use base64::Engine as _;
 use saka_core::diagnostics::{InstalledToolchain, ToolchainCache, host_version_of};
 use saka_core::model::ToolchainUse;
 use saka_core::vocab::{HostTool, Tool};
+use saka_ports::BestEffort;
 use saka_ports::{PortError, PortResult, Toolchains};
 use serde::Deserialize;
 use serde_json::json;
@@ -540,7 +541,7 @@ impl ToolchainInstaller {
         let renamed = std::fs::rename(&out, dir);
         if renamed.is_err() {
             // The staged tree is read-only; the temp dir can only remove it once it is writable again.
-            let _ = make_dirs_writable(&out);
+            make_dirs_writable(&out).best_effort("make the staged tree removable");
         }
         match renamed {
             Ok(()) => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555))

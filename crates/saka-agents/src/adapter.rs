@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use saka_core::diagnostics::{AgentCli, AgentLogin};
 use saka_core::ids::SessionId;
+use saka_ports::BestEffort;
 use saka_ports::{
     Agents, LaunchProfile, LaunchedSession, Link, PortError, PortResult, Reattached, RunnerEvent,
     RunnerUnit, SessionLaunch, SessionRef, Supervisor, UnitLimits,
@@ -267,7 +268,8 @@ impl Agents for ClaudeAgents {
         let (spec, paths) = self.launch_spec(&program, launch)?;
         self.drop_conn(launch.session_id);
         // A socket left by an earlier attempt must not answer for the new runner.
-        let _ = std::fs::remove_file(&paths.socket_path);
+        std::fs::remove_file(&paths.socket_path)
+            .best_effort("remove a socket left by an earlier attempt");
         write_launch(&paths, &spec).map_err(|e| io_error("launch_write_failed", &e))?;
         if let Some(socket) = self.cfg.mcp_socket.as_deref()
             && spec.args.iter().any(|a| a == "--mcp-config")
@@ -309,8 +311,12 @@ impl Agents for ClaudeAgents {
             {
                 Ok(conn) => break conn,
                 Err(e) if !e.retryable || tokio::time::Instant::now() >= deadline => {
-                    let _ = self.supervisor.stop(&name).await;
-                    let _ = std::fs::remove_file(&secrets);
+                    self.supervisor
+                        .stop(&name)
+                        .await
+                        .best_effort("stop the runner that never answered");
+                    std::fs::remove_file(&secrets)
+                        .best_effort("remove the launch secrets of a failed start");
                     return Err(e);
                 }
                 Err(_) => tokio::time::sleep(CONNECT_RETRY).await,
@@ -428,7 +434,9 @@ impl Agents for ClaudeAgents {
             .and_then(|c| c.get(&session_id).cloned());
         self.drop_conn(session_id);
         if let Some(conn) = conn {
-            let _ = conn.send(session_id, &ServerFrame::Shutdown).await;
+            conn.send(session_id, &ServerFrame::Shutdown)
+                .await
+                .best_effort("ask the runner to shut down");
         }
         let name = runner_unit
             .map(String::from)

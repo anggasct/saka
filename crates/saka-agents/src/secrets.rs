@@ -5,6 +5,7 @@ use std::path::Path;
 
 use saka_core::secret::SecretVar;
 use saka_core::vocab::SecretPurpose;
+use saka_ports::BestEffort;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -43,7 +44,7 @@ impl SessionSecrets {
                 .create(dir)?;
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
-        let _ = std::fs::remove_file(path);
+        std::fs::remove_file(path).best_effort("replace an earlier secrets file");
         let bytes = Zeroizing::new(serde_json::to_vec(self).map_err(std::io::Error::other)?);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -57,7 +58,7 @@ impl SessionSecrets {
     pub fn take(path: &Path) -> std::io::Result<SessionSecrets> {
         let mut bytes = Zeroizing::new(Vec::new());
         let read = std::fs::File::open(path).and_then(|mut f| f.read_to_end(&mut bytes));
-        let _ = std::fs::remove_file(path);
+        std::fs::remove_file(path).best_effort("remove the secrets file once read");
         read?;
         serde_json::from_slice(&bytes).map_err(std::io::Error::other)
     }

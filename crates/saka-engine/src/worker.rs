@@ -20,6 +20,7 @@ use saka_core::vocab::{
     CheckKind, CheckStatus, DocsMode, EnvironmentState, PermissionState, RefreshReason, ScopeStage,
     Stage, StagePhase, TokenInvalidCause, UserLinkCause, UserTokenCause, WorkItemOrigin,
 };
+use saka_ports::BestEffort;
 use saka_ports::{
     ChangeCredential, ChangeOpening, Checkout, DocsRequest, EnqueueOutcome, EnvRef, ExtraDir,
     LaunchProfile, MergeOutcome, MergeRequest, OpenChangeRequest, PortError, PortResult,
@@ -274,7 +275,11 @@ impl Engine {
                         from_offset,
                     }))),
                     Err(e) if e.code == "version_mismatch" => {
-                        let _ = self.ports.agents.stop(id, Some(&target.runner_unit)).await;
+                        self.ports
+                            .agents
+                            .stop(id, Some(&target.runner_unit))
+                            .await
+                            .best_effort("stop a runner of another version");
                         Ok(SessionJob::Input(Box::new(SessionInput::Gone {
                             cause: "version_mismatch".into(),
                         })))
@@ -929,7 +934,7 @@ impl Engine {
         code: BlockerCode,
         params: Value,
     ) -> Execution {
-        let _ = self.run_teardown_commands(env, recipe).await;
+        self.run_teardown_commands(env, recipe).await;
         if let Some(repo) = docs {
             self.ports
                 .env

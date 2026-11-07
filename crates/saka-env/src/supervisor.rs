@@ -9,6 +9,7 @@ use std::io::Read;
 use async_trait::async_trait;
 use saka_core::diagnostics::SupervisorProbe;
 use saka_core::secret::SecretText;
+use saka_ports::BestEffort;
 use saka_ports::{
     COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, PortError, PortResult, RunnerUnit, Supervisor,
 };
@@ -64,7 +65,7 @@ impl SecretFile {
             .create(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         let path = dir.join(format!("{unit}.env"));
-        let _ = std::fs::remove_file(&path);
+        std::fs::remove_file(&path).best_effort("replace an earlier env file");
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -91,7 +92,7 @@ impl SecretFile {
 
 impl Drop for SecretFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        std::fs::remove_file(&self.path).best_effort("remove the env file");
     }
 }
 
@@ -254,7 +255,9 @@ impl Supervisor for SystemdSupervisor {
             self.stop(&unit.name).await?;
         }
         // A failed unit with the same name blocks a new one until it is reset.
-        let _ = Self::systemctl(&["reset-failed", &Self::service(&unit.name)]).await;
+        Self::systemctl(&["reset-failed", &Self::service(&unit.name)])
+            .await
+            .best_effort("reset a failed unit of the same name");
         let out = Command::new("systemd-run")
             .args(["--user", "--collect", "--quiet"])
             .arg(format!("--unit={}", unit.name))
@@ -280,11 +283,15 @@ impl Supervisor for SystemdSupervisor {
 
     async fn stop(&self, name: &str) -> PortResult<()> {
         let service = Self::service(name);
-        let _ = tokio::time::timeout(STOP_WAIT, Self::systemctl(&["stop", &service])).await;
+        tokio::time::timeout(STOP_WAIT, Self::systemctl(&["stop", &service]))
+            .await
+            .best_effort("stop the unit");
         if Self::wait_gone(name, Duration::ZERO).await {
             return Ok(());
         }
-        let _ = Self::systemctl(&["kill", "--signal=SIGKILL", &service]).await;
+        Self::systemctl(&["kill", "--signal=SIGKILL", &service])
+            .await
+            .best_effort("kill the unit");
         if Self::wait_gone(name, KILL_WAIT).await {
             Ok(())
         } else {
@@ -303,7 +310,9 @@ impl Supervisor for SystemdSupervisor {
         if Self::is_active(&unit.name).await {
             self.stop(&unit.name).await?;
         }
-        let _ = Self::systemctl(&["reset-failed", &Self::service(&unit.name)]).await;
+        Self::systemctl(&["reset-failed", &Self::service(&unit.name)])
+            .await
+            .best_effort("reset a failed unit of the same name");
         let (reader, stdout, stderr) = merged_pipe()?;
         let backstop = (unit.timeout + RUN_BACKSTOP).as_secs();
         let mut command = Command::new("systemd-run");
@@ -346,7 +355,7 @@ impl Supervisor for SystemdSupervisor {
             }
             Err(_) => {
                 self.stop(&unit.name).await?;
-                let _ = child.wait().await;
+                child.wait().await.best_effort("reap the stopped command");
                 collect(reader, None, true).await
             }
         };
@@ -421,13 +430,15 @@ impl Supervisor for DirectSupervisor {
             .id()
             .and_then(|p| rustix::process::Pid::from_raw(p as i32));
         if let Some(pid) = group {
-            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
+            rustix::process::kill_process_group(pid, rustix::process::Signal::TERM)
+                .best_effort("ask the command group to stop");
         }
         if tokio::time::timeout(STOP_WAIT, child.wait()).await.is_err() {
             if let Some(pid) = group {
-                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+                rustix::process::kill_process_group(pid, rustix::process::Signal::KILL)
+                    .best_effort("kill the command group");
             }
-            let _ = child.wait().await;
+            child.wait().await.best_effort("reap the killed command");
         }
         Ok(())
     }
@@ -467,15 +478,17 @@ impl Supervisor for DirectSupervisor {
                 let status = status.map_err(|e| failed("supervisor_run_failed", e.to_string()))?;
                 // Background children left by the command still hold the pipe open.
                 if let Some(pid) = group {
-                    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+                    rustix::process::kill_process_group(pid, rustix::process::Signal::KILL)
+                        .best_effort("kill the background children of the command");
                 }
                 collect(reader, status.code(), false).await
             }
             Err(_) => {
                 if let Some(pid) = group {
-                    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+                    rustix::process::kill_process_group(pid, rustix::process::Signal::KILL)
+                        .best_effort("kill the command group");
                 }
-                let _ = child.wait().await;
+                child.wait().await.best_effort("reap the killed command");
                 collect(reader, None, true).await
             }
         }

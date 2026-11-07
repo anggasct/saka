@@ -1,5 +1,6 @@
 use std::fmt;
 
+use saka_ports::BestEffort;
 use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
@@ -87,12 +88,13 @@ pub fn init_with<W>(writer: W)
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
-    let _ = tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .fmt_fields(JsonFields::new())
         .event_format(FlatJson)
         .with_max_level(level())
         .with_writer(writer)
-        .try_init();
+        .try_init()
+        .best_effort("install the logger");
 }
 
 #[cfg(test)]
