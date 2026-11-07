@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use saka_engine::Engine;
+use saka_ports::BestEffort;
 use serde_json::json;
 
 use crate::auth::Authenticator;
@@ -52,11 +53,19 @@ impl AppState {
     }
 
     pub fn set_engine(&self, engine: Arc<Engine>) {
-        let _ = self.0.engine.set(engine);
+        self.0
+            .engine
+            .set(engine)
+            .map_err(|_| "already set")
+            .best_effort("set the engine");
     }
 
     pub fn set_assets(&self, assets: Arc<dyn Assets>) {
-        let _ = self.0.assets.set(assets);
+        self.0
+            .assets
+            .set(assets)
+            .map_err(|_| "already set")
+            .best_effort("set the assets");
     }
 
     pub(crate) fn assets(&self) -> Option<&Arc<dyn Assets>> {

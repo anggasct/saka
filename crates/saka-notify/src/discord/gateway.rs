@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use saka_core::secret::SecretText;
+use saka_ports::BestEffort;
 use saka_ports::{ChatAction, ChatActions, PortError};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -132,7 +133,7 @@ impl Gateway {
             };
             let frame = tokio::select! {
                 _ = stop.changed() => {
-                    let _ = sink.send(Message::Close(None)).await;
+                    sink.send(Message::Close(None)).await.best_effort("close the gateway");
                     return Ended::Stop;
                 }
                 _ = beat => {
@@ -196,7 +197,9 @@ impl Gateway {
                 Some(11) => acked = true,
                 Some(1) => {
                     let heartbeat = json!({ "op": 1, "d": session.seq });
-                    let _ = sink.send(Message::text(heartbeat.to_string())).await;
+                    sink.send(Message::text(heartbeat.to_string()))
+                        .await
+                        .best_effort("send the gateway heartbeat");
                 }
                 Some(7) => {
                     return Ended::Reconnect {

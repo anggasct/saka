@@ -11,6 +11,7 @@ use axum::http::header::{
 };
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::Response;
+use saka_ports::BestEffort;
 use subtle::ConstantTimeEq;
 use tokio::sync::{Mutex, Notify, oneshot};
 use zeroize::Zeroizing;
@@ -60,7 +61,9 @@ pub(crate) struct Listener {
 impl Listener {
     pub(crate) async fn close(self) {
         self.stop.notify_one();
-        let _ = self.server.await;
+        self.server
+            .await
+            .best_effort("wait for the callback server");
     }
 }
 
@@ -85,9 +88,10 @@ pub(crate) fn start(
     let app = axum::Router::new().fallback(handle).with_state(shared);
     let stopped = stop.clone();
     let server = tokio::spawn(async move {
-        let _ = axum::serve(listener, app)
+        axum::serve(listener, app)
             .with_graceful_shutdown(async move { stopped.notified().await })
-            .await;
+            .await
+            .best_effort("run the callback server");
     });
     Ok(Listener {
         claim,

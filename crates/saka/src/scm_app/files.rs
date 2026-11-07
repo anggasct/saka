@@ -3,6 +3,7 @@ use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use saka_ports::BestEffort;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
 pub(crate) const PRIVATE_KEY_FILE: &str = "private-key.pem";
@@ -110,13 +111,13 @@ pub(crate) fn write_new_private_file(
     private_dir(dir).map_err(io)?;
     let temp = temp_path(dir, name).map_err(io)?;
     if let Err(e) = write_temp(&temp, bytes, PRIVATE_FILE_MODE) {
-        let _ = std::fs::remove_file(&temp);
+        std::fs::remove_file(&temp).best_effort("remove the temp file of a failed write");
         return Err(io(e));
     }
     // A hard link fails when the name exists, so a file that appeared since the preflight is
     // never replaced, unlike a rename.
     let linked = std::fs::hard_link(&temp, &target);
-    let _ = std::fs::remove_file(&temp);
+    std::fs::remove_file(&temp).best_effort("remove the temp file");
     match linked {
         Ok(()) => {}
         Err(e) if e.kind() == ErrorKind::AlreadyExists => return Err(WriteError::Exists(target)),
@@ -157,11 +158,11 @@ pub(crate) fn replace_config(path: &Path, text: &str) -> std::io::Result<()> {
         .unwrap_or("config.toml");
     let temp = temp_path(dir, name)?;
     if let Err(e) = write_temp(&temp, text.as_bytes(), mode) {
-        let _ = std::fs::remove_file(&temp);
+        std::fs::remove_file(&temp).best_effort("remove the temp file of a failed write");
         return Err(e);
     }
     if let Err(e) = std::fs::rename(&temp, &target) {
-        let _ = std::fs::remove_file(&temp);
+        std::fs::remove_file(&temp).best_effort("remove the temp file of a failed rename");
         return Err(e);
     }
     sync_dir(dir)

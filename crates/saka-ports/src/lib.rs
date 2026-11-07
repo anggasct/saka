@@ -1,4 +1,5 @@
 pub mod agent;
+mod best_effort;
 pub mod chat;
 pub mod decisions;
 pub mod docs;
@@ -19,6 +20,7 @@ pub use agent::{
     Agents, LaunchProfile, LaunchedSession, Link, MAX_RESULT_TEXT_BYTES, Reattached, RunnerEvent,
     RunnerEventKind, SessionLaunch, SessionRef,
 };
+pub use best_effort::BestEffort;
 pub use chat::{ChatAction, ChatActionKind, ChatActions, ChatOutcome};
 pub use decisions::{AskRefusal, Asked, Decisions};
 pub use docs::{

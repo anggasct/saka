@@ -9,6 +9,7 @@ use saka_core::ids::{EnvironmentId, RepoId};
 use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
+use saka_ports::BestEffort;
 use saka_ports::{
     Blob, ChangeDiff, ChangedPaths, Checkout, CommandUnit, CommitFiles, CommitPush, DOCS_MAX_BYTES,
     DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, GitAccess, GitRemote, PortError,
@@ -1194,7 +1195,7 @@ impl Environments for GitRepos {
                 }),
             ));
         }
-        let _ = std::fs::remove_file(&marker);
+        std::fs::remove_file(&marker).best_effort("remove the docs marker");
         if docs.exists() && self.inside_envs(&docs) {
             make_dirs_writable(&docs).map_err(|e| io("make_writable", &e))?;
         }
@@ -2059,7 +2060,7 @@ pub fn write_file_in(worktree: &Path, path: &str, bytes: &[u8]) -> PortResult<()
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());
     let tmp = dir.join(format!(".{}.saka-tmp", name.unwrap_or_default()));
-    let _ = std::fs::remove_file(&tmp);
+    std::fs::remove_file(&tmp).best_effort("remove a temp file left by an earlier write");
     let write = || -> std::io::Result<()> {
         let flags =
             rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL;
@@ -2069,7 +2070,7 @@ pub fn write_file_in(worktree: &Path, path: &str, bytes: &[u8]) -> PortResult<()
         std::fs::rename(&tmp, &current)
     };
     write().map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+        std::fs::remove_file(&tmp).best_effort("remove the temp file of a failed write");
         io("write_worktree_file", &e)
     })
 }
