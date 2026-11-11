@@ -95,7 +95,7 @@ fn outside_changes_may_share_a_branch_and_a_spec_step_branch_stays_unique() {
     assert_eq!(
         store.migration().applied,
         vec![
-            21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37
+            21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38
         ]
     );
     drop(store);

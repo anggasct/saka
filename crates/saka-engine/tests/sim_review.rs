@@ -13,9 +13,8 @@ use saka_testkit::{
 
 const STEPS: usize = 12_000;
 
-const REVIEW_ONLY: &str = "[workflow]\npreset = \"review_only\"\n";
-const MANUAL_REVIEW: &str =
-    "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nreview = \"manual\"\n";
+const REVIEW_ONLY: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"auto\"\n";
+const MANUAL_REVIEW: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"manual\"\n";
 
 fn layout(workflow: &str) -> Layout {
     let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);

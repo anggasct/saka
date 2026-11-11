@@ -725,7 +725,9 @@ fn reviewed_outside_task(api: &Api) -> bool {
 
 #[test]
 fn a_verdict_is_shown_with_what_it_judged_and_where_it_was_posted() {
-    let mut api = outside_api("[workflow]\npreset = \"review_only\"\n");
+    let mut api = outside_api(
+        "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"auto\"\n",
+    );
     api.sim
         .world
         .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
@@ -5717,6 +5719,80 @@ fn a_task_in_the_merge_queue_shows_its_place_on_reads_only() {
     );
     let detail = api.get(&format!("/api/v1/work-items/{id}"));
     assert_eq!(detail.body["merge_queue"], Value::Null);
+}
+
+#[test]
+fn an_outside_change_shows_its_place_in_the_merge_queue_and_runs_the_update_action() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str("\n[workflow]\npreset = \"review_only\"\n");
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    let mut cfg = SimConfig::default();
+    cfg.operator.merge = false;
+    let mut api = Api::with(Sim::multi_repo(cfg, &layout));
+    api.sim
+        .world
+        .script_reviews(vec![saka_testkit::ReviewReply::approve()]);
+    let number = api
+        .sim
+        .world
+        .open_external_change(SHOP_REPO, saka_testkit::ChangeSpec::new("A", "alice", "a"));
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.externals()
+            .iter()
+            .any(|t| t.is_at(Stage::Merge, StagePhase::AwaitingMerge))
+    }));
+    api.sim.world.push_to_base_of(SHOP_REPO);
+    let task = api.sim.externals().remove(0);
+    let id = task.item.id.0;
+
+    let merge = api.post_with(
+        &format!("/api/v1/work-items/{id}/actions/merge"),
+        Some("queue-1"),
+        &[("if-match", &format!("W/\"{}\"", task.item.version))],
+        &json!({ "reason": null }),
+    );
+    assert_eq!(merge.status, StatusCode::ACCEPTED, "{}", merge.body);
+    let waiting = json!({ "base_branch": "main", "position": 1, "size": 1 });
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["stage_phase"], "queued");
+    assert_eq!(detail.body["merge_queue"], waiting);
+
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.externals().iter().any(|t| {
+            t.open_blocker()
+                .is_some_and(|b| b.code.as_str() == "change_behind_base")
+        })
+    }));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["blocker"]["code"], "change_behind_base");
+    assert_eq!(detail.body["blocker"]["params"]["updatable"], true);
+    assert_eq!(
+        detail.body["blocker"]["primary_action"],
+        json!({ "kind": "update_branch", "params": {} })
+    );
+    let blocker = detail.body["blocker"]["id"].as_str().unwrap().to_string();
+
+    let run = api.post_with(
+        &format!("/api/v1/work-items/{id}/actions/primary"),
+        Some("update-1"),
+        &[],
+        &json!({ "blocker_id": blocker, "reason": "catch up" }),
+    );
+    assert_eq!(run.status, StatusCode::ACCEPTED, "{}", run.body);
+    assert_eq!(run.body["blocker"], Value::Null);
+    assert!(
+        api.sim
+            .run_until(STEPS, |s| !s.world.update_calls().is_empty())
+    );
+    assert_eq!(api.sim.world.update_calls()[0].0, number);
+    let spec = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json"),
+    )
+    .unwrap();
+    assert!(spec.contains("update_branch"));
 }
 
 #[test]

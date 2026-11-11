@@ -1114,9 +1114,11 @@ fn blocker(tx: &Transaction<'_>, t: &Task, b: &Blocker) -> Result<()> {
 fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<()> {
     tx.execute(
         "INSERT INTO change_request (id, project_id, work_item_id, repo_id, number, url, head_branch, base_branch,
-           head_sha, state, merge_commit_sha, merged_at, last_polled_at, created_at, updated_at, role, skipped_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+           head_sha, state, merge_commit_sha, merged_at, last_polled_at, created_at, updated_at, role, skipped_at,
+           update_head_sha)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT (id) DO UPDATE SET head_sha = excluded.head_sha, state = excluded.state,
+           update_head_sha = excluded.update_head_sha,
            merge_commit_sha = excluded.merge_commit_sha, merged_at = excluded.merged_at,
            skipped_at = excluded.skipped_at,
            last_polled_at = excluded.last_polled_at, updated_at = excluded.updated_at",
@@ -1138,6 +1140,7 @@ fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<(
             c.updated_at.0,
             c.role.as_str(),
             c.skipped_at.map(|x| x.0),
+            c.update_head_sha,
         ],
     )?;
     Ok(())

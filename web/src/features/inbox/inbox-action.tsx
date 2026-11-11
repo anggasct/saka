@@ -123,7 +123,7 @@ function Permission({ item }: { item: InboxItem }) {
   );
 }
 
-type BlockerKind = "retry" | "cancel" | "takeover";
+type BlockerKind = "retry" | "cancel" | "takeover" | "update_branch";
 
 function blockerCopy(t: T, kind: BlockerKind) {
   switch (kind) {
@@ -147,6 +147,13 @@ function blockerCopy(t: T, kind: BlockerKind) {
         title: t("task.takeover.title"),
         description: t("task.takeover.description"),
         submit: t("task.takeover.submit"),
+      };
+    case "update_branch":
+      return {
+        trigger: t("task.update_branch.trigger"),
+        title: t("task.update_branch.title"),
+        description: t("task.update_branch.description"),
+        submit: t("task.update_branch.submit"),
       };
   }
 }
@@ -254,6 +261,7 @@ export function Primary({ item }: { item: InboxItem }) {
     case "retry":
     case "cancel":
     case "takeover":
+    case "update_branch":
       return <Blocker item={item} kind={kind} />;
     case "edit_spec":
       return item.title.spec_path == null ? null : (

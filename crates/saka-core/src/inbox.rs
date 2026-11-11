@@ -265,6 +265,7 @@ impl From<crate::vocab::BlockerAction> for InboxActionKind {
             B::LinkAccount => InboxActionKind::LinkAccount,
             B::SetUserToken => InboxActionKind::SetUserToken,
             B::EditSpec => InboxActionKind::EditSpec,
+            B::UpdateBranch => InboxActionKind::UpdateBranch,
         }
     }
 }

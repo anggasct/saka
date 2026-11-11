@@ -104,6 +104,7 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             head_branch: branch.clone(),
             base_branch: base_branch.clone(),
             head_sha: head_sha.clone(),
+            update_head_sha: None,
             state: ChangeState::Open,
             merge_commit_sha: None,
             merged_at: None,
@@ -165,18 +166,18 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
     }
     match event {
         E::StageRunCancelled { stage_run_id, .. } => {
-            let mut fixing = false;
+            let mut returns_to_review = false;
             if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)
                 && matches!(run.state, StageRunState::Pending | StageRunState::Running)
             {
                 run.state = StageRunState::Cancelled;
                 run.ended_at = Some(now);
                 run.updated_at = now;
-                fixing = run.stage == Stage::Fix;
+                returns_to_review = matches!(run.stage, Stage::Fix | Stage::Merge);
             }
             if t.item.state == WorkItemState::InStage && t.item.stage == Some(Stage::Review) {
                 t.item.stage_phase = Some(StagePhase::AwaitingTrigger);
-            } else if fixing && t.external.is_some() {
+            } else if returns_to_review && t.external.is_some() {
                 set_place(
                     &mut t.item,
                     WorkItemState::InStage,
@@ -381,6 +382,9 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             if let Some(run) = &mut t.stage_run {
                 run.queued_at.get_or_insert(now);
             }
+            if let Some(cr) = &mut t.change_request {
+                cr.update_head_sha = None;
+            }
         }
         E::MergeRebased { .. } => {}
         E::MergeEnqueued { .. } => {
@@ -547,6 +551,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 head_branch: head_branch.clone(),
                 base_branch: base_branch.clone(),
                 head_sha: head_sha.clone(),
+                update_head_sha: None,
                 state: ChangeState::Open,
                 merge_commit_sha: None,
                 merged_at: None,
@@ -563,6 +568,17 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::ChangeRequestUpdated { role, head_sha, .. } => {
             if let Some(cr) = t.change_of(*role) {
                 cr.head_sha.clone_from(head_sha);
+                if cr.update_head_sha.as_ref() != Some(head_sha) {
+                    cr.update_head_sha = None;
+                }
+                cr.updated_at = now;
+            }
+        }
+        E::ChangeRequestUpdateRequested { .. } => {}
+        E::ChangeRequestBranchUpdated { head_sha, .. } => {
+            if let Some(cr) = t.change_of(ChangeRole::Code) {
+                cr.head_sha.clone_from(head_sha);
+                cr.update_head_sha = Some(head_sha.clone());
                 cr.updated_at = now;
             }
         }

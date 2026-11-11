@@ -66,6 +66,8 @@ job_kinds! {
     EnvPrepareReview => "env.prepare_review", 3;
     ScmPostReview => "scm.post_review", 3;
     ScmIntegrate => "scm.integrate", 5;
+    ScmUpdateBranch => "scm.update_branch", 5;
+    ScmPostComment => "scm.post_comment", 3;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -91,6 +93,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         JobKind::ScmPollChangeRequest => scm(StagePhase::AwaitingCi),
         JobKind::ScmMerge => scm(StagePhase::Merging),
         JobKind::ScmIntegrate => scm(StagePhase::Integrating),
+        JobKind::ScmUpdateBranch => scm(StagePhase::AwaitingCi),
         JobKind::ScmPostReview => scm(StagePhase::PostingReview),
         JobKind::ScmPushDocsBranch => Some((
             BlockerCode::ScmUnavailable,
@@ -119,7 +122,8 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmUserLinkPoll
         | JobKind::ScmUserLinkRefresh
         | JobKind::HookRun
-        | JobKind::ScmScanChanges => None,
+        | JobKind::ScmScanChanges
+        | JobKind::ScmPostComment => None,
     }
 }
 
@@ -202,5 +206,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::EnvPrepareReview => "env.prepare_review",
         JobKind::ScmPostReview => "scm.post_review",
         JobKind::ScmIntegrate => "scm.integrate",
+        JobKind::ScmUpdateBranch => "scm.update_branch",
+        JobKind::ScmPostComment => "scm.comment",
     }
 }

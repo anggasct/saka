@@ -1,12 +1,16 @@
 use serde_json::{Value, json};
 
+use super::queries::gate_policy;
 use super::{Decider, Verdict};
 use crate::Ctx;
 use crate::event::Event;
+use crate::external;
 use crate::gate::{self, Check, GatePolicy};
 use crate::ids::GateResultId;
 use crate::session::SessionInput;
-use crate::vocab::{BlockerCode, GateOutcome, GateSource, Stage, StagePhase, Trigger};
+use crate::vocab::{
+    BlockerCode, ExternalCause, GateOutcome, GateSource, Stage, StagePhase, Trigger,
+};
 
 impl Decider<'_> {
     pub(super) fn tick(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {
@@ -57,12 +61,7 @@ impl Decider<'_> {
     }
 
     pub(super) fn gate_policy(&self) -> GatePolicy {
-        GatePolicy::from_recipe(
-            self.task
-                .environment
-                .as_ref()
-                .and_then(|e| e.recipe.as_ref()),
-        )
+        gate_policy(self.task)
     }
 
     pub(super) fn ci_timed_out(&self) -> bool {
@@ -197,7 +196,11 @@ impl Decider<'_> {
             };
         }
         let awaiting_merge = self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
-        match verdict {
+        let mut events = Vec::new();
+        if verdict == Verdict::Passed {
+            events.extend(self.vacuous_gate(head_sha, scm, ctx));
+        }
+        events.extend(match verdict {
             Verdict::Failed(params) => self.block(BlockerCode::CiRed, params, ctx),
             Verdict::Passed if self.needs_review(head_sha) => self.request_review(head_sha, ctx),
             Verdict::Passed if self.task.is_queued() && !head_changed => {
@@ -211,14 +214,84 @@ impl Decider<'_> {
                 self.phase(StagePhase::AwaitingCi, Some(head_sha.to_string()))
             }
             Verdict::Pending => vec![],
+        });
+        events
+    }
+
+    fn vacuous_gate(
+        &self,
+        head_sha: &str,
+        scm: Option<(GateOutcome, &[Check])>,
+        ctx: &mut Ctx<'_>,
+    ) -> Option<Event> {
+        let run = self.task.stage_run.as_ref()?;
+        let merging = self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+            || self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
+        if self.task.external.is_none() || !merging {
+            return None;
         }
+        let known = self.task.gate_for(GateSource::Scm, head_sha);
+        let (outcome, checks) = match (scm, known) {
+            (Some((_, seen)), Some(g)) if g.checks == seen => (g.outcome, g.checks.clone()),
+            (Some((outcome, seen)), _) => (outcome, seen.to_vec()),
+            (None, Some(g)) => (g.outcome, g.checks.clone()),
+            (None, None) => (GateOutcome::Pending, Vec::new()),
+        };
+        (outcome != GateOutcome::Passed && self.gate_policy().scm_checks(&checks).is_empty()).then(
+            || Event::GateObserved {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                gate_result_id: GateResultId::new(ctx.ids),
+                source: GateSource::Scm,
+                head_sha: head_sha.to_string(),
+                outcome: GateOutcome::Passed,
+                checks,
+            },
+        )
     }
 
     pub(super) fn needs_review(&self, head_sha: &str) -> bool {
         self.task.has_review_stage() && !self.task.approved_at(head_sha)
     }
 
+    fn request_outside_review(&self, head_sha: &str, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        let Some(run) = &self.task.stage_run else {
+            return vec![];
+        };
+        let mut events = Vec::new();
+        if self.task.is_queued() {
+            events.push(Event::MergeDequeued {
+                work_item_id: self.item().id,
+                reason: "head_moved".to_string(),
+            });
+        }
+        events.push(Event::StageRunCancelled {
+            work_item_id: self.item().id,
+            stage_run_id: run.id,
+            reason: "head_moved".to_string(),
+        });
+        let review_trigger = self
+            .task
+            .external
+            .as_ref()
+            .and_then(|e| e.workflow.stage_trigger(Stage::Review));
+        if review_trigger == Some(Trigger::Auto) {
+            events.push(external::review_run(
+                self.item().id,
+                self.next_attempt(Stage::Review),
+                head_sha,
+                ExternalCause::Auto,
+                None,
+                ctx,
+            ));
+        }
+        events
+    }
+
     pub(super) fn request_review(&self, head_sha: &str, ctx: &mut Ctx<'_>) -> Vec<Event> {
+        if self.task.external.is_some() {
+            return self.request_outside_review(head_sha, ctx);
+        }
         let Some(run) = &self.task.stage_run else {
             return vec![];
         };

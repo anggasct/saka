@@ -9,6 +9,7 @@ pub const DEFAULT_GATE_TIMEOUT_MINUTES: u32 = 30;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatePolicy {
     pub mode: GateMode,
+    pub saka: bool,
     pub commands: Vec<String>,
     pub required_checks: Vec<String>,
     pub timeout_minutes: u32,
@@ -18,6 +19,7 @@ impl Default for GatePolicy {
     fn default() -> GatePolicy {
         GatePolicy {
             mode: GateMode::Auto,
+            saka: true,
             commands: Vec::new(),
             required_checks: Vec::new(),
             timeout_minutes: DEFAULT_GATE_TIMEOUT_MINUTES,
@@ -44,6 +46,7 @@ impl GatePolicy {
                 .as_str()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(GateMode::Auto),
+            saka: true,
             commands: strings("commands"),
             required_checks: strings("required_checks"),
             timeout_minutes: gate["timeout_minutes"]
@@ -54,8 +57,14 @@ impl GatePolicy {
     }
 
     #[must_use]
+    pub fn without_saka(mut self) -> GatePolicy {
+        self.saka = false;
+        self
+    }
+
+    #[must_use]
     pub fn runs_saka(&self) -> bool {
-        self.mode != GateMode::Scm
+        self.saka && self.mode != GateMode::Scm
     }
 
     #[must_use]

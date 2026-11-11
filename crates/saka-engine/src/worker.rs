@@ -2,6 +2,7 @@ mod changes;
 mod environments;
 mod merging;
 mod sessions;
+mod updating;
 mod verification;
 
 use saka_core::authorship::UserLink;
@@ -419,6 +420,8 @@ impl Engine {
             JobKind::ScmPollChangeRequest => self.poll(&task, field(p, "change_request_id")?).await,
             JobKind::ScmMerge => self.merge(&task, field(p, "head_sha")?).await,
             JobKind::ScmIntegrate => self.integrate(&task).await,
+            JobKind::ScmUpdateBranch => self.update_branch(&task, job).await,
+            JobKind::ScmPostComment => self.post_comment(&task, p).await,
             JobKind::EnvVerifyMerged => self.verify(&task, job).await,
             JobKind::EnvTeardown => self.teardown(&task, field(p, "environment_id")?).await,
             JobKind::ScmWebhookPrune => Ok(Effect::Skipped),

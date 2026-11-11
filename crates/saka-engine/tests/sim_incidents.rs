@@ -184,8 +184,7 @@ fn deliveries(sim: &Sim) -> i64 {
         .unwrap()
 }
 
-const FIX_MANUAL: &str =
-    "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nfix = \"manual\"\n";
+const FIX_MANUAL: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"auto\"\nfix = \"manual\"\n";
 
 #[test]
 fn a_pull_request_whose_opened_webhook_was_lost_is_bound_by_polling_and_still_takes_comments() {

@@ -16,9 +16,9 @@ use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    Blob, Checkout, DocsRequest, EnvRef, Environments, ExtraDir, GitAccess, GitRemote, PortResult,
-    PrepareRequest, PreparedDocs, PushOutcome, PushRequest, Rebase, RecipeCommand, RecipePhase,
-    RepoRef, Repos, UnitLimits, WorktreeFile,
+    BaseProbe, Blob, Checkout, DocsRequest, EnvRef, Environments, ExtraDir, GitAccess, GitRemote,
+    PortResult, PrepareRequest, PreparedDocs, PushOutcome, PushRequest, Rebase, RecipeCommand,
+    RecipePhase, RepoRef, Repos, UnitLimits, WorktreeFile,
 };
 use uuid::Uuid;
 
@@ -1729,4 +1729,83 @@ async fn a_detached_worktree_lists_added_and_modified_files_with_bounded_diffs()
 
     let cut = w.repos.worktree_changes(&env, 16).await.unwrap();
     assert!(cut.iter().all(|c| c.truncated && c.diff.len() <= 16));
+}
+
+#[tokio::test]
+async fn a_head_is_probed_against_the_base_and_a_merge_commit_names_its_parents() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let head = commit(&wt, "a.txt", "a\n");
+    w.push(&head, None).await;
+
+    let tip = commit(&w.other, "NEWS.md", "moved on\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    let behind = w.repos.base_probe(&w.repo, "main", &head).await.unwrap();
+    assert_eq!(
+        behind,
+        Some(BaseProbe {
+            base_sha: tip.clone(),
+            in_head: false
+        })
+    );
+
+    git(&w.other, &["fetch", "-q", "origin"]);
+    git(
+        &w.other,
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "updated",
+            &format!("origin/{BRANCH}"),
+        ],
+    );
+    git(
+        &w.other,
+        &["merge", "-q", "--no-ff", "-m", "update", "main"],
+    );
+    let merged = git(&w.other, &["rev-parse", "HEAD"]);
+    git(
+        &w.other,
+        &["push", "-q", "origin", &format!("updated:{BRANCH}")],
+    );
+
+    let current = w.repos.base_probe(&w.repo, "main", &merged).await.unwrap();
+    assert_eq!(
+        current,
+        Some(BaseProbe {
+            base_sha: tip.clone(),
+            in_head: true
+        })
+    );
+    assert_eq!(
+        w.repos.commit_parents(&w.repo, &merged).await.unwrap(),
+        Some(vec![head.clone(), tip])
+    );
+    assert_eq!(
+        w.repos
+            .commit_parents(&w.repo, &head)
+            .await
+            .unwrap()
+            .map(|p| p.len()),
+        Some(1)
+    );
+    assert_eq!(
+        w.repos
+            .commit_parents(&w.repo, &"0".repeat(40))
+            .await
+            .unwrap(),
+        None
+    );
+    let missing = w
+        .repos
+        .base_probe(&w.repo, "main", &"0".repeat(40))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "commit_missing");
+    assert_eq!(
+        w.repos.base_probe(&w.repo, "nope", &head).await.unwrap(),
+        None
+    );
 }

@@ -133,6 +133,7 @@ export function blockerText(
     phase_known: phase !== "" ? "yes" : "no",
     phase: label(t, "phase", phase),
     dirty: params.dirty === true ? "yes" : "no",
+    updatable: params.updatable === true ? "yes" : "no",
     scope_stage: text(params.stage) || "other",
     base_branch: text(params.base_branch),
     paths: text(params.paths),

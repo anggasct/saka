@@ -140,6 +140,48 @@ impl Decider<'_> {
         Ok(events)
     }
 
+    pub(super) fn update_branch(
+        &self,
+        reason: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let invalid = || Rejection::InvalidState {
+            state: self.state_name(),
+        };
+        let (Some(blocker), Some(cr)) = (self.task.open_blocker(), &self.task.change_request)
+        else {
+            return Err(invalid());
+        };
+        if blocker.code != BlockerCode::ChangeBehindBase || cr.state != ChangeState::Open {
+            return Err(invalid());
+        }
+        let retry_of = Coded {
+            code: blocker.code.as_str().to_string(),
+            params: blocker.params.clone(),
+        };
+        Ok(vec![
+            Event::BlockerResolved {
+                work_item_id: self.item().id,
+                blocker_id: blocker.id,
+                resolution: BlockerResolution::Retried,
+                reason: Some(reason.clone()),
+            },
+            self.new_run(
+                Stage::Merge,
+                Trigger::Auto,
+                StagePhase::AwaitingCi,
+                Some(reason),
+                Some(retry_of),
+                ctx,
+            ),
+            Event::ChangeRequestUpdateRequested {
+                work_item_id: self.item().id,
+                change_request_id: cr.id,
+                expected_head_sha: cr.head_sha.clone(),
+            },
+        ])
+    }
+
     pub(super) fn retry_round(&self, blocker: &Blocker) -> FixRound {
         if let Some(round) = self
             .task
@@ -193,6 +235,7 @@ impl Decider<'_> {
             Some(BlockerAction::Retry) => self.retry(reason, ctx),
             Some(BlockerAction::Cancel) => self.cancel(reason),
             Some(BlockerAction::Takeover) => self.takeover(reason),
+            Some(BlockerAction::UpdateBranch) => self.update_branch(reason, ctx),
             Some(other) => Err(Rejection::ActionNeedsInput {
                 action: other.as_str(),
             }),
@@ -456,6 +499,7 @@ pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(S
             {
                 Some((Stage::Fix, StagePhase::RunningSession))
             }
+            B::CiRed if task.external.is_some() => Some((Stage::Merge, StagePhase::AwaitingCi)),
             _ => retry_entry(code, params),
         };
     }
@@ -526,7 +570,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         {
             (Stage::Dev, StagePhase::RunningSession)
         }
-        B::MergeConflict => (Stage::Merge, StagePhase::AwaitingCi),
+        B::MergeConflict | B::ChangeBehindBase => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
         B::HookFailed => (Stage::Sync, StagePhase::TearingDown),
         B::ScmUnavailable => {

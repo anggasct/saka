@@ -28,10 +28,10 @@ pub use docs::{
     DocFilesCommit, DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite,
 };
 pub use env::{
-    ChangeDiff, ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest, EnvRef,
-    Environments, ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest, PreparedDocs,
-    PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome, RecipePhase, Release,
-    ReleaseIndex, WorktreeChange, WorktreeFile, WorktreeState, output_tail,
+    BaseProbe, ChangeDiff, ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest,
+    EnvRef, Environments, ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest,
+    PreparedDocs, PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome, RecipePhase,
+    Release, ReleaseIndex, WorktreeChange, WorktreeFile, WorktreeState, output_tail,
 };
 pub use git::{
     Blob, CommitFile, CommitFiles, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos,

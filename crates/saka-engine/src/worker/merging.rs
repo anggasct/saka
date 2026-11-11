@@ -21,18 +21,9 @@ impl Engine {
         else {
             return Ok(Effect::Skipped);
         };
-        let Some(env) = task.ready_environment() else {
-            return Err(PortError::permanent(
-                "environment_missing",
-                json!({ "work_item_id": task.item.id }),
-            ));
-        };
         let repo = self.repo_ref(task)?;
-        let native = self
-            .ports
-            .scm
-            .capabilities(&repo.integration_id)
-            .is_some_and(|c| c.merge_queue)
+        let capabilities = self.ports.scm.capabilities(&repo.integration_id);
+        let native = capabilities.as_ref().is_some_and(|c| c.merge_queue)
             && self
                 .ports
                 .scm
@@ -41,6 +32,16 @@ impl Engine {
         if native {
             return self.enqueue(task, repo).await;
         }
+        if task.external.is_some() {
+            let updatable = capabilities.is_some_and(|c| c.update_branch);
+            return self.integrate_outside(task, repo, updatable).await;
+        }
+        let Some(env) = task.ready_environment() else {
+            return Err(PortError::permanent(
+                "environment_missing",
+                json!({ "work_item_id": task.item.id }),
+            ));
+        };
         let env_ref = self.env_ref(task, env)?;
         let head = change.head_sha.clone();
         let (outcome, label) = match self
@@ -109,6 +110,51 @@ impl Engine {
         Ok(Effect::Fact(TaskInput::Integrated(outcome)))
     }
 
+    async fn integrate_outside(&self, task: &Task, repo: RepoRef, updatable: bool) -> Execution {
+        let Some(change) = task.change_request.as_ref() else {
+            return Ok(Effect::Skipped);
+        };
+        let head = change.head_sha.clone();
+        let Some(probe) = self
+            .ports
+            .env
+            .base_probe(&repo, &change.base_branch, &head)
+            .await?
+        else {
+            return Err(PortError::permanent(
+                "base_branch_missing",
+                json!({ "base_branch": change.base_branch }),
+            ));
+        };
+        let (outcome, label) = if probe.in_head {
+            (
+                Integration::Rebased {
+                    from_sha: head.clone(),
+                    head_sha: head,
+                    base_sha: probe.base_sha,
+                },
+                "current",
+            )
+        } else {
+            (
+                Integration::Behind {
+                    head_sha: head,
+                    base_sha: probe.base_sha,
+                    updatable,
+                },
+                "behind",
+            )
+        };
+        self.counters.merge_turn(label);
+        tracing::info!(
+            work_item_id = %task.item.id,
+            base_branch = change.base_branch,
+            outcome = label,
+            "delivery.merge.integrated"
+        );
+        Ok(Effect::Fact(TaskInput::Integrated(outcome)))
+    }
+
     pub(super) async fn enqueue(&self, task: &Task, repo: RepoRef) -> Execution {
         let Some(change) = task.change_request.as_ref() else {
             return Ok(Effect::Skipped);
@@ -144,9 +190,10 @@ impl Engine {
             ChangeState::Open => {}
         }
         let base = format!("refs/remotes/origin/{}", change.base_branch);
-        if let Some(violation) = self
-            .scope_violation(task, &base, &head, true, ScopeStage::Merge)
-            .await?
+        if task.external.is_none()
+            && let Some(violation) = self
+                .scope_violation(task, &base, &head, true, ScopeStage::Merge)
+                .await?
         {
             return Ok(Effect::Fact(TaskInput::PathScopeViolated {
                 role: saka_core::vocab::ChangeRole::Code,
@@ -239,9 +286,10 @@ impl Engine {
         }
         // The merge names this head, so the head checked here is the head that lands.
         let base = format!("refs/remotes/origin/{}", change.base_branch);
-        if let Some(violation) = self
-            .scope_violation(task, &base, &head_sha, true, ScopeStage::Merge)
-            .await?
+        if task.external.is_none()
+            && let Some(violation) = self
+                .scope_violation(task, &base, &head_sha, true, ScopeStage::Merge)
+                .await?
         {
             return Ok(Effect::Fact(TaskInput::PathScopeViolated {
                 role: saka_core::vocab::ChangeRole::Code,

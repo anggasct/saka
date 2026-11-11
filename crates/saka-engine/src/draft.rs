@@ -974,6 +974,8 @@ impl Engine {
             | K::ScmPollChangeRequest
             | K::ScmMerge
             | K::ScmIntegrate
+            | K::ScmUpdateBranch
+            | K::ScmPostComment
             | K::EnvVerifyMerged
             | K::ScmWebhookPrune
             | K::WorkspaceReloadConfig

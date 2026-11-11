@@ -206,7 +206,9 @@ impl Run {
 const APPROVE: &str = r#"{"verdict":"approve","summary":"Fine.","findings":[],"questions":[]}"#;
 
 fn auto() -> Workflow {
-    Workflow::of(saka_core::vocab::WorkflowPreset::ReviewOnly)
+    let mut w = Workflow::of(saka_core::vocab::WorkflowPreset::ReviewOnly);
+    w.remove_stage(Stage::Merge);
+    w
 }
 
 fn manual() -> Workflow {

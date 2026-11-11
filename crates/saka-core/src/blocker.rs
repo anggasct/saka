@@ -14,7 +14,10 @@ impl BlockerAction {
     pub fn runs_directly(self) -> bool {
         matches!(
             self,
-            BlockerAction::Retry | BlockerAction::Cancel | BlockerAction::Takeover
+            BlockerAction::Retry
+                | BlockerAction::Cancel
+                | BlockerAction::Takeover
+                | BlockerAction::UpdateBranch
         )
     }
 }
@@ -52,12 +55,17 @@ pub fn designated(code: BlockerCode) -> BlockerAction {
         B::UserLinkRequired => A::LinkAccount,
         B::UserTokenInvalid => A::SetUserToken,
         B::SpecUnclear => A::EditSpec,
+        B::ChangeBehindBase => A::UpdateBranch,
     }
 }
 
 pub fn primary_action(task: &Task) -> Option<PrimaryAction> {
     let blocker = task.open_blocker()?;
     let kind = match designated(blocker.code) {
+        BlockerAction::UpdateBranch if !updatable(&blocker.params) => BlockerAction::Retry,
+        kind => kind,
+    };
+    let kind = match kind {
         BlockerAction::Retry if !can_retry(task) => BlockerAction::Cancel,
         kind => kind,
     };
@@ -69,6 +77,10 @@ pub fn primary_action(task: &Task) -> Option<PrimaryAction> {
         _ => json!({}),
     };
     Some(PrimaryAction { kind, params })
+}
+
+fn updatable(params: &Value) -> bool {
+    params.get("updatable").and_then(Value::as_bool) == Some(true)
 }
 
 fn secret_names(params: &Value) -> Vec<String> {

@@ -48,6 +48,7 @@ fn task() -> Task {
         head_branch: "saka/tasks/s1".into(),
         base_branch: "release/1".into(),
         head_sha: SHA.into(),
+        update_head_sha: None,
         state: ChangeState::Open,
         merge_commit_sha: None,
         merged_at: None,

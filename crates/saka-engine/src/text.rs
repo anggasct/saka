@@ -294,6 +294,25 @@ fn strings(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+pub(crate) fn comment_text(code: &str, params: &Value) -> String {
+    let base = params
+        .get("base_branch")
+        .and_then(Value::as_str)
+        .map_or_else(|| "the base branch".to_string(), |b| format!("`{b}`"));
+    match code {
+        "change_behind_base" => format!(
+            "Saka cannot merge this pull request yet: it is behind {base}. Please update the branch from {base} on your side, then ask again with `/saka merge`."
+        ),
+        "update_conflict" => format!(
+            "Saka could not update this branch with {base}: the changes conflict. Please resolve the conflicts on your side, then ask again with `/saka merge`."
+        ),
+        other => match params.get("message").and_then(Value::as_str) {
+            Some(message) => format!("{message} ({other})"),
+            None => other.to_string(),
+        },
+    }
+}
+
 pub(crate) fn retry_text(retry_of: &Coded) -> Option<String> {
     match retry_of.code.as_str() {
         "ci_red" => ci_failure(retry_of),
