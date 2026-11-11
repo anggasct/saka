@@ -28,7 +28,7 @@ use saka_ports::{
     EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest,
     OpenChangeRequest, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
     RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
-    UnitLimits, WebhookDelivery,
+    UnitLimits, UpdateOutcome, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -171,6 +171,21 @@ impl Scm for ScmRouter {
     }
     async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview> {
         self.get(&post.repo.integration_id)?.post_review(post).await
+    }
+    async fn post_comment(&self, repo: &RepoRef, number: u64, body: &str) -> PortResult<()> {
+        self.get(&repo.integration_id)?
+            .post_comment(repo, number, body)
+            .await
+    }
+    async fn update_branch(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        expected_head_sha: &str,
+    ) -> PortResult<UpdateOutcome> {
+        self.get(&repo.integration_id)?
+            .update_branch(repo, number, expected_head_sha)
+            .await
     }
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         self.get(&request.repo.integration_id)?.merge(request).await
@@ -1097,6 +1112,7 @@ mod capability_tests {
         delete_branch_after_merge: false,
         commit_status: false,
         merge_queue: false,
+        update_branch: false,
         user_authorship: false,
         change_head_ref: "refs/pull/{number}/head",
         diagnostics: None,

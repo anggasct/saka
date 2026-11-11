@@ -879,3 +879,49 @@ async fn an_approval_the_host_refuses_after_the_note_is_a_permanent_refusal() {
     assert_eq!(err.params["status"], 409);
     assert!(!err.to_string().contains(TOKEN));
 }
+
+#[tokio::test]
+async fn a_comment_is_posted_as_a_merge_request_note_and_a_refusal_is_permanent() {
+    let w = GitLabWorld::new().await;
+    Mock::given(method("POST"))
+        .and(path("/projects/acme%2Fapp/merge_requests/3/notes"))
+        .and(header("private-token", TOKEN))
+        .and(body_json(json!({ "body": "Please update the branch." })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 9 })))
+        .expect(1)
+        .mount(&w.server)
+        .await;
+    serve(
+        &w,
+        "POST",
+        "/projects/acme%2Fapp/merge_requests/4/notes",
+        403,
+        json!({ "message": "403 Forbidden" }),
+    )
+    .await;
+    serve(
+        &w,
+        "POST",
+        "/projects/acme%2Fapp/merge_requests/5/notes",
+        502,
+        json!({}),
+    )
+    .await;
+
+    w.gl.post_comment(&w.repo, 3, "Please update the branch.")
+        .await
+        .unwrap();
+    let refused = w.gl.post_comment(&w.repo, 4, "x").await.unwrap_err();
+    assert_eq!(code(&refused), ("comment_refused", false));
+    let down = w.gl.post_comment(&w.repo, 5, "x").await.unwrap_err();
+    assert_eq!(code(&down), ("scm_unavailable", true));
+}
+
+#[tokio::test]
+async fn updating_a_branch_is_unsupported_and_sends_nothing() {
+    let w = GitLabWorld::new().await;
+    let err = w.gl.update_branch(&w.repo, 1, HEAD).await.unwrap_err();
+    assert_eq!(code(&err), ("scm_capability_unsupported", false));
+    assert_eq!(err.params["capability"], "update_branch");
+    assert!(w.server.received_requests().await.unwrap().is_empty());
+}

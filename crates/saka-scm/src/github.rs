@@ -21,7 +21,7 @@ use saka_ports::{
     DevicePoll, EnqueueOutcome, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest,
     OpenedChange, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
     RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
-    WebhookDelivery, WebhookSignature,
+    UpdateOutcome, WebhookDelivery, WebhookSignature, check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -38,6 +38,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     merge_queue: true,
+    update_branch: true,
     user_authorship: true,
     change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(requirements::APP),
@@ -365,6 +366,60 @@ impl Scm for GitHub {
 
     async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool> {
         self.writer(repo, login).await
+    }
+
+    async fn post_comment(&self, repo: &RepoRef, number: u64, body: &str) -> PortResult<()> {
+        check_comment_body(body)?;
+        let n = number.to_string();
+        let reply = self
+            .repo_call(
+                &repo.full_name,
+                Method::POST,
+                &["issues", &n, "comments"],
+                Some(&json!({ "body": body })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(()),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => {
+                Err(PortError::permanent(
+                    "comment_refused",
+                    json!({ "status": reply.status.as_u16() }),
+                ))
+            }
+            _ => Err(self.app.unexpected("post_comment", &reply)),
+        }
+    }
+
+    async fn update_branch(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        expected_head_sha: &str,
+    ) -> PortResult<UpdateOutcome> {
+        check_sha(expected_head_sha, "expected_head_sha")?;
+        let n = number.to_string();
+        let reply = self
+            .repo_call(
+                &repo.full_name,
+                Method::PUT,
+                &["pulls", &n, "update-branch"],
+                Some(&json!({ "expected_head_sha": expected_head_sha })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(UpdateOutcome::Accepted),
+            StatusCode::UNPROCESSABLE_ENTITY
+                if reply.message().to_lowercase().contains("conflict") =>
+            {
+                Ok(UpdateOutcome::Conflict)
+            }
+            StatusCode::UNPROCESSABLE_ENTITY | StatusCode::CONFLICT => {
+                Ok(UpdateOutcome::HeadChanged)
+            }
+            StatusCode::NOT_FOUND => Err(inaccessible(&repo.full_name, 404)),
+            _ => Err(self.app.unexpected("update_branch", &reply)),
+        }
     }
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {

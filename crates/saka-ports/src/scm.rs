@@ -142,22 +142,33 @@ pub struct ReviewPost {
     pub body: String,
 }
 
+fn invalid_argument(field: &str) -> PortError {
+    PortError::permanent(
+        "git_argument_invalid",
+        serde_json::json!({ "field": field }),
+    )
+}
+
+pub fn check_sha(sha: &str, field: &str) -> PortResult<()> {
+    if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(invalid_argument(field))
+    }
+}
+
+pub fn check_comment_body(body: &str) -> PortResult<()> {
+    if body.chars().count() > MAX_REVIEW_BODY_CHARS {
+        Err(invalid_argument("body"))
+    } else {
+        Ok(())
+    }
+}
+
 impl ReviewPost {
     pub fn check(&self) -> PortResult<()> {
-        let sha = self.head_sha.len() == 40 && self.head_sha.bytes().all(|b| b.is_ascii_hexdigit());
-        if !sha {
-            return Err(PortError::permanent(
-                "git_argument_invalid",
-                serde_json::json!({ "field": "head_sha" }),
-            ));
-        }
-        if self.body.chars().count() > MAX_REVIEW_BODY_CHARS {
-            return Err(PortError::permanent(
-                "git_argument_invalid",
-                serde_json::json!({ "field": "body" }),
-            ));
-        }
-        Ok(())
+        check_sha(&self.head_sha, "head_sha")?;
+        check_comment_body(&self.body)
     }
 }
 
@@ -196,6 +207,13 @@ pub enum EnqueueOutcome {
     Rejected {
         reason: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    Accepted,
+    Conflict,
+    HeadChanged,
 }
 
 #[async_trait]
@@ -248,6 +266,15 @@ pub trait Scm: Send + Sync {
     async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool>;
 
     async fn post_review(&self, post: &ReviewPost) -> PortResult<PostedReview>;
+
+    async fn post_comment(&self, repo: &RepoRef, number: u64, body: &str) -> PortResult<()>;
+
+    async fn update_branch(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        expected_head_sha: &str,
+    ) -> PortResult<UpdateOutcome>;
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome>;
 
@@ -416,6 +443,7 @@ pub struct ScmCapabilities {
     pub delete_branch_after_merge: bool,
     pub commit_status: bool,
     pub merge_queue: bool,
+    pub update_branch: bool,
     pub user_authorship: bool,
     pub change_head_ref: &'static str,
     pub diagnostics: Option<ScmDiagnostics>,

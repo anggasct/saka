@@ -15,7 +15,7 @@ use saka_core::vocab::{
 };
 use saka_ports::{
     ChangeCredential, ChangeOpening, EnqueueOutcome, MergeOutcome, MergeRequest, OpenChangeRequest,
-    RepoRef, ReviewPost, Scm, ScmCapabilities, SignalKind, WebhookTarget,
+    RepoRef, ReviewPost, Scm, ScmCapabilities, SignalKind, UpdateOutcome, WebhookTarget,
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -46,6 +46,12 @@ enum Enqueue {
     HeadChanged,
     Merged,
     Refused,
+}
+
+enum UpdateAnswer {
+    Accepted,
+    Conflict,
+    HeadChanged,
 }
 
 enum Signing {
@@ -117,6 +123,8 @@ trait Harness: Sync {
     async fn branch_missing(&self);
     async fn review_accepted(&self, number: u64, event: ReviewEvent, body: &str);
     async fn review_refused(&self, number: u64, status: u16);
+    async fn comment_accepted(&self, number: u64, body: &str);
+    async fn update_answers(&self, number: u64, answer: UpdateAnswer);
     async fn status_accepted(&self, state: &str, description: &str);
     fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>);
     async fn diagnosis_answers(&self);
@@ -170,6 +178,7 @@ impl Harness for GitHubHarness {
             delete_branch_after_merge: true,
             commit_status: true,
             merge_queue: true,
+            update_branch: true,
             user_authorship: true,
             change_head_ref: "refs/pull/{number}/head",
             diagnostics: Some(saka_scm::github::requirements::APP),
@@ -515,6 +524,37 @@ impl Harness for GitHubHarness {
             .await;
     }
 
+    async fn comment_accepted(&self, number: u64, body: &str) {
+        Mock::given(method("POST"))
+            .and(path(
+                format!("/repos/acme/app/issues/{number}/comments").as_str(),
+            ))
+            .and(body_json(json!({ "body": body })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 1 })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn update_answers(&self, number: u64, answer: UpdateAnswer) {
+        let (status, message) = match answer {
+            UpdateAnswer::Accepted => (202, "Updating pull request branch."),
+            UpdateAnswer::Conflict => (422, "merge conflict between base and head"),
+            UpdateAnswer::HeadChanged => (422, "expected head sha didn't match current head ref."),
+        };
+        Mock::given(method("PUT"))
+            .and(path(
+                format!("/repos/acme/app/pulls/{number}/update-branch").as_str(),
+            ))
+            .and(body_json(json!({ "expected_head_sha": HEAD })))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(json!({ "message": message })),
+            )
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
     async fn status_accepted(&self, state: &str, description: &str) {
         Mock::given(method("POST"))
             .and(path(format!("/repos/acme/app/statuses/{HEAD}").as_str()))
@@ -631,6 +671,7 @@ impl Harness for GitLabHarness {
             delete_branch_after_merge: true,
             commit_status: true,
             merge_queue: true,
+            update_branch: false,
             user_authorship: false,
             change_head_ref: "refs/merge-requests/{number}/head",
             diagnostics: Some(saka_scm::gitlab::GITLAB_DIAGNOSTICS),
@@ -948,6 +989,20 @@ impl Harness for GitLabHarness {
             .mount(&self.w.server)
             .await;
     }
+
+    async fn comment_accepted(&self, number: u64, body: &str) {
+        Mock::given(method("POST"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}/notes").as_str(),
+            ))
+            .and(body_json(json!({ "body": body })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 9 })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn update_answers(&self, _number: u64, _answer: UpdateAnswer) {}
 
     async fn status_accepted(&self, state: &str, description: &str) {
         let state = if state == "failure" { "failed" } else { state };
@@ -1339,6 +1394,36 @@ async fn a_review_is_posted_at_the_head(h: &dyn Harness) {
     assert_eq!(refused.code, "git_argument_invalid");
 }
 
+async fn a_comment_is_posted_on_the_change(h: &dyn Harness) {
+    h.comment_accepted(7, "Saka needs the branch updated").await;
+    h.scm()
+        .post_comment(&h.repo(), 7, "Saka needs the branch updated")
+        .await
+        .unwrap();
+}
+
+async fn a_branch_update_follows_the_declared_capability(h: &dyn Harness) {
+    if !h.declared().update_branch {
+        let err = h.scm().update_branch(&h.repo(), 7, HEAD).await.unwrap_err();
+        assert_eq!(err.code, "scm_capability_unsupported");
+        assert_eq!(err.params["capability"], "update_branch");
+        return;
+    }
+    for (number, answer, outcome) in [
+        (7, UpdateAnswer::Accepted, UpdateOutcome::Accepted),
+        (8, UpdateAnswer::Conflict, UpdateOutcome::Conflict),
+        (9, UpdateAnswer::HeadChanged, UpdateOutcome::HeadChanged),
+    ] {
+        h.update_answers(number, answer).await;
+        let got = h
+            .scm()
+            .update_branch(&h.repo(), number, HEAD)
+            .await
+            .unwrap();
+        assert_eq!(got, outcome);
+    }
+}
+
 async fn a_refused_review_is_permanent(h: &dyn Harness) {
     for (number, status) in [(10, 404), (11, 403), (12, 422)] {
         if status == 422 && h.declared().provider == "gitlab" {
@@ -1655,6 +1740,8 @@ conformance!(github_conformance, GitHubHarness:
     write_access_is_checked,
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
+    a_comment_is_posted_on_the_change,
+    a_branch_update_follows_the_declared_capability,
     capabilities_match_the_declared_matrix,
     diagnosis_returns_the_status_the_declared_capability_names,
     the_merge_queue_is_declared_and_found_only_where_the_branch_has_one,
@@ -1686,6 +1773,8 @@ conformance!(gitlab_conformance, GitLabHarness:
     write_access_is_checked,
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
+    a_comment_is_posted_on_the_change,
+    a_branch_update_follows_the_declared_capability,
     capabilities_match_the_declared_matrix,
     diagnosis_returns_the_status_the_declared_capability_names,
     the_merge_queue_is_declared_and_found_only_where_the_branch_has_one,
