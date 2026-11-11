@@ -28,6 +28,6 @@ jobs:
       - run: npm install --global corepack@0.36.0
       - run: corepack pnpm install --frozen-lockfile
         working-directory: web
-      - run: corepack pnpm e2e:install --with-deps
+      - run: corepack pnpm e2e:install
         working-directory: web
       - run: make check
