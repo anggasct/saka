@@ -8,7 +8,7 @@ mod support;
 
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
-use saka_core::diagnostics::{CredentialStatus, RepoGrant, ScmDiagnostics};
+use saka_core::diagnostics::{CredentialStatus, RepoGrant, RepoHooks, ScmDiagnostics};
 use saka_core::gate::outcome;
 use saka_core::vocab::{
     ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod, ReviewEvent,
@@ -633,7 +633,7 @@ impl Harness for GitLabHarness {
             merge_queue: true,
             user_authorship: false,
             change_head_ref: "refs/merge-requests/{number}/head",
-            diagnostics: None,
+            diagnostics: Some(saka_scm::gitlab::GITLAB_DIAGNOSTICS),
         }
     }
 
@@ -1000,7 +1000,30 @@ impl Harness for GitLabHarness {
         (headers, body)
     }
 
-    async fn diagnosis_answers(&self) {}
+    async fn diagnosis_answers(&self) {
+        let mount = |at: &'static str, body: Value| async move {
+            Mock::given(method("GET"))
+                .and(path(at))
+                .and(header("private-token", TOKEN))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&self.w.server)
+                .await;
+        };
+        mount(
+            "/personal_access_tokens/self",
+            json!({
+                "name": "saka", "active": true, "revoked": false,
+                "scopes": ["api"], "expires_at": null,
+            }),
+        )
+        .await;
+        mount(
+            "/projects/acme%2Fapp",
+            json!({ "permissions": { "project_access": { "access_level": 40 }, "group_access": null } }),
+        )
+        .await;
+        mount("/projects/acme%2Fapp/hooks", json!([])).await;
+    }
 }
 
 fn merge_request(h: &dyn Harness, number: u64) -> MergeRequest {
@@ -1527,6 +1550,20 @@ async fn diagnosis_returns_the_status_the_declared_capability_names(h: &dyn Harn
                 scm.repo_webhooks(&h.repo()).await.unwrap_err().code,
                 "scm_capability_unsupported"
             );
+        }
+        Some(ScmDiagnostics::Token(_)) => {
+            assert!(matches!(
+                scm.credential_status(h.integration()).await.unwrap(),
+                CredentialStatus::Token(_)
+            ));
+            assert!(matches!(
+                scm.repo_grant(&h.repo()).await.unwrap(),
+                RepoGrant::Member { .. }
+            ));
+            assert!(matches!(
+                scm.repo_webhooks(&h.repo()).await.unwrap(),
+                RepoHooks::Listed(_)
+            ));
         }
         None => {
             let credential = scm.credential_status(h.integration()).await.unwrap_err();

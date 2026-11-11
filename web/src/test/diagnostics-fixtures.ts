@@ -59,3 +59,47 @@ export const unknownReport: DiagnosticReport = {
   summary: { pass: 0, warn: 0, fail: 1, skip: 0 },
   checks: [check("future.check", "fail", "something_new")],
 };
+
+export const gitlabReport: DiagnosticReport = {
+  ...report,
+  summary: { pass: 1, warn: 1, fail: 1, skip: 0 },
+  checks: [
+    check(
+      "scm.credential",
+      "pass",
+      "token_ok",
+      { name: "saka", scopes: ["api"], expires_at: null },
+      null,
+      "gitlab",
+    ),
+    check(
+      "scm.repo_access",
+      "warn",
+      "repo_access_recommended",
+      { access_level: 30, recommended: 40 },
+      {
+        code: "grant_repo_access",
+        params: {
+          url: "https://gitlab.example/acme/app/-/project_members",
+          role: "Maintainer",
+        },
+      },
+      "acme/app",
+    ),
+    check(
+      "scm.repo_webhook",
+      "fail",
+      "repo_webhook_missing",
+      { path: "/hooks/gitlab" },
+      {
+        code: "configure_repo_webhook",
+        params: {
+          url: "https://gitlab.example/acme/app/-/hooks",
+          path: "/hooks/gitlab",
+          events: ["merge_requests_events", "note_events"],
+        },
+      },
+      "acme/app",
+    ),
+  ],
+};

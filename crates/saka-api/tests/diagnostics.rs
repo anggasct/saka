@@ -11,11 +11,13 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use saka_api::{ApiConfig, AppState, router};
-use saka_core::diagnostics::{AgentLogin, HookDelivery};
+use saka_core::diagnostics::{AgentLogin, HookDelivery, RepoGrant, RepoHooks, TokenStatus};
 use saka_core::time::Timestamp;
 use saka_core::vocab::Tool;
 use saka_engine::DiagnosticLimits;
-use saka_testkit::diagnostics::{HostPort, HostScript, full_installation};
+use saka_testkit::diagnostics::{
+    FAKE_TOKEN_NAME, HostPort, HostScript, full_installation, saka_hook,
+};
 use saka_testkit::{Sim, SimConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -570,6 +572,128 @@ fn app_installation_webhook_and_repo_findings_reach_the_report_with_their_fix() 
     assert_eq!(
         of(&r.body, "scm.repo_access", "acme/tasks")[0]["code"],
         "app_installed"
+    );
+}
+
+fn ping_for(delivery_id: &str, repo: &str) -> saka_ports::WebhookDelivery {
+    saka_ports::WebhookDelivery {
+        delivery_id: delivery_id.into(),
+        event: "ping".into(),
+        action: None,
+        repo_full_name: Some(repo.into()),
+        targets: Vec::new(),
+    }
+}
+
+#[test]
+fn a_token_integration_reports_its_credential_repo_access_and_repo_webhooks() {
+    const DAY_MS: i64 = 86_400_000;
+    let sim = Sim::new(SimConfig::default());
+    add_web_project(&sim);
+    sim.world
+        .set_capabilities(saka_testkit::FAKE_TOKEN_CAPABILITIES);
+    let app = api(&sim);
+    let started = saka_ports::Clock::now(&*sim.clock);
+    sim.world.host().script(|s| {
+        s.token = Ok(TokenStatus {
+            name: FAKE_TOKEN_NAME.into(),
+            active: true,
+            revoked: false,
+            scopes: vec!["api".into()],
+            expires_at: Some(started.plus_ms(5 * DAY_MS)),
+        });
+        s.members.insert(
+            "acme/tasks".into(),
+            RepoGrant::Member {
+                access_level: Some(30),
+            },
+        );
+        s.members.insert("acme/web".into(), RepoGrant::NoAccess);
+        s.hang.insert(HostPort::ScmRepoWebhook);
+    });
+    let r = get(&sim, &app, "/api/v1/diagnostics");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(
+        findings(&of(&r.body, "scm.credential", "github")),
+        pairs(&[("warn", "token_expiring")])
+    );
+    assert_eq!(
+        of(&r.body, "scm.credential", "github")[0]["params"],
+        json!({
+            "name": FAKE_TOKEN_NAME,
+            "expires_at": started.plus_ms(5 * DAY_MS).to_rfc3339(),
+        })
+    );
+    assert_eq!(
+        findings(&of(&r.body, "scm.repo_access", "acme/tasks")),
+        pairs(&[
+            ("pass", "repo_access_ok"),
+            ("warn", "repo_access_recommended")
+        ])
+    );
+    assert_eq!(
+        findings(&of(&r.body, "scm.repo_access", "acme/web")),
+        pairs(&[("fail", "repo_access_missing")])
+    );
+    assert!(of(&r.body, "scm.webhook", "github").is_empty());
+    for repo in ["acme/tasks", "acme/web"] {
+        assert_eq!(
+            findings(&of(&r.body, "scm.repo_webhook", repo)),
+            pairs(&[("skip", "webhook_not_configured")]),
+            "{repo}: no secret, so the provider is not called (it would hang)"
+        );
+    }
+
+    sim.world
+        .set_webhook_secret(b"0123456789abcdef0123456789abcdef");
+    sim.world.host().script(|s| {
+        s.hang.remove(&HostPort::ScmRepoWebhook);
+        s.hooks
+            .insert("acme/web".into(), RepoHooks::Unreadable { status: 403 });
+    });
+    sim.engine()
+        .accept_webhook("github", &ping_for("d-1", "acme/tasks"))
+        .unwrap();
+    let first = saka_ports::Clock::now(&*sim.clock);
+    sim.clock.advance(60_000);
+    sim.engine()
+        .accept_webhook("github", &ping_for("d-2", "acme/web"))
+        .unwrap();
+    let second = saka_ports::Clock::now(&*sim.clock);
+    let r = get(&sim, &app, "/api/v1/diagnostics");
+    let tasks = of(&r.body, "scm.repo_webhook", "acme/tasks");
+    assert_eq!(findings(&tasks), pairs(&[("pass", "repo_webhook_ok")]));
+    assert_eq!(
+        tasks[0]["params"],
+        json!({ "hook_id": saka_testkit::diagnostics::FAKE_HOOK_ID, "last_received_at": first.to_rfc3339() }),
+        "the delivery of the other repo is not counted"
+    );
+    let web = of(&r.body, "scm.repo_webhook", "acme/web");
+    assert_eq!(
+        findings(&web),
+        pairs(&[("warn", "repo_webhook_unreadable")])
+    );
+    assert_eq!(
+        web[0]["params"],
+        json!({ "status": 403, "last_received_at": second.to_rfc3339() })
+    );
+
+    sim.world.host().script(|s| {
+        s.hooks.insert(
+            "acme/tasks".into(),
+            RepoHooks::Listed(vec![saka_core::diagnostics::RepoHook {
+                events: vec!["merge_requests_events".into()],
+                ..saka_hook("other")
+            }]),
+        );
+    });
+    let r = get(&sim, &app, "/api/v1/diagnostics?check=scm.repo_webhook");
+    let tasks = of(&r.body, "scm.repo_webhook", "acme/tasks");
+    assert_eq!(findings(&tasks), pairs(&[("fail", "repo_webhook_missing")]));
+    assert_eq!(tasks[0]["params"], json!({ "path": "/hooks/github" }));
+    assert_eq!(
+        tasks[0]["fix"]["params"]["url"],
+        "https://github.com/acme/tasks/-/hooks"
     );
 }
 

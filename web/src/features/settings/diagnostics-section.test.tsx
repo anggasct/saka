@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AUTHORSHIP, botAuthorship, LINK } from "@/test/authorship-fixtures";
 import {
   DIAGNOSTICS,
+  gitlabReport,
   report,
   unknownReport,
 } from "@/test/diagnostics-fixtures";
@@ -90,6 +91,32 @@ describe("Diagnostics", () => {
     renderApp(SETTINGS);
     const section = await open();
     expect(await section.findByText("Result something_new.")).toBeVisible();
+  });
+
+  it("names the provider-neutral scm checks and words their GitLab findings", async () => {
+    fakeApi(routes({ [DIAGNOSTICS]: { body: gitlabReport } }));
+    renderApp(SETTINGS);
+    const section = await open();
+    expect(await section.findByText("scm.credential")).toBeInTheDocument();
+    expect(section.getByText("scm.repo_access")).toBeInTheDocument();
+    expect(section.getByText("scm.repo_webhook")).toBeInTheDocument();
+    expect(
+      section.getByText("The GitLab token saka works (scopes: api)."),
+    ).toBeInTheDocument();
+    expect(
+      section.getByText(/level 40 \(Maintainer\) is recommended/),
+    ).toBeVisible();
+    expect(
+      section.getByText(
+        "The project has no webhook that posts to /hooks/gitlab.",
+      ),
+    ).toBeVisible();
+    expect(
+      section.getByText(
+        /Add a project webhook at https:\/\/gitlab\.example\/acme\/app\/-\/hooks/,
+      ),
+    ).toBeVisible();
+    expect(section.queryByText(/^Result /)).toBeNull();
   });
 
   it("runs again on request", async () => {

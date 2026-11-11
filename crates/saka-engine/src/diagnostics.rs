@@ -8,7 +8,7 @@ use futures_util::stream::{self, StreamExt};
 use saka_core::diagnostics::{
     self as eval, AppRequirements, CheckResult, CredentialStatus, Finding, Fix, HostVersion,
     MigrationState, RepoGrant, RepoToolchain, Report, ScmDiagnostics, ScopeOverlap, SourceFailure,
-    Subject, ToolchainDrift,
+    Subject, TokenRequirements, ToolchainDrift,
 };
 use saka_core::ids::{ProjectId, RepoId};
 use saka_core::model::{Project, ProjectRepo, Repo};
@@ -29,7 +29,7 @@ use crate::versions::{
     self, FileUse, Proposal, ProposalAction, RepoFiles, VersionStatus, VersionTool,
 };
 use crate::views::scope_warnings;
-use crate::{Engine, EngineError, OPERATOR, Result};
+use crate::{Engine, EngineError, Integration, OPERATOR, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiagnosticLimits {
@@ -277,6 +277,10 @@ fn scm_finding(e: &PortError) -> Finding {
     eval::scm_failure(&e.code, &e.params)
 }
 
+fn token_finding(requirements: &TokenRequirements, web_url: &str, e: &PortError) -> Finding {
+    eval::token_failure(requirements, web_url, &e.code, &e.params)
+}
+
 fn ready(finding: Finding) -> BoxFuture<'static, Vec<Finding>> {
     async move { vec![finding] }.boxed()
 }
@@ -454,15 +458,49 @@ impl Engine {
             Err(e) => return vec![eval::check_failed(&e.code)],
         }
         let (credential, hook) = join(credential, scm.webhook_status(integration_id)).await;
-        let (CredentialStatus::App(app), hook) = match (credential, hook) {
-            (Ok(credential), Ok(hook)) => (credential, hook),
+        let (app, hook) = match (credential, hook) {
+            (Ok(CredentialStatus::App(app)), Ok(hook)) => (app, hook),
             (Err(e), _) | (_, Err(e)) => return vec![scm_finding(&e)],
+            (Ok(_), Ok(_)) => return vec![eval::check_failed("scm_status_mismatch")],
         };
         match self
             .store
             .read(|c| read::last_webhook_received_at(c, integration_id))
         {
             Ok(last) => eval::webhook(&requirements, integration_id, &app, &hook, last),
+            Err(e) => store_failed(&e),
+        }
+    }
+
+    async fn repo_webhook_check(
+        &self,
+        requirements: TokenRequirements,
+        integration: &Integration,
+        repo: &Repo,
+    ) -> Vec<Finding> {
+        let scm = &*self.ports.scm;
+        let id = integration.id.as_str();
+        match scm.webhook_configured(id) {
+            Ok(true) => {}
+            Ok(false) => return vec![eval::webhook_not_configured()],
+            Err(e) => return vec![eval::check_failed(&e.code)],
+        }
+        let hooks = match scm.repo_webhooks(&repo_ref(repo)).await {
+            Ok(hooks) => hooks,
+            Err(e) => return vec![token_finding(&requirements, &integration.web_url, &e)],
+        };
+        match self
+            .store
+            .read(|c| read::last_repo_webhook_received_at(c, id, repo.id))
+        {
+            Ok(last) => eval::repo_webhook(
+                &requirements,
+                id,
+                &repo.full_name,
+                &integration.web_url,
+                &hooks,
+                last,
+            ),
             Err(e) => store_failed(&e),
         }
     }
@@ -563,32 +601,38 @@ impl Engine {
             let id = integration.id.as_str();
             let supported = diagnostics(id);
             let credential = scm.credential_status(id).boxed().shared();
-            for check in [
-                CheckId::ScmCredential,
-                CheckId::ScmWebhook,
-                CheckId::ScmUserLink,
-            ] {
+            let web_url = integration.web_url.as_str();
+            let integration_checks: &[CheckId] = match supported {
+                Some(ScmDiagnostics::Token(_)) => &[CheckId::ScmCredential, CheckId::ScmUserLink],
+                _ => &[
+                    CheckId::ScmCredential,
+                    CheckId::ScmWebhook,
+                    CheckId::ScmUserLink,
+                ],
+            };
+            for &check in integration_checks {
                 if !filter.wants(check) {
                     continue;
                 }
-                let run = match supported {
-                    None => ready(eval::unsupported_by_adapter()),
-                    Some(ScmDiagnostics::App(req)) => match check {
-                        CheckId::ScmCredential => {
-                            let credential = credential.clone();
-                            async move {
-                                vec![match credential.await {
-                                    Ok(c) => eval::credential(&c),
-                                    Err(e) => scm_finding(&e),
-                                }]
-                            }
-                            .boxed()
+                let run = match (supported, check) {
+                    (None, _) => ready(eval::unsupported_by_adapter()),
+                    (Some(diagnostics), CheckId::ScmCredential) => {
+                        let credential = credential.clone();
+                        async move {
+                            vec![match credential.await {
+                                Ok(c) => eval::credential(&diagnostics, web_url, &c, now),
+                                Err(e) => match diagnostics {
+                                    ScmDiagnostics::App(_) => scm_finding(&e),
+                                    ScmDiagnostics::Token(req) => token_finding(&req, web_url, &e),
+                                },
+                            }]
                         }
-                        CheckId::ScmWebhook => {
-                            self.webhook_check(req, id, credential.clone()).boxed()
-                        }
-                        _ => async move { self.user_link_check(id, now) }.boxed(),
-                    },
+                        .boxed()
+                    }
+                    (Some(ScmDiagnostics::App(req)), CheckId::ScmWebhook) => {
+                        self.webhook_check(req, id, credential.clone()).boxed()
+                    }
+                    _ => async move { self.user_link_check(id, now) }.boxed(),
                 };
                 planned.push(Planned {
                     id: check,
@@ -596,39 +640,57 @@ impl Engine {
                     run,
                 });
             }
-            if !filter.wants(CheckId::ScmRepoAccess) {
-                continue;
-            }
             for repo in repos.iter().filter(|r| r.integration_id == id) {
-                let run = match supported {
-                    None => ready(eval::unsupported_by_adapter()),
-                    Some(ScmDiagnostics::App(req)) => {
-                        let credential = credential.clone();
-                        let web_url = integration.web_url.as_str();
-                        async move {
-                            let r = repo_ref(repo);
-                            match join(credential, scm.repo_grant(&r)).await {
-                                (
-                                    Ok(CredentialStatus::App(app)),
-                                    Ok(RepoGrant::Installation(found)),
-                                ) => vec![eval::installation(
-                                    &req,
-                                    &repo.full_name,
-                                    web_url,
-                                    &app.slug,
-                                    &found,
-                                )],
-                                (Err(e), _) | (_, Err(e)) => vec![scm_finding(&e)],
+                let subject = Subject::repo(&repo.id.0.to_string(), &repo.full_name);
+                if filter.wants(CheckId::ScmRepoAccess) {
+                    let run = match supported {
+                        None => ready(eval::unsupported_by_adapter()),
+                        Some(ScmDiagnostics::App(req)) => {
+                            let credential = credential.clone();
+                            async move {
+                                let r = repo_ref(repo);
+                                match join(credential, scm.repo_grant(&r)).await {
+                                    (
+                                        Ok(CredentialStatus::App(app)),
+                                        Ok(RepoGrant::Installation(found)),
+                                    ) => vec![eval::installation(
+                                        &req,
+                                        &repo.full_name,
+                                        web_url,
+                                        &app.slug,
+                                        &found,
+                                    )],
+                                    (Err(e), _) | (_, Err(e)) => vec![scm_finding(&e)],
+                                    _ => vec![eval::check_failed("scm_status_mismatch")],
+                                }
+                            }
+                            .boxed()
+                        }
+                        Some(ScmDiagnostics::Token(req)) => async move {
+                            match scm.repo_grant(&repo_ref(repo)).await {
+                                Ok(found) => {
+                                    eval::member_access(&req, &repo.full_name, web_url, &found)
+                                }
+                                Err(e) => vec![token_finding(&req, web_url, &e)],
                             }
                         }
-                        .boxed()
-                    }
-                };
-                planned.push(Planned {
-                    id: CheckId::ScmRepoAccess,
-                    subject: Subject::repo(&repo.id.0.to_string(), &repo.full_name),
-                    run,
-                });
+                        .boxed(),
+                    };
+                    planned.push(Planned {
+                        id: CheckId::ScmRepoAccess,
+                        subject: subject.clone(),
+                        run,
+                    });
+                }
+                if let (Some(ScmDiagnostics::Token(req)), true) =
+                    (supported, filter.wants(CheckId::ScmRepoWebhook))
+                {
+                    planned.push(Planned {
+                        id: CheckId::ScmRepoWebhook,
+                        subject,
+                        run: self.repo_webhook_check(req, integration, repo).boxed(),
+                    });
+                }
             }
         }
         if filter.wants(CheckId::ScmRepoAccess) {

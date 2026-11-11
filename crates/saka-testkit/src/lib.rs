@@ -33,7 +33,7 @@ pub use sim::{
 pub use world::{
     APP_CREDENTIAL, AgentOutcome, AgentScript, BOT_AUTHOR, ChangeSpec, CiScript, CommandScript,
     DocsCheckoutState, DocsTurn, DraftTurn, FAKE_CAPABILITIES, FAKE_INTEGRATION,
-    FAKE_SIGNATURE_HEADER, FakeWorld, FileEdit, HOME_REPO, Launch, Pr, PrMeta, Prepared, RecipeRun,
-    ReviewReply, SIM_RUNNER_VERSION, ScmCall, ScopeCheck, Stats, ToolchainScript, TurnUsage,
-    fake_signature, git_blob,
+    FAKE_SIGNATURE_HEADER, FAKE_TOKEN_CAPABILITIES, FakeWorld, FileEdit, HOME_REPO, Launch, Pr,
+    PrMeta, Prepared, RecipeRun, ReviewReply, SIM_RUNNER_VERSION, ScmCall, ScopeCheck, Stats,
+    ToolchainScript, TurnUsage, fake_signature, git_blob,
 };

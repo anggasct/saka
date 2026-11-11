@@ -527,8 +527,17 @@ pub struct AppRequirements {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenRequirements {
+    pub scopes: &'static [&'static str],
+    pub required_access: u8,
+    pub recommended_access: u8,
+    pub hook_events: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScmDiagnostics {
     App(AppRequirements),
+    Token(TokenRequirements),
 }
 
 pub const WEBHOOK_CONTENT_TYPE: &str = "json";
@@ -591,13 +600,25 @@ pub struct Installation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenStatus {
+    pub name: String,
+    pub active: bool,
+    pub revoked: bool,
+    pub scopes: Vec<String>,
+    pub expires_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialStatus {
     App(AppStatus),
+    Token(TokenStatus),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoGrant {
     Installation(Installation),
+    Member { access_level: Option<u8> },
+    NoAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -667,12 +688,106 @@ pub fn unsupported_by_adapter() -> Finding {
     Finding::skip("unsupported_by_adapter", json!({}))
 }
 
-pub fn credential(status: &CredentialStatus) -> Finding {
-    match status {
-        CredentialStatus::App(app) => {
-            Finding::pass("app_ok", json!({ "app_id": app.app_id, "slug": app.slug }))
-        }
+pub fn app_ok(app: &AppStatus) -> Finding {
+    Finding::pass("app_ok", json!({ "app_id": app.app_id, "slug": app.slug }))
+}
+
+pub const TOKEN_EXPIRY_WARNING_MS: i64 = 14 * 24 * 3_600_000;
+
+pub fn token_url(web_url: &str) -> String {
+    format!(
+        "{}/-/user_settings/personal_access_tokens",
+        web_url.trim_end_matches('/')
+    )
+}
+
+fn create_token(requirements: &TokenRequirements, web_url: &str) -> Option<Fix> {
+    fix(
+        "create_gitlab_token",
+        json!({ "url": token_url(web_url), "scopes": requirements.scopes }),
+    )
+}
+
+pub fn token_credential(
+    requirements: &TokenRequirements,
+    web_url: &str,
+    token: &TokenStatus,
+    now: Timestamp,
+) -> Finding {
+    let expired = token.expires_at.is_some_and(|at| at <= now);
+    if token.revoked || !token.active || expired {
+        let reason = if token.revoked {
+            "revoked"
+        } else if expired {
+            "expired"
+        } else {
+            "inactive"
+        };
+        return Finding::fail(
+            "token_inactive",
+            json!({ "name": token.name, "reason": reason }),
+            create_token(requirements, web_url),
+        );
     }
+    let missing: Vec<&str> = requirements
+        .scopes
+        .iter()
+        .copied()
+        .filter(|scope| !token.scopes.iter().any(|have| have == scope))
+        .collect();
+    if !missing.is_empty() {
+        return Finding::fail(
+            "token_scopes_missing",
+            json!({ "missing": missing, "granted": token.scopes }),
+            create_token(requirements, web_url),
+        );
+    }
+    let expires_at = token.expires_at.map(Timestamp::to_rfc3339);
+    if token
+        .expires_at
+        .is_some_and(|at| at.since(now) < TOKEN_EXPIRY_WARNING_MS)
+    {
+        return Finding::warn(
+            "token_expiring",
+            json!({ "name": token.name, "expires_at": expires_at }),
+            create_token(requirements, web_url),
+        );
+    }
+    Finding::pass(
+        "token_ok",
+        json!({ "name": token.name, "scopes": token.scopes, "expires_at": expires_at }),
+    )
+}
+
+pub fn credential(
+    diagnostics: &ScmDiagnostics,
+    web_url: &str,
+    status: &CredentialStatus,
+    now: Timestamp,
+) -> Finding {
+    match (diagnostics, status) {
+        (ScmDiagnostics::App(_), CredentialStatus::App(app)) => app_ok(app),
+        (ScmDiagnostics::Token(requirements), CredentialStatus::Token(token)) => {
+            token_credential(requirements, web_url, token, now)
+        }
+        _ => check_failed("scm_status_mismatch"),
+    }
+}
+
+pub fn token_failure(
+    requirements: &TokenRequirements,
+    web_url: &str,
+    code: &str,
+    params: &Value,
+) -> Finding {
+    if code != "scm_auth_refused" {
+        return scm_failure(code, params);
+    }
+    Finding::fail(
+        "token_rejected",
+        json!({ "status": params.get("status").cloned().unwrap_or(Value::Null) }),
+        create_token(requirements, web_url),
+    )
 }
 
 pub fn scm_failure(code: &str, params: &Value) -> Finding {
@@ -774,6 +889,67 @@ pub fn installation(
     )
 }
 
+pub fn members_url(web_url: &str, full_name: &str) -> String {
+    format!(
+        "{}/{full_name}/-/project_members",
+        web_url.trim_end_matches('/')
+    )
+}
+
+pub fn role_name(access_level: u8) -> &'static str {
+    match access_level {
+        0..=9 => "No access",
+        10..=19 => "Guest",
+        20..=29 => "Reporter",
+        30..=39 => "Developer",
+        40..=49 => "Maintainer",
+        _ => "Owner",
+    }
+}
+
+pub fn member_access(
+    requirements: &TokenRequirements,
+    repo: &str,
+    web_url: &str,
+    found: &RepoGrant,
+) -> Vec<Finding> {
+    let (visible, access_level) = match found {
+        RepoGrant::Member { access_level } => (true, *access_level),
+        RepoGrant::NoAccess => (false, None),
+        RepoGrant::Installation(_) => return vec![check_failed("scm_status_mismatch")],
+    };
+    let grant = |role: &str| {
+        fix(
+            "grant_repo_access",
+            json!({ "url": members_url(web_url, repo), "role": role }),
+        )
+    };
+    let required = role_name(requirements.required_access);
+    if !visible || access_level.is_some_and(|l| l < requirements.required_access) {
+        return vec![Finding::fail(
+            "repo_access_missing",
+            json!({
+                "repo": repo,
+                "access_level": access_level,
+                "required": requirements.required_access,
+            }),
+            grant(required),
+        )];
+    }
+    let mut findings = vec![Finding::pass(
+        "repo_access_ok",
+        json!({ "access_level": access_level }),
+    )];
+    if let Some(level) = access_level.filter(|l| *l < requirements.recommended_access) {
+        findings.push(Finding::warn(
+            "repo_access_recommended",
+            json!({ "access_level": level, "recommended": requirements.recommended_access }),
+            grant(role_name(requirements.recommended_access)),
+        ));
+    }
+    findings
+}
+
 pub fn hook_path(integration_id: &str) -> String {
     format!("/hooks/{integration_id}")
 }
@@ -864,6 +1040,93 @@ pub fn webhook(
             "deliveries_24h": hook.deliveries.len(),
             "last_received_at": last_received_at.map(Timestamp::to_rfc3339),
         }),
+    )]
+}
+
+pub fn repo_hooks_url(web_url: &str, full_name: &str) -> String {
+    format!("{}/{full_name}/-/hooks", web_url.trim_end_matches('/'))
+}
+
+fn is_saka_hook(hook: &RepoHook, path: &str) -> bool {
+    let without_query = hook.url.split(['?', '#']).next().unwrap_or_default();
+    without_query.trim_end_matches('/').ends_with(path)
+}
+
+pub fn repo_webhook(
+    requirements: &TokenRequirements,
+    integration_id: &str,
+    repo: &str,
+    web_url: &str,
+    hooks: &RepoHooks,
+    last_received_at: Option<Timestamp>,
+) -> Vec<Finding> {
+    let path = hook_path(integration_id);
+    let last = last_received_at.map(Timestamp::to_rfc3339);
+    let listed = match hooks {
+        RepoHooks::Listed(listed) => listed,
+        RepoHooks::Unreadable { status } => {
+            return vec![Finding::warn(
+                "repo_webhook_unreadable",
+                json!({ "status": status, "last_received_at": last }),
+                None,
+            )];
+        }
+    };
+    let configure = || {
+        fix(
+            "configure_repo_webhook",
+            json!({
+                "url": repo_hooks_url(web_url, repo),
+                "path": path,
+                "events": requirements.hook_events,
+            }),
+        )
+    };
+    let Some(hook) = listed.iter().find(|h| is_saka_hook(h, &path)) else {
+        return vec![Finding::fail(
+            "repo_webhook_missing",
+            json!({ "path": path }),
+            configure(),
+        )];
+    };
+    if hook.alert_status != "executable" {
+        return vec![Finding::fail(
+            "repo_webhook_disabled",
+            json!({
+                "hook_id": hook.id,
+                "alert_status": hook.alert_status,
+                "disabled_until": hook.disabled_until.map(Timestamp::to_rfc3339),
+            }),
+            configure(),
+        )];
+    }
+    let mut warns = Vec::new();
+    let missing: Vec<&str> = requirements
+        .hook_events
+        .iter()
+        .copied()
+        .filter(|e| !hook.events.iter().any(|have| have == e))
+        .collect();
+    if !missing.is_empty() {
+        warns.push(Finding::warn(
+            "repo_webhook_events_missing",
+            json!({ "hook_id": hook.id, "missing": missing }),
+            configure(),
+        ));
+    }
+    if !hook.ssl_verification {
+        warns.push(Finding::warn(
+            "repo_webhook_ssl_unverified",
+            json!({ "hook_id": hook.id }),
+            configure(),
+        ));
+    }
+    if !warns.is_empty() {
+        return warns;
+    }
+    vec![Finding::pass(
+        "repo_webhook_ok",
+        json!({ "hook_id": hook.id, "last_received_at": last }),
     )]
 }
 
@@ -1691,7 +1954,7 @@ mod tests {
         let all_events = ["pull_request", "check_run", "check_suite", "status"];
         let cases: Vec<(Vec<Finding>, Vec<Row<'_>>)> = vec![
             (
-                vec![credential(&CredentialStatus::App(app(&all_events)))],
+                vec![app_ok(&app(&all_events))],
                 vec![(
                     Pass,
                     "app_ok",
@@ -2348,6 +2611,332 @@ mod tests {
                 CheckId::AgentLogin,
                 CheckId::ToolchainCache
             ]
+        );
+    }
+
+    const DAY_MS: i64 = 86_400_000;
+    const GITLAB_WEB: &str = "https://gitlab.example";
+    const TOKEN_RULES: TokenRequirements = TokenRequirements {
+        scopes: &["api"],
+        required_access: 30,
+        recommended_access: 40,
+        hook_events: &[
+            "merge_requests_events",
+            "note_events",
+            "pipeline_events",
+            "job_events",
+        ],
+    };
+
+    fn token(expires_in_ms: Option<i64>) -> TokenStatus {
+        TokenStatus {
+            name: "saka".into(),
+            active: true,
+            revoked: false,
+            scopes: vec!["api".into()],
+            expires_at: expires_in_ms.map(|ms| NOW.plus_ms(ms)),
+        }
+    }
+
+    fn judged(token: &TokenStatus) -> Finding {
+        token_credential(&TOKEN_RULES, GITLAB_WEB, token, NOW)
+    }
+
+    #[test]
+    fn a_token_is_judged_by_its_state_scopes_and_expiry() {
+        use DiagnosticStatus::{Fail, Pass, Warn};
+        let create = Some((
+            "create_gitlab_token",
+            json!({
+                "url": "https://gitlab.example/-/user_settings/personal_access_tokens",
+                "scopes": ["api"],
+            }),
+        ));
+        let in_days = |days: i64| Some(days * DAY_MS);
+        let revoked = TokenStatus {
+            revoked: true,
+            ..token(None)
+        };
+        let lapsed = TokenStatus {
+            active: false,
+            ..token(in_days(-1))
+        };
+        let inactive = TokenStatus {
+            active: false,
+            ..token(None)
+        };
+        let read_only = TokenStatus {
+            scopes: vec!["read_api".into()],
+            ..token(None)
+        };
+        let expiry = |days: i64| NOW.plus_ms(days * DAY_MS).to_rfc3339();
+        let cases = [
+            (
+                judged(&token(None)),
+                (
+                    Pass,
+                    "token_ok",
+                    json!({"name": "saka", "scopes": ["api"], "expires_at": null}),
+                    None,
+                ),
+            ),
+            (
+                judged(&token(in_days(15))),
+                (
+                    Pass,
+                    "token_ok",
+                    json!({"name": "saka", "scopes": ["api"], "expires_at": expiry(15)}),
+                    None,
+                ),
+            ),
+            (
+                judged(&token(in_days(13))),
+                (
+                    Warn,
+                    "token_expiring",
+                    json!({"name": "saka", "expires_at": expiry(13)}),
+                    create.clone(),
+                ),
+            ),
+            (
+                judged(&revoked),
+                (
+                    Fail,
+                    "token_inactive",
+                    json!({"name": "saka", "reason": "revoked"}),
+                    create.clone(),
+                ),
+            ),
+            (
+                judged(&lapsed),
+                (
+                    Fail,
+                    "token_inactive",
+                    json!({"name": "saka", "reason": "expired"}),
+                    create.clone(),
+                ),
+            ),
+            (
+                judged(&token(Some(0))),
+                (
+                    Fail,
+                    "token_inactive",
+                    json!({"name": "saka", "reason": "expired"}),
+                    create.clone(),
+                ),
+            ),
+            (
+                judged(&inactive),
+                (
+                    Fail,
+                    "token_inactive",
+                    json!({"name": "saka", "reason": "inactive"}),
+                    create.clone(),
+                ),
+            ),
+            (
+                judged(&read_only),
+                (
+                    Fail,
+                    "token_scopes_missing",
+                    json!({"missing": ["api"], "granted": ["read_api"]}),
+                    create.clone(),
+                ),
+            ),
+            (
+                token_failure(
+                    &TOKEN_RULES,
+                    GITLAB_WEB,
+                    "scm_auth_refused",
+                    &json!({"status": 401, "repo": "acme/app"}),
+                ),
+                (Fail, "token_rejected", json!({"status": 401}), create),
+            ),
+            (
+                token_failure(
+                    &TOKEN_RULES,
+                    GITLAB_WEB,
+                    "scm_unavailable",
+                    &json!({"status": 500}),
+                ),
+                (Fail, "scm_unavailable", json!({"status": 500}), None),
+            ),
+        ];
+        for (finding, expected) in cases {
+            assert_eq!(row(&finding), expected);
+        }
+    }
+
+    #[test]
+    fn repo_access_needs_developer_and_recommends_maintainer() {
+        use DiagnosticStatus::{Fail, Pass, Warn};
+        let member = |access_level| RepoGrant::Member { access_level };
+        let access = |found: &RepoGrant| member_access(&TOKEN_RULES, "acme/app", GITLAB_WEB, found);
+        let fix = |role: &'static str| {
+            Some((
+                "grant_repo_access",
+                json!({"url": "https://gitlab.example/acme/app/-/project_members", "role": role}),
+            ))
+        };
+        let both = access(&member(Some(30)));
+        assert_eq!(
+            rows(&both),
+            [
+                (Pass, "repo_access_ok", json!({"access_level": 30}), None),
+                (
+                    Warn,
+                    "repo_access_recommended",
+                    json!({"access_level": 30, "recommended": 40}),
+                    fix("Maintainer"),
+                ),
+            ]
+        );
+        assert_eq!(
+            rows(&access(&member(Some(40)))),
+            [(Pass, "repo_access_ok", json!({"access_level": 40}), None)]
+        );
+        assert_eq!(
+            rows(&access(&member(None))),
+            [(Pass, "repo_access_ok", json!({"access_level": null}), None)]
+        );
+        assert_eq!(
+            rows(&access(&member(Some(20)))),
+            [(
+                Fail,
+                "repo_access_missing",
+                json!({"repo": "acme/app", "access_level": 20, "required": 30}),
+                fix("Developer"),
+            )]
+        );
+        assert_eq!(
+            rows(&access(&RepoGrant::NoAccess)),
+            [(
+                Fail,
+                "repo_access_missing",
+                json!({"repo": "acme/app", "access_level": null, "required": 30}),
+                fix("Developer"),
+            )]
+        );
+    }
+
+    fn saka_hook_for(integration: &str) -> RepoHook {
+        RepoHook {
+            id: 7,
+            url: format!("https://saka.example/hooks/{integration}"),
+            events: TOKEN_RULES
+                .hook_events
+                .iter()
+                .map(|e| (*e).into())
+                .collect(),
+            ssl_verification: true,
+            alert_status: "executable".into(),
+            disabled_until: None,
+        }
+    }
+
+    #[test]
+    fn a_repo_webhook_is_found_by_its_path_and_judged_by_events_state_and_ssl() {
+        use DiagnosticStatus::{Fail, Pass, Warn};
+        let last = Some(NOW.plus_ms(-1000));
+        let judge = |hooks: RepoHooks| {
+            repo_webhook(&TOKEN_RULES, "gitlab", "acme/app", GITLAB_WEB, &hooks, last)
+        };
+        let configure = Some((
+            "configure_repo_webhook",
+            json!({
+                "url": "https://gitlab.example/acme/app/-/hooks",
+                "path": "/hooks/gitlab",
+                "events": TOKEN_RULES.hook_events,
+            }),
+        ));
+        let stamp = last.map(Timestamp::to_rfc3339);
+        assert_eq!(
+            rows(&judge(RepoHooks::Listed(vec![saka_hook_for("gitlab")]))),
+            [(
+                Pass,
+                "repo_webhook_ok",
+                json!({"hook_id": 7, "last_received_at": stamp}),
+                None,
+            )]
+        );
+        let elsewhere = RepoHook {
+            url: "https://saka.example/hooks/other?x=1".into(),
+            ..saka_hook_for("gitlab")
+        };
+        assert_eq!(
+            rows(&judge(RepoHooks::Listed(vec![elsewhere]))),
+            [(
+                Fail,
+                "repo_webhook_missing",
+                json!({"path": "/hooks/gitlab"}),
+                configure.clone(),
+            )]
+        );
+        let prefixed = RepoHook {
+            url: "https://saka.example/base/hooks/gitlab/".into(),
+            ..saka_hook_for("gitlab")
+        };
+        assert_eq!(
+            judge(RepoHooks::Listed(vec![prefixed]))[0].code,
+            "repo_webhook_ok"
+        );
+        let without_jobs = RepoHook {
+            events: vec![
+                "merge_requests_events".into(),
+                "note_events".into(),
+                "pipeline_events".into(),
+            ],
+            ..saka_hook_for("gitlab")
+        };
+        assert_eq!(
+            rows(&judge(RepoHooks::Listed(vec![without_jobs]))),
+            [(
+                Warn,
+                "repo_webhook_events_missing",
+                json!({"hook_id": 7, "missing": ["job_events"]}),
+                configure.clone(),
+            )]
+        );
+        let unverified = RepoHook {
+            ssl_verification: false,
+            ..saka_hook_for("gitlab")
+        };
+        assert_eq!(
+            rows(&judge(RepoHooks::Listed(vec![unverified]))),
+            [(
+                Warn,
+                "repo_webhook_ssl_unverified",
+                json!({"hook_id": 7}),
+                configure.clone(),
+            )]
+        );
+        let disabled = RepoHook {
+            alert_status: "temporarily_disabled".into(),
+            disabled_until: Some(NOW.plus_ms(DAY_MS)),
+            ssl_verification: false,
+            ..saka_hook_for("gitlab")
+        };
+        assert_eq!(
+            rows(&judge(RepoHooks::Listed(vec![disabled]))),
+            [(
+                Fail,
+                "repo_webhook_disabled",
+                json!({
+                    "hook_id": 7,
+                    "alert_status": "temporarily_disabled",
+                    "disabled_until": NOW.plus_ms(DAY_MS).to_rfc3339(),
+                }),
+                configure,
+            )]
+        );
+        assert_eq!(
+            rows(&judge(RepoHooks::Unreadable { status: 403 })),
+            [(
+                Warn,
+                "repo_webhook_unreadable",
+                json!({"status": 403, "last_received_at": stamp}),
+                None,
+            )]
         );
     }
 }
