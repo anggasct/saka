@@ -40,8 +40,8 @@ pub enum HostPort {
     AgentLogin,
     ToolchainCache,
     Releases,
-    ScmApp,
-    ScmInstallation,
+    ScmCredential,
+    ScmRepoAccess,
     ScmWebhook,
     HostVersion,
 }
@@ -144,12 +144,13 @@ impl FakeHost {
     }
 
     pub(crate) async fn app_status(&self) -> PortResult<AppStatus> {
-        self.answer(HostPort::ScmApp, |s| s.app.clone()).await
+        self.answer(HostPort::ScmCredential, |s| s.app.clone())
+            .await
     }
 
     pub(crate) async fn installation(&self, full_name: &str) -> PortResult<Installation> {
         Ok(self
-            .answer(HostPort::ScmInstallation, |s| {
+            .answer(HostPort::ScmRepoAccess, |s| {
                 s.installations
                     .get(full_name)
                     .cloned()

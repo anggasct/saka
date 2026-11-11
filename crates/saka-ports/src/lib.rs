@@ -104,6 +104,13 @@ impl PortError {
         }
     }
 
+    pub fn unsupported(capability: &str) -> PortError {
+        PortError::permanent(
+            "scm_capability_unsupported",
+            json!({ "capability": capability }),
+        )
+    }
+
     pub fn to_json(&self) -> Value {
         json!({ "code": self.code, "params": self.params })
     }

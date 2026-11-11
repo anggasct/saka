@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
-use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
+use saka_core::diagnostics::{CredentialStatus, RepoGrant, RepoHooks, WebhookStatus};
 use saka_core::gate::Check;
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
@@ -50,13 +50,6 @@ pub struct GitLab {
     client: Arc<GitLabClient>,
     repos: Arc<dyn Repos>,
     webhook_secret: Option<Zeroizing<Vec<u8>>>,
-}
-
-fn unsupported(capability: &str) -> PortError {
-    PortError::permanent(
-        "scm_capability_unsupported",
-        json!({ "capability": capability }),
-    )
 }
 
 fn text(value: &Value) -> Option<String> {
@@ -312,7 +305,7 @@ impl Scm for GitLab {
 
     async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening> {
         if matches!(request.credential, ChangeCredential::User(_)) {
-            return Err(unsupported("user_authorship"));
+            return Err(PortError::unsupported("user_authorship"));
         }
         let full_name = &request.repo.full_name;
         let body = json!({
@@ -412,7 +405,7 @@ impl Scm for GitLab {
         let squash = match request.method {
             MergeMethod::Merge => false,
             MergeMethod::Squash => true,
-            MergeMethod::Rebase => return Err(unsupported("merge_method")),
+            MergeMethod::Rebase => return Err(PortError::unsupported("merge_method")),
         };
         let mut body = json!({
             "sha": request.head_sha,
@@ -662,16 +655,20 @@ impl Scm for GitLab {
         Some(CAPABILITIES)
     }
 
-    async fn app_status(&self, _integration_id: &str) -> PortResult<AppStatus> {
-        Err(unsupported("diagnostics"))
+    async fn credential_status(&self, _integration_id: &str) -> PortResult<CredentialStatus> {
+        Err(PortError::unsupported("diagnostics"))
     }
 
-    async fn app_installation(&self, _repo: &RepoRef) -> PortResult<Installation> {
-        Err(unsupported("diagnostics"))
+    async fn repo_grant(&self, _repo: &RepoRef) -> PortResult<RepoGrant> {
+        Err(PortError::unsupported("diagnostics"))
+    }
+
+    async fn repo_webhooks(&self, _repo: &RepoRef) -> PortResult<RepoHooks> {
+        Err(PortError::unsupported("diagnostics"))
     }
 
     async fn webhook_status(&self, _integration_id: &str) -> PortResult<WebhookStatus> {
-        Err(unsupported("diagnostics"))
+        Err(PortError::unsupported("diagnostics"))
     }
 
     fn webhook_configured(&self, _integration_id: &str) -> PortResult<bool> {
@@ -696,7 +693,7 @@ impl Scm for GitLab {
     }
 
     async fn start_device_flow(&self, _integration_id: &str) -> PortResult<DeviceCode> {
-        Err(unsupported("user_authorship"))
+        Err(PortError::unsupported("user_authorship"))
     }
 
     async fn poll_device_flow(
@@ -704,7 +701,7 @@ impl Scm for GitLab {
         _integration_id: &str,
         _device_code: &SecretText,
     ) -> PortResult<DevicePoll> {
-        Err(unsupported("user_authorship"))
+        Err(PortError::unsupported("user_authorship"))
     }
 
     async fn refresh_user_token(
@@ -712,7 +709,7 @@ impl Scm for GitLab {
         _integration_id: &str,
         _refresh_token: &SecretText,
     ) -> PortResult<TokenRefresh> {
-        Err(unsupported("user_authorship"))
+        Err(PortError::unsupported("user_authorship"))
     }
 
     async fn user_identity(
@@ -720,7 +717,7 @@ impl Scm for GitLab {
         _integration_id: &str,
         _token: &SecretText,
     ) -> PortResult<IdentityLookup> {
-        Err(unsupported("user_authorship"))
+        Err(PortError::unsupported("user_authorship"))
     }
 
     async fn user_repository_access(
@@ -729,6 +726,6 @@ impl Scm for GitLab {
         _full_name: &str,
         _token: &SecretText,
     ) -> PortResult<RepoAccess> {
-        Err(unsupported("user_authorship"))
+        Err(PortError::unsupported("user_authorship"))
     }
 }

@@ -6,8 +6,9 @@ use std::time::Duration;
 use futures_util::future::{BoxFuture, FutureExt, Shared, join, join_all};
 use futures_util::stream::{self, StreamExt};
 use saka_core::diagnostics::{
-    self as eval, AppRequirements, AppStatus, CheckResult, Finding, Fix, HostVersion,
-    MigrationState, RepoToolchain, Report, ScopeOverlap, SourceFailure, Subject, ToolchainDrift,
+    self as eval, AppRequirements, CheckResult, CredentialStatus, Finding, Fix, HostVersion,
+    MigrationState, RepoGrant, RepoToolchain, Report, ScmDiagnostics, ScopeOverlap, SourceFailure,
+    Subject, ToolchainDrift,
 };
 use saka_core::ids::{ProjectId, RepoId};
 use saka_core::model::{Project, ProjectRepo, Repo};
@@ -444,7 +445,7 @@ impl Engine {
         &self,
         requirements: AppRequirements,
         integration_id: &str,
-        app: Shared<BoxFuture<'_, PortResult<AppStatus>>>,
+        credential: Shared<BoxFuture<'_, PortResult<CredentialStatus>>>,
     ) -> Vec<Finding> {
         let scm = &*self.ports.scm;
         match scm.webhook_configured(integration_id) {
@@ -452,9 +453,9 @@ impl Engine {
             Ok(false) => return vec![eval::webhook_not_configured()],
             Err(e) => return vec![eval::check_failed(&e.code)],
         }
-        let (app, hook) = join(app, scm.webhook_status(integration_id)).await;
-        let (app, hook) = match (app, hook) {
-            (Ok(app), Ok(hook)) => (app, hook),
+        let (credential, hook) = join(credential, scm.webhook_status(integration_id)).await;
+        let (CredentialStatus::App(app), hook) = match (credential, hook) {
+            (Ok(credential), Ok(hook)) => (credential, hook),
             (Err(e), _) | (_, Err(e)) => return vec![scm_finding(&e)],
         };
         match self
@@ -556,30 +557,36 @@ impl Engine {
         now: Timestamp,
     ) -> Vec<Planned<'a>> {
         let scm = &*self.ports.scm;
-        let requirements = |id: &str| scm.capabilities(id).and_then(|c| c.diagnostics);
+        let diagnostics = |id: &str| scm.capabilities(id).and_then(|c| c.diagnostics);
         let mut planned = Vec::new();
         for integration in &self.cfg.integrations {
             let id = integration.id.as_str();
-            let supported = requirements(id);
-            let app = scm.app_status(id).boxed().shared();
-            for check in [CheckId::ScmApp, CheckId::ScmWebhook, CheckId::ScmUserLink] {
+            let supported = diagnostics(id);
+            let credential = scm.credential_status(id).boxed().shared();
+            for check in [
+                CheckId::ScmCredential,
+                CheckId::ScmWebhook,
+                CheckId::ScmUserLink,
+            ] {
                 if !filter.wants(check) {
                     continue;
                 }
                 let run = match supported {
                     None => ready(eval::unsupported_by_adapter()),
-                    Some(req) => match check {
-                        CheckId::ScmApp => {
-                            let app = app.clone();
+                    Some(ScmDiagnostics::App(req)) => match check {
+                        CheckId::ScmCredential => {
+                            let credential = credential.clone();
                             async move {
-                                vec![match app.await {
-                                    Ok(a) => eval::app_ok(&a),
+                                vec![match credential.await {
+                                    Ok(c) => eval::credential(&c),
                                     Err(e) => scm_finding(&e),
                                 }]
                             }
                             .boxed()
                         }
-                        CheckId::ScmWebhook => self.webhook_check(req, id, app.clone()).boxed(),
+                        CheckId::ScmWebhook => {
+                            self.webhook_check(req, id, credential.clone()).boxed()
+                        }
                         _ => async move { self.user_link_check(id, now) }.boxed(),
                     },
                 };
@@ -589,23 +596,26 @@ impl Engine {
                     run,
                 });
             }
-            if !filter.wants(CheckId::ScmInstallation) {
+            if !filter.wants(CheckId::ScmRepoAccess) {
                 continue;
             }
             for repo in repos.iter().filter(|r| r.integration_id == id) {
                 let run = match supported {
                     None => ready(eval::unsupported_by_adapter()),
-                    Some(req) => {
-                        let app = app.clone();
+                    Some(ScmDiagnostics::App(req)) => {
+                        let credential = credential.clone();
                         let web_url = integration.web_url.as_str();
                         async move {
                             let r = repo_ref(repo);
-                            match join(app, scm.app_installation(&r)).await {
-                                (Ok(a), Ok(found)) => vec![eval::installation(
+                            match join(credential, scm.repo_grant(&r)).await {
+                                (
+                                    Ok(CredentialStatus::App(app)),
+                                    Ok(RepoGrant::Installation(found)),
+                                ) => vec![eval::installation(
                                     &req,
                                     &repo.full_name,
                                     web_url,
-                                    &a.slug,
+                                    &app.slug,
                                     &found,
                                 )],
                                 (Err(e), _) | (_, Err(e)) => vec![scm_finding(&e)],
@@ -615,13 +625,13 @@ impl Engine {
                     }
                 };
                 planned.push(Planned {
-                    id: CheckId::ScmInstallation,
+                    id: CheckId::ScmRepoAccess,
                     subject: Subject::repo(&repo.id.0.to_string(), &repo.full_name),
                     run,
                 });
             }
         }
-        if filter.wants(CheckId::ScmInstallation) {
+        if filter.wants(CheckId::ScmRepoAccess) {
             for repo in repos.iter().filter(|r| {
                 !self
                     .cfg
@@ -630,7 +640,7 @@ impl Engine {
                     .any(|i| i.id == r.integration_id)
             }) {
                 planned.push(Planned {
-                    id: CheckId::ScmInstallation,
+                    id: CheckId::ScmRepoAccess,
                     subject: Subject::repo(&repo.id.0.to_string(), &repo.full_name),
                     run: ready(eval::unsupported_by_adapter()),
                 });

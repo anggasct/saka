@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use saka_core::diagnostics::{AppRequirements, access_covers};
+use saka_core::diagnostics::{AppRequirements, ScmDiagnostics, access_covers};
 use serde::Serialize;
 
 pub const REQUIRED_PERMISSIONS: &[(&str, &str)] = &[
@@ -21,11 +21,11 @@ pub const REQUIRED_EVENTS: &[&str] = &[
     "status",
 ];
 
-pub const APP: AppRequirements = AppRequirements {
+pub const APP: ScmDiagnostics = ScmDiagnostics::App(AppRequirements {
     permissions: REQUIRED_PERMISSIONS,
     recommended: RECOMMENDED_PERMISSIONS,
     events: REQUIRED_EVENTS,
-};
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MissingPermission {
