@@ -488,7 +488,7 @@ pub fn merge_queue_members(
         "SELECT w.id FROM work_item w
            JOIN change_request c ON c.work_item_id = w.id AND c.role = 'code'
            JOIN stage_run r ON r.work_item_id = w.id AND r.state IN ('pending', 'running')
-          WHERE w.state = 'in_stage' AND w.stage = 'merge' AND w.origin = 'spec_step'
+          WHERE w.state = 'in_stage' AND w.stage = 'merge'
             AND r.queued_at IS NOT NULL AND w.repo_id = ?1 AND c.base_branch = ?2
           ORDER BY w.id",
     )?;
@@ -676,6 +676,7 @@ fn change_request(row: &Row<'_>) -> Result<ChangeRequest> {
         head_branch: row.get("head_branch")?,
         base_branch: row.get("base_branch")?,
         head_sha: row.get("head_sha")?,
+        update_head_sha: row.get("update_head_sha")?,
         state: vocab(row, "state")?,
         merge_commit_sha: row.get("merge_commit_sha")?,
         merged_at: opt_ts(row, "merged_at")?,

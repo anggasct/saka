@@ -2506,8 +2506,10 @@ export interface components {
     };
     PrimaryAction: {
       /**
-       * @description `retry | cancel | set_secret | link_account | set_user_token | edit_spec`. Only `retry` and
-       *     `cancel` run through `actions/primary`; the others need input the client collects.
+       * @description `retry | cancel | takeover | update_branch | set_secret | link_account | set_user_token |
+       *     edit_spec`. The first four run through `actions/primary`; the others need input the client
+       *     collects. `update_branch` asks the code host to merge the base into the branch of an outside
+       *     pull request.
        */
       kind: string;
       /** @description `set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`. */

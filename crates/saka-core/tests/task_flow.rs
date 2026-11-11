@@ -2437,7 +2437,11 @@ fn the_turn_goes_to_one_task_per_branch_by_priority_then_arrival() {
 
     let mut outside = copy(17, 0, 3);
     outside.item.origin = saka_core::vocab::WorkItemOrigin::ExternalChange;
-    assert!(saka_core::queue::next_turns(&[outside]).is_empty());
+    assert_eq!(
+        saka_core::queue::next_turns(&[outside.clone(), late.clone()]),
+        vec![id(&outside)],
+        "an outside change waits in the same line as the changes of Saka"
+    );
 }
 
 #[test]

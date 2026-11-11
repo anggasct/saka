@@ -136,6 +136,7 @@ vocab!(
         DocsMergeFailed => "docs_merge_failed",
         BranchMoved => "branch_moved",
         DecisionExpired => "decision_expired",
+        ChangeBehindBase => "change_behind_base",
     }
 );
 vocab!(BlockerAction {
@@ -146,6 +147,7 @@ vocab!(BlockerAction {
     LinkAccount => "link_account",
     SetUserToken => "set_user_token",
     EditSpec => "edit_spec",
+    UpdateBranch => "update_branch",
 });
 vocab!(InboxKind {
     Decision => "decision",
@@ -171,6 +173,7 @@ vocab!(InboxActionKind {
     LinkAccount => "link_account",
     SetUserToken => "set_user_token",
     EditSpec => "edit_spec",
+    UpdateBranch => "update_branch",
     AnswerPermission => "answer_permission",
     ApproveSpec => "approve_spec",
     StartStep => "start_step",

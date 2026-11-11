@@ -696,6 +696,19 @@ pub enum Event {
         role: ChangeRole,
         head_sha: String,
     },
+    #[serde(rename = "delivery.change_request.update_requested")]
+    ChangeRequestUpdateRequested {
+        work_item_id: WorkItemId,
+        change_request_id: ChangeRequestId,
+        expected_head_sha: String,
+    },
+    #[serde(rename = "delivery.change_request.branch_updated")]
+    ChangeRequestBranchUpdated {
+        work_item_id: WorkItemId,
+        change_request_id: ChangeRequestId,
+        from_head_sha: String,
+        head_sha: String,
+    },
     #[serde(rename = "scm.change_request.merged")]
     ChangeRequestMerged {
         work_item_id: WorkItemId,
@@ -1065,6 +1078,8 @@ impl Event {
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }
+            | E::ChangeRequestUpdateRequested { work_item_id, .. }
+            | E::ChangeRequestBranchUpdated { work_item_id, .. }
             | E::ChangeRequestMerged { work_item_id, .. }
             | E::ChangeRequestClosed { work_item_id, .. }
             | E::DocsChangeSkipped { work_item_id, .. } => Stream::WorkItem(*work_item_id),

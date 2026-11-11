@@ -175,21 +175,12 @@ pub fn review_only(api: &Api, cli: &Cli<'_>, run: &Run<'_>) -> Result<()> {
         "/api/v1/work-items?project_id={project_id}&limit=200"
     ))?;
     let task = outside_task(&items, number, &branch).context("the outside task disappeared")?;
-    let offers_merge = task["available_actions"]
-        .as_array()
-        .is_some_and(|a| a.iter().any(|x| x == "merge"));
-    if state.merged
-        || !state.open
-        || task["merge_auto"] == true
-        || offers_merge
-        || task["state"] == "done"
-    {
+    if state.merged || !state.open || task["merge_auto"] == true || task["state"] == "done" {
         bail!(
-            "Saka must not merge an outside pull request: open {}, merged {}, merge_auto {}, actions {}, state {}",
+            "Saka must not merge an outside pull request on its own: open {}, merged {}, merge_auto {}, state {}",
             state.open,
             state.merged,
             task["merge_auto"],
-            task["available_actions"],
             task["state"]
         );
     }

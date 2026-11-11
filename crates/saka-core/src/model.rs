@@ -446,6 +446,7 @@ pub struct ChangeRequest {
     pub head_branch: String,
     pub base_branch: String,
     pub head_sha: String,
+    pub update_head_sha: Option<String>,
     pub state: ChangeState,
     pub merge_commit_sha: Option<String>,
     pub merged_at: Option<Timestamp>,
@@ -715,7 +716,7 @@ impl Task {
     }
 
     pub fn has_review_stage(&self) -> bool {
-        self.item.origin == WorkItemOrigin::SpecStep && self.workflow.has_stage(Stage::Review)
+        self.workflow.has_stage(Stage::Review)
     }
 
     pub fn approved_at(&self, head_sha: &str) -> bool {

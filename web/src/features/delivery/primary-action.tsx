@@ -3,7 +3,12 @@ import { Link } from "@tanstack/react-router";
 import { useT } from "@/i18n/use-t";
 
 import type { WorkItem } from "./queries";
-import { CancelDialog, RetryDialog, TakeoverDialog } from "./task-actions";
+import {
+  CancelDialog,
+  RetryDialog,
+  TakeoverDialog,
+  UpdateBranchDialog,
+} from "./task-actions";
 import { label } from "./text";
 
 const LINK =
@@ -27,6 +32,8 @@ export function PrimaryAction({
       return <CancelDialog task={task} primary />;
     case "takeover":
       return <TakeoverDialog task={task} primary />;
+    case "update_branch":
+      return <UpdateBranchDialog task={task} />;
     case "edit_spec":
       return specPath === undefined ? null : (
         <Link

@@ -692,8 +692,10 @@ pub struct Blocker {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PrimaryAction {
-    /// `retry | cancel | set_secret | link_account | set_user_token | edit_spec`. Only `retry` and
-    /// `cancel` run through `actions/primary`; the others need input the client collects.
+    /// `retry | cancel | takeover | update_branch | set_secret | link_account | set_user_token |
+    /// edit_spec`. The first four run through `actions/primary`; the others need input the client
+    /// collects. `update_branch` asks the code host to merge the base into the branch of an outside
+    /// pull request.
     pub kind: String,
     /// `set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`.
     pub params: Value,

@@ -86,7 +86,7 @@ fn a_blocker_can_be_resolved_by_taking_the_task_over_and_old_blockers_survive() 
     assert_eq!(
         store.migration().applied,
         vec![
-            22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37
+            22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38
         ]
     );
     drop(store);

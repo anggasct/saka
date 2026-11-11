@@ -10,8 +10,8 @@ use crate::gate::Check;
 use crate::ids::GateResultId;
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerCode, ChangeRole, ChangeState, ExternalCause, GateSource, SessionState, Stage,
-    StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    BlockerCode, BlockerResolution, ChangeRole, ChangeState, ExternalCause, GateSource,
+    SessionState, Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 
 impl Decider<'_> {
@@ -445,6 +445,23 @@ impl Decider<'_> {
                 Trigger::Auto,
                 StagePhase::AwaitingCi,
                 None,
+                None,
+                ctx,
+            ));
+        } else if external::merging(self.task) {
+            if let Some(blocker) = self.task.open_blocker() {
+                events.push(Event::BlockerResolved {
+                    work_item_id: self.item().id,
+                    blocker_id: blocker.id,
+                    resolution: BlockerResolution::Auto,
+                    reason: Some("head_moved".to_string()),
+                });
+            }
+            events.push(self.new_run(
+                Stage::Merge,
+                Trigger::Auto,
+                StagePhase::AwaitingCi,
+                Some("head_moved".to_string()),
                 None,
                 ctx,
             ));

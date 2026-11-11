@@ -129,6 +129,7 @@ fn task_at_merge(workflow: Workflow) -> Task {
         head_branch: task.item.branch.clone(),
         base_branch: "main".into(),
         head_sha: HEAD.into(),
+        update_head_sha: None,
         state: ChangeState::Open,
         merge_commit_sha: None,
         merged_at: None,

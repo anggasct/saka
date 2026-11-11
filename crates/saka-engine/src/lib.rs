@@ -428,6 +428,20 @@ impl Engine {
                     self.counters.merge_request(by);
                     tracing::info!(%work_item_id, by, "delivery.merge.requested");
                 }
+                Event::ChangeRequestUpdateRequested {
+                    work_item_id,
+                    expected_head_sha,
+                    ..
+                } => {
+                    tracing::info!(%work_item_id, expected_head_sha, "delivery.change_request.update_requested");
+                }
+                Event::ChangeRequestBranchUpdated {
+                    work_item_id,
+                    head_sha,
+                    ..
+                } => {
+                    tracing::info!(%work_item_id, head_sha, "delivery.change_request.branch_updated");
+                }
                 Event::MergeDequeued {
                     work_item_id,
                     reason,

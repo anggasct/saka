@@ -1,17 +1,17 @@
 use serde_json::json;
 
 use crate::event::Event;
-use crate::gate::GatePolicy;
 use crate::job::{Job, JobKind};
 use crate::model::Task;
 use crate::resume;
 use crate::session;
 use crate::task::{
-    LoopConfig, docs_pending, needs_docs_change, run_view, watches_change, watches_docs_change,
+    LoopConfig, docs_pending, gate_policy, needs_docs_change, run_view, watches_change,
+    watches_docs_change,
 };
 use crate::time::Timestamp;
 use crate::vocab::{
-    ChangeRole, ChangeState, DecisionState, EnvironmentState, GateOutcome, GateSource,
+    BlockerCode, ChangeRole, ChangeState, DecisionState, EnvironmentState, GateOutcome, GateSource,
     PermissionState, Stage, StagePhase, WorkItemState,
 };
 
@@ -67,10 +67,84 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             .into_iter()
             .chain(phase_jobs(task, cfg, now))
             .collect(),
-        _ => run_view(task)
-            .map(|view| session::react(&view, event, now))
-            .unwrap_or_default(),
+        E::ChangeRequestUpdateRequested {
+            work_item_id,
+            change_request_id,
+            expected_head_sha,
+        } => task
+            .change_request
+            .as_ref()
+            .filter(|cr| cr.id == *change_request_id)
+            .map(|cr| {
+                Job::new(
+                    JobKind::ScmUpdateBranch,
+                    format!(
+                        "{work_item_id}:{}:{expected_head_sha}",
+                        task.stage_run
+                            .as_ref()
+                            .map_or_else(String::new, |r| r.id.to_string())
+                    ),
+                    json!({
+                        "work_item_id": work_item_id,
+                        "repo_id": cr.repo_id,
+                        "number": cr.number,
+                        "base_branch": cr.base_branch,
+                        "expected_head_sha": expected_head_sha,
+                    }),
+                    now,
+                )
+            })
+            .into_iter()
+            .collect(),
+        _ => {
+            let mut jobs = run_view(task)
+                .map(|view| session::react(&view, event, now))
+                .unwrap_or_default();
+            jobs.extend(blocker_comment(task, event, now));
+            jobs
+        }
     }
+}
+
+pub fn comment_job(
+    task: &Task,
+    head_sha: &str,
+    code: &str,
+    params: serde_json::Value,
+    now: Timestamp,
+) -> Option<Job> {
+    let cr = task.change_request.as_ref()?;
+    Some(Job::new(
+        JobKind::ScmPostComment,
+        format!("{}:{head_sha}:{code}", task.item.id),
+        json!({
+            "work_item_id": task.item.id,
+            "repo_id": cr.repo_id,
+            "number": cr.number,
+            "head_sha": head_sha,
+            "code": code,
+            "params": params,
+        }),
+        now,
+    ))
+}
+
+fn blocker_comment(task: &Task, event: &Event, now: Timestamp) -> Option<Job> {
+    let Event::WorkItemBlocked { code, params, .. } = event else {
+        return None;
+    };
+    task.external.as_ref()?;
+    let head = params.get("head_sha").and_then(serde_json::Value::as_str)?;
+    let reason = params.get("reason").and_then(serde_json::Value::as_str);
+    let comment = match (
+        code,
+        params.get("updatable").and_then(serde_json::Value::as_bool),
+    ) {
+        (BlockerCode::ChangeBehindBase, Some(false)) => BlockerCode::ChangeBehindBase.as_str(),
+        (BlockerCode::MergeConflict, _) if reason == Some("update_conflict") => "update_conflict",
+        _ => return None,
+    };
+    comment_job(task, head, comment, params.clone(), now)
 }
 
 fn report_status(
@@ -293,9 +367,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
         }
         (Stage::Merge, StagePhase::AwaitingCi | StagePhase::AwaitingMerge) => {
             if let Some(cr) = cr {
-                let policy = GatePolicy::from_recipe(
-                    task.environment.as_ref().and_then(|e| e.recipe.as_ref()),
-                );
+                let policy = gate_policy(task);
                 let unsettled = task
                     .gate_for(GateSource::Saka, &cr.head_sha)
                     .is_none_or(|g| g.outcome == GateOutcome::Pending);
@@ -365,9 +437,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
             if let (Some(run), Some(cr), Some(target)) =
                 (run, cr, run.and_then(|r| r.head_sha.as_ref()))
             {
-                let policy = GatePolicy::from_recipe(
-                    task.environment.as_ref().and_then(|e| e.recipe.as_ref()),
-                );
+                let policy = gate_policy(task);
                 let unsettled = |source| {
                     task.gate_for(source, target)
                         .is_none_or(|g| g.outcome == GateOutcome::Pending)
@@ -416,7 +486,7 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                     now,
                 ));
             }
-            if cfg.delete_branch_after_merge {
+            if cfg.delete_branch_after_merge && task.external.is_none() {
                 jobs.push(Job::new(
                     JobKind::ScmDeleteBranch,
                     id,

@@ -50,6 +50,8 @@ export const EVENT_KINDS = [
   "delivery.merge.requested",
   "delivery.merge.rebased",
   "delivery.merge.dequeued",
+  "delivery.change_request.update_requested",
+  "delivery.change_request.branch_updated",
   "delivery.work_item.blocked",
   "delivery.blocker.resolved",
   "delivery.docs_change.skipped",

@@ -1,7 +1,9 @@
 use serde_json::{Value, json};
 
 use super::queries::{gates_clear, merge_ready};
-use super::{Decider, Integration, MAX_CONFLICT_PATHS, MERGED_ON_HOST, QUEUE_REASON, Verdict};
+use super::{
+    BranchUpdate, Decider, Integration, MAX_CONFLICT_PATHS, MERGED_ON_HOST, QUEUE_REASON, Verdict,
+};
 use crate::Ctx;
 use crate::event::Event;
 use crate::model::Coded;
@@ -226,6 +228,31 @@ impl Decider<'_> {
                 json!({ "reason": reason, "head_sha": cr.head_sha }),
                 ctx,
             ),
+            Integration::Behind {
+                head_sha,
+                base_sha,
+                updatable,
+            } => {
+                if cr.head_sha != head_sha {
+                    return self.leave_queue(cr.head_sha.clone());
+                }
+                let from_fork = self.task.external.as_ref().is_some_and(|e| e.from_fork);
+                let mut events = vec![Event::MergeDequeued {
+                    work_item_id: self.item().id,
+                    reason: "behind_base".to_string(),
+                }];
+                events.extend(self.block(
+                    BlockerCode::ChangeBehindBase,
+                    json!({
+                        "base_branch": cr.base_branch,
+                        "base_sha": base_sha,
+                        "head_sha": head_sha,
+                        "updatable": updatable && !from_fork,
+                    }),
+                    ctx,
+                ));
+                events
+            }
             Integration::Unclean { head_sha } => self.conflicted(
                 json!({ "reason": "worktree_unclean", "head_sha": head_sha }),
                 ctx,
@@ -269,6 +296,70 @@ impl Decider<'_> {
                         events.extend(self.phase(StagePhase::AwaitingCi, Some(head_sha)))
                     }
                 }
+                events
+            }
+        }
+    }
+
+    pub(super) fn branch_updated(
+        &self,
+        expected_head_sha: &str,
+        outcome: BranchUpdate,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(cr) = self
+            .task
+            .change_request
+            .as_ref()
+            .filter(|c| c.state == ChangeState::Open)
+        else {
+            return vec![];
+        };
+        if self.task.external.is_none() || !self.task.is_at(Stage::Merge, StagePhase::AwaitingCi) {
+            return vec![];
+        }
+        match outcome {
+            BranchUpdate::HeadChanged | BranchUpdate::Unchanged => vec![],
+            BranchUpdate::Conflict { head_sha, base_sha } if cr.head_sha == expected_head_sha => {
+                self.block(
+                    BlockerCode::MergeConflict,
+                    json!({
+                        "reason": "update_conflict",
+                        "head_sha": head_sha,
+                        "base_sha": base_sha,
+                        "base_branch": cr.base_branch,
+                    }),
+                    ctx,
+                )
+            }
+            BranchUpdate::Conflict { .. } => vec![],
+            BranchUpdate::Unexpected { head_sha } => {
+                let mut events = Vec::new();
+                if cr.head_sha != head_sha {
+                    events.push(Event::ChangeRequestUpdated {
+                        work_item_id: self.item().id,
+                        change_request_id: cr.id,
+                        role: ChangeRole::Code,
+                        head_sha,
+                    });
+                }
+                events.push(Event::MergeDequeued {
+                    work_item_id: self.item().id,
+                    reason: "head_moved".to_string(),
+                });
+                events
+            }
+            BranchUpdate::Updated { head_sha } => {
+                if cr.head_sha != expected_head_sha && cr.head_sha != head_sha {
+                    return vec![];
+                }
+                let mut events = vec![Event::ChangeRequestBranchUpdated {
+                    work_item_id: self.item().id,
+                    change_request_id: cr.id,
+                    from_head_sha: expected_head_sha.to_string(),
+                    head_sha: head_sha.clone(),
+                }];
+                events.extend(self.request_review(&head_sha, ctx));
                 events
             }
         }

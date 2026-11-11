@@ -33,8 +33,9 @@ use crate::vocab::{
 pub use evolve::evolve;
 pub use queries::{
     auto_merge, auto_merge_enabled, auto_retry_due, auto_retryable, available_actions, can_retry,
-    count_retry, docs_open, docs_pending, gates_clear, merge_allowed, merge_ready, merge_status,
-    needs_docs_change, needs_tick, run_view, watches_change, watches_docs_change,
+    count_retry, docs_open, docs_pending, gate_policy, gates_clear, merge_allowed, merge_ready,
+    merge_status, needs_docs_change, needs_tick, run_view, update_merge, watches_change,
+    watches_docs_change,
 };
 pub use recovery::{retry_entry, retry_target};
 
@@ -63,6 +64,7 @@ pub const VERDICT_FAILED_FINDINGS: usize = 20;
 pub const MERGED_ON_HOST: &str = "change merged on the host";
 pub const QUEUE_REASON: &str = "merge queue";
 pub const AUTONOMY_REASON: &str = "autonomy";
+pub const UPDATE_REASON: &str = "branch updated";
 const MAX_CONFLICT_PATHS: usize = 20;
 
 impl LoopConfig {
@@ -121,6 +123,20 @@ pub enum Integration {
     Rejected {
         reason: String,
     },
+    Behind {
+        head_sha: String,
+        base_sha: String,
+        updatable: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BranchUpdate {
+    Updated { head_sha: String },
+    Unexpected { head_sha: String },
+    Conflict { head_sha: String, base_sha: String },
+    HeadChanged,
+    Unchanged,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +281,10 @@ pub enum TaskInput {
     },
     MergeTurn,
     Integrated(Integration),
+    BranchUpdated {
+        expected_head_sha: String,
+        outcome: BranchUpdate,
+    },
     QueueLeft,
     ReviewEnvironmentPrepared {
         environment_id: EnvironmentId,
@@ -292,10 +312,31 @@ pub fn decide(
 ) -> Result<Vec<Event>, Rejection> {
     if task.item.origin == WorkItemOrigin::ExternalChange {
         match input {
+            TaskInput::ChangeObserved {
+                role: ChangeRole::Code,
+                state: ChangeState::Open,
+                ..
+            } if external::merging(task) => {}
             TaskInput::ChangeObserved { .. } | TaskInput::ReviewRequested { .. } => {
                 return external::decide(task, input, ctx);
             }
-            TaskInput::Session(_)
+            TaskInput::RequestMerge { .. }
+            | TaskInput::MergeTurn
+            | TaskInput::Integrated(_)
+            | TaskInput::QueueLeft
+            | TaskInput::MergeNotReady
+            | TaskInput::BranchUpdated { .. }
+            | TaskInput::MergeVerified { .. }
+            | TaskInput::CommitChecksObserved { .. }
+            | TaskInput::MergeSucceeded {
+                role: ChangeRole::Code,
+                ..
+            }
+            | TaskInput::MergeRejected {
+                role: ChangeRole::Code,
+                ..
+            }
+            | TaskInput::Session(_)
             | TaskInput::FixRequested { .. }
             | TaskInput::EnvironmentPrepared { .. }
             | TaskInput::WorktreeInspected { .. }
@@ -542,6 +583,10 @@ pub fn decide(
         I::StartReview => d.start_review(),
         I::MergeTurn => d.merge_turn(),
         I::Integrated(outcome) => d.integrated(outcome, ctx),
+        I::BranchUpdated {
+            expected_head_sha,
+            outcome,
+        } => d.branch_updated(&expected_head_sha, outcome, ctx),
         I::QueueLeft => d.queue_left(ctx),
         I::ReviewEnvironmentPrepared {
             environment_id,

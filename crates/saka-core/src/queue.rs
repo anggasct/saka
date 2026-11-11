@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use crate::ids::{RepoId, WorkItemId};
 use crate::model::Task;
-use crate::vocab::{Stage, StagePhase, WorkItemOrigin, WorkItemState};
+use crate::vocab::{Stage, StagePhase, WorkItemState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Position {
@@ -14,8 +14,7 @@ pub struct Position {
 
 fn group(task: &Task) -> Option<(RepoId, &str)> {
     let cr = task.change_request.as_ref()?;
-    let queued = task.item.origin == WorkItemOrigin::SpecStep
-        && task.item.state == WorkItemState::InStage
+    let queued = task.item.state == WorkItemState::InStage
         && task.item.stage == Some(Stage::Merge)
         && task.is_queued();
     queued.then_some((cr.repo_id, cr.base_branch.as_str()))

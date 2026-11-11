@@ -242,6 +242,15 @@ pub fn reconcile(
                 },
             ));
         }
+        if crate::task::update_merge(task) {
+            actions.push(Action::Decide(
+                task.item.id,
+                TaskInput::RequestMerge {
+                    expected_version: task.item.version,
+                    reason: Some(crate::task::UPDATE_REASON.to_string()),
+                },
+            ));
+        }
         if crate::task::needs_tick(task, cfg, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::Tick));
         }

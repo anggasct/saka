@@ -756,4 +756,50 @@ describe("review request", () => {
       { blocker_id: BLOCKER, reason: "mine" },
     ]);
   });
+
+  it("updates the branch of an outside change that is behind its base from the blocker", async () => {
+    const behind = detail(
+      task(1, {
+        state: "blocked",
+        stage: "merge",
+        change_request: change,
+        blocker: {
+          ...BASE_BLOCKER,
+          code: "change_behind_base",
+          params: {
+            base_branch: "main",
+            base_sha: HEAD,
+            head_sha: HEAD,
+            updatable: true,
+          },
+          primary_action: { kind: "update_branch", params: {} },
+        },
+        available_actions: ["cancel"],
+      }),
+    );
+    const { requests } = fakeApi(
+      routes(() => behind, { [`${DETAIL}/actions/primary`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    expect(
+      within(card).getByText(
+        /The pull request is behind main; update its branch/,
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Update the branch" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "catch up");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Update the branch" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(posts(requests, "primary").map((r) => r.body)).toEqual([
+      { blocker_id: BLOCKER, reason: "catch up" },
+    ]);
+  });
 });

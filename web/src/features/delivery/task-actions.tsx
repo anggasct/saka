@@ -164,6 +164,25 @@ export function RetryDialog({
   );
 }
 
+export function UpdateBranchDialog({ task }: { task: WorkItem }) {
+  const t = useT();
+  const after = useAfterAction();
+  const run = primaryRun(task);
+  return (
+    <ActionDialog
+      trigger={t("task.update_branch.trigger")}
+      triggerVariant="default"
+      title={t("task.update_branch.title")}
+      description={t("task.update_branch.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      submit={t("task.update_branch.submit")}
+      onSubmit={(reason, key) =>
+        after(() => (run ? run(reason ?? "", key) : Promise.resolve()))
+      }
+    />
+  );
+}
+
 export function CancelDialog({
   task,
   primary = false,

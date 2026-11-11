@@ -20,18 +20,18 @@ use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, Mer
 use saka_core::vocab::{HostTool, Tool};
 use saka_core::vocab::{ReviewOutcome, SecretPurpose};
 use saka_ports::{
-    Agents, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal, ChangeSnapshot,
-    ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit, DeviceCode,
-    DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocFileCommitted, DocFilesCommit,
-    DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite, DocsRequest, EnqueueOutcome,
-    EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome,
-    MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult, PostedReview,
-    PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached,
-    Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo,
-    RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed,
-    SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains,
-    UpdateOutcome, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeChange, WorktreeFile,
-    WorktreeState, check_comment_body, check_sha,
+    Agents, BaseProbe, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal,
+    ChangeSnapshot, ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit,
+    DeviceCode, DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocFileCommitted,
+    DocFilesCommit, DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite, DocsRequest,
+    EnqueueOutcome, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link,
+    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
+    PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
+    Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess,
+    RepoInfo, RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities,
+    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh,
+    Toolchains, UpdateOutcome, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeChange,
+    WorktreeFile, WorktreeState, check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -974,6 +974,14 @@ impl FakeWorld {
         commit
     }
 
+    pub fn push_to_base_of(&self, repo: &str) -> String {
+        let mut s = self.state();
+        let base = s.refs(repo).get(BASE_BRANCH).cloned().unwrap_or_default();
+        let commit = s.new_commit(vec![base]);
+        s.refs(repo).insert(BASE_BRANCH.to_string(), commit.clone());
+        commit
+    }
+
     pub fn fail_change_reads(&self, fail: bool) {
         self.state().change_reads_fail = fail;
     }
@@ -1657,6 +1665,28 @@ impl Environments for FakeWorld {
             .cloned()
             .unwrap_or_default();
         Ok(s.is_ancestor(commit, &base).then_some(base))
+    }
+
+    async fn base_probe(
+        &self,
+        repo: &RepoRef,
+        base_branch: &str,
+        head_sha: &str,
+    ) -> PortResult<Option<BaseProbe>> {
+        let mut s = self.state();
+        let Some(base_sha) = s.refs(&repo.full_name).get(base_branch).cloned() else {
+            return Ok(None);
+        };
+        let in_head = s.is_ancestor(&base_sha, head_sha);
+        Ok(Some(BaseProbe { base_sha, in_head }))
+    }
+
+    async fn commit_parents(
+        &self,
+        _repo: &RepoRef,
+        commit: &str,
+    ) -> PortResult<Option<Vec<String>>> {
+        Ok(self.state().parents.get(commit).cloned())
     }
 
     async fn changed_paths(

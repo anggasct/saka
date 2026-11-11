@@ -269,6 +269,41 @@ impl Decider<'_> {
         if self.task.item.origin == WorkItemOrigin::SpecStep {
             return self.own_review_settled(run, review_id, events, ctx);
         }
+        let approved = self
+            .task
+            .reviews
+            .iter()
+            .any(|r| r.id == review_id && r.outcome == ReviewOutcome::Approved);
+        let at_head = self
+            .task
+            .change_request
+            .as_ref()
+            .is_some_and(|cr| run.head_sha.as_ref() == Some(&cr.head_sha));
+        let merges = self
+            .task
+            .external
+            .as_ref()
+            .is_some_and(|e| e.workflow.has_stage(Stage::Merge));
+        if approved && at_head && merges {
+            events.push(Event::StageRunSucceeded {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                head_sha: run.head_sha.clone(),
+            });
+            let mut merge = self.new_run(
+                Stage::Merge,
+                Trigger::Auto,
+                StagePhase::AwaitingCi,
+                None,
+                None,
+                ctx,
+            );
+            if let Event::StageRunCreated { head_sha, .. } = &mut merge {
+                head_sha.clone_from(&run.head_sha);
+            }
+            events.push(merge);
+            return events;
+        }
         events.extend(self.phase(StagePhase::Reviewed, None));
         events.push(Event::StageRunSucceeded {
             work_item_id: self.item().id,

@@ -12,14 +12,11 @@ use saka_testkit::{
 
 const STEPS: usize = 12_000;
 
-const FIX_AUTO: &str =
-    "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nfix = \"auto\"\n";
-const FIX_MANUAL: &str =
-    "[workflow]\npreset = \"review_only\"\n\n[workflow.stages]\nfix = \"manual\"\n";
-const ONE_ROUND: &str =
-    "[workflow]\npreset = \"review_only\"\nfix_rounds = 1\n\n[workflow.stages]\nfix = \"auto\"\n";
-const FORKS_MANUAL: &str = "[workflow]\npreset = \"review_only\"\n\n[workflow.change_request]\ninclude_forks = true\n\n[workflow.stages]\nfix = \"manual\"\n";
-const WITH_FORKS: &str = "[workflow]\npreset = \"review_only\"\n\n[workflow.change_request]\ninclude_forks = true\n\n[workflow.stages]\nfix = \"auto\"\n";
+const FIX_AUTO: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"auto\"\nfix = \"auto\"\n";
+const FIX_MANUAL: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"auto\"\nfix = \"manual\"\n";
+const ONE_ROUND: &str = "[workflow]\npreset = \"custom\"\nfix_rounds = 1\n\n[workflow.change_request]\n\n[workflow.stages]\nreview = \"auto\"\nfix = \"auto\"\n";
+const FORKS_MANUAL: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\ninclude_forks = true\n\n[workflow.stages]\nreview = \"auto\"\nfix = \"manual\"\n";
+const WITH_FORKS: &str = "[workflow]\npreset = \"custom\"\n\n[workflow.change_request]\ninclude_forks = true\n\n[workflow.stages]\nreview = \"auto\"\nfix = \"auto\"\n";
 
 fn sim(workflow: &str) -> Sim {
     let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);

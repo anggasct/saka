@@ -135,7 +135,7 @@ macro_rules! change_request_columns {
         change_request_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "work_item_id", "role", "repo_id", "number", "url", "head_branch", "base_branch", "head_sha", "state", "merge_commit_sha", "merged_at", "skipped_at", "last_polled_at", "created_at", "updated_at")
+        qualified!($prefix: "id", "project_id", "work_item_id", "role", "repo_id", "number", "url", "head_branch", "base_branch", "head_sha", "state", "merge_commit_sha", "merged_at", "skipped_at", "last_polled_at", "created_at", "updated_at", "update_head_sha")
     };
 }
 

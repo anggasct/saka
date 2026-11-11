@@ -11,6 +11,7 @@ use crate::Ctx;
 use crate::autonomy::Ceilings;
 use crate::event::Prompt;
 use crate::external;
+use crate::gate::GatePolicy;
 use crate::model::{Blocker, Coded, GateResult, Retries, RunOwner, Session, Task};
 use crate::session::{RunRetry, RunView};
 use crate::time::Timestamp;
@@ -45,8 +46,26 @@ pub fn auto_merge_enabled(task: &Task, ceilings: &Ceilings) -> bool {
         && task.has_review_stage()
 }
 
+pub fn update_merge(task: &Task) -> bool {
+    task.external.is_some()
+        && task
+            .change_request
+            .as_ref()
+            .is_some_and(|cr| cr.update_head_sha.as_ref() == Some(&cr.head_sha))
+        && merge_ready(task)
+}
+
 pub fn auto_merge(task: &Task, ceilings: &Ceilings) -> bool {
     auto_merge_enabled(task, ceilings) && merge_ready(task)
+}
+
+pub fn gate_policy(task: &Task) -> GatePolicy {
+    let policy = GatePolicy::from_recipe(task.environment.as_ref().and_then(|e| e.recipe.as_ref()));
+    if task.external.is_some() {
+        policy.without_saka()
+    } else {
+        policy
+    }
 }
 
 pub fn gates_clear(task: &Task) -> bool {

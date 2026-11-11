@@ -142,7 +142,10 @@ impl Workflow {
                 spec: false,
                 change_request: Some(ChangeEntry::default()),
                 fix_rounds: DEFAULT_FIX_ROUNDS,
-                stages: vec![stage(Stage::Review, Trigger::Auto)],
+                stages: vec![
+                    stage(Stage::Review, Trigger::Auto),
+                    stage(Stage::Merge, Trigger::Manual),
+                ],
             },
             WorkflowPreset::Custom => Workflow {
                 preset,
@@ -287,7 +290,13 @@ mod tests {
         let review = Workflow::of(WorkflowPreset::ReviewOnly);
         assert!(!review.spec);
         assert_eq!(review.change_request, Some(ChangeEntry::default()));
-        assert_eq!(review.stages, [stage(Stage::Review, Trigger::Auto)]);
+        assert_eq!(
+            review.stages,
+            [
+                stage(Stage::Review, Trigger::Auto),
+                stage(Stage::Merge, Trigger::Manual)
+            ]
+        );
         for preset in [
             WorkflowPreset::FullLoop,
             WorkflowPreset::BuildOnly,

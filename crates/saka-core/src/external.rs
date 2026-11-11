@@ -200,11 +200,23 @@ pub fn accept(
     Ok(events)
 }
 
+pub fn merging(task: &Task) -> bool {
+    task.external.is_some()
+        && matches!(
+            task.item.state,
+            WorkItemState::InStage | WorkItemState::Blocked
+        )
+        && task
+            .stage_run
+            .as_ref()
+            .is_some_and(|r| r.stage == Stage::Merge)
+}
+
 fn open_run(task: &Task) -> Option<StageRunId> {
     task.stage_run
         .as_ref()
         .filter(|r| {
-            matches!(r.stage, Stage::Review | Stage::Fix)
+            matches!(r.stage, Stage::Review | Stage::Fix | Stage::Merge)
                 && matches!(r.state, StageRunState::Pending | StageRunState::Running)
         })
         .map(|r| r.id)

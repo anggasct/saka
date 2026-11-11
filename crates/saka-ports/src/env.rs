@@ -183,6 +183,12 @@ pub enum Rebase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseProbe {
+    pub base_sha: String,
+    pub in_head: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangedPaths {
     pub paths: Vec<String>,
     pub truncated: bool,
@@ -237,6 +243,16 @@ pub trait Environments: Send + Sync {
         commit: &str,
         base_branch: &str,
     ) -> PortResult<Option<String>>;
+
+    async fn base_probe(
+        &self,
+        repo: &RepoRef,
+        base_branch: &str,
+        head_sha: &str,
+    ) -> PortResult<Option<BaseProbe>>;
+
+    async fn commit_parents(&self, repo: &RepoRef, commit: &str)
+    -> PortResult<Option<Vec<String>>>;
 
     async fn changed_paths(
         &self,

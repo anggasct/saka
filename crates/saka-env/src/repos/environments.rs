@@ -7,10 +7,10 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    BestEffort, ChangeDiff, ChangedPaths, Checkout, CommandUnit, DOCS_MAX_BYTES, DOCS_MAX_FILES,
-    DocsRequest, EntryKind, EnvRef, Environments, PortError, PortResult, PrepareRequest,
-    PreparedDocs, PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome, RepoRef,
-    TreeEntry, WorktreeChange, WorktreeFile, WorktreeState,
+    BaseProbe, BestEffort, ChangeDiff, ChangedPaths, Checkout, CommandUnit, DOCS_MAX_BYTES,
+    DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, PortError, PortResult,
+    PrepareRequest, PreparedDocs, PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome,
+    RepoRef, TreeEntry, WorktreeChange, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -343,6 +343,75 @@ impl Environments for GitRepos {
             Some(GIT_NOT_AN_ANCESTOR | GIT_UNKNOWN_COMMIT) => Ok(None),
             _ => Err(failed("merge_base", &out)),
         }
+    }
+
+    async fn base_probe(
+        &self,
+        repo: &RepoRef,
+        base_branch: &str,
+        head_sha: &str,
+    ) -> PortResult<Option<BaseProbe>> {
+        sha_arg(head_sha, "head_sha")?;
+        arg(base_branch, "base_branch")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        self.fetch_locked(repo).await?;
+        let Some(base_sha) = self.tip_locked(repo, base_branch).await? else {
+            return Ok(None);
+        };
+        let bare = self.mirror_path(repo.repo_id);
+        let out = self
+            .cfg
+            .git
+            .local(&bare, &["merge-base", "--is-ancestor", &base_sha, head_sha])
+            .await?;
+        match out.code {
+            Some(0) => Ok(Some(BaseProbe {
+                base_sha,
+                in_head: true,
+            })),
+            Some(GIT_NOT_AN_ANCESTOR) => Ok(Some(BaseProbe {
+                base_sha,
+                in_head: false,
+            })),
+            Some(GIT_UNKNOWN_COMMIT) => Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": head_sha }),
+            )),
+            _ => Err(failed("merge_base", &out)),
+        }
+    }
+
+    async fn commit_parents(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+    ) -> PortResult<Option<Vec<String>>> {
+        sha_arg(commit, "commit")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        self.fetch_locked(repo).await?;
+        let bare = self.mirror_path(repo.repo_id);
+        let object = format!("{commit}^{{commit}}");
+        let present = self
+            .cfg
+            .git
+            .local(&bare, &["cat-file", "-e", &object])
+            .await?;
+        if !present.ok() {
+            return Ok(None);
+        }
+        let out = self
+            .git_ok(
+                &bare,
+                &["rev-list", "--parents", "-n", "1", commit],
+                "rev_list",
+            )
+            .await?
+            .text();
+        Ok(Some(
+            out.split_whitespace().skip(1).map(String::from).collect(),
+        ))
     }
 
     async fn changed_paths(

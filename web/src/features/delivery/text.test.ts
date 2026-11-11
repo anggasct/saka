@@ -490,6 +490,23 @@ const VARIANTS: [string, Record<string, unknown>][] = [
     },
   ],
   ["merge_conflict", { reason: "worktree_unclean", head_sha: HEAD }],
+  [
+    "merge_conflict",
+    {
+      reason: "update_conflict",
+      head_sha: HEAD,
+      base_sha: HEAD,
+      base_branch: "main",
+    },
+  ],
+  [
+    "change_behind_base",
+    { base_branch: "main", base_sha: HEAD, head_sha: HEAD, updatable: true },
+  ],
+  [
+    "change_behind_base",
+    { base_branch: "main", base_sha: HEAD, head_sha: HEAD, updatable: false },
+  ],
   ["change_closed", { number: 12 }],
   ["branch_moved", { number: 12, head_sha: HEAD, previous_head_sha: HEAD }],
   [
