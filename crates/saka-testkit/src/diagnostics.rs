@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use saka_core::diagnostics::{
-    AgentCli, AgentLogin, AppStatus, FoundCli, Installation, InstalledToolchain, SupervisorProbe,
-    ToolchainCache, WebhookStatus,
+    AgentCli, AgentLogin, AppStatus, FoundCli, Installation, InstalledToolchain, RepoGrant,
+    RepoHook, RepoHooks, SupervisorProbe, TokenStatus, ToolchainCache, WebhookStatus,
 };
 use saka_core::vocab::{HostTool, Tool};
 use saka_ports::{PortError, PortResult, Release};
@@ -15,6 +15,32 @@ pub const FAKE_TOOLCHAINS: &str = "/sim/toolchains";
 pub const FAKE_APP_ID: u64 = 4242;
 pub const FAKE_APP_SLUG: &str = "saka-sim";
 pub const FAKE_INSTALLATION_ID: u64 = 77;
+pub const FAKE_TOKEN_NAME: &str = "saka-sim-token";
+pub const FAKE_HOOK_ID: u64 = 501;
+
+pub fn full_member() -> RepoGrant {
+    RepoGrant::Member {
+        access_level: Some(40),
+    }
+}
+
+pub fn saka_hook(integration_id: &str) -> RepoHook {
+    RepoHook {
+        id: FAKE_HOOK_ID,
+        url: format!("https://saka.example/hooks/{integration_id}"),
+        events: [
+            "merge_requests_events",
+            "note_events",
+            "pipeline_events",
+            "job_events",
+        ]
+        .map(String::from)
+        .to_vec(),
+        ssl_verification: true,
+        alert_status: "executable".into(),
+        disabled_until: None,
+    }
+}
 
 pub fn full_installation() -> Installation {
     Installation {
@@ -43,6 +69,7 @@ pub enum HostPort {
     ScmCredential,
     ScmRepoAccess,
     ScmWebhook,
+    ScmRepoWebhook,
     HostVersion,
 }
 
@@ -56,6 +83,9 @@ pub struct HostScript {
     pub app: Result<AppStatus, PortError>,
     pub installations: BTreeMap<String, Installation>,
     pub webhook: Result<WebhookStatus, PortError>,
+    pub token: Result<TokenStatus, PortError>,
+    pub members: BTreeMap<String, RepoGrant>,
+    pub hooks: BTreeMap<String, RepoHooks>,
     pub host_versions: BTreeMap<HostTool, String>,
     pub hang: BTreeSet<HostPort>,
 }
@@ -98,6 +128,15 @@ impl Default for HostScript {
                 secret_set: true,
                 deliveries: Vec::new(),
             }),
+            token: Ok(TokenStatus {
+                name: FAKE_TOKEN_NAME.into(),
+                active: true,
+                revoked: false,
+                scopes: vec!["api".into()],
+                expires_at: None,
+            }),
+            members: BTreeMap::new(),
+            hooks: BTreeMap::new(),
             host_versions: BTreeMap::new(),
             hang: BTreeSet::new(),
         }
@@ -157,6 +196,31 @@ impl FakeHost {
                     .unwrap_or_else(full_installation)
             })
             .await)
+    }
+
+    pub(crate) async fn token(&self) -> PortResult<TokenStatus> {
+        self.answer(HostPort::ScmCredential, |s| s.token.clone())
+            .await
+    }
+
+    pub(crate) async fn member(&self, full_name: &str) -> RepoGrant {
+        self.answer(HostPort::ScmRepoAccess, |s| {
+            s.members
+                .get(full_name)
+                .cloned()
+                .unwrap_or_else(full_member)
+        })
+        .await
+    }
+
+    pub(crate) async fn hooks(&self, full_name: &str) -> RepoHooks {
+        self.answer(HostPort::ScmRepoWebhook, |s| {
+            s.hooks
+                .get(full_name)
+                .cloned()
+                .unwrap_or_else(|| RepoHooks::Listed(vec![saka_hook(crate::FAKE_INTEGRATION)]))
+        })
+        .await
     }
 
     pub(crate) async fn webhook(&self) -> PortResult<WebhookStatus> {

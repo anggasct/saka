@@ -776,7 +776,7 @@ async fn push_credentials_are_a_basic_header_on_the_instance_host_only() {
 }
 
 #[tokio::test]
-async fn user_accounts_and_diagnosis_are_declared_unsupported() {
+async fn user_accounts_and_the_app_webhook_status_are_declared_unsupported() {
     let w = GitLabWorld::new().await;
     assert!(!w.gl.device_flow_configured("gitlab").unwrap());
     assert_eq!(
@@ -784,7 +784,7 @@ async fn user_accounts_and_diagnosis_are_declared_unsupported() {
         "scm_capability_unsupported"
     );
     assert_eq!(
-        w.gl.credential_status("gitlab").await.unwrap_err().code,
+        w.gl.webhook_status("gitlab").await.unwrap_err().code,
         "scm_capability_unsupported"
     );
     assert!(!w.gl.webhook_configured("gitlab").unwrap());

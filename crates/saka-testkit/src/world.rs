@@ -2717,20 +2717,33 @@ impl Scm for FakeWorld {
 
     async fn credential_status(&self, integration_id: &str) -> PortResult<CredentialStatus> {
         known_integration(integration_id)?;
-        self.host.app_status().await.map(CredentialStatus::App)
+        let diagnostics = self.state().capabilities.diagnostics;
+        match diagnostics {
+            Some(ScmDiagnostics::Token(_)) => self.host.token().await.map(CredentialStatus::Token),
+            _ => self.host.app_status().await.map(CredentialStatus::App),
+        }
     }
 
     async fn repo_grant(&self, repo: &RepoRef) -> PortResult<RepoGrant> {
         known_integration(&repo.integration_id)?;
-        self.host
-            .installation(&repo.full_name)
-            .await
-            .map(RepoGrant::Installation)
+        let diagnostics = self.state().capabilities.diagnostics;
+        match diagnostics {
+            Some(ScmDiagnostics::Token(_)) => Ok(self.host.member(&repo.full_name).await),
+            _ => self
+                .host
+                .installation(&repo.full_name)
+                .await
+                .map(RepoGrant::Installation),
+        }
     }
 
     async fn repo_webhooks(&self, repo: &RepoRef) -> PortResult<RepoHooks> {
         known_integration(&repo.integration_id)?;
-        Err(PortError::unsupported("repo_webhooks"))
+        let diagnostics = self.state().capabilities.diagnostics;
+        match diagnostics {
+            Some(ScmDiagnostics::Token(_)) => Ok(self.host.hooks(&repo.full_name).await),
+            _ => Err(PortError::unsupported("repo_webhooks")),
+        }
     }
 
     async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus> {
@@ -2855,6 +2868,28 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(ScmDiagnostics::App(FAKE_APP_REQUIREMENTS)),
 };
+
+pub const FAKE_TOKEN_CAPABILITIES: ScmCapabilities = ScmCapabilities {
+    provider: "fake_token",
+    webhook_signature: Some(WebhookSignature::SharedToken),
+    user_authorship: false,
+    change_head_ref: "refs/merge-requests/{number}/head",
+    diagnostics: Some(ScmDiagnostics::Token(FAKE_TOKEN_REQUIREMENTS)),
+    ..FAKE_CAPABILITIES
+};
+
+pub const FAKE_TOKEN_REQUIREMENTS: saka_core::diagnostics::TokenRequirements =
+    saka_core::diagnostics::TokenRequirements {
+        scopes: &["api"],
+        required_access: 30,
+        recommended_access: 40,
+        hook_events: &[
+            "merge_requests_events",
+            "note_events",
+            "pipeline_events",
+            "job_events",
+        ],
+    };
 
 pub const FAKE_APP_REQUIREMENTS: saka_core::diagnostics::AppRequirements =
     saka_core::diagnostics::AppRequirements {

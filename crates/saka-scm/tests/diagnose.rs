@@ -4,7 +4,7 @@
     reason = "tests fail loudly on a broken setup"
 )]
 
-use saka_core::diagnostics::{CredentialStatus, RepoGrant};
+use saka_core::diagnostics::{AppStatus, CredentialStatus, Installation, RepoGrant};
 use saka_core::time::Timestamp;
 use saka_ports::Scm;
 use serde_json::json;
@@ -16,6 +16,20 @@ mod support;
 use support::*;
 
 const HOUR: i64 = 3_600_000;
+
+fn app_of(status: CredentialStatus) -> AppStatus {
+    match status {
+        CredentialStatus::App(app) => app,
+        other => panic!("not an app credential: {other:?}"),
+    }
+}
+
+fn installation_of(grant: RepoGrant) -> Installation {
+    match grant {
+        RepoGrant::Installation(found) => found,
+        other => panic!("not an installation: {other:?}"),
+    }
+}
 
 async fn mount(w: &World, at: &str, status: u16, body: serde_json::Value) {
     Mock::given(method("GET"))
@@ -78,12 +92,12 @@ async fn the_app_installation_and_webhook_are_read_with_the_app_jwt() {
         .mount(&w.server)
         .await;
 
-    let CredentialStatus::App(app) = w.gh.credential_status("github").await.unwrap();
+    let app = app_of(w.gh.credential_status("github").await.unwrap());
     assert_eq!(app.app_id, APP_ID);
     assert_eq!(app.slug, "saka-dev");
     assert_eq!(app.events, ["pull_request", "check_run"]);
 
-    let RepoGrant::Installation(installed) = w.gh.repo_grant(&w.repo).await.unwrap();
+    let installed = installation_of(w.gh.repo_grant(&w.repo).await.unwrap());
     assert!(installed.installed);
     assert_eq!(installed.installation_id, Some(42));
     assert_eq!(
@@ -133,7 +147,7 @@ async fn a_missing_installation_and_a_masked_secret_are_read_as_such() {
     )
     .await;
     mount(&w, "/app/hook/deliveries", 200, json!([])).await;
-    let RepoGrant::Installation(installed) = w.gh.repo_grant(&w.repo).await.unwrap();
+    let installed = installation_of(w.gh.repo_grant(&w.repo).await.unwrap());
     assert!(!installed.installed);
     assert_eq!(installed.installation_id, None);
     let hook = w.gh.webhook_status("github").await.unwrap();

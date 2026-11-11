@@ -1,5 +1,6 @@
 mod ci;
 mod client;
+mod diagnose;
 mod intake;
 mod webhook;
 
@@ -26,6 +27,8 @@ use crate::github::app::{inaccessible, parse_time};
 use client::Reply;
 pub use client::{GitLabClient, GitLabConfig};
 
+pub use diagnose::TOKEN as GITLAB_DIAGNOSTICS;
+
 pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     provider: "gitlab",
     merge_methods: &[MergeMethod::Merge, MergeMethod::Squash],
@@ -37,7 +40,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     merge_queue: true,
     user_authorship: false,
     change_head_ref: "refs/merge-requests/{number}/head",
-    diagnostics: None,
+    diagnostics: Some(GITLAB_DIAGNOSTICS),
 };
 
 fn queued_in(mr: &Value) -> bool {
@@ -656,15 +659,15 @@ impl Scm for GitLab {
     }
 
     async fn credential_status(&self, _integration_id: &str) -> PortResult<CredentialStatus> {
-        Err(PortError::unsupported("diagnostics"))
+        diagnose::credential_status(&self.client).await
     }
 
-    async fn repo_grant(&self, _repo: &RepoRef) -> PortResult<RepoGrant> {
-        Err(PortError::unsupported("diagnostics"))
+    async fn repo_grant(&self, repo: &RepoRef) -> PortResult<RepoGrant> {
+        diagnose::repo_grant(&self.client, repo).await
     }
 
-    async fn repo_webhooks(&self, _repo: &RepoRef) -> PortResult<RepoHooks> {
-        Err(PortError::unsupported("diagnostics"))
+    async fn repo_webhooks(&self, repo: &RepoRef) -> PortResult<RepoHooks> {
+        diagnose::repo_webhooks(&self.client, repo).await
     }
 
     async fn webhook_status(&self, _integration_id: &str) -> PortResult<WebhookStatus> {
