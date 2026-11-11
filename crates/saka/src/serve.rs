@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use saka_agents::launch::{self, ClaudeSettings, UnsupportedPath};
 use saka_agents::{AgentsConfig, ClaudeAgents};
 use saka_api::{ApiConfig, AppState};
-use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
+use saka_core::diagnostics::{CredentialStatus, RepoGrant, RepoHooks, WebhookStatus};
 use saka_core::ids::SessionId;
 use saka_core::model::Budget;
 use saka_core::policy::Policy;
@@ -208,11 +208,16 @@ impl Scm for ScmRouter {
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities> {
         self.0.get(integration_id)?.capabilities(integration_id)
     }
-    async fn app_status(&self, integration_id: &str) -> PortResult<AppStatus> {
-        self.get(integration_id)?.app_status(integration_id).await
+    async fn credential_status(&self, integration_id: &str) -> PortResult<CredentialStatus> {
+        self.get(integration_id)?
+            .credential_status(integration_id)
+            .await
     }
-    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation> {
-        self.get(&repo.integration_id)?.app_installation(repo).await
+    async fn repo_grant(&self, repo: &RepoRef) -> PortResult<RepoGrant> {
+        self.get(&repo.integration_id)?.repo_grant(repo).await
+    }
+    async fn repo_webhooks(&self, repo: &RepoRef) -> PortResult<RepoHooks> {
+        self.get(&repo.integration_id)?.repo_webhooks(repo).await
     }
     async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus> {
         self.get(integration_id)?

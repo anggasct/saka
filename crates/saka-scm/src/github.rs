@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
-use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
+use saka_core::diagnostics::{CredentialStatus, RepoGrant, RepoHooks, WebhookStatus};
 use saka_core::secret::SecretText;
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeState, CheckKind, MergeMethod, ReviewEvent};
@@ -511,12 +511,20 @@ impl Scm for GitHub {
         Some(CAPABILITIES)
     }
 
-    async fn app_status(&self, _integration_id: &str) -> PortResult<AppStatus> {
-        diagnose::app_status(&self.app).await
+    async fn credential_status(&self, _integration_id: &str) -> PortResult<CredentialStatus> {
+        diagnose::app_status(&self.app)
+            .await
+            .map(CredentialStatus::App)
     }
 
-    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation> {
-        diagnose::installation(&self.app, repo).await
+    async fn repo_grant(&self, repo: &RepoRef) -> PortResult<RepoGrant> {
+        diagnose::installation(&self.app, repo)
+            .await
+            .map(RepoGrant::Installation)
+    }
+
+    async fn repo_webhooks(&self, _repo: &RepoRef) -> PortResult<RepoHooks> {
+        Err(PortError::unsupported("repo_webhooks"))
     }
 
     async fn webhook_status(&self, _integration_id: &str) -> PortResult<WebhookStatus> {

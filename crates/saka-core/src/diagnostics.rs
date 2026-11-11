@@ -33,10 +33,10 @@ impl CheckId {
             | CheckId::ToolchainCache
             | CheckId::ToolchainSources
             | CheckId::AuthConfig => SubjectKind::Instance,
-            CheckId::ScmApp | CheckId::ScmWebhook | CheckId::ScmUserLink => {
+            CheckId::ScmCredential | CheckId::ScmWebhook | CheckId::ScmUserLink => {
                 SubjectKind::Integration
             }
-            CheckId::ScmInstallation => SubjectKind::Repo,
+            CheckId::ScmRepoAccess | CheckId::ScmRepoWebhook => SubjectKind::Repo,
             CheckId::ProjectUserToken | CheckId::ProjectConfig => SubjectKind::Project,
             CheckId::ToolchainRepo => SubjectKind::ProjectRepo,
         }
@@ -525,6 +525,12 @@ pub struct AppRequirements {
     pub recommended: &'static [(&'static str, &'static str)],
     pub events: &'static [&'static str],
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScmDiagnostics {
+    App(AppRequirements),
+}
+
 pub const WEBHOOK_CONTENT_TYPE: &str = "json";
 
 impl Subject {
@@ -585,6 +591,32 @@ pub struct Installation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialStatus {
+    App(AppStatus),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoGrant {
+    Installation(Installation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoHook {
+    pub id: u64,
+    pub url: String,
+    pub events: Vec<String>,
+    pub ssl_verification: bool,
+    pub alert_status: String,
+    pub disabled_until: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoHooks {
+    Listed(Vec<RepoHook>),
+    Unreadable { status: u16 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookDelivery {
     pub delivered_at: Timestamp,
     pub status_code: u16,
@@ -635,8 +667,12 @@ pub fn unsupported_by_adapter() -> Finding {
     Finding::skip("unsupported_by_adapter", json!({}))
 }
 
-pub fn app_ok(app: &AppStatus) -> Finding {
-    Finding::pass("app_ok", json!({ "app_id": app.app_id, "slug": app.slug }))
+pub fn credential(status: &CredentialStatus) -> Finding {
+    match status {
+        CredentialStatus::App(app) => {
+            Finding::pass("app_ok", json!({ "app_id": app.app_id, "slug": app.slug }))
+        }
+    }
 }
 
 pub fn scm_failure(code: &str, params: &Value) -> Finding {
@@ -1655,7 +1691,7 @@ mod tests {
         let all_events = ["pull_request", "check_run", "check_suite", "status"];
         let cases: Vec<(Vec<Finding>, Vec<Row<'_>>)> = vec![
             (
-                vec![app_ok(&app(&all_events))],
+                vec![credential(&CredentialStatus::App(app(&all_events)))],
                 vec![(
                     Pass,
                     "app_ok",
@@ -2287,9 +2323,10 @@ mod tests {
                 "toolchain.cache",
                 "toolchain.sources",
                 "auth.config",
-                "scm.app",
-                "scm.installation",
+                "scm.credential",
+                "scm.repo_access",
                 "scm.webhook",
+                "scm.repo_webhook",
                 "scm.user_link",
                 "project.user_token",
                 "project.config",

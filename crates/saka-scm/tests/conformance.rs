@@ -8,6 +8,7 @@ mod support;
 
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
+use saka_core::diagnostics::{CredentialStatus, RepoGrant, ScmDiagnostics};
 use saka_core::gate::outcome;
 use saka_core::vocab::{
     ChangeState, CheckConclusion, CheckKind, CheckStatus, GateOutcome, MergeMethod, ReviewEvent,
@@ -118,6 +119,7 @@ trait Harness: Sync {
     async fn review_refused(&self, number: u64, status: u16);
     async fn status_accepted(&self, state: &str, description: &str);
     fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>);
+    async fn diagnosis_answers(&self);
 }
 
 struct GitHubHarness {
@@ -561,6 +563,19 @@ impl Harness for GitHubHarness {
         }
         (headers, body)
     }
+
+    async fn diagnosis_answers(&self) {
+        Mock::given(method("GET"))
+            .and(path("/app"))
+            .and(self.w.jwt())
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({ "id": 9, "slug": "saka-dev", "events": ["pull_request"] }),
+                ),
+            )
+            .mount(&self.w.server)
+            .await;
+    }
 }
 
 struct GitLabHarness {
@@ -984,6 +999,8 @@ impl Harness for GitLabHarness {
         }
         (headers, body)
     }
+
+    async fn diagnosis_answers(&self) {}
 }
 
 fn merge_request(h: &dyn Harness, number: u64) -> MergeRequest {
@@ -1493,6 +1510,33 @@ async fn capabilities_match_the_declared_matrix(h: &dyn Harness) {
     assert_eq!(h.scm().capabilities(h.integration()), Some(h.declared()));
 }
 
+async fn diagnosis_returns_the_status_the_declared_capability_names(h: &dyn Harness) {
+    h.diagnosis_answers().await;
+    let scm = h.scm();
+    match h.declared().diagnostics {
+        Some(ScmDiagnostics::App(_)) => {
+            assert!(matches!(
+                scm.credential_status(h.integration()).await.unwrap(),
+                CredentialStatus::App(_)
+            ));
+            assert!(matches!(
+                scm.repo_grant(&h.repo()).await.unwrap(),
+                RepoGrant::Installation(_)
+            ));
+            assert_eq!(
+                scm.repo_webhooks(&h.repo()).await.unwrap_err().code,
+                "scm_capability_unsupported"
+            );
+        }
+        None => {
+            let credential = scm.credential_status(h.integration()).await.unwrap_err();
+            assert_eq!(credential.code, "scm_capability_unsupported");
+            let grant = scm.repo_grant(&h.repo()).await.unwrap_err();
+            assert_eq!(grant.code, "scm_capability_unsupported");
+        }
+    }
+}
+
 async fn the_merge_queue_is_declared_and_found_only_where_the_branch_has_one(h: &dyn Harness) {
     assert!(h.declared().merge_queue);
     h.queue_state(true).await;
@@ -1575,6 +1619,7 @@ conformance!(github_conformance, GitHubHarness:
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
     capabilities_match_the_declared_matrix,
+    diagnosis_returns_the_status_the_declared_capability_names,
     the_merge_queue_is_declared_and_found_only_where_the_branch_has_one,
     a_branch_without_a_merge_queue_reports_none,
     enqueue_names_the_head_and_reports_its_outcomes,
@@ -1605,6 +1650,7 @@ conformance!(gitlab_conformance, GitLabHarness:
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
     capabilities_match_the_declared_matrix,
+    diagnosis_returns_the_status_the_declared_capability_names,
     the_merge_queue_is_declared_and_found_only_where_the_branch_has_one,
     a_branch_without_a_merge_queue_reports_none,
     enqueue_names_the_head_and_reports_its_outcomes,

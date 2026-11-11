@@ -6,7 +6,8 @@ use futures_util::FutureExt;
 use saka_core::authorship::GitIdentity;
 use saka_core::decision::Question;
 use saka_core::diagnostics::{
-    AgentCli, AgentLogin, AppStatus, Installation, SupervisorProbe, ToolchainCache, WebhookStatus,
+    AgentCli, AgentLogin, CredentialStatus, RepoGrant, RepoHooks, ScmDiagnostics, SupervisorProbe,
+    ToolchainCache, WebhookStatus,
 };
 use saka_core::gate::Check;
 use saka_core::ids::{DecisionRequestId, EnvironmentId, SessionId};
@@ -2714,14 +2715,22 @@ impl Scm for FakeWorld {
         (integration_id == FAKE_INTEGRATION).then(|| self.state().capabilities.clone())
     }
 
-    async fn app_status(&self, integration_id: &str) -> PortResult<AppStatus> {
+    async fn credential_status(&self, integration_id: &str) -> PortResult<CredentialStatus> {
         known_integration(integration_id)?;
-        self.host.app_status().await
+        self.host.app_status().await.map(CredentialStatus::App)
     }
 
-    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation> {
+    async fn repo_grant(&self, repo: &RepoRef) -> PortResult<RepoGrant> {
         known_integration(&repo.integration_id)?;
-        self.host.installation(&repo.full_name).await
+        self.host
+            .installation(&repo.full_name)
+            .await
+            .map(RepoGrant::Installation)
+    }
+
+    async fn repo_webhooks(&self, repo: &RepoRef) -> PortResult<RepoHooks> {
+        known_integration(&repo.integration_id)?;
+        Err(PortError::unsupported("repo_webhooks"))
     }
 
     async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus> {
@@ -2844,7 +2853,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     merge_queue: false,
     user_authorship: true,
     change_head_ref: "refs/pull/{number}/head",
-    diagnostics: Some(FAKE_APP_REQUIREMENTS),
+    diagnostics: Some(ScmDiagnostics::App(FAKE_APP_REQUIREMENTS)),
 };
 
 pub const FAKE_APP_REQUIREMENTS: saka_core::diagnostics::AppRequirements =

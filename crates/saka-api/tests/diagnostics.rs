@@ -111,9 +111,9 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
         ("toolchain.cache", "instance"),
         ("toolchain.sources", "instance"),
         ("auth.config", "instance"),
-        ("scm.app", "ghes"),
-        ("scm.app", "github"),
-        ("scm.installation", "acme/tasks"),
+        ("scm.credential", "ghes"),
+        ("scm.credential", "github"),
+        ("scm.repo_access", "acme/tasks"),
         ("scm.webhook", "ghes"),
         ("scm.webhook", "github"),
         ("scm.user_link", "ghes"),
@@ -153,8 +153,8 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
     let project = sim.project_id.0.to_string();
     let repo = sim.project().project.repos[0].repo_id.0.to_string();
     let subjects: Vec<(&str, Value)> = [
-        "scm.app",
-        "scm.installation",
+        "scm.credential",
+        "scm.repo_access",
         "project.config",
         "toolchain.repo",
     ]
@@ -173,11 +173,11 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
         subjects,
         [
             (
-                "scm.app",
+                "scm.credential",
                 json!({ "kind": "integration", "id": "github", "label": "github" })
             ),
             (
-                "scm.installation",
+                "scm.repo_access",
                 json!({ "kind": "repo", "id": repo, "label": "acme/tasks" })
             ),
             (
@@ -191,7 +191,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
         ]
     );
     assert_eq!(
-        check(&r.body, "scm.app")["code"],
+        check(&r.body, "scm.credential")["code"],
         "unsupported_by_adapter",
         "ghes sorts first and the fake has no adapter for it"
     );
@@ -226,8 +226,14 @@ fn the_check_filter_and_the_project_are_validated() {
         "/api/v1/diagnostics?check=toolchain.cache&check=agent.login",
     );
     assert_eq!(ids(&two.body).len(), 2);
+    for id in ["scm.credential", "scm.repo_access", "scm.repo_webhook"] {
+        let r = get(&sim, &app, &format!("/api/v1/diagnostics?check={id}"));
+        assert_eq!(r.status, StatusCode::OK, "{id}: {}", r.text);
+    }
     for (query, field, code) in [
         ("check=nope", "check", "unknown"),
+        ("check=scm.app", "check", "unknown"),
+        ("check=scm.installation", "check", "unknown"),
         ("check=cli.config", "check", "unknown"),
         ("project_id=not-a-uuid", "project_id", "invalid"),
         (
@@ -477,7 +483,7 @@ fn app_installation_webhook_and_repo_findings_reach_the_report_with_their_fix() 
     });
     let r = get(&sim, &app, "/api/v1/diagnostics");
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    let installation = of(&r.body, "scm.installation", "acme/tasks");
+    let installation = of(&r.body, "scm.repo_access", "acme/tasks");
     assert_eq!(installation.len(), 1);
     assert_eq!(installation[0]["code"], "app_permissions_missing");
     assert_eq!(
@@ -498,6 +504,7 @@ fn app_installation_webhook_and_repo_findings_reach_the_report_with_their_fix() 
     );
     assert_eq!(webhook[1]["params"]["failed"], 3);
     assert_eq!(webhook[1]["params"]["total"], 10);
+    assert!(all(&r.body, "scm.repo_webhook").is_empty());
     assert_eq!(
         webhook[1]["fix"],
         json!({ "code": "configure_app_webhook", "params": { "url": "/hooks/github" } })
@@ -534,7 +541,7 @@ fn app_installation_webhook_and_repo_findings_reach_the_report_with_their_fix() 
         ));
     });
     let r = get(&sim, &app, "/api/v1/diagnostics");
-    for id in ["scm.app", "scm.installation", "scm.webhook"] {
+    for id in ["scm.credential", "scm.repo_access", "scm.webhook"] {
         let failed = all(&r.body, id)
             .into_iter()
             .filter(|c| c["subject"]["label"] != "ghes")
@@ -561,7 +568,7 @@ fn app_installation_webhook_and_repo_findings_reach_the_report_with_their_fix() 
         json!({ "deliveries_24h": 10, "last_received_at": now.to_rfc3339() })
     );
     assert_eq!(
-        of(&r.body, "scm.installation", "acme/tasks")[0]["code"],
+        of(&r.body, "scm.repo_access", "acme/tasks")[0]["code"],
         "app_installed"
     );
 }
@@ -669,7 +676,7 @@ fn links_tokens_and_overlapping_scopes_are_reported_per_subject_and_scoped_by_pr
         overlap[0]["fix"],
         json!({ "code": "narrow_path_scope", "params": { "repo": "app" } })
     );
-    let installs: Vec<&str> = all(&r.body, "scm.installation")
+    let installs: Vec<&str> = all(&r.body, "scm.repo_access")
         .iter()
         .map(|c| c["subject"]["label"].as_str().unwrap())
         .collect();
@@ -698,7 +705,7 @@ fn links_tokens_and_overlapping_scopes_are_reported_per_subject_and_scoped_by_pr
     assert_eq!(labels("toolchain.repo"), ["web/api", "web/site"]);
     assert_eq!(labels("project.config"), ["web"]);
     assert_eq!(labels("project.user_token"), ["web"]);
-    assert_eq!(labels("scm.installation"), ["acme/tasks", "acme/web"]);
+    assert_eq!(labels("scm.repo_access"), ["acme/tasks", "acme/web"]);
     assert_eq!(labels("scm.user_link"), ["ghes", "github"]);
     assert_eq!(labels("agent.login"), ["claude:default"]);
 }
@@ -716,7 +723,7 @@ fn an_adapter_without_diagnostics_skips_its_scm_checks_and_no_report_holds_a_sec
     let full = get(&sim, &app, "/api/v1/diagnostics");
     assert_eq!(full.status, StatusCode::OK);
     assert_eq!(
-        findings(&of(&full.body, "scm.app", "github")),
+        findings(&of(&full.body, "scm.credential", "github")),
         pairs(&[("pass", "app_ok")])
     );
 
@@ -726,8 +733,8 @@ fn an_adapter_without_diagnostics_skips_its_scm_checks_and_no_report_holds_a_sec
     });
     let limited = get(&sim, &app, "/api/v1/diagnostics");
     for (id, label) in [
-        ("scm.app", "github"),
-        ("scm.installation", "acme/tasks"),
+        ("scm.credential", "github"),
+        ("scm.repo_access", "acme/tasks"),
         ("scm.webhook", "github"),
         ("scm.user_link", "github"),
     ] {

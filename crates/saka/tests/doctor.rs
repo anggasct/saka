@@ -335,9 +335,9 @@ fn doctor_exit_codes_follow_failures_warnings_and_flags() {
             "toolchain.cache",
             "toolchain.sources",
             "auth.config",
-            "scm.app",
-            "scm.app",
-            "scm.installation",
+            "scm.credential",
+            "scm.credential",
+            "scm.repo_access",
             "scm.webhook",
             "scm.webhook",
             "scm.user_link",
@@ -383,13 +383,15 @@ fn doctor_exit_codes_follow_failures_warnings_and_flags() {
     assert_eq!(body["checks"].as_array().unwrap().len(), 4);
     assert_eq!(code(&only), 0);
 
-    let unknown = doctor(&host, &server, &["--check", "nope"]);
-    assert_eq!(code(&unknown), 2);
-    assert!(
-        stderr(&unknown).contains("error: check_unknown {\"id\":\"nope\"}"),
-        "{}",
-        stderr(&unknown)
-    );
+    for id in ["nope", "scm.app", "scm.installation"] {
+        let unknown = doctor(&host, &server, &["--check", id]);
+        assert_eq!(code(&unknown), 2);
+        assert!(
+            stderr(&unknown).contains(&format!("error: check_unknown {{\"id\":\"{id}\"}}")),
+            "{}",
+            stderr(&unknown)
+        );
+    }
 }
 
 fn closed_port() -> String {
@@ -446,8 +448,8 @@ fn doctor_runs_the_local_checks_read_only_when_the_server_is_down() {
         "agent.quota",
         "toolchain.sources",
         "auth.config",
-        "scm.app",
-        "scm.installation",
+        "scm.credential",
+        "scm.repo_access",
         "scm.webhook",
         "scm.user_link",
         "project.user_token",

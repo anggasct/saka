@@ -4,6 +4,7 @@
     reason = "tests fail loudly on a broken setup"
 )]
 
+use saka_core::diagnostics::{CredentialStatus, RepoGrant};
 use saka_core::time::Timestamp;
 use saka_ports::Scm;
 use serde_json::json;
@@ -77,12 +78,12 @@ async fn the_app_installation_and_webhook_are_read_with_the_app_jwt() {
         .mount(&w.server)
         .await;
 
-    let app = w.gh.app_status("github").await.unwrap();
+    let CredentialStatus::App(app) = w.gh.credential_status("github").await.unwrap();
     assert_eq!(app.app_id, APP_ID);
     assert_eq!(app.slug, "saka-dev");
     assert_eq!(app.events, ["pull_request", "check_run"]);
 
-    let installed = w.gh.app_installation(&w.repo).await.unwrap();
+    let RepoGrant::Installation(installed) = w.gh.repo_grant(&w.repo).await.unwrap();
     assert!(installed.installed);
     assert_eq!(installed.installation_id, Some(42));
     assert_eq!(
@@ -132,7 +133,7 @@ async fn a_missing_installation_and_a_masked_secret_are_read_as_such() {
     )
     .await;
     mount(&w, "/app/hook/deliveries", 200, json!([])).await;
-    let installed = w.gh.app_installation(&w.repo).await.unwrap();
+    let RepoGrant::Installation(installed) = w.gh.repo_grant(&w.repo).await.unwrap();
     assert!(!installed.installed);
     assert_eq!(installed.installation_id, None);
     let hook = w.gh.webhook_status("github").await.unwrap();
@@ -152,7 +153,7 @@ async fn a_rejected_jwt_is_app_auth_failed_with_the_key_path_and_never_the_key()
         json!({ "message": "A JSON web token could not be decoded" }),
     )
     .await;
-    let e = w.gh.app_status("github").await.unwrap_err();
+    let e = w.gh.credential_status("github").await.unwrap_err();
     assert_eq!(e.code, "app_auth_failed");
     assert_eq!(e.params["status"], 401);
     assert_eq!(e.params["app_id"], APP_ID);
@@ -172,12 +173,12 @@ async fn other_provider_failures_are_scm_unavailable_with_the_status() {
         json!({ "message": "Forbidden" }),
     )
     .await;
-    let e = w.gh.app_status("github").await.unwrap_err();
+    let e = w.gh.credential_status("github").await.unwrap_err();
     assert_eq!(
         (e.code.as_str(), &e.params),
         ("scm_unavailable", &json!({ "status": 500 }))
     );
-    let e = w.gh.app_installation(&w.repo).await.unwrap_err();
+    let e = w.gh.repo_grant(&w.repo).await.unwrap_err();
     assert_eq!(
         (e.code.as_str(), &e.params),
         ("scm_unavailable", &json!({ "status": 403 }))

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use saka_core::diagnostics::{AppStatus, Installation, WebhookStatus};
+use saka_core::diagnostics::{
+    CredentialStatus, RepoGrant, RepoHooks, ScmDiagnostics, WebhookStatus,
+};
 use saka_core::gate::Check;
 use saka_core::ids::RepoId;
 use saka_core::secret::SecretText;
@@ -266,9 +268,11 @@ pub trait Scm: Send + Sync {
 
     fn capabilities(&self, integration_id: &str) -> Option<ScmCapabilities>;
 
-    async fn app_status(&self, integration_id: &str) -> PortResult<AppStatus>;
+    async fn credential_status(&self, integration_id: &str) -> PortResult<CredentialStatus>;
 
-    async fn app_installation(&self, repo: &RepoRef) -> PortResult<Installation>;
+    async fn repo_grant(&self, repo: &RepoRef) -> PortResult<RepoGrant>;
+
+    async fn repo_webhooks(&self, repo: &RepoRef) -> PortResult<RepoHooks>;
 
     async fn webhook_status(&self, integration_id: &str) -> PortResult<WebhookStatus>;
 
@@ -414,7 +418,7 @@ pub struct ScmCapabilities {
     pub merge_queue: bool,
     pub user_authorship: bool,
     pub change_head_ref: &'static str,
-    pub diagnostics: Option<saka_core::diagnostics::AppRequirements>,
+    pub diagnostics: Option<ScmDiagnostics>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
