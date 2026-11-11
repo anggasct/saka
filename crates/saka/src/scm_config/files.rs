@@ -12,13 +12,23 @@ const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
 #[derive(Debug, Clone)]
+pub(crate) enum Credentials<'a> {
+    App {
+        app_id: i64,
+        private_key_file: &'a str,
+        client_id: &'a str,
+    },
+    Token {
+        token_file: &'a str,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ConfigBlock<'a> {
     pub id: &'a str,
     pub web_url: Option<&'a str>,
     pub api_url: Option<&'a str>,
-    pub app_id: i64,
-    pub private_key_file: &'a str,
-    pub client_id: &'a str,
+    pub credentials: Credentials<'a>,
     pub webhook_secret_file: Option<&'a str>,
     pub hooks_listen: Option<&'a str>,
 }
@@ -38,16 +48,31 @@ pub(crate) fn block_text(block: &ConfigBlock<'_>) -> String {
     }
     let mut scm = Table::new();
     scm.insert("id", value(block.id));
-    scm.insert("provider", value("github"));
+    let provider = match block.credentials {
+        Credentials::App { .. } => "github",
+        Credentials::Token { .. } => "gitlab",
+    };
+    scm.insert("provider", value(provider));
     if let Some(web_url) = block.web_url {
         scm.insert("web_url", value(web_url));
     }
     if let Some(api_url) = block.api_url {
         scm.insert("api_url", value(api_url));
     }
-    scm.insert("app_id", value(block.app_id));
-    scm.insert("private_key_file", value(block.private_key_file));
-    scm.insert("client_id", value(block.client_id));
+    match block.credentials {
+        Credentials::App {
+            app_id,
+            private_key_file,
+            client_id,
+        } => {
+            scm.insert("app_id", value(app_id));
+            scm.insert("private_key_file", value(private_key_file));
+            scm.insert("client_id", value(client_id));
+        }
+        Credentials::Token { token_file } => {
+            scm.insert("token_file", value(token_file));
+        }
+    }
     if let Some(file) = block.webhook_secret_file {
         scm.insert("webhook_secret_file", value(file));
     }
@@ -177,9 +202,11 @@ mod tests {
             id: "github",
             web_url: None,
             api_url: None,
-            app_id: 123_456,
-            private_key_file: "/home/u/.config/saka/scm/github/private-key.pem",
-            client_id: "Iv23liAbCdEfGh123456",
+            credentials: Credentials::App {
+                app_id: 123_456,
+                private_key_file: "/home/u/.config/saka/scm/github/private-key.pem",
+                client_id: "Iv23liAbCdEfGh123456",
+            },
             webhook_secret_file: Some("/home/u/.config/saka/scm/github/webhook-secret"),
             hooks_listen: hooks,
         }
@@ -209,7 +236,11 @@ mod tests {
         let mut b = block(None);
         b.web_url = Some("https://ghe.example.com");
         b.api_url = Some("https://ghe.example.com/api/v3");
-        b.private_key_file = "/tmp/a\"b/private-key.pem";
+        b.credentials = Credentials::App {
+            app_id: 123_456,
+            private_key_file: "/tmp/a\"b/private-key.pem",
+            client_id: "Iv23liAbCdEfGh123456",
+        };
         b.webhook_secret_file = None;
         assert_eq!(
             block_text(&b),
@@ -222,6 +253,31 @@ mod tests {
                 "app_id = 123456\n",
                 "private_key_file = '/tmp/a\"b/private-key.pem'\n",
                 "client_id = \"Iv23liAbCdEfGh123456\"\n",
+            )
+        );
+    }
+
+    #[test]
+    fn a_gitlab_block_names_its_token_file_and_no_app_fields() {
+        let block = ConfigBlock {
+            id: "gitlab",
+            web_url: Some("https://gitlab.example"),
+            api_url: None,
+            credentials: Credentials::Token {
+                token_file: "/home/u/.config/saka/gitlab-token",
+            },
+            webhook_secret_file: Some("/home/u/.config/saka/gitlab-webhook"),
+            hooks_listen: None,
+        };
+        assert_eq!(
+            block_text(&block),
+            concat!(
+                "[[scm]]\n",
+                "id = \"gitlab\"\n",
+                "provider = \"gitlab\"\n",
+                "web_url = \"https://gitlab.example\"\n",
+                "token_file = \"/home/u/.config/saka/gitlab-token\"\n",
+                "webhook_secret_file = \"/home/u/.config/saka/gitlab-webhook\"\n",
             )
         );
     }

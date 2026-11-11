@@ -13,7 +13,7 @@ use crate::github::app::{parse_time, unavailable};
 const DEVELOPER: u8 = 30;
 const MAINTAINER: u8 = 40;
 
-pub const TOKEN: ScmDiagnostics = ScmDiagnostics::Token(TokenRequirements {
+pub const TOKEN_REQUIREMENTS: TokenRequirements = TokenRequirements {
     scopes: &["api"],
     required_access: DEVELOPER,
     recommended_access: MAINTAINER,
@@ -23,7 +23,9 @@ pub const TOKEN: ScmDiagnostics = ScmDiagnostics::Token(TokenRequirements {
         "pipeline_events",
         "job_events",
     ],
-});
+};
+
+pub const TOKEN: ScmDiagnostics = ScmDiagnostics::Token(TOKEN_REQUIREMENTS);
 
 fn date(value: &Value) -> Option<Timestamp> {
     let day: jiff::civil::Date = value.as_str()?.parse().ok()?;
@@ -36,6 +38,10 @@ fn refused() -> PortError {
 }
 
 pub async fn credential_status(client: &GitLabClient) -> PortResult<CredentialStatus> {
+    token_status(client).await.map(CredentialStatus::Token)
+}
+
+pub async fn token_status(client: &GitLabClient) -> PortResult<TokenStatus> {
     let url = client.url(&["personal_access_tokens", "self"])?;
     let reply = client.send(Method::GET, url, None).await?;
     if reply.status == StatusCode::UNAUTHORIZED {
@@ -45,7 +51,7 @@ pub async fn credential_status(client: &GitLabClient) -> PortResult<CredentialSt
         return Err(unavailable(Some(reply.status.as_u16()), "rejected"));
     }
     let b = &reply.body;
-    Ok(CredentialStatus::Token(TokenStatus {
+    Ok(TokenStatus {
         name: b["name"].as_str().unwrap_or_default().to_string(),
         active: b["active"].as_bool().unwrap_or(false),
         revoked: b["revoked"].as_bool().unwrap_or(false),
@@ -56,7 +62,7 @@ pub async fn credential_status(client: &GitLabClient) -> PortResult<CredentialSt
             .filter_map(|s| s.as_str().map(String::from))
             .collect(),
         expires_at: date(&b["expires_at"]),
-    }))
+    })
 }
 
 fn level(access: &Value) -> Option<u8> {

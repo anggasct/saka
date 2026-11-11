@@ -1233,7 +1233,7 @@ impl Config {
     }
 }
 
-fn check_private_file(path: &std::path::Path) -> Result<(), ConfigError> {
+pub(crate) fn check_private_file(path: &std::path::Path) -> Result<(), ConfigError> {
     let meta = std::fs::metadata(path).map_err(|e| {
         err(
             "config_key_file_unreadable",

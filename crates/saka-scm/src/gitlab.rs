@@ -27,7 +27,7 @@ use crate::github::app::{inaccessible, parse_time};
 use client::Reply;
 pub use client::{GitLabClient, GitLabConfig};
 
-pub use diagnose::TOKEN as GITLAB_DIAGNOSTICS;
+pub use diagnose::{TOKEN as GITLAB_DIAGNOSTICS, TOKEN_REQUIREMENTS, token_status};
 
 pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     provider: "gitlab",
