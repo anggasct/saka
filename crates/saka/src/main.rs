@@ -8,6 +8,8 @@ mod logging;
 mod mcp;
 mod notify_cmd;
 mod scm_app;
+mod scm_config;
+mod scm_gitlab;
 mod serve;
 
 use std::path::PathBuf;
@@ -120,7 +122,9 @@ enum Command {
     #[command(about = "Project secrets for environment recipes (write-only)")]
     #[command(subcommand)]
     Secret(SecretCmd),
-    #[command(about = "SCM integrations: create the GitHub App, link your account")]
+    #[command(
+        about = "SCM integrations: create the GitHub App or connect GitLab, link your account"
+    )]
     #[command(subcommand)]
     Scm(ScmCmd),
     #[command(about = "Hooks of a project: what is configured, what ran, and run it again")]
@@ -274,6 +278,11 @@ enum ScmCmd {
         after_help = "Exit codes: 0 created, 1 failed after the listener started, 2 refused before it started, 130 interrupted. On a headless host use --port <n> --no-browser and ssh -L <n>:127.0.0.1:<n>."
     )]
     CreateApp(scm_app::CreateAppArgs),
+    #[command(
+        about = "Validates a GitLab access token and adds it to the config as [[scm]] (no server needed)",
+        after_help = "Exit codes: 0 added, 1 the token or the provider failed the check, 2 refused before the provider was called (a flag, a file, or an id already in the config)."
+    )]
+    ConnectGitlab(scm_gitlab::ConnectGitlabArgs),
     #[command(
         about = "Links your account with the device flow: prints a code to enter at the provider, then waits"
     )]
@@ -895,12 +904,13 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             })
         }
         Command::Scm(ScmCmd::CreateApp(args)) => scm_app::run(&args, cli.json),
+        Command::Scm(ScmCmd::ConnectGitlab(args)) => scm_gitlab::run(&args, cli.json),
         Command::Scm(cmd) => {
             let given = match &cmd {
                 ScmCmd::Link { integration, .. }
                 | ScmCmd::Status { integration }
                 | ScmCmd::Unlink { integration } => integration.clone(),
-                ScmCmd::CreateApp(_) => None,
+                ScmCmd::CreateApp(_) | ScmCmd::ConnectGitlab(_) => None,
             };
             let integration = integration_of(given)?;
             let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
@@ -909,7 +919,9 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     ScmCmd::Link { no_wait, .. } => client.scm_link(&integration, !no_wait).await,
                     ScmCmd::Status { .. } => client.scm_status(&integration).await,
                     ScmCmd::Unlink { .. } => client.scm_unlink(&integration).await,
-                    ScmCmd::CreateApp(_) => ExitCode::from(serve::EXIT_REFUSED),
+                    ScmCmd::CreateApp(_) | ScmCmd::ConnectGitlab(_) => {
+                        ExitCode::from(serve::EXIT_REFUSED)
+                    }
                 }
             })
         }

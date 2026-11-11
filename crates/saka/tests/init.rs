@@ -459,8 +459,18 @@ fn config_problems_exit_three_and_list_every_problem() {
         "{out}"
     );
     assert_eq!(
-        out.matches("next  saka scm create-app --web-url https://gitlab.example\n")
-            .count(),
+        out.matches(
+            "next  saka scm create-app --web-url https://gitlab.example   (GitHub Enterprise)\n"
+        )
+        .count(),
+        1,
+        "{out}"
+    );
+    assert_eq!(
+        out.matches(
+            "next  saka scm connect-gitlab --web-url https://gitlab.example --token-file <path>   (GitLab self-managed)\n"
+        )
+        .count(),
         1,
         "{out}"
     );
@@ -468,6 +478,21 @@ fn config_problems_exit_three_and_list_every_problem() {
     let report: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert!(report.get("next").is_none(), "{report}");
     assert!(!stdout(&json).contains("create-app"));
+    assert!(!stdout(&json).contains("connect-gitlab"));
+}
+
+#[test]
+fn gitlab_com_gets_only_the_connect_command() {
+    let env = Env::new();
+    let sim = Sim::new(SimConfig::default());
+    let server = serve(&sim);
+    let repo = env.repo("x", "https://gitlab.com/acme/x.git", &[]);
+    let out = stdout(&env.init(&repo.path, &server, &["--yes"]));
+    assert!(
+        out.contains("next  saka scm connect-gitlab --token-file <path>\n"),
+        "{out}"
+    );
+    assert!(!out.contains("create-app"), "{out}");
 }
 
 #[test]

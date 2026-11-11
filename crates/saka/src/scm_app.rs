@@ -1,9 +1,8 @@
 mod browser;
 mod callback;
-mod files;
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -23,18 +22,18 @@ use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
 use crate::cli;
-use crate::config::{self, Config, url_ok};
-use crate::serve::{EXIT_REFUSED, VERSION};
-use files::{ConfigBlock, PRIVATE_KEY_FILE, WEBHOOK_SECRET_FILE, WriteError};
+use crate::scm_config::{
+    self, ConfigBlock, Credentials, DEFAULT_HOOKS_LISTEN, Failure, OperatorConfig,
+    PRIVATE_KEY_FILE, WEBHOOK_SECRET_FILE, WriteError, id_ok, path_text, print_failure,
+    provider_url,
+};
+use crate::serve::VERSION;
 
-const EXIT_FAILED: u8 = 1;
 const EXIT_INTERRUPTED: u8 = 130;
 const DEFAULT_ID: &str = "github";
 const DEFAULT_WEB_URL: &str = "https://github.com";
 const DEFAULT_API_URL: &str = "https://api.github.com";
-const DEFAULT_HOOKS_LISTEN: &str = "127.0.0.1:7421";
 const MAX_NAME_CHARS: usize = 34;
-const MAX_ID_LEN: usize = 32;
 const MAX_ORG_LEN: usize = 39;
 const TIMEOUTS_SECS: std::ops::RangeInclusive<u64> = 5..=3300;
 const PORTS: std::ops::RangeInclusive<u32> = 1024..=65535;
@@ -130,45 +129,6 @@ impl Plan {
     }
 }
 
-#[derive(Debug)]
-struct Failure {
-    exit: u8,
-    code: &'static str,
-    params: Value,
-    block: Option<String>,
-}
-
-impl Failure {
-    fn refused(code: &'static str, params: Value) -> Failure {
-        Failure {
-            exit: EXIT_REFUSED,
-            code,
-            params,
-            block: None,
-        }
-    }
-
-    fn failed(code: &'static str, params: Value) -> Failure {
-        Failure {
-            exit: EXIT_FAILED,
-            code,
-            params,
-            block: None,
-        }
-    }
-
-    fn flag(flag: &str, reason: &str) -> Failure {
-        Failure::refused("flag_invalid", json!({ "flag": flag, "reason": reason }))
-    }
-
-    fn config(e: &config::ConfigError, path: &Path) -> Failure {
-        Failure::refused(
-            e.code,
-            json!({ "path": path.display().to_string(), "detail": e.detail }),
-        )
-    }
-}
-
 fn random_bytes<const N: usize>() -> Result<[u8; N], Failure> {
     let mut bytes = [0u8; N];
     getrandom::fill(&mut bytes).map_err(|_| Failure::refused("random_unavailable", json!({})))?;
@@ -179,13 +139,6 @@ fn token() -> Result<Zeroizing<String>, Failure> {
     Ok(Zeroizing::new(
         URL_SAFE_NO_PAD.encode(random_bytes::<TOKEN_BYTES>()?),
     ))
-}
-
-fn id_ok(id: &str) -> bool {
-    (1..=MAX_ID_LEN).contains(&id.len())
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 fn org_ok(org: &str) -> bool {
@@ -218,13 +171,6 @@ fn webhook_base(raw: &str) -> Result<String, &'static str> {
         return Err("has_fragment");
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
-}
-
-fn provider_url(flag: &str, raw: &str) -> Result<String, Failure> {
-    if !url_ok(raw) {
-        return Err(Failure::flag(flag, "not_https_or_loopback"));
-    }
-    Ok(raw.trim_end_matches('/').to_string())
 }
 
 fn plan(args: &CreateAppArgs) -> Result<Plan, Failure> {
@@ -298,9 +244,7 @@ fn plan(args: &CreateAppArgs) -> Result<Plan, Failure> {
 }
 
 struct Prepared {
-    config_path: PathBuf,
-    original: Option<Vec<u8>>,
-    original_text: String,
+    config: OperatorConfig,
     key_dir: PathBuf,
     add_hooks: bool,
 }
@@ -315,22 +259,6 @@ impl Prepared {
     }
 }
 
-fn same_host(a: &str, b: &str) -> bool {
-    let norm = |raw: &str| {
-        Url::parse(raw).map_or_else(
-            |_| raw.trim_end_matches('/').to_ascii_lowercase(),
-            |u| u.as_str().trim_end_matches('/').to_string(),
-        )
-    };
-    norm(a) == norm(b)
-}
-
-fn path_text(path: &Path) -> Result<&str, Failure> {
-    path.to_str().ok_or_else(|| {
-        Failure::refused("config_path_unknown", json!({ "reason": "path_not_utf8" }))
-    })
-}
-
 fn block<'a>(
     plan: &'a Plan,
     prepared: &'a Prepared,
@@ -343,9 +271,11 @@ fn block<'a>(
         id: &plan.id,
         web_url: plan.web_url_in_config(),
         api_url: plan.api_url_in_config(),
-        app_id,
-        private_key_file: key,
-        client_id,
+        credentials: Credentials::App {
+            app_id,
+            private_key_file: key,
+            client_id,
+        },
         webhook_secret_file: secret,
         hooks_listen: (prepared.add_hooks && secret.is_some())
             .then_some(plan.hooks_listen.as_str()),
@@ -353,50 +283,12 @@ fn block<'a>(
 }
 
 fn preflight(plan: &Plan) -> Result<Prepared, Failure> {
-    let path = config::path().ok_or_else(|| Failure::refused("config_path_unknown", json!({})))?;
-    let path = std::path::absolute(&path)
-        .map_err(|_| Failure::refused("config_path_unknown", json!({})))?;
-    let original = files::read_optional(&path).map_err(|e| {
-        Failure::refused(
-            "config_unreadable",
-            json!({ "path": path.display().to_string(), "detail": e.kind().to_string() }),
-        )
-    })?;
-    let original_text = match &original {
-        Some(bytes) => String::from_utf8(bytes.clone()).map_err(|_| {
-            Failure::refused(
-                "config_unreadable",
-                json!({ "path": path.display().to_string(), "detail": "not_utf8" }),
-            )
-        })?,
-        None => String::new(),
-    };
-    let cfg = Config::parse(&original_text).map_err(|e| Failure::config(&e, &path))?;
-    if cfg.scm.iter().any(|s| s.id == plan.id) {
-        return Err(Failure::refused(
-            "scm_integration_exists",
-            json!({ "id": plan.id }),
-        ));
-    }
-    if let Some(other) = cfg
-        .scm
-        .iter()
-        .find(|s| same_host(&s.web_url, &plan.web_url))
-    {
-        return Err(Failure::refused(
-            "scm_host_configured",
-            json!({ "id": other.id, "web_url": other.web_url }),
-        ));
-    }
-    let dir = path
-        .parent()
-        .ok_or_else(|| Failure::refused("config_path_unknown", json!({})))?;
+    let config = OperatorConfig::load(None)?;
+    config.check_free(&plan.id, &plan.web_url)?;
     let prepared = Prepared {
-        key_dir: dir.join("scm").join(&plan.id),
-        add_hooks: plan.webhook_url.is_some() && cfg.hooks.is_none(),
-        config_path: path.clone(),
-        original,
-        original_text,
+        key_dir: config.dir()?.join("scm").join(&plan.id),
+        add_hooks: plan.webhook_url.is_some() && !config.has_hooks(),
+        config,
     };
     let existing: Vec<String> = [prepared.key_path(), prepared.secret_path()]
         .iter()
@@ -424,8 +316,9 @@ fn preflight(plan: &Plan) -> Result<Prepared, Failure> {
         PLACEHOLDER_APP_ID,
         PLACEHOLDER_CLIENT_ID,
     );
-    let rendered = files::appended(&prepared.original_text, &files::block_text(&trial));
-    Config::parse(&rendered).map_err(|e| Failure::config(&e, &path))?;
+    prepared
+        .config
+        .check_block(&scm_config::block_text(&trial))?;
     Ok(prepared)
 }
 
@@ -549,11 +442,11 @@ async fn finish(
         ),
     };
     let key_path =
-        files::write_new_private_file(&prepared.key_dir, PRIVATE_KEY_FILE, app.pem.as_bytes())
+        scm_config::write_new_private_file(&prepared.key_dir, PRIVATE_KEY_FILE, app.pem.as_bytes())
             .map_err(write_failed)?;
     let secret_path = secret
         .map(|s| {
-            files::write_new_private_file(&prepared.key_dir, WEBHOOK_SECRET_FILE, s.as_bytes())
+            scm_config::write_new_private_file(&prepared.key_dir, WEBHOOK_SECRET_FILE, s.as_bytes())
                 .map_err(write_failed)
         })
         .transpose()?;
@@ -567,8 +460,8 @@ async fn finish(
         app_id,
         &app.client_id,
     );
-    let block_text = files::block_text(&added);
-    write_config(prepared, &block_text, &known)?;
+    let block_text = scm_config::block_text(&added);
+    prepared.config.write(&block_text, Some(("app", &known)))?;
     let hooks_added = added.hooks_listen.is_some();
     let settings_url = plan.settings_url(&app.slug);
     Ok(ScmAppReport {
@@ -608,46 +501,12 @@ async fn finish(
             webhook_secret: secret_path.map(|p| p.display().to_string()),
         },
         config: ConfigView {
-            path: prepared.config_path.display().to_string(),
-            created: prepared.original.is_none(),
+            path: prepared.config.path.display().to_string(),
+            created: prepared.config.created(),
             hooks_added,
         },
         warnings: Vec::new(),
         exit_code: 0,
-    })
-}
-
-fn write_config(prepared: &Prepared, block_text: &str, known: &Value) -> Result<(), Failure> {
-    let path = &prepared.config_path;
-    let shown = path.display().to_string();
-    let with_block = |mut f: Failure| {
-        f.block = Some(block_text.to_string());
-        f
-    };
-    let now = files::read_optional(path).map_err(|e| {
-        with_block(Failure::failed(
-            "config_write_failed",
-            json!({ "path": shown, "reason": e.kind().to_string(), "app": known }),
-        ))
-    })?;
-    if now != prepared.original {
-        return Err(with_block(Failure::failed(
-            "config_changed_concurrently",
-            json!({ "path": shown, "app": known }),
-        )));
-    }
-    let text = files::appended(&prepared.original_text, block_text);
-    if let Err(e) = Config::parse(&text) {
-        return Err(with_block(Failure::failed(
-            "config_write_failed",
-            json!({ "path": shown, "reason": e.code, "app": known }),
-        )));
-    }
-    files::replace_config(path, &text).map_err(|e| {
-        with_block(Failure::failed(
-            "config_write_failed",
-            json!({ "path": shown, "reason": e.kind().to_string(), "app": known }),
-        ))
     })
 }
 
@@ -735,7 +594,7 @@ async fn flow(plan: Plan, warnings: &mut Vec<Note>) -> Result<ScmAppReport, Fail
             listener.close().await;
             return Err(Failure {
                 exit: EXIT_INTERRUPTED,
-                code: "interrupted",
+                code: "interrupted".into(),
                 params: json!({}),
                 block: None,
             });
@@ -826,17 +685,6 @@ fn text(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
-fn print_failure(f: &Failure, json_out: bool) {
-    cli::refuse(f.code, &f.params);
-    if let Some(block) = &f.block {
-        cli::err("add this to the config by hand:");
-        cli::err(block.trim_end());
-    }
-    if json_out {
-        cli::out(&json!({ "code": f.code, "params": f.params, "exit_code": f.exit }).to_string());
-    }
-}
-
 pub fn run(args: &CreateAppArgs, json_out: bool) -> ExitCode {
     let outcome = plan(args).and_then(|plan| {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -863,6 +711,7 @@ pub fn run(args: &CreateAppArgs, json_out: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
 
     #[test]
     fn organization_logins_follow_the_provider_rule() {
@@ -899,18 +748,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let keys = dir.path().join("scm/github");
         let secret = "s".repeat(40);
-        let key = files::write_new_private_file(&keys, PRIVATE_KEY_FILE, b"pem").unwrap();
+        let key = scm_config::write_new_private_file(&keys, PRIVATE_KEY_FILE, b"pem").unwrap();
         let secret_file =
-            files::write_new_private_file(&keys, WEBHOOK_SECRET_FILE, secret.as_bytes()).unwrap();
-        let text = files::appended(
+            scm_config::write_new_private_file(&keys, WEBHOOK_SECRET_FILE, secret.as_bytes())
+                .unwrap();
+        let text = scm_config::appended(
             "# operator config\n[server]\nlisten = \"127.0.0.1:7400\"",
-            &files::block_text(&ConfigBlock {
+            &scm_config::block_text(&ConfigBlock {
                 id: "github",
                 web_url: Some("http://127.0.0.1:9"),
                 api_url: Some("http://127.0.0.1:9"),
-                app_id: 123_456,
-                private_key_file: key.to_str().unwrap(),
-                client_id: "Iv23liAbCdEfGh123456",
+                credentials: Credentials::App {
+                    app_id: 123_456,
+                    private_key_file: key.to_str().unwrap(),
+                    client_id: "Iv23liAbCdEfGh123456",
+                },
                 webhook_secret_file: secret_file.to_str(),
                 hooks_listen: Some(DEFAULT_HOOKS_LISTEN),
             }),
@@ -925,11 +777,5 @@ mod tests {
             cfg.hooks_listen().unwrap().to_string(),
             DEFAULT_HOOKS_LISTEN
         );
-    }
-
-    #[test]
-    fn hosts_compare_without_a_trailing_slash_or_case() {
-        assert!(same_host("https://GitHub.com/", "https://github.com"));
-        assert!(!same_host("https://ghe.example.com", "https://github.com"));
     }
 }
