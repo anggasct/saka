@@ -8,9 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use saka_core::time::Timestamp;
-use saka_ports::{GitAccess, PortError, Scm};
+use saka_ports::{GitAccess, PortError, Scm, UpdateOutcome};
 use serde_json::json;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 mod support;
@@ -223,4 +223,122 @@ async fn a_changed_file_that_was_renamed_lists_both_paths_once() {
         .await;
     let files = w.gh.change_files(&w.repo, 4, 3000).await.unwrap();
     assert_eq!(files, ["new/name.rs", "old/name.rs", "docs/readme.md"]);
+}
+
+#[tokio::test]
+async fn update_branch_sends_the_expected_head_and_maps_each_answer() {
+    let w = World::new().await;
+    w.mount_tokens().await;
+    let answers = [
+        (
+            1,
+            202,
+            json!({ "message": "Updating pull request branch." }),
+        ),
+        (
+            2,
+            422,
+            json!({ "message": "merge conflict between base and head" }),
+        ),
+        (
+            3,
+            422,
+            json!({ "message": "expected head sha didn't match current head ref." }),
+        ),
+        (4, 409, json!({ "message": "Conflict" })),
+    ];
+    for (number, status, body) in answers {
+        Mock::given(method("PUT"))
+            .and(path(format!(
+                "/repos/acme/app/pulls/{number}/update-branch"
+            )))
+            .and(body_json(json!({ "expected_head_sha": HEAD })))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&w.server)
+            .await;
+    }
+    Mock::given(method("PUT"))
+        .and(path("/repos/acme/app/pulls/5/update-branch"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&w.server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/repos/acme/app/pulls/6/update-branch"))
+        .respond_with(ResponseTemplate::new(502))
+        .mount(&w.server)
+        .await;
+
+    let outcomes = [
+        UpdateOutcome::Accepted,
+        UpdateOutcome::Conflict,
+        UpdateOutcome::HeadChanged,
+        UpdateOutcome::HeadChanged,
+    ];
+    for (number, outcome) in (1..).zip(outcomes) {
+        assert_eq!(
+            w.gh.update_branch(&w.repo, number, HEAD).await.unwrap(),
+            outcome,
+            "pull request {number}"
+        );
+    }
+    let gone = w.gh.update_branch(&w.repo, 5, HEAD).await.unwrap_err();
+    assert_eq!(
+        (gone.code.as_str(), gone.retryable),
+        ("scm_repo_inaccessible", false)
+    );
+    let down = w.gh.update_branch(&w.repo, 6, HEAD).await.unwrap_err();
+    assert_eq!(
+        (down.code.as_str(), down.retryable),
+        ("scm_unavailable", true)
+    );
+    let bad = w.gh.update_branch(&w.repo, 1, "abc").await.unwrap_err();
+    assert_eq!(
+        (bad.code.as_str(), &bad.params["field"]),
+        ("git_argument_invalid", &json!("expected_head_sha"))
+    );
+}
+
+#[tokio::test]
+async fn a_comment_is_posted_to_the_issue_thread_and_a_refusal_is_permanent() {
+    let w = World::new().await;
+    w.mount_tokens().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/issues/3/comments"))
+        .and(body_json(json!({ "body": "Please update the branch." })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 9 })))
+        .expect(1)
+        .mount(&w.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/issues/4/comments"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({ "message": "no" })))
+        .mount(&w.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/issues/5/comments"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&w.server)
+        .await;
+
+    w.gh.post_comment(&w.repo, 3, "Please update the branch.")
+        .await
+        .unwrap();
+    let refused = w.gh.post_comment(&w.repo, 4, "x").await.unwrap_err();
+    assert_eq!(
+        (
+            refused.code.as_str(),
+            refused.retryable,
+            &refused.params["status"]
+        ),
+        ("comment_refused", false, &json!(403))
+    );
+    let down = w.gh.post_comment(&w.repo, 5, "x").await.unwrap_err();
+    assert_eq!(
+        (down.code.as_str(), down.retryable),
+        ("scm_unavailable", true)
+    );
+    let long = "a".repeat(saka_ports::MAX_REVIEW_BODY_CHARS + 1);
+    let err = w.gh.post_comment(&w.repo, 3, &long).await.unwrap_err();
+    assert_eq!(err.code, "git_argument_invalid");
 }

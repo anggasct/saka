@@ -30,7 +30,8 @@ use saka_ports::{
     Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo,
     RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed,
     SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains,
-    WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeChange, WorktreeFile, WorktreeState,
+    UpdateOutcome, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeChange, WorktreeFile,
+    WorktreeState, check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -230,6 +231,13 @@ pub struct Pr {
 pub const APP_CREDENTIAL: &str = "app";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostedComment {
+    pub repo: String,
+    pub number: u64,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScmCall {
     pub op: &'static str,
     pub credential: String,
@@ -318,6 +326,9 @@ struct State {
     docs_refusal: Option<PortError>,
     docs_turns: VecDeque<DocsTurn>,
     merge_scripts: HashMap<u64, VecDeque<String>>,
+    update_scripts: HashMap<u64, VecDeque<UpdateOutcome>>,
+    update_calls: Vec<(u64, String)>,
+    comments: Vec<PostedComment>,
     merge_calls: Vec<(String, u64)>,
     lost_merge_repos: BTreeSet<String>,
     rebased: BTreeMap<(String, String), String>,
@@ -497,6 +508,9 @@ impl FakeWorld {
                 docs_refusal: None,
                 docs_turns: VecDeque::new(),
                 merge_scripts: HashMap::new(),
+                update_scripts: HashMap::new(),
+                update_calls: Vec::new(),
+                comments: Vec::new(),
                 merge_calls: Vec::new(),
                 lost_merge_repos: BTreeSet::new(),
                 next_sha: 1,
@@ -596,6 +610,20 @@ impl FakeWorld {
 
     pub fn script_docs(&self, turns: Vec<DocsTurn>) {
         self.state().docs_turns = turns.into();
+    }
+
+    pub fn script_updates(&self, number: u64, outcomes: Vec<UpdateOutcome>) {
+        self.state()
+            .update_scripts
+            .insert(number, outcomes.into_iter().collect());
+    }
+
+    pub fn update_calls(&self) -> Vec<(u64, String)> {
+        self.state().update_calls.clone()
+    }
+
+    pub fn comments(&self) -> Vec<PostedComment> {
+        self.state().comments.clone()
     }
 
     pub fn script_merges(&self, number: u64, reasons: Vec<&str>) {
@@ -2597,6 +2625,74 @@ impl Scm for FakeWorld {
         self.writes(login)
     }
 
+    async fn post_comment(&self, repo: &RepoRef, number: u64, body: &str) -> PortResult<()> {
+        check_comment_body(body)?;
+        let mut s = self.state();
+        s.call("post_comment");
+        if !s
+            .prs
+            .iter()
+            .any(|p| p.repo == repo.full_name && p.number == number)
+        {
+            return Err(PortError::permanent(
+                "comment_refused",
+                json!({ "status": 404 }),
+            ));
+        }
+        s.comments.push(PostedComment {
+            repo: repo.full_name.clone(),
+            number,
+            body: body.to_string(),
+        });
+        Ok(())
+    }
+
+    async fn update_branch(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        expected_head_sha: &str,
+    ) -> PortResult<UpdateOutcome> {
+        check_sha(expected_head_sha, "expected_head_sha")?;
+        let mut s = self.state();
+        s.call("update_branch");
+        s.update_calls.push((number, expected_head_sha.to_string()));
+        let scripted = s
+            .update_scripts
+            .get_mut(&number)
+            .and_then(VecDeque::pop_front);
+        let pr = s
+            .prs
+            .iter()
+            .find(|p| p.number == number && p.repo == repo.full_name)
+            .cloned();
+        let outcome = match (scripted, &pr) {
+            (Some(outcome), _) => outcome,
+            (None, None) => {
+                return Err(PortError::permanent("not_found", json!({ "status": 404 })));
+            }
+            (None, Some(pr)) => {
+                let head = s.refs(&pr.repo).get(&pr.head_branch).cloned();
+                if pr.state == ChangeState::Open && head.as_deref() == Some(expected_head_sha) {
+                    UpdateOutcome::Accepted
+                } else {
+                    UpdateOutcome::HeadChanged
+                }
+            }
+        };
+        if let (UpdateOutcome::Accepted, Some(pr)) = (outcome, pr) {
+            let base = s.refs(&pr.repo).get(&pr.base_branch).cloned();
+            let head = s.refs(&pr.repo).get(&pr.head_branch).cloned();
+            if let (Some(base), Some(head)) = (base, head)
+                && !s.is_ancestor(&base, &head)
+            {
+                let merged = s.new_commit(vec![head, base]);
+                s.refs(&pr.repo).insert(pr.head_branch, merged);
+            }
+        }
+        Ok(outcome)
+    }
+
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
         let mut s = self.state();
         s.call("merge");
@@ -2864,6 +2960,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     merge_queue: false,
+    update_branch: true,
     user_authorship: true,
     change_head_ref: "refs/pull/{number}/head",
     diagnostics: Some(ScmDiagnostics::App(FAKE_APP_REQUIREMENTS)),
@@ -2872,6 +2969,7 @@ pub const FAKE_CAPABILITIES: ScmCapabilities = ScmCapabilities {
 pub const FAKE_TOKEN_CAPABILITIES: ScmCapabilities = ScmCapabilities {
     provider: "fake_token",
     webhook_signature: Some(WebhookSignature::SharedToken),
+    update_branch: false,
     user_authorship: false,
     change_head_ref: "refs/merge-requests/{number}/head",
     diagnostics: Some(ScmDiagnostics::Token(FAKE_TOKEN_REQUIREMENTS)),

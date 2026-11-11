@@ -47,8 +47,8 @@ pub use scm::{
     MAX_OPEN_CHANGES, MAX_REVIEW_BODY_CHARS, MAX_SIGNALS, MAX_WEBHOOK_TARGETS, MergeOutcome,
     MergeRequest, OpenChangeRequest, OpenedChange, PostedReview, PushOutcome, PushRequest,
     RepoAccess, RepoInfo, RepoRef, ReviewPost, Scm, ScmCapabilities, SignalKind, StatusReport,
-    StatusState, TokenRefresh, UserTokens, WebhookDelivery, WebhookSignature, WebhookTarget,
-    clip_text, unique_paths,
+    StatusState, TokenRefresh, UpdateOutcome, UserTokens, WebhookDelivery, WebhookSignature,
+    WebhookTarget, check_comment_body, check_sha, clip_text, unique_paths,
 };
 pub use secret::{Sealed, SecretStore};
 pub use supervisor::{

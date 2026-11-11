@@ -18,7 +18,7 @@ use saka_ports::{
     DevicePoll, EnqueueOutcome, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest,
     OpenedChange, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
     RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, StatusState,
-    TokenRefresh, WebhookDelivery, WebhookSignature,
+    TokenRefresh, UpdateOutcome, WebhookDelivery, WebhookSignature, check_comment_body,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -38,6 +38,7 @@ pub const CAPABILITIES: ScmCapabilities = ScmCapabilities {
     delete_branch_after_merge: true,
     commit_status: true,
     merge_queue: true,
+    update_branch: false,
     user_authorship: false,
     change_head_ref: "refs/merge-requests/{number}/head",
     diagnostics: Some(GITLAB_DIAGNOSTICS),
@@ -402,6 +403,38 @@ impl Scm for GitLab {
 
     async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool> {
         self.writer(repo, login).await
+    }
+
+    async fn post_comment(&self, repo: &RepoRef, number: u64, body: &str) -> PortResult<()> {
+        check_comment_body(body)?;
+        let n = number.to_string();
+        let reply = self
+            .project_call(
+                &repo.full_name,
+                Method::POST,
+                &["merge_requests", &n, "notes"],
+                Some(&json!({ "body": body })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(()),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED => {
+                Err(PortError::permanent(
+                    "comment_refused",
+                    json!({ "status": reply.status.as_u16() }),
+                ))
+            }
+            _ => Err(self.client.unexpected("post_comment", &reply)),
+        }
+    }
+
+    async fn update_branch(
+        &self,
+        _repo: &RepoRef,
+        _number: u64,
+        _expected_head_sha: &str,
+    ) -> PortResult<UpdateOutcome> {
+        Err(PortError::unsupported("update_branch"))
     }
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
