@@ -1656,6 +1656,16 @@ pub fn tracked_changes(conn: &Connection, repo: RepoId) -> Result<Vec<TrackedCha
     Ok(out)
 }
 
+pub fn repo_has_live_change(conn: &Connection, repo: RepoId) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM change_request cr JOIN work_item w ON w.id = cr.work_item_id
+         WHERE cr.repo_id = ?1 AND cr.role = 'code' AND cr.state = 'open'
+           AND w.state NOT IN ('done', 'cancelled'))",
+        [repo.0.to_string()],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
 pub fn spec_step_branches(conn: &Connection, repo: RepoId) -> Result<Vec<(String, WorkItemId)>> {
     let mut stmt = conn
         .prepare("SELECT branch, id FROM work_item WHERE repo_id = ?1 AND origin = 'spec_step'")?;

@@ -75,6 +75,7 @@ struct Requested {
 struct Seen {
     command: Option<Requested>,
     fix: Option<Requested>,
+    merge: Option<Requested>,
     cursor: ChangeCursorRow,
 }
 
@@ -82,6 +83,7 @@ struct Seen {
 struct Wanted {
     review: bool,
     fix: bool,
+    merge: bool,
 }
 
 fn is_new(signal: &ChangeSignal, cursor: Option<&ChangeCursorRow>) -> bool {
@@ -102,16 +104,23 @@ impl Engine {
                 .filter_map(|id| read::load_project(c, id).transpose())
                 .collect::<std::result::Result<Vec<_>, _>>()
         })?;
-        Ok(projects
-            .into_iter()
-            .filter(|p| p.workflow.change_request.is_some())
-            .flat_map(|p| {
-                p.repos
-                    .iter()
-                    .map(|r| (p.id, scan_job(p.id, r.repo_id, now, period)))
-                    .collect::<Vec<_>>()
-            })
-            .collect())
+        let mut jobs = Vec::new();
+        for p in &projects {
+            for r in &p.repos {
+                if self.scans(p, r.repo_id)? {
+                    jobs.push((p.id, scan_job(p.id, r.repo_id, now, period)));
+                }
+            }
+        }
+        Ok(jobs)
+    }
+
+    fn scans(&self, project: &Project, repo_id: RepoId) -> Result<bool> {
+        Ok(project.workflow.change_request.is_some()
+            || (project.workflow.has_stage(Stage::Merge)
+                && self
+                    .store
+                    .read(|c| read::repo_has_live_change(c, repo_id))?))
     }
 
     pub(crate) fn repo_ref_stored(&self, repo_id: RepoId) -> Result<RepoRef> {
@@ -133,18 +142,11 @@ impl Engine {
             .store
             .read(|c| read::load_project(c, project_id))?
             .ok_or(Rejection::NotFound)?;
-        let (Some(entry), Some(binding)) = (
-            project.workflow.change_request.clone(),
-            project.repos.iter().find(|r| r.repo_id == repo_id).cloned(),
-        ) else {
+        let Some(binding) = project.repos.iter().find(|r| r.repo_id == repo_id).cloned() else {
             return Ok(ScanReport::default());
         };
+        let entry = project.workflow.change_request.clone();
         let repo = self.repo_ref_stored(repo_id)?;
-        let listed = self
-            .ports
-            .scm
-            .list_open_changes(&repo, MAX_OPEN_CHANGES)
-            .await?;
         let (tracked, branches, cursors, specs) = self.store.read(|c| {
             Ok((
                 read::tracked_changes(c, repo_id)?,
@@ -153,6 +155,14 @@ impl Engine {
                 read::project_specs(c, project_id)?,
             ))
         })?;
+        if entry.is_none() && tracked.iter().all(|t| t.state.is_terminal()) {
+            return Ok(ScanReport::default());
+        }
+        let listed = self
+            .ports
+            .scm
+            .list_open_changes(&repo, MAX_OPEN_CHANGES)
+            .await?;
         let cause = self.cause(SCAN_ACTOR);
         let mut report = ScanReport {
             listed: listed.len(),
@@ -168,6 +178,15 @@ impl Engine {
                 tracing::debug!(repo = %repo.full_name, number = change.number, reason, "intake.skipped");
             };
             match known {
+                Some(t) if t.origin == WorkItemOrigin::SpecStep && !t.state.is_terminal() => {
+                    if let Some(asked) = self
+                        .merge_asked(&repo, change, &cursors, &mut writers, &mut written)
+                        .await?
+                    {
+                        self.merge_on_command(&repo, change, t.work_item_id, &asked, &mut written);
+                    }
+                    continue;
+                }
                 Some(t) if t.origin == WorkItemOrigin::SpecStep => {
                     skip("skipped_owned");
                     continue;
@@ -184,9 +203,13 @@ impl Engine {
                 }
                 _ => {}
             }
+            let Some(entry) = entry.as_ref() else {
+                continue;
+            };
             let manual_entry = known.is_none() && entry.trigger == Trigger::Manual;
             let manual_review = known.is_some() && review == Some(Trigger::Manual);
             let fixes = known.is_some() && project.workflow.has_stage(Stage::Fix);
+            let merges = known.is_some();
             if known.is_none() {
                 let candidate = Candidate {
                     labels: &change.labels,
@@ -203,25 +226,28 @@ impl Engine {
                     });
                     continue;
                 }
-                if !self.path_filter_passes(&repo, change, &entry).await? {
+                if !self.path_filter_passes(&repo, change, entry).await? {
                     skip("skipped_filter");
                     continue;
                 }
             }
             let mut command = None;
             let mut fix = None;
-            if manual_entry || manual_review || fixes {
+            let mut merge = None;
+            if manual_entry || manual_review || fixes || merges {
                 let cursor = cursors.iter().find(|c| c.number == change.number);
                 let wanted = Wanted {
                     review: manual_entry || manual_review,
                     fix: fixes,
+                    merge: merges,
                 };
                 let seen = self
-                    .read_commands(&repo, change, &entry, cursor, &mut writers, wanted)
+                    .read_commands(&repo, change, entry, cursor, &mut writers, wanted)
                     .await?;
                 if let Some(seen) = seen {
                     command = seen.command;
                     fix = seen.fix;
+                    merge = seen.merge;
                     written.change_cursors.push(seen.cursor);
                 }
                 if manual_entry && command.is_none() {
@@ -272,6 +298,9 @@ impl Engine {
                 Some(t) => {
                     if let Some(asked) = &fix {
                         self.fix_on_command(&repo, change.number, t.work_item_id, asked);
+                    }
+                    if let Some(asked) = &merge {
+                        self.merge_on_command(&repo, change, t.work_item_id, asked, &mut written);
                     }
                     let Some(command) = command else { continue };
                     let events = self.decide(
@@ -344,33 +373,29 @@ impl Engine {
         let fresh: Vec<&ChangeSignal> = signals.iter().filter(|s| is_new(s, cursor)).collect();
         let mut command = None;
         let mut fix = None;
+        let mut merge = None;
         for signal in &fresh {
-            let (cause, asks_review, asks_fix) = match &signal.kind {
+            let (cause, asks_review, asks_fix, asks_merge) = match &signal.kind {
                 SignalKind::Comment { body } => {
                     let commands = external::parse_commands(body);
-                    for other in commands.iter().filter(|c| **c == Command::Merge) {
-                        tracing::info!(
-                            repo = %repo.full_name,
-                            number = change.number,
-                            command = other.stage().as_str(),
-                            "intake.command.unavailable"
-                        );
-                    }
                     (
                         ExternalCause::Comment,
                         commands.contains(&Command::Review),
                         commands.contains(&Command::Fix),
+                        commands.contains(&Command::Merge),
                     )
                 }
                 SignalKind::Label { name } => (
                     ExternalCause::Label,
                     name.eq_ignore_ascii_case(&entry.trigger_label),
                     false,
+                    false,
                 ),
             };
             let asks_review = asks_review && wanted.review && command.is_none();
             let asks_fix = asks_fix && wanted.fix && fix.is_none();
-            if !asks_review && !asks_fix {
+            let asks_merge = asks_merge && wanted.merge && merge.is_none();
+            if !asks_review && !asks_fix && !asks_merge {
                 continue;
             }
             let writes = match writers.get(&signal.actor) {
@@ -391,6 +416,9 @@ impl Engine {
                 }
                 if asks_fix {
                     fix = Some(asked());
+                }
+                if asks_merge {
+                    merge = Some(asked());
                 }
             } else {
                 self.counters.intake_change("command_denied");
@@ -421,6 +449,7 @@ impl Engine {
         Ok(Some(Seen {
             command,
             fix,
+            merge,
             cursor: ChangeCursorRow {
                 repo_id: repo.repo_id,
                 number: change.number,
@@ -586,6 +615,78 @@ impl Engine {
         self.counters
             .review_request(ExternalCause::Operator.as_str());
         Ok(events)
+    }
+
+    async fn merge_asked(
+        &self,
+        repo: &RepoRef,
+        change: &ChangeSummary,
+        cursors: &[ChangeCursorRow],
+        writers: &mut BTreeMap<String, bool>,
+        written: &mut Batch,
+    ) -> Result<Option<Requested>> {
+        let cursor = cursors.iter().find(|c| c.number == change.number);
+        let wanted = Wanted {
+            review: false,
+            fix: false,
+            merge: true,
+        };
+        let Some(seen) = self
+            .read_commands(
+                repo,
+                change,
+                &ChangeEntry::default(),
+                cursor,
+                writers,
+                wanted,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        written.change_cursors.push(seen.cursor);
+        Ok(seen.merge)
+    }
+
+    fn merge_on_command(
+        &self,
+        repo: &RepoRef,
+        change: &ChangeSummary,
+        id: saka_core::ids::WorkItemId,
+        asked: &Requested,
+        written: &mut Batch,
+    ) {
+        let cause = self.cause(SCAN_ACTOR);
+        let why = format!("comment by {}", asked.actor);
+        let outcome = self
+            .load_task(id)
+            .and_then(|task| self.request_merge(id, task.item.version, Some(&why), &cause));
+        match outcome {
+            Ok(_) => {
+                self.counters.intake_change("command_accepted");
+                tracing::info!(repo = %repo.full_name, number = change.number, actor = %asked.actor, "intake.command.accepted");
+            }
+            Err(EngineError::Rejected(rejection)) => {
+                self.counters.intake_change("command_rejected");
+                let code = rejection.code();
+                tracing::info!(repo = %repo.full_name, number = change.number, actor = %asked.actor, code, "intake.command.rejected");
+                let reply = self.load_task(id).ok().and_then(|task| {
+                    saka_core::react::comment_job(
+                        &task,
+                        &change.head_sha,
+                        code,
+                        json!({ "message": rejection.to_string() }),
+                        self.now(),
+                    )
+                });
+                if let Some(job) = reply {
+                    self.push_job(written, job, None, &cause);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(repo = %repo.full_name, number = change.number, error = %e, "intake.command.failed");
+            }
+        }
     }
 
     fn fix_on_command(
@@ -791,10 +892,10 @@ impl Engine {
             saka_store::list::projects_bound_to(c, &[repo_id], ProjectId(uuid::Uuid::nil()))
         })?;
         let mut scheduled = 0;
-        for p in projects
-            .iter()
-            .filter(|p| p.workflow.change_request.is_some())
-        {
+        for p in &projects {
+            if !self.scans(p, repo_id)? {
+                continue;
+            }
             let job = Job::new(
                 saka_core::job::JobKind::ScmScanChanges,
                 format!("{}:{repo_id}:hook:{row_id}", p.id),
