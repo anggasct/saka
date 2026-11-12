@@ -16,6 +16,7 @@ pub use model::{
     AcceptanceCriterion, Decision, DecisionOption, Link, MAX_PRIORITY, MIN_PRIORITY, SpecModel,
     Step,
 };
-pub use parse::{MAX_SPEC_BYTES, MAX_STEPS, PARSER_VERSION, Parsed, parse};
+pub use parse::{MAX_REGRESSION, MAX_SPEC_BYTES, MAX_STEPS, PARSER_VERSION, Parsed, parse};
 pub use rules::rules;
+pub use saka_core::vocab::WorkKind;
 pub use template::{Locale, template};

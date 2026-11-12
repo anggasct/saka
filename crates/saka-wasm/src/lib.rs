@@ -47,7 +47,7 @@ pub fn lint_codes() -> String {
 
 #[cfg(test)]
 mod tests {
-    use saka_spec::{Locale, template};
+    use saka_spec::{Locale, WorkKind, template};
 
     use super::*;
 
@@ -56,25 +56,57 @@ mod tests {
     }
 
     #[test]
-    fn both_templates_lint_clean_with_their_steps_and_lines() {
+    fn every_template_lints_clean_with_its_steps_and_lines() {
         for locale in [Locale::En, Locale::Id] {
-            let text = template(locale);
-            let report = lint_json("example-spec.md", text);
-            assert_eq!(report["is_spec"], true);
-            assert_eq!(report["parser_version"], PARSER_VERSION);
-            assert_eq!(report["issues"], json!([]), "{locale:?}");
-            let steps = report["steps"].as_array().unwrap();
-            let ids: Vec<&str> = steps.iter().map(|s| s["id"].as_str().unwrap()).collect();
-            assert_eq!(ids, ["S1", "S2"]);
-            for step in steps {
-                let line = step["line"].as_u64().unwrap() as usize;
-                let row = text.lines().nth(line - 1).unwrap();
-                assert!(
-                    row.trim_start().starts_with('|') && row.contains(step["id"].as_str().unwrap()),
-                    "{row}"
-                );
+            for &kind in WorkKind::ALL {
+                let text = template(locale, kind);
+                let report = lint_json("example-spec.md", text);
+                assert_eq!(report["is_spec"], true);
+                assert_eq!(report["parser_version"], PARSER_VERSION);
+                assert_eq!(report["issues"], json!([]), "{locale:?} {kind}");
+                let steps = report["steps"].as_array().unwrap();
+                let ids: Vec<&str> = steps.iter().map(|s| s["id"].as_str().unwrap()).collect();
+                if kind == WorkKind::Feature {
+                    assert_eq!(ids, ["S1", "S2"]);
+                    for step in steps {
+                        let line = step["line"].as_u64().unwrap() as usize;
+                        let row = text.lines().nth(line - 1).unwrap();
+                        assert!(
+                            row.trim_start().starts_with('|')
+                                && row.contains(step["id"].as_str().unwrap()),
+                            "{row}"
+                        );
+                    }
+                } else {
+                    assert_eq!(ids, ["S1"]);
+                    let line = steps[0]["line"].as_u64().unwrap() as usize;
+                    assert_eq!(text.lines().nth(line - 1), Some("## Done when"));
+                }
             }
         }
+    }
+
+    #[test]
+    fn kind_and_regression_issues_come_back_from_the_browser_lint() {
+        let bugfix = template(Locale::En, WorkKind::Bugfix);
+        let without = bugfix.replace("## Regression", "## Notes about the test");
+        let report = lint_json("fix.md", &without);
+        let codes: Vec<&str> = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["code"].as_str().unwrap())
+            .collect();
+        assert_eq!(codes, ["regression_missing"]);
+        let chore = template(Locale::En, WorkKind::Chore)
+            .replace("## Notes", "## Regression\n\n- `make test`\n\n## Notes");
+        let report = lint_json("tidy.md", &chore);
+        assert_eq!(report["issues"][0]["code"], "regression_ignored");
+        assert_eq!(report["issues"][0]["severity"], "warning");
+        let unknown = template(Locale::En, WorkKind::Chore).replace("kind: chore", "kind: hotfix");
+        let report = lint_json("tidy.md", &unknown);
+        assert_eq!(report["issues"][0]["code"], "kind_invalid");
+        assert_eq!(report["issues"][0]["params"]["value"], "hotfix");
     }
 
     #[test]

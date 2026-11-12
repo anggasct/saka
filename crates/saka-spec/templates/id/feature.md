@@ -1,5 +1,6 @@
 ---
 saka: spec
+kind: feature
 # depends_on: [spec-lain]   spec yang harus selesai sebelum spec ini mulai
 # priority: 0               -1000..1000; yang lebih besar mulai lebih dulu
 ---

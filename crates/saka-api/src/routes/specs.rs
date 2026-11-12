@@ -289,12 +289,18 @@ pub async fn spec_template(Query(q): Query<dto::TemplateQuery>) -> Response {
     let Some(locale) = saka_spec::Locale::from_code(code) else {
         return ApiError::validation("locale", "invalid").into_response();
     };
+    let kind = match q.kind.as_deref().map(str::parse::<saka_spec::WorkKind>) {
+        None => saka_spec::WorkKind::default(),
+        Some(Ok(kind)) => kind,
+        Some(Err(_)) => return ApiError::validation("kind", "invalid").into_response(),
+    };
     ok(
         StatusCode::OK,
         &dto::SpecTemplate {
             locale: locale.as_str().to_string(),
+            kind: kind.as_str().to_string(),
             parser_version: saka_spec::PARSER_VERSION,
-            content: saka_spec::template(locale).to_string(),
+            content: saka_spec::template(locale, kind).to_string(),
         },
     )
 }

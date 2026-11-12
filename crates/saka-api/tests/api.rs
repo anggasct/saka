@@ -1623,7 +1623,7 @@ fn a_spec_shows_priority_dependencies_effective_steps_and_severities() {
         .map(|s| &s["after"])
         .collect();
     assert_eq!(after, [&json!([]), &json!(["S1"]), &json!([])]);
-    assert_eq!(b["revision"]["parser_version"], 5);
+    assert_eq!(b["revision"]["parser_version"], 6);
     assert_eq!(b["lint"]["ok"], true);
     assert_eq!(
         b["lint"]["issues"],
@@ -1721,7 +1721,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
     let again = api.register_doc("docs/specs/kept.md", &text);
     assert_eq!(again.body["id"], spec.0.to_string());
     assert_ne!(again.body["revision"]["id"], old.0.to_string());
-    assert_eq!(again.body["revision"]["parser_version"], 5);
+    assert_eq!(again.body["revision"]["parser_version"], 6);
     let versions: Vec<i64> = api
         .sim
         .engine()
@@ -1734,7 +1734,7 @@ fn a_revision_from_an_older_parser_must_be_read_again_before_approve() {
             Ok(rows.collect::<Result<Vec<i64>, _>>()?)
         })
         .unwrap();
-    assert_eq!(versions, vec![1, 5]);
+    assert_eq!(versions, vec![1, 6]);
     assert_eq!(api.approve_reply(&again).status, StatusCode::OK);
 }
 
@@ -1801,7 +1801,8 @@ fn the_spec_template_comes_in_english_and_indonesian() {
     let en = api.get("/api/v1/spec-template");
     assert_eq!(en.status, StatusCode::OK);
     assert_eq!(en.body["locale"], "en");
-    assert_eq!(en.body["parser_version"], 5);
+    assert_eq!(en.body["kind"], "feature");
+    assert_eq!(en.body["parser_version"], 6);
     let id = api.get("/api/v1/spec-template?locale=id");
     assert_eq!(id.body["locale"], "id");
     assert_ne!(id.body["content"], en.body["content"]);
@@ -1814,6 +1815,32 @@ fn the_spec_template_comes_in_english_and_indonesian() {
     let bad = api.get("/api/v1/spec-template?locale=fr");
     problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
     assert_eq!(bad.body["params"]["errors"][0]["field"], "locale");
+}
+
+#[test]
+fn the_spec_template_follows_the_kind() {
+    let api = Api::new(SimConfig::default());
+    for locale in saka_spec::Locale::ALL {
+        for &kind in saka_spec::WorkKind::ALL {
+            let reply = api.get(&format!(
+                "/api/v1/spec-template?locale={}&kind={}",
+                locale.as_str(),
+                kind.as_str()
+            ));
+            assert_eq!(reply.status, StatusCode::OK);
+            assert_eq!(reply.body["kind"], kind.as_str());
+            assert_eq!(reply.body["locale"], locale.as_str());
+            let content = reply.body["content"].as_str().unwrap();
+            assert_eq!(content, saka_spec::template(locale, kind));
+            let parsed = saka_spec::parse("example-spec.md", content.as_bytes());
+            assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+            assert_eq!(parsed.model.unwrap().kind, kind);
+        }
+    }
+    let bad = api.get("/api/v1/spec-template?kind=hotfix");
+    problem(&bad, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(bad.body["params"]["errors"][0]["field"], "kind");
+    assert_eq!(bad.body["params"]["errors"][0]["code"], "invalid");
 }
 
 const APPROVAL: &str = "docs/specs/approval.md";

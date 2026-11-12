@@ -368,7 +368,8 @@ pub fn issue_list(issues: &[&serde_json::Value]) -> String {
 pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     let mut text = String::from("<documents>\n");
     let mut documents = Vec::new();
-    let template = saka_spec::template(template_locale(input.locale)).as_bytes();
+    let template =
+        saka_spec::template(template_locale(input.locale), saka_spec::WorkKind::Feature).as_bytes();
     let rules = saka_spec::rules().as_bytes();
     let fixed = [
         (

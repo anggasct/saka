@@ -1,3 +1,4 @@
+use saka_core::vocab::WorkKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -23,9 +24,17 @@ impl Locale {
     }
 }
 
-pub fn template(locale: Locale) -> &'static str {
-    match locale {
-        Locale::En => include_str!("../templates/en.md"),
-        Locale::Id => include_str!("../templates/id.md"),
+pub fn template(locale: Locale, kind: WorkKind) -> &'static str {
+    match (locale, kind) {
+        (Locale::En, WorkKind::Feature) => include_str!("../templates/en/feature.md"),
+        (Locale::En, WorkKind::Bugfix) => include_str!("../templates/en/bugfix.md"),
+        (Locale::En, WorkKind::Refactor) => include_str!("../templates/en/refactor.md"),
+        (Locale::En, WorkKind::Chore) => include_str!("../templates/en/chore.md"),
+        (Locale::En, WorkKind::SecurityPatch) => include_str!("../templates/en/security_patch.md"),
+        (Locale::Id, WorkKind::Feature) => include_str!("../templates/id/feature.md"),
+        (Locale::Id, WorkKind::Bugfix) => include_str!("../templates/id/bugfix.md"),
+        (Locale::Id, WorkKind::Refactor) => include_str!("../templates/id/refactor.md"),
+        (Locale::Id, WorkKind::Chore) => include_str!("../templates/id/chore.md"),
+        (Locale::Id, WorkKind::SecurityPatch) => include_str!("../templates/id/security_patch.md"),
     }
 }

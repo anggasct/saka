@@ -213,7 +213,7 @@ fn a_revision_from_an_older_parser_is_read_again_and_cannot_be_approved() {
             assert_eq!(r.code(), "spec_reparse_required");
             assert_eq!(
                 r.params(),
-                json!({"parser_version": 1, "current_parser_version": 5})
+                json!({"parser_version": 1, "current_parser_version": 6})
             );
         }
         other => panic!("expected spec_reparse_required, got {other:?}"),
@@ -234,7 +234,7 @@ fn a_revision_from_an_older_parser_is_read_again_and_cannot_be_approved() {
             Ok(rows.collect::<Result<Vec<i64>, _>>()?)
         })
         .unwrap();
-    assert_eq!(versions, vec![1, 5]);
+    assert_eq!(versions, vec![1, 6]);
     assert_eq!(sim.spec_of(kept).latest_revision_id, again.revision_id);
     sim.approve_spec(kept, again.revision_id).unwrap();
 }

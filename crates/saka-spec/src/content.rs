@@ -16,6 +16,7 @@ pub fn is_spec(text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::{Locale, template};
+    use saka_core::vocab::WorkKind;
 
     #[test]
     fn content_hashes_are_prefixed_sha256_of_the_raw_bytes() {
@@ -29,7 +30,7 @@ mod tests {
     #[test]
     fn a_spec_is_a_file_whose_frontmatter_says_saka_spec() {
         for locale in Locale::ALL {
-            assert!(is_spec(template(locale)));
+            assert!(is_spec(template(locale, WorkKind::Feature)));
         }
         assert!(is_spec("---\r\nsaka: spec\r\n---\r\n# T\r\n"));
         assert!(is_spec("---\nsaka: \"spec\"\n---\n"));

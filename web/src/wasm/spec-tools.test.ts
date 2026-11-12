@@ -45,9 +45,9 @@ const EXAMPLE_PARAMS: Record<string, unknown> = {
   value: "high",
 };
 
-function template(locale: Locale): string {
+function template(locale: Locale, kind = "feature"): string {
   return readFileSync(
-    resolve(`../crates/saka-spec/templates/${locale}.md`),
+    resolve(`../crates/saka-spec/templates/${locale}/${kind}.md`),
     "utf8",
   );
 }
@@ -110,6 +110,25 @@ describe("spec tools", () => {
         },
       ]);
       expect(diagnostics[0]?.message).toContain("AC-09");
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it("lints a bugfix without its regression command in both languages", async () => {
+    const tools = await loadSpecTools();
+    for (const locale of LOCALES) {
+      const text = template(locale, "bugfix").replace(
+        /^- `make test-regression`\n/m,
+        "",
+      );
+      const report = tools.lint("fix.md", text);
+      expect(report.issues.map((i) => [i.code, i.severity])).toEqual([
+        ["regression_missing", "error"],
+      ]);
+      const { t, errors } = translator(locale);
+      const [diagnostic] = toDiagnostics(lined(text), report.issues, t);
+      expect(diagnostic?.severity).toBe("error");
+      expect(diagnostic?.message).toBe(t("lint.regression_missing"));
       expect(errors).toEqual([]);
     }
   });

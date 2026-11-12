@@ -2816,6 +2816,8 @@ mod tests {
 pub struct TemplateQuery {
     /// `en` (default) or `id`.
     pub locale: Option<String>,
+    /// `feature` (default), `bugfix`, `refactor`, `chore` or `security_patch`.
+    pub kind: Option<String>,
 }
 
 /// Markdown files of the project folder at the tip of the base branch.
@@ -2941,6 +2943,8 @@ impl FileWrite {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SpecTemplate {
     pub locale: String,
+    /// `feature | bugfix | refactor | chore | security_patch`
+    pub kind: String,
     pub parser_version: u32,
     /// Markdown that parses without issues as `example-spec.md`.
     pub content: String,

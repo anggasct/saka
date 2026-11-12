@@ -11,6 +11,10 @@ pub struct UnknownValue {
 }
 
 macro_rules! vocab {
+    ($(#[$doc:meta])* $name:ident default $default:ident { $($variant:ident => $wire:literal),* $(,)? }) => {
+        vocab!($(#[$doc])* $name { $($variant => $wire),* });
+        vocab_default!($name, $default);
+    };
     ($(#[$doc:meta])* $name:ident { $($variant:ident => $wire:literal),* $(,)? }) => {
         $(#[$doc])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -44,10 +48,22 @@ macro_rules! vocab {
     };
 }
 
+macro_rules! vocab_default {
+    ($name:ident, $default:ident) => {
+        impl Default for $name {
+            fn default() -> $name {
+                $name::$default
+            }
+        }
+    };
+}
+
 vocab!(PairingPurpose { Setup => "setup", Passkey => "passkey", Token => "token" });
 vocab!(DeviceKind { LocalCli => "local_cli", Client => "client" });
 vocab!(SpecState { Draft => "draft", Ready => "ready", Approved => "approved", Shipped => "shipped", Withdrawn => "withdrawn" });
 vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "intake" });
+vocab!(WorkKind default Feature { Feature => "feature", Bugfix => "bugfix", Refactor => "refactor", Chore => "chore", SecurityPatch => "security_patch" });
+
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });
 vocab!(WorkflowPreset { FullLoop => "full_loop", ReviewOnly => "review_only", BuildOnly => "build_only", Custom => "custom" });
 vocab!(WorkItemOrigin { SpecStep => "spec_step", ExternalChange => "external_change" });
