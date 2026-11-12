@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
 import type { components } from "@/api/schema";
+import type { WorkKind } from "@/features/delivery/kinds";
 import type { Locale } from "@/i18n/messages";
 
 export type FileTree = components["schemas"]["FileTree"];
@@ -21,8 +22,8 @@ export const docsKeys = {
     [QUERY_ROOTS.specs, "by-path", projectId, path] as const,
   specTasks: (specId: string) =>
     [QUERY_ROOTS.workItems, "spec", specId] as const,
-  template: (locale: Locale) =>
-    [QUERY_ROOTS.specs, "template", locale] as const,
+  template: (locale: Locale, kind: WorkKind) =>
+    [QUERY_ROOTS.specs, "template", locale, kind] as const,
 };
 
 export function useDocTree(projectId: string) {
@@ -95,10 +96,13 @@ export function useSpecTasks(specId: string | undefined) {
   });
 }
 
-export async function fetchTemplate(locale: Locale): Promise<string> {
+export async function fetchTemplate(
+  locale: Locale,
+  kind: WorkKind,
+): Promise<string> {
   return unwrap(
     await api.GET("/api/v1/spec-template", {
-      params: { query: { locale } },
+      params: { query: { locale, kind } },
     }),
   ).content;
 }

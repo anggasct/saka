@@ -3854,6 +3854,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`feature` (default), `bugfix`, `refactor`, `chore` or `security_patch`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10919,6 +10928,7 @@
         "type": "object",
         "required": [
           "locale",
+          "kind",
           "parser_version",
           "content"
         ],
@@ -10926,6 +10936,10 @@
           "content": {
             "type": "string",
             "description": "Markdown that parses without issues as `example-spec.md`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`feature | bugfix | refactor | chore | security_patch`"
           },
           "locale": {
             "type": "string"

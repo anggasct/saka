@@ -1,4 +1,4 @@
-# Saka spec format (parser 5)
+# Saka spec format (parser 6)
 
 A spec is one markdown file. Saka reads its structure exactly as written here; anything else in the file is free prose for people and agents.
 
@@ -6,7 +6,7 @@ A spec is one markdown file. Saka reads its structure exactly as written here; a
 
 - The file name without `.md` is the spec slug: lowercase letters, digits, and `-`, starting with a letter or digit, at most 63 characters. The slug is also the task key, so it never changes.
 - The file starts with a YAML frontmatter block between two `---` lines. It must contain `saka: spec`; without it the file is not a spec.
-- Optional keys: `priority` (integer from -1000 to 1000, higher starts first, default 0) and `depends_on` (a list of slugs of other specs in the same project that must ship before this one starts). Any other top-level key is ignored; nested lines belong to the key above them.
+- Optional keys: `priority` (integer from -1000 to 1000, higher starts first, default 0), `depends_on` (a list of slugs of other specs in the same project that must ship before this one starts), and `kind` (`feature`, `bugfix`, `refactor`, `chore`, or `security_patch`; default `feature`). Any other top-level key is ignored; nested lines belong to the key above them.
 - The file is UTF-8 and at most 256 KiB.
 
 ## Title
@@ -32,6 +32,19 @@ A spec is one markdown file. Saka reads its structure exactly as written here; a
 
 - A small change can replace the Steps section with a level 2 heading `## Done when` and a list. Each item holds exactly one command in backticks. The spec is then a single step `S1` that delivers every criterion, in the project's default repository.
 - A spec has either a Steps table or a Done when list, never both.
+
+## Kind
+
+- `kind` says what sort of change the spec is, and it sets the safeguards Saka applies to the task. Any other value is an error.
+- `security_patch` is always reviewed and needs the operator's approval per step and for the merge. `chore` may skip review only when the operator allows it. `bugfix` is test-first: see Regression.
+- Start from the template of the kind: `refactor`, `chore`, and `security_patch` are one `## Done when` step; `bugfix` adds `## Regression`.
+
+## Regression
+
+- A `bugfix` needs a level 2 heading `## Regression` with a list. Each item holds exactly one command in backticks, at most 10.
+- The commands run the test that reproduces the bug. Saka runs them on the agent's test-only commit and requires at least one to fail, then requires all of them to pass on the fix.
+- The test commit may change test files only; Saka recognises them by path (`tests/`, `test/`, `__tests__/`, `spec/`, `*_test.*`, `*.test.*`, `*.spec.*`, and similar).
+- A bugfix without the section is an error. In any other kind the section is a warning and is ignored. A bugfix with several steps is a warning: the rule applies to the first step only.
 
 ## Context links
 
@@ -108,3 +121,9 @@ Each line is one code Saka can report, when it is reported, and its level. Any e
 - `decision_recommendation_invalid` — the first option lacks `(recommended)`, or another option has it. Error.
 - `decision_answer_multiple` — more than one option of a decision is checked. Error.
 - `decision_unanswered` — no option of a decision is checked yet; the operator still has to answer it. Error.
+- `kind_invalid` — `kind` is not one of the five kinds. Error.
+- `regression_missing` — a bugfix has no Regression section, or it lists no command. Error.
+- `regression_command_invalid` — a Regression item does not hold exactly one command. Error.
+- `regression_too_many` — the Regression section lists more than 10 commands. Error.
+- `regression_ignored` — a spec that is not a bugfix has a Regression section, which Saka ignores. Warning.
+- `regression_multi_step` — a bugfix has more than one step, and the test-first rule covers the first. Warning.

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, parse_document};
+use saka_core::vocab::WorkKind;
 
 use crate::context::MAX_LINKS;
 use crate::decision::DecisionReader;
@@ -10,7 +11,7 @@ use crate::graph::cycles;
 use crate::lint::{LintCode, LintIssue};
 use crate::model::{AcceptanceCriterion, Link, SpecModel, Step};
 
-pub const PARSER_VERSION: u32 = 5;
+pub const PARSER_VERSION: u32 = 6;
 pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 pub const MAX_STEPS: usize = 50;
 
@@ -18,6 +19,7 @@ const REQUIRED_COLUMNS: [&str; 4] = ["step", "work", "ac", "done when"];
 const AFTER_COLUMN: &str = "after";
 const REPO_COLUMN: &str = "repo";
 const MAX_REPO_NAME: usize = 32;
+pub const MAX_REGRESSION: usize = 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parsed {
@@ -111,6 +113,10 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
                         doc.done_when = Some(DoneWhen { line, items: None });
                         Section::DoneWhen
                     }
+                    "regression" if doc.regression.is_none() => {
+                        doc.regression = Some(DoneWhen { line, items: None });
+                        Section::Regression
+                    }
                     "decisions" => Section::Decisions,
                     _ => Section::Other,
                 };
@@ -125,6 +131,11 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             Section::DoneWhen if is_list => {
                 if let Some(done_when) = doc.done_when.as_mut().filter(|d| d.items.is_none()) {
                     done_when.items = Some(read_done_when(node));
+                }
+            }
+            Section::Regression if is_list => {
+                if let Some(regression) = doc.regression.as_mut().filter(|d| d.items.is_none()) {
+                    regression.items = Some(read_done_when(node));
                 }
             }
             Section::Decisions => decisions.block(node),
@@ -156,6 +167,16 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
         }
     };
     let decisions = decisions.finish(&mut issues);
+    let regression = regression_commands(doc.regression.as_ref(), front.kind, &mut issues);
+    if front.kind == WorkKind::Bugfix && steps.len() > 1 {
+        issues.push(
+            LintIssue::new(
+                LintCode::RegressionMultiStep,
+                doc.steps_heading.unwrap_or(1),
+            )
+            .with("count", steps.len()),
+        );
+    }
     check_commands(&steps, &mut issues);
     if !steps.is_empty() {
         check_coverage(&doc.acs, &steps, &mut issues);
@@ -167,11 +188,13 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
             slug,
             title,
             priority: front.priority,
+            kind: front.kind,
             depends_on: front.depends_on,
             acceptance_criteria: doc.acs,
             steps,
             links,
             decisions,
+            regression,
         }),
         issues,
         depends_on_line,
@@ -183,6 +206,7 @@ enum Section {
     Ac,
     Steps,
     DoneWhen,
+    Regression,
     Decisions,
     Other,
 }
@@ -196,6 +220,7 @@ struct Document {
     steps_heading: Option<u32>,
     table: Option<Table>,
     done_when: Option<DoneWhen>,
+    regression: Option<DoneWhen>,
 }
 
 struct DoneWhen {
@@ -436,6 +461,39 @@ fn one_step(
         repo: None,
         line: done_when.line,
     }]
+}
+
+fn regression_commands(
+    section: Option<&DoneWhen>,
+    kind: WorkKind,
+    issues: &mut Vec<LintIssue>,
+) -> Vec<String> {
+    let items = section.and_then(|s| s.items.as_deref()).unwrap_or_default();
+    if kind != WorkKind::Bugfix {
+        if let Some(section) = section {
+            issues.push(LintIssue::new(LintCode::RegressionIgnored, section.line));
+        }
+    } else if items.is_empty() {
+        let line = section.map_or(1, |s| s.line);
+        issues.push(LintIssue::new(LintCode::RegressionMissing, line));
+    }
+    let mut commands = Vec::new();
+    for (n, item) in items.iter().enumerate().take(MAX_REGRESSION) {
+        match item.code.as_slice() {
+            [command] if !command.is_empty() => commands.push(command.clone()),
+            _ => issues.push(
+                LintIssue::new(LintCode::RegressionCommandInvalid, item.line).with("item", n + 1),
+            ),
+        }
+    }
+    if let Some(extra) = items.get(MAX_REGRESSION) {
+        issues.push(
+            LintIssue::new(LintCode::RegressionTooMany, extra.line)
+                .with("max", MAX_REGRESSION)
+                .with("found", items.len()),
+        );
+    }
+    commands
 }
 
 fn read_table<'a>(table: &'a AstNode<'a>) -> Table {

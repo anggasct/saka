@@ -2,6 +2,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
 import { useLocale } from "@/i18n/locale-context";
+import {
+  DEFAULT_KIND,
+  WORK_KINDS,
+  type WorkKind,
+} from "@/features/delivery/kinds";
+import { label } from "@/features/delivery/text";
 import { useT } from "@/i18n/use-t";
 import { Button } from "@/ui/button";
 import {
@@ -12,6 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/ui/dialog";
+import { RadioGroup } from "@/ui/radio-group";
 
 import { docsKeys, fetchTemplate } from "./queries";
 
@@ -67,7 +74,9 @@ export function NewFileDialog({
   const [value, setValue] = useState(folder);
   const [problem, setProblem] = useState<Problem | "template" | null>(null);
   const [pending, setPending] = useState(false);
+  const [workKind, setWorkKind] = useState<WorkKind>(DEFAULT_KIND);
   const fieldId = useId();
+  const kindName = useId();
   const errorId = useId();
   const title = t(kind === "spec" ? "docs.new.spec" : "docs.new.file");
 
@@ -87,8 +96,8 @@ export function NewFileDialog({
       setPending(true);
       try {
         content = await queryClient.query({
-          queryKey: docsKeys.template(locale),
-          queryFn: () => fetchTemplate(locale),
+          queryKey: docsKeys.template(locale, workKind),
+          queryFn: () => fetchTemplate(locale, workKind),
           staleTime: Infinity,
         });
       } catch {
@@ -120,6 +129,7 @@ export function NewFileDialog({
         if (next) {
           setValue(folder);
           setProblem(null);
+          setWorkKind(DEFAULT_KIND);
         }
         setOpen(next);
       }}
@@ -164,6 +174,21 @@ export function NewFileDialog({
               </p>
             )}
           </div>
+          {kind === "spec" && (
+            <RadioGroup
+              legend={t("docs.new.kind")}
+              name={kindName}
+              value={workKind}
+              options={WORK_KINDS.map((value) => ({
+                value,
+                label: label(t, "kind", value),
+                description: label(t, "kind.hint", value),
+              }))}
+              onChange={(next) => {
+                setWorkKind(WORK_KINDS.find((k) => k === next) ?? DEFAULT_KIND);
+              }}
+            />
+          )}
           <div className="flex flex-wrap justify-end gap-2">
             <DialogClose asChild>
               <Button type="button" variant="outline">

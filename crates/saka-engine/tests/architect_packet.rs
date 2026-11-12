@@ -149,7 +149,7 @@ fn english_drafts_name_the_language_and_template() {
     assert!(
         packet
             .text
-            .contains("<source>saka:spec-template/en (parser 5)</source>")
+            .contains("<source>saka:spec-template/en (parser 6)</source>")
     );
     assert!(
         packet
@@ -164,8 +164,8 @@ fn the_sources_of_a_rendered_packet_are_read_back_per_document() {
     let read = sources(&packet.text);
     let indexes: Vec<u32> = read.keys().copied().collect();
     assert_eq!(indexes, [1, 2, 3, 4, 5]);
-    assert_eq!(read[&1], "saka:spec-template/id (parser 5)");
-    assert_eq!(read[&2], "saka:spec-rules (parser 5)");
+    assert_eq!(read[&1], "saka:spec-template/id (parser 6)");
+    assert_eq!(read[&2], "saka:spec-rules (parser 6)");
     assert_eq!(read[&3], format!("docs/prd.md @ {BASE}"));
     assert_eq!(read[&5], format!("docs/glossary.md @ {BASE}"));
     assert!(sources("not a packet").is_empty());

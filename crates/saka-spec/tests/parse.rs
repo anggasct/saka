@@ -1,3 +1,4 @@
+use saka_core::vocab::WorkKind;
 use saka_spec::{
     Decision, LintCode, LintIssue, Locale, MAX_DECISIONS, MAX_SPEC_BYTES, PARSER_VERSION, Severity,
     parse, rules, template,
@@ -33,8 +34,223 @@ fn after(parsed: &saka_spec::Parsed) -> Vec<(String, Vec<String>)> {
 }
 
 #[test]
-fn the_parser_is_version_five() {
-    assert_eq!(PARSER_VERSION, 5);
+fn the_parser_is_version_six() {
+    assert_eq!(PARSER_VERSION, 6);
+}
+
+fn spec_of_kind(kind_line: &str, sections: &str) -> String {
+    format!(
+        "---\nsaka: spec\n{kind_line}---\n# Title\n\n## Acceptance criteria\n\n- **AC-01**: one.\n\n## Done when\n\n- `true`\n{sections}"
+    )
+}
+
+fn codes(parsed: &saka_spec::Parsed) -> Vec<(LintCode, u32)> {
+    parsed.issues.iter().map(|i| (i.code, i.line)).collect()
+}
+
+#[test]
+fn the_kind_comes_from_the_frontmatter_and_defaults_to_feature() {
+    for (line, kind) in [
+        ("", WorkKind::Feature),
+        ("kind: feature\n", WorkKind::Feature),
+        ("kind: bugfix\n", WorkKind::Bugfix),
+        ("kind: \"refactor\"\n", WorkKind::Refactor),
+        ("kind: chore # tidy\n", WorkKind::Chore),
+        ("kind: security_patch\n", WorkKind::SecurityPatch),
+    ] {
+        let sections = if kind == WorkKind::Bugfix {
+            "\n## Regression\n\n- `cargo test`\n"
+        } else {
+            ""
+        };
+        let parsed = parse("kinds.md", spec_of_kind(line, sections).as_bytes());
+        assert!(parsed.issues.is_empty(), "{line}: {:?}", parsed.issues);
+        assert_eq!(parsed.model.unwrap().kind, kind, "{line}");
+    }
+}
+
+#[test]
+fn an_unknown_kind_is_an_error_that_names_the_value() {
+    for (line, value) in [
+        ("kind: hotfix\n", "hotfix"),
+        ("kind: Bugfix\n", "Bugfix"),
+        ("kind:\n", ""),
+        ("kind: \"\"\n", ""),
+    ] {
+        let parsed = parse("kinds.md", spec_of_kind(line, "").as_bytes());
+        assert_eq!(
+            found(&parsed.issues),
+            vec![(
+                LintCode::KindInvalid,
+                Severity::Error,
+                3,
+                json!({ "value": value })
+            )],
+            "{line}"
+        );
+        assert!(!parsed.is_ready());
+        assert_eq!(parsed.model.unwrap().kind, WorkKind::Feature);
+    }
+    let listed = parse(
+        "kinds.md",
+        spec_of_kind("kind:\n  - bugfix\n", "").as_bytes(),
+    );
+    assert_eq!(codes(&listed), vec![(LintCode::KindInvalid, 3)]);
+    let twice = parse(
+        "kinds.md",
+        spec_of_kind("kind: chore\nkind: bugfix\n", "").as_bytes(),
+    );
+    assert_eq!(
+        found(&twice.issues),
+        vec![(
+            LintCode::FrontmatterInvalid,
+            Severity::Error,
+            4,
+            json!({ "reason": "duplicate_key", "key": "kind" })
+        )]
+    );
+    assert_eq!(twice.model.unwrap().kind, WorkKind::Chore);
+}
+
+#[test]
+fn a_bugfix_needs_a_regression_section_with_commands() {
+    let missing = parse("fix.md", spec_of_kind("kind: bugfix\n", "").as_bytes());
+    assert_eq!(
+        found(&missing.issues),
+        vec![(LintCode::RegressionMissing, Severity::Error, 1, json!({}))]
+    );
+    assert!(!missing.is_ready());
+
+    let empty = parse(
+        "fix.md",
+        spec_of_kind("kind: bugfix\n", "\n## Regression\n\nNo list.\n").as_bytes(),
+    );
+    assert_eq!(codes(&empty), vec![(LintCode::RegressionMissing, 15)]);
+
+    let heading_case = parse(
+        "fix.md",
+        spec_of_kind(
+            "kind: bugfix\n",
+            "\n## REGRESSION\n\n- `cargo test a`\n- `cargo test b`\n",
+        )
+        .as_bytes(),
+    );
+    assert!(heading_case.is_ready(), "{:?}", heading_case.issues);
+    assert_eq!(
+        heading_case.model.unwrap().regression,
+        vec!["cargo test a", "cargo test b"]
+    );
+}
+
+#[test]
+fn a_regression_item_needs_exactly_one_command() {
+    let sections = "\n## Regression\n\n- `cargo test a`\n- no command here\n- `a` and `b`\n- ``\n";
+    let parsed = parse(
+        "fix.md",
+        spec_of_kind("kind: bugfix\n", sections).as_bytes(),
+    );
+    assert_eq!(
+        found(&parsed.issues),
+        vec![
+            (
+                LintCode::RegressionCommandInvalid,
+                Severity::Error,
+                18,
+                json!({ "item": 2 })
+            ),
+            (
+                LintCode::RegressionCommandInvalid,
+                Severity::Error,
+                19,
+                json!({ "item": 3 })
+            ),
+            (
+                LintCode::RegressionCommandInvalid,
+                Severity::Error,
+                20,
+                json!({ "item": 4 })
+            ),
+        ]
+    );
+    assert_eq!(parsed.model.unwrap().regression, vec!["cargo test a"]);
+}
+
+#[test]
+fn more_than_ten_regression_commands_is_an_error() {
+    let list: String = (1..=11).map(|n| format!("- `cargo test t{n}`\n")).collect();
+    let ten: String = (1..=10).map(|n| format!("- `cargo test t{n}`\n")).collect();
+    let over = parse(
+        "fix.md",
+        spec_of_kind("kind: bugfix\n", &format!("\n## Regression\n\n{list}")).as_bytes(),
+    );
+    assert_eq!(
+        found(&over.issues),
+        vec![(
+            LintCode::RegressionTooMany,
+            Severity::Error,
+            27,
+            json!({ "max": 10, "found": 11 })
+        )]
+    );
+    assert_eq!(over.model.unwrap().regression.len(), 10);
+    let fits = parse(
+        "fix.md",
+        spec_of_kind("kind: bugfix\n", &format!("\n## Regression\n\n{ten}")).as_bytes(),
+    );
+    assert!(fits.is_ready(), "{:?}", fits.issues);
+}
+
+#[test]
+fn another_kind_with_a_regression_section_only_warns() {
+    for (kind, line) in [
+        ("", 14),
+        ("kind: refactor\n", 15),
+        ("kind: chore\n", 15),
+        ("kind: security_patch\n", 15),
+    ] {
+        let parsed = parse(
+            "other.md",
+            spec_of_kind(kind, "\n## Regression\n\n- `cargo test`\n").as_bytes(),
+        );
+        assert_eq!(
+            found(&parsed.issues),
+            vec![(
+                LintCode::RegressionIgnored,
+                Severity::Warning,
+                line,
+                json!({})
+            )],
+            "{kind}"
+        );
+        assert!(parsed.is_ready(), "{kind}");
+    }
+}
+
+#[test]
+fn a_bugfix_with_several_steps_warns_that_the_rule_covers_the_first() {
+    let text = "---\nsaka: spec\nkind: bugfix\n---\n# Title\n\n## Acceptance criteria\n\n- **AC-01**: one.\n- **AC-02**: two.\n\n## Regression\n\n- `cargo test`\n\n## Steps\n\n| Step | Work | AC | Done when |\n|------|------|----|-----------|\n| S1 | a | AC-01 | `true` |\n| S2 | b | AC-02 | `true` |\n";
+    let parsed = parse("fix.md", text.as_bytes());
+    assert_eq!(
+        found(&parsed.issues),
+        vec![(
+            LintCode::RegressionMultiStep,
+            Severity::Warning,
+            16,
+            json!({ "count": 2 })
+        )]
+    );
+    assert!(parsed.is_ready());
+}
+
+#[test]
+fn only_the_first_regression_section_is_read() {
+    let sections = "\n## Regression\n\n- `cargo test a`\n\n## Regression\n\n- `cargo test b`\n";
+    let parsed = parse(
+        "fix.md",
+        spec_of_kind("kind: bugfix\n", sections).as_bytes(),
+    );
+    assert!(parsed.is_ready(), "{:?}", parsed.issues);
+    assert_eq!(parsed.model.unwrap().regression, vec!["cargo test a"]);
 }
 
 fn links_of(text: &str) -> (Vec<(String, u32)>, Vec<LintIssue>) {
@@ -409,6 +625,8 @@ fn every_lint_code_has_a_fixed_severity() {
         C::StepParallelStart,
         C::LinksLimitExceeded,
         C::ReferenceNotDoc,
+        C::RegressionIgnored,
+        C::RegressionMultiStep,
     ];
     for code in LintCode::ALL {
         let expected = if warnings.contains(&code) {
@@ -721,22 +939,39 @@ fn invalid_utf8_reports_its_line() {
 }
 
 #[test]
-fn both_templates_parse_without_issues() {
+fn every_template_parses_without_issues_and_carries_its_kind() {
     for locale in Locale::ALL {
-        let parsed = parse("example-spec.md", template(locale).as_bytes());
-        assert!(
-            parsed.issues.is_empty(),
-            "{}: {:?}",
-            locale.as_str(),
-            parsed.issues
-        );
-        assert!(template(locale).contains("`## Decisions`"));
-        let model = parsed.model.unwrap();
-        assert!(model.decisions.is_empty());
-        assert_eq!(model.steps.len(), 2);
-        assert_eq!(model.acceptance_criteria.len(), 2);
+        for &kind in WorkKind::ALL {
+            let text = template(locale, kind);
+            let parsed = parse("example-spec.md", text.as_bytes());
+            let label = format!("{}/{}", locale.as_str(), kind.as_str());
+            assert!(parsed.issues.is_empty(), "{label}: {:?}", parsed.issues);
+            let model = parsed.model.unwrap();
+            assert_eq!(model.kind, kind, "{label}");
+            assert!(model.decisions.is_empty(), "{label}");
+            assert_eq!(
+                model.regression.is_empty(),
+                kind != WorkKind::Bugfix,
+                "{label}"
+            );
+            let (steps, criteria) = if kind == WorkKind::Feature {
+                (2, 2)
+            } else {
+                (1, 1)
+            };
+            assert_eq!(model.steps.len(), steps, "{label}");
+            assert_eq!(model.acceptance_criteria.len(), criteria, "{label}");
+        }
+        assert!(template(locale, WorkKind::Feature).contains("`## Decisions`"));
     }
-    assert_ne!(template(Locale::En), template(Locale::Id));
+    for &kind in WorkKind::ALL {
+        assert_ne!(template(Locale::En, kind), template(Locale::Id, kind));
+    }
+    for locale in Locale::ALL {
+        let texts: std::collections::HashSet<_> =
+            WorkKind::ALL.iter().map(|&k| template(locale, k)).collect();
+        assert_eq!(texts.len(), WorkKind::ALL.len());
+    }
     assert_eq!(Locale::from_code("id"), Some(Locale::Id));
     assert_eq!(Locale::from_code("fr"), None);
 }
@@ -1000,6 +1235,6 @@ fn the_rules_list_every_lint_code_once() {
             code.as_str()
         );
     }
-    assert_eq!(LintCode::ALL.len(), 46);
+    assert_eq!(LintCode::ALL.len(), 52);
     assert!(rules.contains("## Decisions"));
 }

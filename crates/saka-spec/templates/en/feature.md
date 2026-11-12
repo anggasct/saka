@@ -1,5 +1,6 @@
 ---
 saka: spec
+kind: feature
 # depends_on: [other-spec]   specs that must ship before this one starts
 # priority: 0                -1000..1000; higher starts first
 ---

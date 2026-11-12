@@ -454,10 +454,36 @@ fn spec_template_prints_the_template_and_approve_reports_warnings_and_dependenci
 
     let en = saka(&server, &["spec", "template"]);
     assert_eq!(code(&en), 0, "{}", String::from_utf8_lossy(&en.stderr));
-    assert_eq!(stdout(&en), saka_spec::template(saka_spec::Locale::En));
+    assert_eq!(
+        stdout(&en),
+        saka_spec::template(saka_spec::Locale::En, saka_spec::WorkKind::Feature)
+    );
     let id = saka(&server, &["spec", "template", "--locale", "id"]);
     assert_eq!(code(&id), 0);
-    assert_eq!(stdout(&id), saka_spec::template(saka_spec::Locale::Id));
+    assert_eq!(
+        stdout(&id),
+        saka_spec::template(saka_spec::Locale::Id, saka_spec::WorkKind::Feature)
+    );
+    for &kind in saka_spec::WorkKind::ALL {
+        let out = saka(
+            &server,
+            &[
+                "spec",
+                "template",
+                "--locale",
+                "id",
+                "--kind",
+                kind.as_str(),
+            ],
+        );
+        assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(
+            stdout(&out),
+            saka_spec::template(saka_spec::Locale::Id, kind)
+        );
+    }
+    let unknown_kind = saka(&server, &["spec", "template", "--kind", "hotfix"]);
+    assert_eq!(code(&unknown_kind), 2);
     let bad = saka(&server, &["spec", "template", "--locale", "fr"]);
     assert_eq!(code(&bad), 1);
     assert!(String::from_utf8_lossy(&bad.stderr).contains("validation_failed"));

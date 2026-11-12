@@ -3159,6 +3159,8 @@ export interface components {
     SpecTemplate: {
       /** @description Markdown that parses without issues as `example-spec.md`. */
       content: string;
+      /** @description `feature | bugfix | refactor | chore | security_patch` */
+      kind: string;
       locale: string;
       /** Format: int32 */
       parser_version: number;
@@ -6056,6 +6058,8 @@ export interface operations {
       query?: {
         /** @description `en` (default) or `id`. */
         locale?: string;
+        /** @description `feature` (default), `bugfix`, `refactor`, `chore` or `security_patch`. */
+        kind?: string;
       };
       header?: never;
       path?: never;

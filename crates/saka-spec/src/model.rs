@@ -1,3 +1,4 @@
+use saka_core::vocab::WorkKind;
 use serde::{Deserialize, Serialize};
 
 pub const MIN_PRIORITY: i32 = -1000;
@@ -10,12 +11,16 @@ pub struct SpecModel {
     #[serde(default)]
     pub priority: i32,
     #[serde(default)]
+    pub kind: WorkKind,
+    #[serde(default)]
     pub depends_on: Vec<String>,
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub steps: Vec<Step>,
     pub links: Vec<Link>,
     #[serde(default)]
     pub decisions: Vec<Decision>,
+    #[serde(default)]
+    pub regression: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

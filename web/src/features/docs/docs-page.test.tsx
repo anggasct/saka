@@ -521,9 +521,10 @@ describe("specs in the editor", () => {
       docsRoutes(undefined, {
         [TEMPLATE]: (r: Recorded): Route => ({
           body: {
-            content: `---\nsaka: spec\n---\n# Template ${r.search.get("locale") ?? ""}\n`,
+            content: `---\nsaka: spec\n---\n# Template ${r.search.get("locale") ?? ""} ${r.search.get("kind") ?? ""}\n`,
             locale: r.search.get("locale"),
-            parser_version: 4,
+            kind: r.search.get("kind"),
+            parser_version: 6,
           },
         }),
         [FILE]: (r: Recorded): Route =>
@@ -560,8 +561,10 @@ describe("specs in the editor", () => {
       });
     });
     const view = await editorFor("docs/specs/export.md");
-    expect(view.state.sliceDoc()).toBe("---\nsaka: spec\n---\n# Template en\n");
-    expect(api.calls).toContain(`${TEMPLATE}?locale=en`);
+    expect(view.state.sliceDoc()).toBe(
+      "---\nsaka: spec\n---\n# Template en feature\n",
+    );
+    expect(api.calls).toContain(`${TEMPLATE}?locale=en&kind=feature`);
     expect(screen.getByRole("status")).toHaveTextContent("Unsaved changes");
     expect(await screen.findByText("Not registered yet")).toBeInTheDocument();
 
@@ -571,6 +574,60 @@ describe("specs in the editor", () => {
     expect(put?.headers.get("if-match")).toBeNull();
     const panel = await screen.findByRole("region", { name: "Spec" });
     expect(await within(panel).findByText("Ready")).toBeInTheDocument();
+  });
+
+  it("opens a new spec from the template of the chosen kind", async () => {
+    const api = fakeApi(
+      docsRoutes(undefined, {
+        [TEMPLATE]: (r: Recorded): Route => ({
+          body: {
+            content: `---\nsaka: spec\nkind: ${r.search.get("kind") ?? ""}\n---\n# Template\n`,
+            locale: r.search.get("locale"),
+            kind: r.search.get("kind"),
+            parser_version: 6,
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderApp(DOCS);
+    await user.click(await screen.findByRole("button", { name: "New spec" }));
+    const dialog = await screen.findByRole("dialog", { name: "New spec" });
+    const kinds = within(dialog).getByRole("group", { name: "Kind" });
+    expect(
+      within(kinds)
+        .getAllByRole<HTMLInputElement>("radio")
+        .map((r) => [r.value, r.checked]),
+    ).toEqual([
+      ["feature", true],
+      ["bugfix", false],
+      ["refactor", false],
+      ["chore", false],
+      ["security_patch", false],
+    ]);
+    await user.click(within(kinds).getByRole("radio", { name: /Bugfix/ }));
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Path" }),
+      "login-loop",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Open" }));
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({
+        path: "docs/specs/login-loop.md",
+      });
+    });
+    const view = await editorFor("docs/specs/login-loop.md");
+    expect(view.state.sliceDoc()).toContain("kind: bugfix");
+    expect(api.calls).toContain(`${TEMPLATE}?locale=en&kind=bugfix`);
+  });
+
+  it("offers no kind for a plain new file", async () => {
+    fakeApi(docsRoutes());
+    const user = userEvent.setup();
+    renderApp(DOCS);
+    await user.click(await screen.findByRole("button", { name: "New file" }));
+    const dialog = await screen.findByRole("dialog", { name: "New file" });
+    expect(within(dialog).queryByRole("group", { name: "Kind" })).toBeNull();
   });
 
   it("shows the spec, its checks, and a live chip per step", async () => {

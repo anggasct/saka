@@ -518,7 +518,20 @@ enum SpecCmd {
     Template {
         #[arg(long, default_value = "en", help = "Template language: en or id")]
         locale: String,
+        #[arg(
+            long,
+            default_value = "feature",
+            value_parser = work_kinds(),
+            help = "Kind of work the template is for"
+        )]
+        kind: String,
     },
+}
+
+fn work_kinds() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(
+        saka_core::vocab::WorkKind::ALL.iter().map(|k| k.as_str()),
+    )
 }
 
 #[derive(Subcommand)]
@@ -1091,9 +1104,9 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 }
             })
         }
-        Command::Spec(SpecCmd::Template { locale }) => {
+        Command::Spec(SpecCmd::Template { locale, kind }) => {
             let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
-            current_thread()?.block_on(client.spec_template(&locale))
+            current_thread()?.block_on(client.spec_template(&locale, &kind))
         }
         Command::Review {
             number,

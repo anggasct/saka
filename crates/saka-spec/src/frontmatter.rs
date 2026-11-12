@@ -1,16 +1,19 @@
 use std::collections::HashSet;
 
+use saka_core::vocab::WorkKind;
+
 use crate::lint::{LintCode, LintIssue};
 use crate::model::{MAX_PRIORITY, MIN_PRIORITY};
 use crate::parse::valid_slug;
 
-const KNOWN_KEYS: [&str; 3] = ["saka", "depends_on", "priority"];
+const KNOWN_KEYS: [&str; 4] = ["saka", "depends_on", "priority", "kind"];
 
 pub(crate) struct Frontmatter {
     pub is_spec: bool,
     pub end_line: u32,
     pub body_offset: usize,
     pub priority: i32,
+    pub kind: WorkKind,
     pub depends_on: Vec<String>,
     pub depends_on_line: Option<u32>,
     pub issues: Vec<LintIssue>,
@@ -81,6 +84,7 @@ pub(crate) fn read(text: &str, slug: &str) -> Option<Frontmatter> {
         end_line,
         body_offset,
         priority: 0,
+        kind: WorkKind::default(),
         depends_on: Vec::new(),
         depends_on_line: None,
         issues,
@@ -98,6 +102,7 @@ pub(crate) fn read(text: &str, slug: &str) -> Option<Frontmatter> {
         match entry.key {
             "saka" => front.is_spec = unquote(entry.value) == "spec",
             "priority" => read_priority(entry, &mut front),
+            "kind" => read_kind(entry, &mut front),
             _ => read_depends_on(entry, slug, &mut front),
         }
     }
@@ -181,6 +186,16 @@ fn read_priority(entry: &Entry<'_>, front: &mut Frontmatter) {
         _ => front
             .issues
             .push(LintIssue::new(LintCode::PriorityInvalid, entry.line).with("value", raw)),
+    }
+}
+
+fn read_kind(entry: &Entry<'_>, front: &mut Frontmatter) {
+    let raw = unquote(entry.value);
+    match raw.parse::<WorkKind>() {
+        Ok(kind) if entry.nested.is_empty() => front.kind = kind,
+        _ => front
+            .issues
+            .push(LintIssue::new(LintCode::KindInvalid, entry.line).with("value", raw)),
     }
 }
 

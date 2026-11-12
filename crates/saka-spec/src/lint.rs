@@ -67,10 +67,16 @@ pub enum LintCode {
     DecisionRecommendationInvalid,
     DecisionAnswerMultiple,
     DecisionUnanswered,
+    KindInvalid,
+    RegressionMissing,
+    RegressionCommandInvalid,
+    RegressionTooMany,
+    RegressionIgnored,
+    RegressionMultiStep,
 }
 
 impl LintCode {
-    pub const ALL: [LintCode; 46] = [
+    pub const ALL: [LintCode; 52] = [
         LintCode::NotASpec,
         LintCode::FileTooLarge,
         LintCode::InvalidUtf8,
@@ -117,6 +123,12 @@ impl LintCode {
         LintCode::DecisionRecommendationInvalid,
         LintCode::DecisionAnswerMultiple,
         LintCode::DecisionUnanswered,
+        LintCode::KindInvalid,
+        LintCode::RegressionMissing,
+        LintCode::RegressionCommandInvalid,
+        LintCode::RegressionTooMany,
+        LintCode::RegressionIgnored,
+        LintCode::RegressionMultiStep,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -167,6 +179,12 @@ impl LintCode {
             LintCode::DecisionRecommendationInvalid => "decision_recommendation_invalid",
             LintCode::DecisionAnswerMultiple => "decision_answer_multiple",
             LintCode::DecisionUnanswered => "decision_unanswered",
+            LintCode::KindInvalid => "kind_invalid",
+            LintCode::RegressionMissing => "regression_missing",
+            LintCode::RegressionCommandInvalid => "regression_command_invalid",
+            LintCode::RegressionTooMany => "regression_too_many",
+            LintCode::RegressionIgnored => "regression_ignored",
+            LintCode::RegressionMultiStep => "regression_multi_step",
         }
     }
 
@@ -177,7 +195,9 @@ impl LintCode {
             | LintCode::StepCommandDuplicate
             | LintCode::StepParallelStart
             | LintCode::LinksLimitExceeded
-            | LintCode::ReferenceNotDoc => Severity::Warning,
+            | LintCode::ReferenceNotDoc
+            | LintCode::RegressionIgnored
+            | LintCode::RegressionMultiStep => Severity::Warning,
             LintCode::NotASpec
             | LintCode::FileTooLarge
             | LintCode::InvalidUtf8
@@ -217,7 +237,11 @@ impl LintCode {
             | LintCode::DecisionOptionsInvalid
             | LintCode::DecisionRecommendationInvalid
             | LintCode::DecisionAnswerMultiple
-            | LintCode::DecisionUnanswered => Severity::Error,
+            | LintCode::DecisionUnanswered
+            | LintCode::KindInvalid
+            | LintCode::RegressionMissing
+            | LintCode::RegressionCommandInvalid
+            | LintCode::RegressionTooMany => Severity::Error,
         }
     }
 }

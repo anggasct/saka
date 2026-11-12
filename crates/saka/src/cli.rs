@@ -991,9 +991,11 @@ impl Client {
         ExitCode::from(EXIT_PROBLEMS)
     }
 
-    pub async fn spec_template(&self, locale: &str) -> ExitCode {
+    pub async fn spec_template(&self, locale: &str, kind: &str) -> ExitCode {
         let a = match self
-            .get(&format!("/api/v1/spec-template?locale={locale}"))
+            .get(&format!(
+                "/api/v1/spec-template?locale={locale}&kind={kind}"
+            ))
             .await
         {
             Ok(a) => a,
