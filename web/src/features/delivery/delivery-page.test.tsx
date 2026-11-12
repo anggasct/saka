@@ -244,6 +244,7 @@ describe("Changes from outside", () => {
         },
         stages: [{ stage: "review", trigger: "auto" }],
         fix_rounds: 2,
+        kinds: {},
       },
     };
     fakeApi({

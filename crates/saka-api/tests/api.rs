@@ -652,6 +652,312 @@ fn kind_overrides_show_on_the_project_and_the_kind_on_its_specs_and_tasks() {
     assert_eq!(detail.body["merge_auto"], false);
 }
 
+fn quick_body(extra: Value) -> Value {
+    let mut body = json!({
+        "kind": "bugfix",
+        "title": "Login redirect loop",
+        "description": "Signing in sends the user back to the form.",
+        "done_when": ["make test"],
+        "regression": ["cargo test --test login"],
+        "approve": true,
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        body[key] = value.clone();
+    }
+    body
+}
+
+#[test]
+fn a_quick_bugfix_answers_201_with_the_spec_the_commit_and_the_task_and_replays_by_key() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let path = format!("/api/v1/projects/{project}/quick-specs");
+    let commits_before = api.sim.world.doc_commits().len();
+    let first = api.post_with(&path, Some("quick-1"), &[], &quick_body(json!({})));
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.body);
+    assert_eq!(
+        first.body["path"],
+        "docs/specs/bugfix-login-redirect-loop.md"
+    );
+    assert!(first.body["commit_sha"].as_str().unwrap().len() >= 7);
+    let spec = &first.body["spec"];
+    assert_eq!(spec["origin"], "quick");
+    assert_eq!(spec["kind"], "bugfix");
+    assert_eq!(spec["state"], "approved");
+    assert_eq!(spec["regression"], json!(["cargo test --test login"]));
+    assert_eq!(spec["lint"]["ok"], true);
+    let items = first.body["work_items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["state"], "queued");
+    assert_eq!(items[0]["kind"], "bugfix");
+    assert_eq!(items[0]["task_key"], "bugfix-login-redirect-loop/s1");
+    assert_eq!(api.sim.world.doc_commits().len(), commits_before + 1);
+
+    let replay = api.post_with(&path, Some("quick-1"), &[], &quick_body(json!({})));
+    assert_eq!(replay.status, StatusCode::CREATED);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(replay.body, first.body);
+    assert_eq!(api.sim.world.doc_commits().len(), commits_before + 1);
+
+    let changed = api.post_with(
+        &path,
+        Some("quick-1"),
+        &[],
+        &quick_body(json!({ "title": "Other" })),
+    );
+    problem(
+        &changed,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "idempotency_key_reused",
+    );
+
+    assert_eq!(
+        rows(
+            &api,
+            "SELECT action || ':' || target_type || ':' || response_status FROM action_request WHERE action = 'spec.quick'"
+        ),
+        ["spec.quick:project:201"]
+    );
+    let shown = api.get(&format!("/api/v1/specs/{}", spec["id"].as_str().unwrap()));
+    assert_eq!(shown.body["origin"], "quick");
+}
+
+#[test]
+fn create_only_leaves_the_spec_ready_without_a_task() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let reply = api.post_with(
+        &format!("/api/v1/projects/{project}/quick-specs"),
+        Some("quick-only"),
+        &[],
+        &quick_body(json!({ "approve": false, "kind": "chore", "regression": [], "locale": "id" })),
+    );
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+    assert_eq!(reply.body["spec"]["state"], "ready");
+    assert_eq!(reply.body["work_items"], json!([]));
+    assert_eq!(
+        reply.body["path"],
+        "docs/specs/chore-login-redirect-loop.md"
+    );
+    let text = String::from_utf8(
+        api.sim
+            .world
+            .doc("docs/specs/chore-login-redirect-loop.md")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(text.contains("semua perintah di Done when lulus"), "{text}");
+}
+
+#[test]
+fn a_quick_task_that_cannot_be_written_is_refused_and_a_refusal_replays() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let path = format!("/api/v1/projects/{project}/quick-specs");
+    let before = api.sim.world.doc_commits().len();
+
+    let no_regression = api.post_with(
+        &path,
+        Some("k1"),
+        &[],
+        &quick_body(json!({ "regression": [] })),
+    );
+    problem(
+        &no_regression,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "spec_not_ready",
+    );
+    assert_eq!(
+        no_regression.body["params"]["issues"][0]["code"],
+        "regression_missing"
+    );
+    let replayed = api.post_with(
+        &path,
+        Some("k1"),
+        &[],
+        &quick_body(json!({ "regression": [] })),
+    );
+    assert_eq!(replayed.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(replayed.headers["idempotent-replayed"], "true");
+
+    for (extra, field, code) in [
+        (json!({ "title": "" }), "title", "required"),
+        (json!({ "done_when": [] }), "done_when", "required"),
+        (json!({ "kind": "chore" }), "regression", "not_allowed"),
+        (json!({ "kind": "hotfix" }), "kind", "invalid"),
+        (json!({ "locale": "fr" }), "locale", "invalid"),
+        (json!({ "path": "src/a.md" }), "path", "outside_project"),
+        (json!({ "repo": "ghost" }), "repo", "unknown"),
+        (json!({ "done_when": ["a\nb"] }), "done_when[0]", "invalid"),
+    ] {
+        let reply = api.post_with(
+            &path,
+            Some(&format!("bad-{field}-{code}")),
+            &[],
+            &quick_body(extra),
+        );
+        problem(
+            &reply,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        );
+        assert_eq!(reply.body["params"]["errors"][0]["field"], field);
+        assert_eq!(reply.body["params"]["errors"][0]["code"], code);
+    }
+    let mut unknown_field = quick_body(json!({}));
+    unknown_field["flavour"] = json!("x");
+    problem(
+        &api.post_with(&path, Some("k-unknown"), &[], &unknown_field),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    problem(
+        &api.post_with(&path, None, &[], &quick_body(json!({}))),
+        StatusCode::BAD_REQUEST,
+        "idempotency_key_required",
+    );
+    problem(
+        &api.post_with(
+            &format!("/api/v1/projects/{}/quick-specs", uuid::Uuid::nil()),
+            Some("k-missing"),
+            &[],
+            &quick_body(json!({})),
+        ),
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+    assert_eq!(
+        api.sim.world.doc_commits().len(),
+        before,
+        "nothing was written"
+    );
+}
+
+#[test]
+fn a_quick_task_never_replaces_a_file_and_names_the_slug_it_would_clash_with() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let path = format!("/api/v1/projects/{project}/quick-specs");
+    let first = api.post_with(&path, Some("a"), &[], &quick_body(json!({})));
+    assert_eq!(first.status, StatusCode::CREATED);
+
+    let clash = api.post_with(&path, Some("b"), &[], &quick_body(json!({})));
+    problem(&clash, StatusCode::CONFLICT, "spec_slug_conflict");
+    assert_eq!(clash.body["params"]["slug"], "bugfix-login-redirect-loop");
+
+    api.sim.world.put_doc("docs/specs/taken.md", b"# taken\n");
+    let head = api.sim.world.base_head();
+    let taken = api.post_with(
+        &path,
+        Some("c"),
+        &[],
+        &quick_body(json!({ "path": "docs/specs/taken.md", "title": "Another" })),
+    );
+    problem(&taken, StatusCode::CONFLICT, "file_path_conflict");
+    assert_eq!(taken.body["params"]["path"], "docs/specs/taken.md");
+    assert_eq!(api.sim.world.base_head(), head);
+}
+
+#[test]
+fn an_approval_that_fails_after_the_commit_answers_409_with_the_registered_spec() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let reply = api.post_with(
+        &format!("/api/v1/projects/{project}/quick-specs"),
+        Some("late"),
+        &[],
+        &quick_body(json!({
+            "kind": "chore",
+            "regression": [],
+            "description": "See [the plan](missing-plan.md)."
+        })),
+    );
+    problem(&reply, StatusCode::CONFLICT, "quick_spec_not_approved");
+    assert_eq!(reply.body["params"]["code"], "spec_not_ready");
+    let spec = &reply.body["params"]["spec"];
+    assert_eq!(spec["path"], "docs/specs/chore-login-redirect-loop.md");
+    assert_eq!(spec["state"], "draft");
+    let shown = api.get(&format!("/api/v1/specs/{}", spec["id"].as_str().unwrap()));
+    assert_eq!(shown.status, StatusCode::OK);
+    assert_eq!(shown.body["origin"], "quick");
+    let again = api.post_with(
+        &format!("/api/v1/projects/{project}/quick-specs"),
+        Some("late"),
+        &[],
+        &quick_body(json!({
+            "kind": "chore",
+            "regression": [],
+            "description": "See [the plan](missing-plan.md)."
+        })),
+    );
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+}
+
+#[test]
+fn a_quick_security_patch_runs_at_the_strict_level_and_waits_for_its_start() {
+    let mut cfg = SimConfig::default();
+    cfg.operator.start = false;
+    let mut api = Api::new(cfg);
+    let project = api.sim.project_id.0;
+    let reply = api.post_with(
+        &format!("/api/v1/projects/{project}/quick-specs"),
+        Some("sec-1"),
+        &[],
+        &quick_body(
+            json!({ "kind": "security_patch", "regression": [], "title": "Close the hole" }),
+        ),
+    );
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.body);
+    let item = &reply.body["work_items"][0];
+    assert_eq!(item["autonomy"], "strict");
+    assert_eq!(item["kind"], "security_patch");
+    let spec = uuid::Uuid::parse_str(reply.body["spec"]["id"].as_str().unwrap()).unwrap();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.tasks_of(saka_core::ids::SpecId(spec))[0].item.state
+            == saka_core::vocab::WorkItemState::AwaitingStart
+    }));
+    let id = item["id"].as_str().unwrap();
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["state"], "awaiting_start");
+    assert_eq!(
+        rows(
+            &api,
+            "SELECT json_extract(payload, '$.reason') FROM event WHERE kind = 'spec.spec.approved' ORDER BY seq DESC LIMIT 1"
+        ),
+        ["quick task"]
+    );
+}
+
+#[test]
+fn quick_tasks_are_counted_by_kind_and_outcome() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let path = format!("/api/v1/projects/{project}/quick-specs");
+    api.post_with(&path, Some("m1"), &[], &quick_body(json!({})));
+    api.post_with(
+        &path,
+        Some("m2"),
+        &[],
+        &quick_body(json!({ "regression": [] })),
+    );
+    api.post_with(
+        &path,
+        Some("m3"),
+        &[],
+        &quick_body(json!({ "kind": "chore", "regression": [], "approve": false })),
+    );
+    let metrics = api.get_text("/metrics");
+    assert!(metrics.contains("# TYPE saka_quick_specs_total counter"));
+    for line in [
+        "saka_quick_specs_total{kind=\"bugfix\",outcome=\"approved\"} 1",
+        "saka_quick_specs_total{kind=\"bugfix\",outcome=\"refused\"} 1",
+        "saka_quick_specs_total{kind=\"chore\",outcome=\"created\"} 1",
+    ] {
+        assert!(metrics.contains(line), "{line}\n{metrics}");
+    }
+}
+
 #[test]
 fn a_reload_that_names_an_unknown_kind_answers_with_the_issue() {
     let api = Api::new(SimConfig::default());

@@ -24,8 +24,34 @@ export type LintCodeInfo = {
   severity: LintSeverity;
 };
 
+export type QuickInput = {
+  kind: string;
+  title: string;
+  description: string;
+  done_when: readonly string[];
+  regression: readonly string[];
+  ac: readonly string[];
+  locale: string;
+  repo: string;
+};
+
+export type QuickFieldIssue = {
+  field: string;
+  code: string;
+};
+
+export type QuickPreview = {
+  valid: boolean;
+  issues: QuickFieldIssue[];
+  structure: boolean;
+  text: string;
+  slug: string | null;
+  lint: LintIssue[];
+};
+
 export type SpecTools = {
   lint(fileName: string, text: string): LintReport;
+  quickPreview(input: QuickInput): QuickPreview;
   contentHash(text: string): string;
   lintCodes(): LintCodeInfo[];
 };
@@ -64,6 +90,14 @@ function isCodeInfo(value: unknown): value is LintCodeInfo {
   );
 }
 
+function isFieldIssue(value: unknown): value is QuickFieldIssue {
+  return (
+    isRecord(value) &&
+    typeof value.field === "string" &&
+    typeof value.code === "string"
+  );
+}
+
 function invalid(what: string): never {
   throw new Error(`saka-wasm returned an invalid ${what}`);
 }
@@ -89,6 +123,29 @@ export function parseLintReport(json: string): LintReport {
   };
 }
 
+export function parseQuickPreview(json: string): QuickPreview {
+  const value: unknown = JSON.parse(json);
+  if (
+    !isRecord(value) ||
+    typeof value.valid !== "boolean" ||
+    !Array.isArray(value.issues) ||
+    !value.issues.every(isFieldIssue) ||
+    typeof value.text !== "string" ||
+    !Array.isArray(value.lint) ||
+    !value.lint.every(isIssue)
+  ) {
+    return invalid("quick task preview");
+  }
+  return {
+    valid: value.valid,
+    issues: value.issues,
+    structure: value.structure !== false,
+    text: value.text,
+    slug: typeof value.slug === "string" ? value.slug : null,
+    lint: value.lint,
+  };
+}
+
 export function parseLintCodes(json: string): LintCodeInfo[] {
   const value: unknown = JSON.parse(json);
   if (!Array.isArray(value) || !value.every(isCodeInfo)) {
@@ -102,6 +159,8 @@ export async function loadSpecTools(): Promise<SpecTools> {
   await wasm.default();
   return {
     lint: (fileName, text) => parseLintReport(wasm.lint(fileName, text)),
+    quickPreview: (input) =>
+      parseQuickPreview(wasm.quick_preview(JSON.stringify(input))),
     contentHash: (text) => wasm.content_hash(text),
     lintCodes: () => parseLintCodes(wasm.lint_codes()),
   };

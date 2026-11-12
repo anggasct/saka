@@ -644,6 +644,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/projects/{project_id}/quick-specs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["add_quick_spec"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/projects/{project_id}/secrets": {
     parameters: {
       query?: never;
@@ -2645,6 +2661,38 @@ export interface components {
       code: string;
       /** @description For `path_scope_overlap`: `repo`, `repo_id`, `other_project_id`, `other_project`, `other_repo`. */
       params: unknown;
+    };
+    /** @description A spec written from a short form: Saka renders the file, commits it to the base branch, registers it and, when `approve` is set, approves it. */
+    QuickSpecBody: {
+      /** @description Acceptance criteria, up to 10 sentences of 500 characters; when empty one criterion is made from the title. */
+      ac?: string[];
+      /** @description `true` approves the spec and creates its task; `false` only commits and registers it. */
+      approve: boolean;
+      /** @description Markdown shown under the title, up to 4000 characters; it may not add spec sections. */
+      description?: string;
+      /** @description The commands that must pass before the task is done: 1 to 10, each 1 to 500 characters, without backticks. */
+      done_when: string[];
+      /** @description `feature | bugfix | refactor | chore | security_patch` */
+      kind: string;
+      /** @description `en` (default) or `id`: the language of the generated sentences. */
+      locale?: string | null;
+      /** @description Where the spec file goes, inside the project folder; defaults to `<project folder>/specs/<slug>.md`, the slug being the title with the kind in front (none for `feature`). */
+      path?: string | null;
+      /** @description The commands that must fail before and pass after a bug fix: 1 to 10 for `bugfix`, empty for every other kind. */
+      regression?: string[];
+      /** @description The name of a repo binding of the project; the step then runs in that repo. Defaults to the default repo. */
+      repo?: string | null;
+      /** @description 1 to 120 characters on one line. */
+      title: string;
+    };
+    QuickSpecCreated: {
+      /** @description The commit on the base branch that added the file. */
+      commit_sha: string;
+      /** @description Path of the spec file in the repo. */
+      path: string;
+      spec: components["schemas"]["Spec"];
+      /** @description The task made by the approval; empty when `approve` was `false`. */
+      work_items: components["schemas"]["WorkItem"][];
     };
     QuotaWindow: {
       observed_at: string;
@@ -5100,6 +5148,50 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["PermissionPreview"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  add_quick_spec: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["QuickSpecBody"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["QuickSpecCreated"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
       "4XX": {

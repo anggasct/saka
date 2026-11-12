@@ -2317,6 +2317,73 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/quick-specs": {
+      "post": {
+        "tags": [
+          "specs"
+        ],
+        "operationId": "add_quick_spec",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickSpecBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickSpecCreated"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/secrets": {
       "get": {
         "tags": [
@@ -9298,6 +9365,106 @@
           },
           "params": {
             "description": "For `path_scope_overlap`: `repo`, `repo_id`, `other_project_id`, `other_project`, `other_repo`."
+          }
+        }
+      },
+      "QuickSpecBody": {
+        "type": "object",
+        "description": "A spec written from a short form: Saka renders the file, commits it to the base branch, registers it and, when `approve` is set, approves it.",
+        "required": [
+          "kind",
+          "title",
+          "done_when",
+          "approve"
+        ],
+        "properties": {
+          "ac": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Acceptance criteria, up to 10 sentences of 500 characters; when empty one criterion is made from the title."
+          },
+          "approve": {
+            "type": "boolean",
+            "description": "`true` approves the spec and creates its task; `false` only commits and registers it."
+          },
+          "description": {
+            "type": "string",
+            "description": "Markdown shown under the title, up to 4000 characters; it may not add spec sections."
+          },
+          "done_when": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The commands that must pass before the task is done: 1 to 10, each 1 to 500 characters, without backticks."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`feature | bugfix | refactor | chore | security_patch`"
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`en` (default) or `id`: the language of the generated sentences."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the spec file goes, inside the project folder; defaults to `<project folder>/specs/<slug>.md`, the slug being the title with the kind in front (none for `feature`)."
+          },
+          "regression": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The commands that must fail before and pass after a bug fix: 1 to 10 for `bugfix`, empty for every other kind."
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of a repo binding of the project; the step then runs in that repo. Defaults to the default repo."
+          },
+          "title": {
+            "type": "string",
+            "description": "1 to 120 characters on one line."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuickSpecCreated": {
+        "type": "object",
+        "required": [
+          "spec",
+          "path",
+          "commit_sha",
+          "work_items"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string",
+            "description": "The commit on the base branch that added the file."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path of the spec file in the repo."
+          },
+          "spec": {
+            "$ref": "#/components/schemas/Spec"
+          },
+          "work_items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkItem"
+            },
+            "description": "The task made by the approval; empty when `approve` was `false`."
           }
         }
       },

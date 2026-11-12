@@ -326,6 +326,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_docs_changes_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_quick_specs_total",
+        "counter",
+        "Quick tasks, by kind and outcome (created, approved, not_approved, refused).",
+    );
+    for (kind, outcome, n) in &m.quick_specs {
+        t.sample(
+            "saka_quick_specs_total",
+            &[("kind", kind), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
         "saka_user_link_authorizations_total",
         "counter",
         "Device-flow authorizations that link an SCM account, by integration and the state reached.",

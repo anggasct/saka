@@ -991,6 +991,50 @@ impl Client {
         ExitCode::from(EXIT_PROBLEMS)
     }
 
+    pub async fn spec_quick(&self, project: &str, body: &Value) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let answer = match self
+            .post(&format!("/api/v1/projects/{id}/quick-specs"), body, None)
+            .await
+        {
+            Ok(a) => a,
+            Err(code) => return code,
+        };
+        if answer.body["code"] == "spec_not_ready" {
+            err("error: spec_not_ready");
+            for issue in answer.body["params"]["issues"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                err(&issue_line(issue));
+            }
+            return ExitCode::FAILURE;
+        }
+        self.finish(&answer, |b| {
+            let spec = &b["spec"];
+            let mut lines = vec![
+                format!("spec {} ({})", text(&spec["slug"]), text(&spec["state"])),
+                format!("path {}", text(&b["path"])),
+                format!(
+                    "commit {}",
+                    text(&b["commit_sha"]).chars().take(12).collect::<String>()
+                ),
+            ];
+            lines.extend(
+                b["work_items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|w| format!("task {}", text(&w["task_key"]))),
+            );
+            lines.join("\n")
+        })
+    }
+
     pub async fn spec_template(&self, locale: &str, kind: &str) -> ExitCode {
         let a = match self
             .get(&format!(

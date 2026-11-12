@@ -326,7 +326,27 @@ for (const width of [375, 1280]) {
     await expect(dialog).toBeVisible();
     await touchable(dialog.getByRole("button"));
     await accessible(page);
+    await noOverflow(page);
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
+
+    await touchable(page.getByRole("button", { name: "Quick task" }));
+    await page.getByRole("button", { name: "Quick task" }).click();
+    const quick = page.getByRole("dialog", { name: "Quick task" });
+    await expect(quick).toBeVisible();
+    await quick.getByRole("radio", { name: /Bugfix/ }).check();
+    await quick.getByRole("textbox", { name: "Title" }).fill("Login loop");
+    await quick.getByRole("textbox", { name: /^Done when/ }).fill("make test");
+    await quick
+      .getByRole("textbox", { name: /^Regression/ })
+      .fill("cargo test --test login");
+    await expect(
+      quick.getByText("File: docs/specs/bugfix-login-loop.md"),
+    ).toBeVisible();
+    await touchable(quick.getByRole("button"));
+    await accessible(page);
+    await noOverflow(page);
+    await page.keyboard.press("Escape");
+    await expect(quick).toBeHidden();
   });
 }

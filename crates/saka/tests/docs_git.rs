@@ -438,6 +438,60 @@ async fn a_save_is_one_commit_on_the_tip_with_the_exact_bytes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_rendered_quick_spec_lands_as_one_commit_and_is_never_written_twice() {
+    use saka_spec::{Locale, QuickSpec, WorkKind, parse, render_quick};
+
+    let w = World::new();
+    let text = render_quick(&QuickSpec {
+        kind: WorkKind::Bugfix,
+        title: "Login redirect loop".into(),
+        description: "Signing in sends the user back to the form.".into(),
+        done_when: vec!["make test".into()],
+        regression: vec!["cargo test --test login".into()],
+        criteria: Vec::new(),
+        locale: Locale::En,
+        repo: None,
+    });
+    let path = "docs/specs/bugfix-login-redirect-loop.md";
+    assert!(parse("bugfix-login-redirect-loop.md", text.as_bytes()).is_ready());
+
+    let before = w.tip();
+    let first = w.write(path, text.as_bytes(), DocExpect::Absent).await;
+    let DocWrite::Committed {
+        commit,
+        parent,
+        created,
+        ..
+    } = first
+    else {
+        panic!("expected a commit, got {first:?}");
+    };
+    assert!(created);
+    assert_eq!(parent, before);
+    assert_eq!(commit, w.tip());
+    assert_eq!(
+        git(
+            &w.remote,
+            &["rev-list", "--count", &format!("{before}..{commit}")]
+        ),
+        "1"
+    );
+    assert_eq!(
+        git_bytes(&w.remote, &["show", &format!("main:{path}")]),
+        text.as_bytes()
+    );
+
+    let again = w.write(path, text.as_bytes(), DocExpect::Absent).await;
+    assert!(matches!(again, DocWrite::Unchanged { .. }), "{again:?}");
+    let other = w.write(path, b"# Mine\n", DocExpect::Absent).await;
+    assert!(
+        matches!(other, DocWrite::Stale { blob: Some(_), .. }),
+        "{other:?}"
+    );
+    assert_eq!(w.tip(), commit);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn preconditions_that_do_not_hold_change_nothing() {
     let w = World::new();
     let tip = w.tip();

@@ -32,7 +32,7 @@ pub use state::{ApiConfig, AppState};
         routes::projects::remove_user_token,
         routes::user_links::start_user_link, routes::user_links::get_user_link_authorization, routes::user_links::get_user_link,
         routes::user_links::remove_user_link,
-        routes::specs::add_spec, routes::specs::list_specs, routes::specs::get_spec, routes::specs::approve_spec, routes::specs::withdraw_spec,
+        routes::specs::add_spec, routes::specs::add_quick_spec, routes::specs::list_specs, routes::specs::get_spec, routes::specs::approve_spec, routes::specs::withdraw_spec,
         routes::specs::spec_template,
         routes::specs::list_files, routes::specs::get_file, routes::specs::put_file,
         routes::tasks::list_work_items, routes::tasks::get_work_item, routes::tasks::get_work_packet, routes::tasks::start, routes::tasks::merge, routes::tasks::retry, routes::tasks::cancel, routes::tasks::takeover, routes::tasks::return_to_loop, routes::tasks::primary_action, routes::tasks::review, routes::tasks::fix, routes::tasks::take_external_change,
@@ -103,6 +103,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{project_id}/specs",
             post(routes::specs::add_spec).get(routes::specs::list_specs),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/quick-specs",
+            post(routes::specs::add_quick_spec),
         )
         .route(
             "/api/v1/projects/{project_id}/files",

@@ -3,7 +3,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use saka_core::ids::{ProjectId, SpecId, SpecRevisionId};
-use saka_engine::{EngineError, Precondition, Produced};
+use saka_engine::{EngineError, Precondition, Produced, QuickRequest};
+use saka_spec::{Locale, QuickSpec, WorkKind};
 
 use super::{SPEC_STATES, reply, unexpected};
 use crate::dto;
@@ -69,6 +70,84 @@ pub async fn add_spec(
         },
     )
     .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/quick-specs", tag = "specs",
+    params(("project_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::QuickSpecBody,
+    responses(
+        (status = 201, body = dto::QuickSpecCreated),
+        (status = "4XX", body = dto::Problem, content_type = "application/problem+json"),
+        (status = 502, body = dto::Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn add_quick_spec(
+    State(s): State<AppState>,
+    Path(project): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let req: dto::QuickSpecBody = tri!(body(&raw));
+    let request = tri!(quick_request(req));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Quick(v) => reply(StatusCode::CREATED, &dto::QuickSpecCreated::from_view(v)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "spec.quick",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: None,
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .quick_spec_with(project, request, &cause, Some(&action))
+                .await
+                .map(|_| Some(project))
+                .map_err(|e| (e, Some(project)))
+        },
+    )
+    .await
+}
+
+fn quick_request(req: dto::QuickSpecBody) -> Result<QuickRequest, ApiError> {
+    let kind = req
+        .kind
+        .parse::<WorkKind>()
+        .map_err(|_| ApiError::validation("kind", "invalid"))?;
+    let locale = match req.locale.as_deref() {
+        None => Locale::default(),
+        Some(code) => {
+            Locale::from_code(code).ok_or_else(|| ApiError::validation("locale", "invalid"))?
+        }
+    };
+    Ok(QuickRequest {
+        spec: QuickSpec {
+            kind,
+            title: req.title,
+            description: req.description,
+            done_when: req.done_when,
+            regression: req.regression,
+            criteria: req.ac,
+            locale,
+            repo: req.repo,
+        },
+        path: req.path,
+        approve: req.approve,
+    })
 }
 
 #[utoipa::path(

@@ -1,4 +1,7 @@
-use saka_spec::{LintCode, PARSER_VERSION};
+use saka_spec::{
+    LintCode, Locale, PARSER_VERSION, QuickSpec, WorkKind, check_quick, quick_keeps_structure,
+    quick_slug, render_quick,
+};
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -29,6 +32,72 @@ fn report(file_name: &str, text: &str) -> Value {
 #[wasm_bindgen]
 pub fn lint(file_name: &str, text: &str) -> String {
     report(file_name, text).to_string()
+}
+
+fn strings(value: &Value, key: &str) -> Vec<String> {
+    value[key]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+fn quick_input(value: &Value) -> Option<QuickSpec> {
+    Some(QuickSpec {
+        kind: value["kind"].as_str()?.parse::<WorkKind>().ok()?,
+        title: value["title"].as_str()?.to_string(),
+        description: value["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        done_when: strings(value, "done_when"),
+        regression: strings(value, "regression"),
+        criteria: strings(value, "ac"),
+        locale: value["locale"]
+            .as_str()
+            .and_then(Locale::from_code)
+            .unwrap_or_default(),
+        repo: value["repo"]
+            .as_str()
+            .filter(|r| !r.is_empty())
+            .map(str::to_string),
+    })
+}
+
+fn quick_report(input: &str) -> Value {
+    let Some(spec) = serde_json::from_str::<Value>(input)
+        .ok()
+        .as_ref()
+        .and_then(quick_input)
+    else {
+        return json!({ "valid": false, "issues": [], "text": "", "slug": null, "lint": [] });
+    };
+    let issues: Vec<Value> = check_quick(&spec)
+        .into_iter()
+        .map(|i| json!({ "field": i.field, "code": i.code }))
+        .collect();
+    let text = render_quick(&spec);
+    let slug = quick_slug(spec.kind, &spec.title);
+    let file = format!("{}.md", slug.as_deref().unwrap_or("quick"));
+    let parsed = saka_spec::parse(&file, text.as_bytes());
+    let structure = parsed
+        .model
+        .as_ref()
+        .is_some_and(|model| quick_keeps_structure(&spec, model));
+    json!({
+        "valid": true,
+        "issues": issues,
+        "structure": structure,
+        "text": text,
+        "slug": slug,
+        "lint": parsed.issues,
+    })
+}
+
+#[wasm_bindgen]
+pub fn quick_preview(input: &str) -> String {
+    quick_report(input).to_string()
 }
 
 #[wasm_bindgen]
@@ -158,6 +227,54 @@ mod tests {
             report,
             json!({ "is_spec": false, "parser_version": PARSER_VERSION, "issues": [], "steps": [] })
         );
+    }
+
+    #[test]
+    fn the_quick_preview_is_the_server_render_with_its_field_issues() {
+        let input = json!({
+            "kind": "bugfix",
+            "title": "Login redirect loop",
+            "description": "Back to the form.",
+            "done_when": ["make test"],
+            "regression": ["cargo test --test login"],
+            "ac": [],
+            "locale": "id",
+            "repo": "",
+        });
+        let report: Value = serde_json::from_str(&quick_preview(&input.to_string())).unwrap();
+        let spec = quick_input(&input).unwrap();
+        assert_eq!(report["valid"], true);
+        assert_eq!(report["text"], render_quick(&spec));
+        assert_eq!(report["slug"], "bugfix-login-redirect-loop");
+        assert_eq!(report["issues"], json!([]));
+        assert_eq!(report["lint"], json!([]));
+        assert_eq!(report["structure"], true);
+
+        let mut bad = input.clone();
+        bad["title"] = json!("");
+        bad["done_when"] = json!([]);
+        bad["regression"] = json!([]);
+        let report: Value = serde_json::from_str(&quick_preview(&bad.to_string())).unwrap();
+        assert_eq!(
+            report["issues"],
+            json!([
+                { "field": "title", "code": "required" },
+                { "field": "done_when", "code": "required" },
+            ])
+        );
+        assert_eq!(report["slug"], Value::Null);
+        let codes: Vec<&str> = report["lint"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["code"].as_str().unwrap())
+            .collect();
+        assert!(codes.contains(&"regression_missing"), "{codes:?}");
+
+        let unknown: Value = serde_json::from_str(&quick_preview("{\"kind\":\"hotfix\"}")).unwrap();
+        assert_eq!(unknown["valid"], false);
+        let garbage: Value = serde_json::from_str(&quick_preview("not json")).unwrap();
+        assert_eq!(garbage["valid"], false);
     }
 
     #[test]
