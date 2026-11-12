@@ -1,14 +1,28 @@
+use std::collections::BTreeMap;
+
 use saka_core::scope::{PathScope, ScopeIssue};
-use saka_core::vocab::{Stage, Trigger, WorkflowPreset};
+use saka_core::vocab::{Stage, Trigger, WorkKind, WorkflowPreset};
 use saka_core::workflow::{
-    ChangeEntry, MAX_FILTER_ENTRIES, MAX_FIX_ROUNDS, Workflow, filter_text_ok,
+    ChangeEntry, KindIssue, KindOverride, KindRefusal, MAX_FILTER_ENTRIES, MAX_FIX_ROUNDS,
+    MAX_TEST_PATHS, Workflow, WorkflowPolicy, filter_text_ok,
 };
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
-use super::{Collector, get, line_of};
+use super::{Collector, autonomy, get, line_of};
 
-const KEYS: &[&str] = &["preset", "spec", "change_request", "stages", "fix_rounds"];
+pub type KindLines = BTreeMap<(WorkKind, Stage), usize>;
+
+const KEYS: &[&str] = &[
+    "preset",
+    "spec",
+    "change_request",
+    "stages",
+    "fix_rounds",
+    "kinds",
+];
+const KIND_KEYS: &[&str] = &["stages", "autonomy"];
+const BUGFIX_KEYS: &[&str] = &["stages", "autonomy", "test_paths"];
 const ENTRY_KEYS: &[&str] = &[
     "trigger",
     "labels",
@@ -195,14 +209,165 @@ fn fix_rounds(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<De
     }
 }
 
-pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Workflow {
+fn kind_stage(
+    c: &mut Collector<'_>,
+    value: &Spanned<DeValue<'_>>,
+    field: &str,
+) -> Option<Option<Trigger>> {
+    let parsed = match value.get_ref().as_str() {
+        Some("off") => Some(None),
+        Some(text) => text.parse::<Trigger>().ok().map(Some),
+        None => None,
+    };
+    if parsed.is_none() {
+        c.push("field_invalid", field, Some(value.span().start));
+    }
+    parsed
+}
+
+fn kind_stages(
+    c: &mut Collector<'_>,
+    workflow: &Workflow,
+    kind: WorkKind,
+    over: &mut KindOverride,
+    lines: &mut KindLines,
+    value: &Spanned<DeValue<'_>>,
+) {
+    let base = format!("workflow.kinds.{kind}.stages");
+    let Some(table) = value.get_ref().as_table() else {
+        c.push("field_invalid", &base, Some(value.span().start));
+        return;
+    };
+    let known: Vec<&str> = STAGE_KEYS.iter().map(|(k, _)| *k).collect();
+    c.unknown(table, &format!("{base}."), &known);
+    for (key, stage) in STAGE_KEYS {
+        let Some(v) = get(table, key) else { continue };
+        let field = format!("{base}.{key}");
+        let Some(trigger) = kind_stage(c, v, &field) else {
+            continue;
+        };
+        let unsupported = match (*stage, trigger) {
+            (Stage::Dev, Some(Trigger::Manual)) => true,
+            (Stage::Review, Some(Trigger::Manual)) => workflow.spec,
+            _ => false,
+        };
+        if unsupported {
+            c.push("workflow_trigger_unsupported", &field, Some(v.span().start));
+            continue;
+        }
+        over.stages.insert(*stage, trigger);
+        lines.insert((kind, *stage), line_of(c.text, v.span().start));
+    }
+}
+
+fn test_paths(
+    c: &mut Collector<'_>,
+    kind: WorkKind,
+    over: &mut KindOverride,
+    value: &Spanned<DeValue<'_>>,
+) {
+    let field = format!("workflow.kinds.{kind}.test_paths");
+    let at = Some(value.span().start);
+    let Some(items) = value.get_ref().as_array() else {
+        c.push("field_invalid", &field, at);
+        return;
+    };
+    if items.len() > MAX_TEST_PATHS {
+        c.push("field_invalid", &field, at);
+        return;
+    }
+    let mut patterns = Vec::with_capacity(items.len());
+    for (j, item) in items.iter().enumerate() {
+        match item.get_ref().as_str() {
+            Some(text) => patterns.push(text.to_string()),
+            None => c.push(
+                "field_invalid",
+                &format!("{field}[{j}]"),
+                Some(item.span().start),
+            ),
+        }
+    }
+    if patterns.len() != items.len() || patterns.is_empty() {
+        over.test_paths = patterns;
+        return;
+    }
+    match PathScope::parse(&patterns) {
+        Ok(_) => over.test_paths = patterns,
+        Err(issues) => {
+            for issue in issues {
+                let target = match issue {
+                    ScopeIssue::Pattern(j) => format!("{field}[{j}]"),
+                    ScopeIssue::TooMany | ScopeIssue::NoInclude => field.clone(),
+                };
+                c.push("kind_test_paths_invalid", &target, at);
+            }
+        }
+    }
+}
+
+fn kinds(
+    c: &mut Collector<'_>,
+    workflow: &mut Workflow,
+    lines: &mut KindLines,
+    value: &Spanned<DeValue<'_>>,
+) {
+    let Some(table) = value.get_ref().as_table() else {
+        c.push("field_invalid", "workflow.kinds", Some(value.span().start));
+        return;
+    };
+    let known: Vec<&str> = WorkKind::ALL.iter().map(|k| k.as_str()).collect();
+    c.unknown(table, "workflow.kinds.", &known);
+    for &kind in WorkKind::ALL {
+        let Some(v) = get(table, kind.as_str()) else {
+            continue;
+        };
+        let base = format!("workflow.kinds.{kind}");
+        let Some(entry) = v.get_ref().as_table() else {
+            c.push("field_invalid", &base, Some(v.span().start));
+            continue;
+        };
+        let keys = if kind == WorkKind::Bugfix {
+            BUGFIX_KEYS
+        } else {
+            KIND_KEYS
+        };
+        c.unknown(entry, &format!("{base}."), keys);
+        let mut over = KindOverride::default();
+        if let Some(stages) = get(entry, "stages") {
+            kind_stages(c, workflow, kind, &mut over, lines, stages);
+        }
+        over.autonomy = autonomy(c, entry, &format!("{base}.autonomy"));
+        if kind == WorkKind::Bugfix
+            && let Some(paths) = get(entry, "test_paths")
+        {
+            test_paths(c, kind, &mut over, paths);
+        }
+        workflow.kinds.insert(kind, over);
+    }
+}
+
+pub fn kind_issue(issue: &KindIssue, lines: &KindLines) -> super::Issue {
+    let stage = issue.stage.unwrap_or(Stage::Review);
+    let field = match issue.refusal {
+        KindRefusal::FixWithoutReview => format!("workflow.kinds.{}", issue.kind),
+        _ => format!("workflow.kinds.{}.stages.{stage}", issue.kind),
+    };
+    super::Issue {
+        code: issue.refusal.code(),
+        field: Some(field),
+        line: lines.get(&(issue.kind, stage)).copied(),
+    }
+}
+
+pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> (Workflow, KindLines) {
+    let mut lines = KindLines::new();
     let Some(section) = get(doc, "workflow") else {
-        return Workflow::default();
+        return (Workflow::default(), lines);
     };
     let at = section.span().start;
     let Some(table) = section.get_ref().as_table() else {
         c.push("field_invalid", "workflow", Some(at));
-        return Workflow::default();
+        return (Workflow::default(), lines);
     };
     let before = c.issues.len();
     c.unknown(table, "workflow.", KEYS);
@@ -220,7 +385,7 @@ pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Workflow {
                     "workflow.preset",
                     Some(v.span().start),
                 );
-                return Workflow::default();
+                return (Workflow::default(), lines);
             }
         },
     };
@@ -258,6 +423,9 @@ pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Workflow {
     if let Some(v) = get(table, "fix_rounds") {
         fix_rounds(c, &mut workflow, v);
     }
+    if let Some(v) = get(table, "kinds") {
+        kinds(c, &mut workflow, &mut lines, v);
+    }
     if c.issues.len() == before {
         for issue in workflow.validate() {
             c.issues.push(super::Issue {
@@ -266,14 +434,20 @@ pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> Workflow {
                 line: Some(line_of(c.text, at)),
             });
         }
+        let structural = WorkflowPolicy {
+            allow_unreviewed_chore: true,
+        };
+        for issue in workflow.kind_issues(&structural) {
+            c.issues.push(kind_issue(&issue, &lines));
+        }
     }
-    workflow
+    (workflow, lines)
 }
 
 #[cfg(test)]
 mod tests {
-    use saka_core::vocab::{Stage, Trigger, WorkflowPreset};
-    use saka_core::workflow::{DEFAULT_TRIGGER_LABEL, Workflow};
+    use saka_core::vocab::{Autonomy, Stage, Trigger, WorkKind, WorkflowPreset};
+    use saka_core::workflow::{DEFAULT_TRIGGER_LABEL, Workflow, WorkflowPolicy};
 
     use crate::project_config::parse;
 
@@ -599,6 +773,204 @@ sync = "auto"
                 "workflow.change_request.authors[0]".into(),
                 11
             )]
+        );
+    }
+
+    #[test]
+    fn kind_overrides_are_read_into_the_workflow() {
+        let w = config(
+            r#"[workflow.kinds.bugfix]
+stages = { review = "auto", merge = "manual" }
+autonomy = "standard"
+test_paths = ["src/**/fixtures/**", "!src/skip/**"]
+
+[workflow.kinds.chore]
+stages = { review = "off" }
+"#,
+        )
+        .unwrap();
+        let bugfix = &w.kinds[&WorkKind::Bugfix];
+        assert_eq!(
+            bugfix
+                .stages
+                .iter()
+                .map(|(s, t)| (*s, *t))
+                .collect::<Vec<_>>(),
+            [
+                (Stage::Review, Some(Trigger::Auto)),
+                (Stage::Merge, Some(Trigger::Manual))
+            ]
+        );
+        assert_eq!(bugfix.autonomy, Some(Autonomy::Standard));
+        assert_eq!(bugfix.test_paths, ["src/**/fixtures/**", "!src/skip/**"]);
+        assert_eq!(w.kinds[&WorkKind::Chore].stages[&Stage::Review], None);
+        assert_eq!(w.kinds.len(), 2);
+        assert_eq!(w.stages, Workflow::default().stages);
+    }
+
+    #[test]
+    fn unknown_kinds_and_keys_are_named() {
+        assert_eq!(
+            issues("[workflow.kinds.hotfix]\nstages = {}\n"),
+            [("field_unknown", "workflow.kinds.hotfix".into(), 8)]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.bugfix]\nretries = 2\n"),
+            [("field_unknown", "workflow.kinds.bugfix.retries".into(), 9)]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.chore]\ntest_paths = [\"a/**\"]\n"),
+            [("field_unknown", "workflow.kinds.chore.test_paths".into(), 9)]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.bugfix]\nstages = { sync = \"auto\" }\n"),
+            [(
+                "field_unknown",
+                "workflow.kinds.bugfix.stages.sync".into(),
+                9
+            )]
+        );
+    }
+
+    #[test]
+    fn kind_values_must_have_the_documented_shape() {
+        for (text, field, line) in [
+            (
+                "[workflow.kinds.bugfix]\nstages = { review = \"sometimes\" }\n",
+                "workflow.kinds.bugfix.stages.review",
+                9,
+            ),
+            (
+                "[workflow.kinds.bugfix]\nstages = \"auto\"\n",
+                "workflow.kinds.bugfix.stages",
+                9,
+            ),
+            (
+                "[workflow.kinds.bugfix]\nautonomy = \"free\"\n",
+                "workflow.kinds.bugfix.autonomy",
+                9,
+            ),
+            (
+                "[workflow.kinds.bugfix]\ntest_paths = \"tests/**\"\n",
+                "workflow.kinds.bugfix.test_paths",
+                9,
+            ),
+            ("[workflow.kinds]\nbugfix = 3\n", "workflow.kinds.bugfix", 9),
+            ("[workflow]\nkinds = 3\n", "workflow.kinds", 9),
+        ] {
+            assert_eq!(
+                issues(text),
+                [("field_invalid", field.to_string(), line)],
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_paths_are_valid_patterns_and_at_most_thirty_two() {
+        assert_eq!(
+            issues("[workflow.kinds.bugfix]\ntest_paths = [\"ok/**\", \"[bad\"]\n"),
+            [(
+                "kind_test_paths_invalid",
+                "workflow.kinds.bugfix.test_paths[1]".into(),
+                9
+            )]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.bugfix]\ntest_paths = [\"!only/excludes/**\"]\n"),
+            [(
+                "kind_test_paths_invalid",
+                "workflow.kinds.bugfix.test_paths".into(),
+                9
+            )]
+        );
+        let many = vec!["\"a/**\""; 33].join(", ");
+        assert_eq!(
+            issues(&format!("[workflow.kinds.bugfix]\ntest_paths = [{many}]\n")),
+            [(
+                "field_invalid",
+                "workflow.kinds.bugfix.test_paths".into(),
+                9
+            )]
+        );
+        let fits = vec!["\"a/**\""; 32].join(", ");
+        assert!(config(&format!("[workflow.kinds.bugfix]\ntest_paths = [{fits}]\n")).is_ok());
+        assert!(config("[workflow.kinds.bugfix]\ntest_paths = []\n").is_ok());
+    }
+
+    #[test]
+    fn kind_overrides_that_break_a_rule_name_it_at_their_line() {
+        assert_eq!(
+            issues("[workflow.kinds.bugfix]\nstages = { review = \"off\" }\n"),
+            [(
+                "kind_review_required",
+                "workflow.kinds.bugfix.stages.review".into(),
+                9
+            )]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.security_patch]\nstages = { review = \"off\" }\n"),
+            [(
+                "kind_review_required",
+                "workflow.kinds.security_patch.stages.review".into(),
+                9
+            )]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.refactor]\nstages = { dev = \"off\" }\n"),
+            [(
+                "kind_stage_required",
+                "workflow.kinds.refactor.stages.dev".into(),
+                9
+            )]
+        );
+        assert_eq!(
+            issues(
+                "[workflow]\npreset = \"build_only\"\n[workflow.kinds.refactor]\nstages = { merge = \"auto\" }\n"
+            ),
+            [(
+                "workflow_stage_not_allowed",
+                "workflow.kinds.refactor.stages.merge".into(),
+                11
+            )]
+        );
+        assert_eq!(
+            issues(
+                "[workflow]\npreset = \"build_only\"\n[workflow.kinds.refactor]\nstages = { fix = \"auto\" }\n"
+            ),
+            [(
+                "workflow_fix_without_review",
+                "workflow.kinds.refactor".into(),
+                11
+            )]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.refactor]\nstages = { dev = \"manual\" }\n"),
+            [(
+                "workflow_trigger_unsupported",
+                "workflow.kinds.refactor.stages.dev".into(),
+                9
+            )]
+        );
+        assert_eq!(
+            issues("[workflow.kinds.refactor]\nstages = { review = \"manual\" }\n"),
+            [(
+                "workflow_trigger_unsupported",
+                "workflow.kinds.refactor.stages.review".into(),
+                9
+            )]
+        );
+    }
+
+    #[test]
+    fn a_chore_without_review_passes_the_file_check_and_waits_for_the_operator_check() {
+        let w = config("[workflow.kinds.chore]\nstages = { review = \"off\" }\n").unwrap();
+        assert_eq!(
+            w.kind_issues(&WorkflowPolicy::default())
+                .iter()
+                .map(|i| i.refusal.code())
+                .collect::<Vec<_>>(),
+            ["kind_review_not_allowed"]
         );
     }
 }

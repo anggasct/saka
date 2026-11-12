@@ -27,7 +27,7 @@ use crate::vocab::{
     InboxSubject, InterruptBy, LintOutcome, MatchKind, MergeMethod, PairingPurpose,
     PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis,
     ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
-    TargetKind, TokenInvalidCause, Trigger,
+    TargetKind, TokenInvalidCause, Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -155,6 +155,7 @@ pub enum Event {
         parser_version: u32,
         #[serde(default)]
         priority: i64,
+        kind: WorkKind,
     },
     #[serde(rename = "spec.spec.approved")]
     SpecApproved {
@@ -163,6 +164,7 @@ pub enum Event {
         reason: Option<String>,
         #[serde(default)]
         priority: i64,
+        kind: WorkKind,
         #[serde(default)]
         depends_on: Vec<DependsOn>,
         #[serde(default)]
@@ -273,6 +275,7 @@ pub enum Event {
         branch: String,
         repo_id: RepoId,
         priority: i64,
+        kind: WorkKind,
     },
     #[serde(rename = "delivery.work_item.repinned")]
     WorkItemRepinned {
@@ -282,6 +285,7 @@ pub enum Event {
         work: String,
         repo_id: RepoId,
         priority: i64,
+        kind: WorkKind,
         restored: bool,
     },
     #[serde(rename = "delivery.work_item.superseded")]

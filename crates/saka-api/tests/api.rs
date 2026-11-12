@@ -567,6 +567,116 @@ fn a_repo_shows_what_the_operator_allows_what_its_file_asks_and_the_level_in_for
     assert_eq!(listed.body["items"][0]["merge_auto"], true);
 }
 
+const BUGFIX_SPEC: &str = "---
+saka: spec
+kind: bugfix
+---
+# Fix the loop
+
+## Acceptance criteria
+
+- **AC-01**: the loop is gone.
+
+## Regression
+
+- `make test-regression`
+
+## Done when
+
+- `make test`
+";
+
+#[test]
+fn kind_overrides_show_on_the_project_and_the_kind_on_its_specs_and_tasks() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str(
+        "\n[workflow.kinds.bugfix]\nstages = { merge = \"manual\" }\nautonomy = \"standard\"\ntest_paths = [\"src/**/fixtures/**\"]\n\n[workflow.kinds.chore]\nstages = { review = \"off\" }\n",
+    );
+    let layout = Layout {
+        saka_toml: text,
+        ..Layout::default()
+    };
+    let mut cfg = SimConfig::default();
+    cfg.workflow_policy.allow_unreviewed_chore = true;
+    let mut api = Api::with(Sim::multi_repo(cfg, &layout));
+    let project = api.sim.project_id.0;
+    let shown = api.get(&format!("/api/v1/projects/{project}"));
+    assert_eq!(
+        shown.body["workflow"]["kinds"],
+        json!({
+            "bugfix": {
+                "stages": { "merge": "manual" },
+                "autonomy": "standard",
+                "test_paths": ["src/**/fixtures/**"],
+            },
+            "chore": { "stages": { "review": "off" }, "autonomy": null, "test_paths": [] },
+        })
+    );
+    assert_eq!(shown.body["allow_unreviewed_chore"], true);
+
+    let spec = api.register_doc("docs/specs/fix-loop.md", BUGFIX_SPEC);
+    assert_eq!(spec.body["kind"], "bugfix");
+    assert_eq!(spec.body["regression"], json!(["make test-regression"]));
+    assert_eq!(spec.body["lint"]["ok"], true);
+    let id = spec.body["id"].as_str().unwrap().to_string();
+    let shown_spec = api.get(&format!("/api/v1/specs/{id}"));
+    assert_eq!(shown_spec.body["kind"], "bugfix");
+    assert_eq!(
+        shown_spec.body["regression"],
+        json!(["make test-regression"])
+    );
+
+    let feature = api.get(&format!("/api/v1/specs/{}", api.sim.spec_id.0));
+    assert_eq!(feature.body["kind"], "feature");
+    assert_eq!(feature.body["regression"], json!([]));
+    let listed = api.get(&format!("/api/v1/projects/{project}/specs"));
+    let kinds: Vec<_> = listed.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["slug"].as_str().unwrap().to_string(), s["kind"].clone()))
+        .collect();
+    assert!(
+        kinds.contains(&("fix-loop".to_string(), json!("bugfix"))),
+        "{kinds:?}"
+    );
+
+    let approved = api.approve_reply(&spec);
+    assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
+    let items = api.get(&format!("/api/v1/work-items?spec_id={id}"));
+    assert_eq!(items.body["items"][0]["kind"], "bugfix");
+    let task = items.body["items"][0]["id"].as_str().unwrap().to_string();
+    let detail = api.get(&format!("/api/v1/work-items/{task}"));
+    assert_eq!(detail.body["kind"], "bugfix");
+    assert_eq!(detail.body["autonomy"], "standard");
+    assert_eq!(detail.body["merge_auto"], false);
+}
+
+#[test]
+fn a_reload_that_names_an_unknown_kind_answers_with_the_issue() {
+    let api = Api::new(SimConfig::default());
+    let project = api.sim.project_id.0;
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str("\n[workflow.kinds.hotfix]\nstages = {}\n");
+    api.sim.world.put_doc("docs/saka.toml", text.as_bytes());
+    let reply = api.post_with(
+        &format!("/api/v1/projects/{project}/actions/reload"),
+        Some("reload-kinds"),
+        &[],
+        &json!({}),
+    );
+    problem(
+        &reply,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "project_config_invalid",
+    );
+    assert_eq!(reply.body["params"]["issues"][0]["code"], "field_unknown");
+    assert_eq!(
+        reply.body["params"]["issues"][0]["field"],
+        "workflow.kinds.hotfix"
+    );
+}
+
 #[test]
 fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
     let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
@@ -588,6 +698,7 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
             "change_request": null,
             "stages": [{ "stage": "dev", "trigger": "auto" }],
             "fix_rounds": 2,
+            "kinds": {},
         })
     );
 

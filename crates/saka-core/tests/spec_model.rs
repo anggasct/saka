@@ -27,6 +27,7 @@ const NOW: Timestamp = Timestamp(1_000);
 
 fn spec(n: u128, slug: &str, state: SpecState) -> Spec {
     Spec {
+        kind: saka_core::vocab::WorkKind::Feature,
         id: SpecId(Uuid::from_u128(n)),
         project_id: PROJECT,
         path: format!("docs/specs/{slug}.md"),
@@ -70,6 +71,7 @@ fn step(n: u32, after: &[&str]) -> StepPlan {
 
 fn revision(s: &Spec, depends_on: &[&str], priority: i64, steps: Vec<StepPlan>) -> RevisionView {
     RevisionView {
+        kind: saka_core::vocab::WorkKind::Feature,
         id: s.latest_revision_id,
         lint_ok: true,
         issues: json!([]),
@@ -275,6 +277,7 @@ fn priority_follows_the_latest_revision_until_approve() {
         ids: &mut ids,
     };
     let revision = |priority| NewRevision {
+        kind: saka_core::vocab::WorkKind::Feature,
         origin: saka_core::vocab::SpecOrigin::Manual,
         source_commit: "a".repeat(40),
         content_hash: format!("h{priority}"),
@@ -332,7 +335,8 @@ fn old_events_read_with_defaults() {
         "kind": "spec.revision.recorded",
         "payload": {
             "spec_id": Uuid::from_u128(1), "revision_id": Uuid::from_u128(2), "source_commit": "a",
-            "content_hash": "h", "lint_ok": true, "issue_codes": [], "title": "T", "reused": false
+            "content_hash": "h", "lint_ok": true, "issue_codes": [], "title": "T", "reused": false,
+            "kind": "feature"
         }
     }))
     .unwrap();
@@ -348,7 +352,7 @@ fn old_events_read_with_defaults() {
     ));
     let approved: Event = serde_json::from_value(json!({
         "kind": "spec.spec.approved",
-        "payload": {"spec_id": Uuid::from_u128(1), "revision_id": Uuid::from_u128(2), "reason": null}
+        "payload": {"spec_id": Uuid::from_u128(1), "revision_id": Uuid::from_u128(2), "reason": null, "kind": "feature"}
     }))
     .unwrap();
     assert!(matches!(

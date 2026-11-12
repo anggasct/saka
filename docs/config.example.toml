@@ -20,6 +20,9 @@ session_hours = 168                  # 1..=720; a browser session ends this long
 [scheduler]
 max_active_tasks = 2               # 1..=16
 
+[workflow]
+allow_unreviewed_chore = false     # true lets a project's saka.toml skip review for the chore kind
+
 [workspace]
 config_poll_secs = 300             # 0 or 30..=86400; how often each project's saka.toml is re-read (0 = only on reload)
 

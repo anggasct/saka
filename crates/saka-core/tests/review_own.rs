@@ -107,6 +107,7 @@ fn review(head: &str, outcome: ReviewOutcome) -> Review {
 
 fn task_at_merge(workflow: Workflow) -> Task {
     let mut task = Task::new(WorkItem {
+        kind: Some(saka_core::vocab::WorkKind::Feature),
         id: WorkItemId(Uuid::from_u128(1)),
         project_id: ProjectId(Uuid::from_u128(2)),
         origin: WorkItemOrigin::SpecStep,

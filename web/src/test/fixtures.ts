@@ -32,7 +32,9 @@ export const project: ProjectItem = {
       { stage: "merge", trigger: "manual" },
     ],
     fix_rounds: 2,
+    kinds: {},
   },
+  allow_unreviewed_chore: false,
   config_commit: "9f1c".padEnd(40, "0"),
   config_sha256: `sha256:${"4b8e".padEnd(64, "0")}`,
   config_error: null,
@@ -49,6 +51,8 @@ export const spec: SpecItem = {
   title: "Mark tasks as done",
   state: "approved",
   origin: "manual",
+  kind: "feature",
+  regression: [],
   priority: 0,
   depends_on: [],
   revision: {

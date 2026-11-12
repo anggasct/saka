@@ -14,7 +14,8 @@ use saka_core::model::{
     StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
-use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger};
+use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger, WorkKind};
+use saka_core::workflow::{Workflow, WorkflowPolicy};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -85,7 +86,7 @@ impl RunOf {
 }
 
 const WORK_ITEM_COLUMNS: &str = "id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key,
-    work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at";
+    work, repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at, kind";
 
 pub(crate) fn ts(row: &Row<'_>, col: &str) -> Result<Timestamp> {
     Ok(Timestamp(row.get(col)?))
@@ -99,6 +100,7 @@ pub(crate) fn opt_ts(row: &Row<'_>, col: &str) -> Result<Option<Timestamp>> {
 fn work_item(row: &Row<'_>) -> Result<WorkItem> {
     Ok(WorkItem {
         id: WorkItemId(uuid(row, "id")?),
+        kind: opt_vocab(row, "kind")?,
         project_id: ProjectId(uuid(row, "project_id")?),
         origin: vocab(row, "origin")?,
         spec_id: opt_uuid(row, "spec_id")?.map(SpecId),
@@ -164,7 +166,11 @@ pub(crate) fn rows_of<T>(
     Ok(out)
 }
 
-pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
+pub fn load_tasks(
+    conn: &Connection,
+    set: TaskSet<'_>,
+    policy: &WorkflowPolicy,
+) -> Result<Vec<Task>> {
     let ids_json;
     let spec_id;
     let (selection, bind): (&str, Vec<&dyn rusqlite::ToSql>) = match set {
@@ -283,9 +289,9 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
             t.external = Some(external);
         }
     }
-    for (id, workflow, policy) in rows_of(
+    for (id, workflow, kind, repo_policy) in rows_of(
         conn,
-        "SELECT w.id, p.workflow, r.full_name, pr.autonomy FROM work_item w JOIN project p ON p.id = w.project_id
+        "SELECT w.id, p.workflow, w.kind, r.full_name, pr.autonomy FROM work_item w JOIN project p ON p.id = w.project_id
            JOIN repo r ON r.id = w.repo_id
            LEFT JOIN project_repo pr ON pr.project_id = w.project_id AND pr.repo_id = w.repo_id",
         "w.id",
@@ -295,7 +301,8 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         |row| {
             Ok((
                 WorkItemId(uuid(row, "id")?),
-                json(row, "workflow")?,
+                json::<Workflow>(row, "workflow")?,
+                opt_vocab::<WorkKind>(row, "kind")?,
                 RepoPolicy {
                     full_name: row.get("full_name")?,
                     requested: opt_vocab(row, "autonomy")?,
@@ -304,8 +311,11 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
         },
     )? {
         if let Some(t) = tasks.get_mut(&id) {
-            t.workflow = workflow;
-            t.policy = policy;
+            t.workflow = match kind {
+                Some(kind) => workflow.for_kind(kind, policy),
+                None => workflow,
+            };
+            t.policy = repo_policy;
         }
     }
     for r in rows(
@@ -475,8 +485,14 @@ pub fn load_tasks(conn: &Connection, set: TaskSet<'_>) -> Result<Vec<Task>> {
     Ok(tasks.into_values().collect())
 }
 
-pub fn load_task(conn: &Connection, id: WorkItemId) -> Result<Option<Task>> {
-    Ok(load_tasks(conn, TaskSet::Ids(&[id]))?.into_iter().next())
+pub fn load_task(
+    conn: &Connection,
+    id: WorkItemId,
+    policy: &WorkflowPolicy,
+) -> Result<Option<Task>> {
+    Ok(load_tasks(conn, TaskSet::Ids(&[id]), policy)?
+        .into_iter()
+        .next())
 }
 
 pub fn merge_queue_members(
@@ -1067,6 +1083,7 @@ pub(crate) fn permission(row: &Row<'_>) -> Result<PermissionRequest> {
 pub(crate) fn spec_row(row: &Row<'_>) -> Result<Spec> {
     Ok(Spec {
         id: SpecId(uuid(row, "id")?),
+        kind: vocab(row, "kind")?,
         project_id: ProjectId(uuid(row, "project_id")?),
         path: row.get("path")?,
         slug: row.get("slug")?,
@@ -1354,7 +1371,12 @@ pub fn revision_view_of(
         Some(list) => serde_json::from_value(list.clone())?,
         None => Vec::new(),
     };
+    let kind = match model.get("kind") {
+        Some(kind) => serde_json::from_value(kind.clone())?,
+        None => WorkKind::default(),
+    };
     Ok(RevisionView {
+        kind,
         id,
         lint_ok,
         issues: issues.clone(),

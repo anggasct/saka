@@ -23,6 +23,7 @@ const project = {
   hooks_skipped: [],
   authorship_mode: "bot",
   workflow: FULL_LOOP,
+  allow_unreviewed_chore: false,
   config_commit: "9f1c".padEnd(40, "0"),
   config_sha256: `sha256:${"4b8e".padEnd(64, "0")}`,
   config_error: null,

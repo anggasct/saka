@@ -273,6 +273,24 @@ impl Engine {
         }
     }
 
+    pub(crate) fn checked_kinds(
+        &self,
+        config: &crate::project_config::ProjectConfig,
+    ) -> std::result::Result<(), Vec<crate::project_config::Issue>> {
+        let issues: Vec<_> = config
+            .workflow
+            .kind_issues(&self.cfg.workflow_policy)
+            .iter()
+            .filter(|i| i.refusal == saka_core::workflow::KindRefusal::ReviewNotAllowed)
+            .map(|i| crate::project_config::kind_issue(i, &config.kind_lines))
+            .collect();
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(issues)
+        }
+    }
+
     pub fn project_hooks(&self, project: ProjectId) -> Result<Vec<Hook>> {
         let project =
             self.store
@@ -348,7 +366,7 @@ impl Engine {
         {
             let holding = self
                 .store
-                .read(|c| read::load_task(c, work_item_id))?
+                .read(|c| read::load_task(c, work_item_id, &self.cfg.workflow_policy))?
                 .is_some_and(|t| !t.item.state.is_terminal());
             if holding {
                 return Err(EngineError::Rejected(

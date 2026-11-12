@@ -61,6 +61,82 @@ function ChangeFilters({ entry }: { entry: Entry }) {
   );
 }
 
+type KindOverride = Project["workflow"]["kinds"][string];
+
+function KindOverrides({ kinds }: { kinds: Project["workflow"]["kinds"] }) {
+  const t = useT();
+  const entries = Object.entries(kinds);
+  if (entries.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("settings.workflow.kinds.none")}
+      </p>
+    );
+  }
+  return (
+    <ul aria-label={t("settings.workflow.kinds.title")} className="space-y-2">
+      {entries.map(([kind, override]) => (
+        <KindEntry key={kind} kind={kind} override={override} />
+      ))}
+    </ul>
+  );
+}
+
+function KindEntry({
+  kind,
+  override,
+}: {
+  kind: string;
+  override: KindOverride;
+}) {
+  const t = useT();
+  const stages = Object.entries(override.stages);
+  return (
+    <li className="space-y-2 rounded-lg border border-border p-3 text-sm">
+      <span className="font-medium">{label(t, "kind", kind)}</span>
+      <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.stages")}
+        </dt>
+        <dd>
+          {stages.length === 0 ? (
+            t("settings.workflow.kinds.noStages")
+          ) : (
+            <ul className="space-y-1">
+              {stages.map(([stage, trigger]) => (
+                <li key={stage}>
+                  {t("settings.workflow.stage", {
+                    stage: label(t, "stage", stage),
+                    trigger: label(t, "trigger", trigger),
+                  })}
+                </li>
+              ))}
+            </ul>
+          )}
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.kinds.autonomy")}
+        </dt>
+        <dd>
+          {override.autonomy === null || override.autonomy === undefined
+            ? t("settings.workflow.kinds.noAutonomy")
+            : label(t, "autonomy", override.autonomy)}
+        </dd>
+        {override.test_paths.length > 0 && (
+          <>
+            <dt className="text-muted-foreground">
+              {t("settings.workflow.kinds.testPaths")}
+            </dt>
+            <dd>
+              <Scope globs={override.test_paths} />
+            </dd>
+          </>
+        )}
+      </dl>
+    </li>
+  );
+}
+
 export function WorkflowSection({ project }: { project: Project }) {
   const t = useT();
   const { workflow } = project;
@@ -106,7 +182,21 @@ export function WorkflowSection({ project }: { project: Project }) {
             </ul>
           )}
         </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.unreviewedChore")}
+        </dt>
+        <dd>
+          {project.allow_unreviewed_chore
+            ? t("settings.workflow.unreviewedChore.allowed")
+            : t("settings.workflow.unreviewedChore.refused")}
+        </dd>
       </dl>
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium">
+          {t("settings.workflow.kinds.title")}
+        </h3>
+        <KindOverrides kinds={workflow.kinds} />
+      </div>
       {entry !== null && entry !== undefined && <ChangeFilters entry={entry} />}
     </Section>
   );

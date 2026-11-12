@@ -16,6 +16,7 @@ const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn task() -> Task {
     let mut task = Task::new(WorkItem {
+        kind: Some(saka_core::vocab::WorkKind::Feature),
         id: WORK,
         project_id: ProjectId(Uuid::from_u128(2)),
         origin: WorkItemOrigin::ExternalChange,

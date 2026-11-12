@@ -19,6 +19,7 @@ fn id(n: u128) -> Uuid {
 
 fn task(state: WorkItemState) -> Task {
     Task::new(WorkItem {
+        kind: Some(saka_core::vocab::WorkKind::Feature),
         id: WorkItemId(id(1)),
         project_id: ProjectId(id(2)),
         origin: WorkItemOrigin::SpecStep,
@@ -60,6 +61,7 @@ fn blocked(code: BlockerCode, params: serde_json::Value) -> Task {
 
 fn spec(state: SpecState) -> Spec {
     Spec {
+        kind: saka_core::vocab::WorkKind::Feature,
         id: SpecId(id(3)),
         project_id: ProjectId(id(2)),
         path: "specs/feat-x.md".into(),

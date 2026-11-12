@@ -63,7 +63,7 @@ macro_rules! spec_columns {
         spec_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "path", "slug", "title", "state", "origin", "priority", "latest_revision_id", "approved_revision_id", "approved_at", "shipped_at", "created_at", "updated_at")
+        qualified!($prefix: "id", "project_id", "path", "slug", "title", "state", "origin", "priority", "latest_revision_id", "approved_revision_id", "approved_at", "shipped_at", "created_at", "updated_at", "kind")
     };
 }
 

@@ -324,6 +324,10 @@ impl Engine {
         issues.sort_by_key(|i| i.line);
         let lint_ok = parsed.is_ready() && !context.issues.iter().any(LintIssue::is_error);
         let revision = NewRevision {
+            kind: parsed
+                .model
+                .as_ref()
+                .map_or_else(Default::default, |m| m.kind),
             origin,
             source_commit: source_commit.to_string(),
             content_hash: hash.clone(),
@@ -423,11 +427,10 @@ impl Engine {
                 .map(RevisionInfo::from)
                 .ok_or_else(|| EngineError::Internal("revision not found".into()))?,
         };
-        let work_items = step_items(
-            &self
-                .store
-                .read(|c| read::load_tasks(c, TaskSet::Spec(spec.id)))?,
-        );
+        let work_items =
+            step_items(&self.store.read(|c| {
+                read::load_tasks(c, TaskSet::Spec(spec.id), &self.cfg.workflow_policy)
+            })?);
         let created = existing.is_none();
         let view = self.spec_view_with(spec, revision, work_items)?;
         if let Some(action) = action {
@@ -491,7 +494,7 @@ impl Engine {
                 read::project_specs(c, spec.project_id)?,
                 read::spec_dependencies(c, Some(spec.project_id))?,
                 approved,
-                read::load_tasks(c, TaskSet::Spec(spec.id))?,
+                read::load_tasks(c, TaskSet::Spec(spec.id), &self.cfg.workflow_policy)?,
             ))
         })?;
         let items: Vec<_> = tasks.iter().map(|t| t.item.clone()).collect();
@@ -631,7 +634,7 @@ impl Engine {
         let (spec, tasks) = self.store.read(|c| {
             Ok((
                 read::load_spec(c, spec_id)?,
-                read::load_tasks(c, TaskSet::Spec(spec_id))?,
+                read::load_tasks(c, TaskSet::Spec(spec_id), &self.cfg.workflow_policy)?,
             ))
         })?;
         let spec = spec.ok_or(EngineError::Rejected(Rejection::NotFound))?;
@@ -845,7 +848,7 @@ impl Engine {
         let reason = why.map(reason).transpose()?;
         let task = self
             .store
-            .read(|c| read::load_task(c, id))?
+            .read(|c| read::load_task(c, id, &self.cfg.workflow_policy))?
             .ok_or(Rejection::NotFound)?;
         let project = self
             .store

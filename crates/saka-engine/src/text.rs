@@ -194,7 +194,7 @@ impl Engine {
     pub fn work_packet(&self, id: WorkItemId) -> Result<(Task, Packet)> {
         let task = self
             .store
-            .read(|c| read::load_task(c, id))?
+            .read(|c| read::load_task(c, id, &self.cfg.workflow_policy))?
             .ok_or(Rejection::NotFound)?;
         if task.item.spec_revision_id.is_none() {
             return Err(Rejection::WorkPacketUnavailable {

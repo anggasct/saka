@@ -1,13 +1,16 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::scope::PathScope;
-use crate::vocab::{Stage, Trigger, WorkflowPreset};
+use crate::vocab::{Autonomy, Stage, Trigger, WorkKind, WorkflowPreset};
 
 pub const MAX_FILTER_ENTRIES: usize = 16;
 pub const MAX_FILTER_BYTES: usize = 100;
 pub const DEFAULT_TRIGGER_LABEL: &str = "saka:review";
 pub const DEFAULT_FIX_ROUNDS: u32 = 2;
 pub const MAX_FIX_ROUNDS: u32 = 10;
+pub const MAX_TEST_PATHS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSetting {
@@ -50,6 +53,53 @@ pub struct Workflow {
     pub stages: Vec<StageSetting>,
     #[serde(default = "default_fix_rounds")]
     pub fix_rounds: u32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kinds: BTreeMap<WorkKind, KindOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy_cap: Option<Autonomy>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindOverride {
+    #[serde(default)]
+    pub stages: BTreeMap<Stage, Option<Trigger>>,
+    #[serde(default)]
+    pub autonomy: Option<Autonomy>,
+    #[serde(default)]
+    pub test_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkflowPolicy {
+    pub allow_unreviewed_chore: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindRefusal {
+    StageRequired,
+    ReviewRequired,
+    ReviewNotAllowed,
+    StageNotAllowed,
+    FixWithoutReview,
+}
+
+impl KindRefusal {
+    pub fn code(self) -> &'static str {
+        match self {
+            KindRefusal::StageRequired => "kind_stage_required",
+            KindRefusal::ReviewRequired => "kind_review_required",
+            KindRefusal::ReviewNotAllowed => "kind_review_not_allowed",
+            KindRefusal::StageNotAllowed => "workflow_stage_not_allowed",
+            KindRefusal::FixWithoutReview => "workflow_fix_without_review",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KindIssue {
+    pub kind: WorkKind,
+    pub stage: Option<Stage>,
+    pub refusal: KindRefusal,
 }
 
 fn default_fix_rounds() -> u32 {
@@ -123,6 +173,8 @@ impl Workflow {
                 spec: true,
                 change_request: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                kinds: BTreeMap::new(),
+                autonomy_cap: None,
                 stages: vec![
                     stage(Stage::Dev, Trigger::Auto),
                     stage(Stage::Review, Trigger::Auto),
@@ -135,6 +187,8 @@ impl Workflow {
                 spec: true,
                 change_request: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                kinds: BTreeMap::new(),
+                autonomy_cap: None,
                 stages: vec![stage(Stage::Dev, Trigger::Auto)],
             },
             WorkflowPreset::ReviewOnly => Workflow {
@@ -142,6 +196,8 @@ impl Workflow {
                 spec: false,
                 change_request: Some(ChangeEntry::default()),
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                kinds: BTreeMap::new(),
+                autonomy_cap: None,
                 stages: vec![
                     stage(Stage::Review, Trigger::Auto),
                     stage(Stage::Merge, Trigger::Manual),
@@ -152,6 +208,8 @@ impl Workflow {
                 spec: false,
                 change_request: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                kinds: BTreeMap::new(),
+                autonomy_cap: None,
                 stages: Vec::new(),
             },
         }
@@ -179,6 +237,88 @@ impl Workflow {
                 self.stages.push(StageSetting { stage, trigger });
                 self.stages.sort_by_key(|s| s.stage);
             }
+        }
+    }
+
+    pub fn for_kind(&self, kind: WorkKind, policy: &WorkflowPolicy) -> Workflow {
+        self.resolve_kind(kind, policy).0
+    }
+
+    pub fn kind_issues(&self, policy: &WorkflowPolicy) -> Vec<KindIssue> {
+        self.kinds
+            .keys()
+            .flat_map(|&kind| self.resolve_kind(kind, policy).1)
+            .collect()
+    }
+
+    fn resolve_kind(&self, kind: WorkKind, policy: &WorkflowPolicy) -> (Workflow, Vec<KindIssue>) {
+        let mut effective = Workflow {
+            kinds: BTreeMap::new(),
+            autonomy_cap: None,
+            ..self.clone()
+        };
+        let mut issues = Vec::new();
+        if kind == WorkKind::SecurityPatch {
+            if !effective.has_stage(Stage::Review) {
+                effective.set_stage(Stage::Review, Trigger::Auto);
+            }
+            effective.autonomy_cap = Some(Autonomy::Strict);
+        }
+        let Some(overrides) = self.kinds.get(&kind) else {
+            return (effective, issues);
+        };
+        for (&stage, &trigger) in &overrides.stages {
+            if let Err(refusal) = effective.apply_kind_stage(kind, stage, trigger, policy) {
+                issues.push(KindIssue {
+                    kind,
+                    stage: Some(stage),
+                    refusal,
+                });
+            }
+        }
+        if effective.has_stage(Stage::Fix) && !effective.has_stage(Stage::Review) {
+            effective.remove_stage(Stage::Fix);
+            if matches!(overrides.stages.get(&Stage::Fix), Some(Some(_))) {
+                issues.push(KindIssue {
+                    kind,
+                    stage: Some(Stage::Fix),
+                    refusal: KindRefusal::FixWithoutReview,
+                });
+            }
+        }
+        effective.autonomy_cap = match (effective.autonomy_cap, overrides.autonomy) {
+            (Some(cap), Some(level)) => Some(cap.min(level)),
+            (cap, level) => cap.or(level),
+        };
+        (effective, issues)
+    }
+
+    fn apply_kind_stage(
+        &mut self,
+        kind: WorkKind,
+        stage: Stage,
+        trigger: Option<Trigger>,
+        policy: &WorkflowPolicy,
+    ) -> Result<(), KindRefusal> {
+        match (stage, trigger) {
+            (Stage::Dev, None) => Err(KindRefusal::StageRequired),
+            (Stage::Review, None) if kind != WorkKind::Chore => Err(KindRefusal::ReviewRequired),
+            (Stage::Review, None) if !policy.allow_unreviewed_chore => {
+                Err(KindRefusal::ReviewNotAllowed)
+            }
+            (_, None) => {
+                self.remove_stage(stage);
+                Ok(())
+            }
+            (Stage::Review | Stage::Fix, Some(trigger)) => {
+                self.set_stage(stage, trigger);
+                Ok(())
+            }
+            (_, Some(trigger)) if self.has_stage(stage) => {
+                self.set_stage(stage, trigger);
+                Ok(())
+            }
+            (_, Some(_)) => Err(KindRefusal::StageNotAllowed),
         }
     }
 

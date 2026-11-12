@@ -377,7 +377,7 @@ impl Engine {
         };
         let Some(task) = self
             .store
-            .read(|c| read::load_task(c, id))
+            .read(|c| read::load_task(c, id, &self.cfg.workflow_policy))
             .map_err(|e| internal(e.into()))?
         else {
             return Ok(Effect::Skipped);

@@ -27,7 +27,7 @@ impl Engine {
         let snapshot = self.store.read(|c| {
             Ok(Snapshot {
                 specs: read::reconcile_specs(c)?,
-                tasks: read::load_tasks(c, TaskSet::Reconcile)?,
+                tasks: read::load_tasks(c, TaskSet::Reconcile, &self.cfg.workflow_policy)?,
                 work_item_dependencies: read::queued_work_item_dependencies(c)?,
                 spec_dependencies: read::spec_dependencies(c, None)?,
                 quotas: read::account_quotas(c)?,
@@ -136,7 +136,7 @@ impl Engine {
         let (spec, tasks) = self.store.read(|c| {
             Ok((
                 read::load_spec(c, spec_id)?,
-                read::load_tasks(c, TaskSet::Reconcile)?,
+                read::load_tasks(c, TaskSet::Reconcile, &self.cfg.workflow_policy)?,
             ))
         })?;
         let Some(spec) = spec else {
@@ -165,7 +165,7 @@ impl Engine {
     pub fn recover(&self) -> Result<usize> {
         let tasks = self
             .store
-            .read(|c| read::load_tasks(c, TaskSet::Reconcile))?;
+            .read(|c| read::load_tasks(c, TaskSet::Reconcile, &self.cfg.workflow_policy))?;
         let cause = self.cause("system:recovery");
         let mut batch = Batch::new(self.now());
         for job in self.monitor_sessions(tasks.iter().filter_map(Task::live_session)) {

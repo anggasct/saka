@@ -54,7 +54,7 @@ fn externals(sim: &Sim) -> Vec<Task> {
                 })
                 .collect()
             };
-            read::load_tasks(c, TaskSet::Ids(&ids))
+            read::load_tasks(c, TaskSet::Ids(&ids), &saka_core::workflow::WorkflowPolicy::default())
         })
         .unwrap()
 }

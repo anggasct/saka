@@ -53,6 +53,7 @@ fn cfg(ceiling: Autonomy) -> LoopConfig {
 
 fn spec() -> Spec {
     Spec {
+        kind: saka_core::vocab::WorkKind::Feature,
         id: SPEC,
         project_id: PROJECT,
         path: "docs/specs/t.md".into(),
@@ -72,6 +73,7 @@ fn spec() -> Spec {
 
 fn task(n: u32, state: WorkItemState, approved: bool, requested: Option<Autonomy>) -> Task {
     let mut t = Task::new(WorkItem {
+        kind: Some(saka_core::vocab::WorkKind::Feature),
         id: WorkItemId(Uuid::from_u128(100 + u128::from(n))),
         project_id: PROJECT,
         origin: WorkItemOrigin::SpecStep,

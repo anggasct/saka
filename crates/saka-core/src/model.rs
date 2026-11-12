@@ -19,7 +19,7 @@ use crate::vocab::{
     EnvironmentState, ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind,
     PacketOrigin, PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome,
     SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState,
-    TargetKind, Tool, Trigger, WorkItemOrigin, WorkItemState,
+    TargetKind, Tool, Trigger, WorkItemOrigin, WorkItemState, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -161,6 +161,7 @@ pub struct Spec {
     pub title: String,
     pub state: SpecState,
     pub origin: SpecOrigin,
+    pub kind: WorkKind,
     pub priority: i64,
     pub latest_revision_id: SpecRevisionId,
     pub approved_revision_id: Option<SpecRevisionId>,
@@ -194,6 +195,7 @@ pub struct RevisionView {
     pub issues: Value,
     pub steps: Vec<StepPlan>,
     pub parser_version: u32,
+    pub kind: WorkKind,
     pub priority: i64,
     pub depends_on: Vec<String>,
 }
@@ -240,6 +242,7 @@ pub struct WorkItem {
     pub id: WorkItemId,
     pub project_id: ProjectId,
     pub origin: WorkItemOrigin,
+    pub kind: Option<WorkKind>,
     pub spec_id: Option<SpecId>,
     pub spec_revision_id: Option<SpecRevisionId>,
     pub step_id: Option<String>,

@@ -109,6 +109,7 @@ pub struct EngineConfig {
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
     pub auth_enabled: bool,
+    pub workflow_policy: saka_core::workflow::WorkflowPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,7 +269,7 @@ impl Engine {
 
     fn load_task(&self, id: WorkItemId) -> Result<Task> {
         self.store
-            .read(|c| read::load_task(c, id))?
+            .read(|c| read::load_task(c, id, &self.cfg.workflow_policy))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))
     }
 

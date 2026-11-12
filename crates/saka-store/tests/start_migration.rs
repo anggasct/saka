@@ -82,7 +82,7 @@ fn the_start_approval_migration_adds_the_time_without_touching_the_rows() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![29, 30, 31, 32, 33, 34, 35, 36, 37, 38]
+        vec![29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
     );
     drop(store);
 

@@ -260,6 +260,7 @@ impl World {
                 diagnostics: DiagnosticLimits::default(),
                 hooks: Vec::new(),
                 auth_enabled: false,
+                workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
             },
         );
         let cause = engine.cause("human:operator:local");

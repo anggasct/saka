@@ -89,6 +89,7 @@ pub struct SimConfig {
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
     pub auth_enabled: bool,
+    pub workflow_policy: saka_core::workflow::WorkflowPolicy,
     pub workflow: saka_core::workflow::Workflow,
     pub autonomy_request: Option<saka_core::vocab::Autonomy>,
 }
@@ -209,6 +210,7 @@ impl Default for SimConfig {
             diagnostics: DiagnosticLimits::default(),
             hooks: Vec::new(),
             auth_enabled: false,
+            workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
             workflow: saka_core::workflow::Workflow::default(),
             autonomy_request: None,
         }
@@ -444,6 +446,7 @@ impl Sim {
             diagnostics: self.cfg.diagnostics,
             hooks: self.cfg.hooks.clone(),
             auth_enabled: self.cfg.auth_enabled,
+            workflow_policy: self.cfg.workflow_policy,
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();
@@ -517,6 +520,7 @@ impl Sim {
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let mut batch = Batch::new(now);
         batch.specs.push(Spec {
+            kind: saka_core::vocab::WorkKind::Feature,
             id: spec_id,
             project_id: self.project_id,
             path: format!("docs/specs/{slug}.md"),
@@ -599,6 +603,7 @@ impl Sim {
         let now = self.clock.now();
         let mut batch = Batch::new(now);
         batch.tasks.push(Task::new(WorkItem {
+            kind: Some(saka_core::vocab::WorkKind::Feature),
             id: WorkItemId(
                 uuid::Uuid::from_slice(&Sha256::digest(branch.as_bytes())[..16])
                     .expect("16 bytes of the digest"),
@@ -731,7 +736,7 @@ impl Sim {
         let engine = self.engine();
         let mut tasks: Vec<Task> = engine
             .store()
-            .read(|c| read::load_tasks(c, TaskSet::Spec(spec_id)))
+            .read(|c| read::load_tasks(c, TaskSet::Spec(spec_id), &self.cfg.workflow_policy))
             .unwrap();
         tasks.sort_by_key(|t| t.item.step_index);
         tasks
@@ -741,7 +746,7 @@ impl Sim {
         let engine = self.engine();
         engine
             .store()
-            .read(|c| read::load_tasks(c, TaskSet::Reconcile))
+            .read(|c| read::load_tasks(c, TaskSet::Reconcile, &self.cfg.workflow_policy))
             .unwrap()
     }
 
@@ -758,7 +763,7 @@ impl Sim {
                         .map(WorkItemId)
                         .collect()
                 };
-                read::load_tasks(c, TaskSet::Ids(&ids))
+                read::load_tasks(c, TaskSet::Ids(&ids), &self.cfg.workflow_policy)
             })
             .unwrap()
     }
