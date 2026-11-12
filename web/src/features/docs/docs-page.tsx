@@ -7,6 +7,7 @@ import { useProjects } from "@/features/delivery/queries";
 import { DraftDialog } from "@/features/drafts/draft-dialog";
 import { DraftsLink } from "@/features/drafts/drafts-link";
 import { useDraftContent } from "@/features/drafts/queries";
+import { QuickDialog } from "@/features/quick/quick-dialog";
 import { useT } from "@/i18n/use-t";
 import { Button } from "@/ui/button";
 import { Card } from "@/ui/card";
@@ -156,6 +157,7 @@ export function DocsPage({
             files={files}
             existing={existing}
           />
+          {project !== undefined && <QuickDialog project={project} />}
           <DraftsLink projectId={projectId} />
         </div>
       )}

@@ -2741,6 +2741,60 @@ pub struct AddSpecBody {
     pub path: String,
 }
 
+/// A spec written from a short form: Saka renders the file, commits it to the base branch, registers it and, when `approve` is set, approves it.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuickSpecBody {
+    /// `feature | bugfix | refactor | chore | security_patch`
+    pub kind: String,
+    /// 1 to 120 characters on one line.
+    pub title: String,
+    /// Markdown shown under the title, up to 4000 characters; it may not add spec sections.
+    #[serde(default)]
+    pub description: String,
+    /// The commands that must pass before the task is done: 1 to 10, each 1 to 500 characters, without backticks.
+    pub done_when: Vec<String>,
+    /// The commands that must fail before and pass after a bug fix: 1 to 10 for `bugfix`, empty for every other kind.
+    #[serde(default)]
+    pub regression: Vec<String>,
+    /// Acceptance criteria, up to 10 sentences of 500 characters; when empty one criterion is made from the title.
+    #[serde(default)]
+    pub ac: Vec<String>,
+    /// Where the spec file goes, inside the project folder; defaults to `<project folder>/specs/<slug>.md`, the slug being the title with the kind in front (none for `feature`).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `en` (default) or `id`: the language of the generated sentences.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// The name of a repo binding of the project; the step then runs in that repo. Defaults to the default repo.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// `true` approves the spec and creates its task; `false` only commits and registers it.
+    pub approve: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QuickSpecCreated {
+    pub spec: Spec,
+    /// Path of the spec file in the repo.
+    pub path: String,
+    /// The commit on the base branch that added the file.
+    pub commit_sha: String,
+    /// The task made by the approval; empty when `approve` was `false`.
+    pub work_items: Vec<WorkItem>,
+}
+
+impl QuickSpecCreated {
+    pub fn from_view(v: &saka_engine::QuickView) -> QuickSpecCreated {
+        QuickSpecCreated {
+            spec: Spec::from_view(&v.spec, true),
+            path: v.path.clone(),
+            commit_sha: v.commit_sha.clone(),
+            work_items: v.tasks.iter().map(WorkItem::from_view).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OptionalReason {

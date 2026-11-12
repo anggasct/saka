@@ -438,6 +438,183 @@ fn serve_becomes_ready_logs_json_with_correlation_ids_and_stops_on_sigterm() {
 }
 
 #[test]
+fn spec_quick_writes_the_spec_and_prints_its_path_and_task_key() {
+    let sim = Sim::new(SimConfig::default());
+    let server = serve(&sim);
+    let before = sim.world.doc_commits().len();
+
+    let made = saka(
+        &server,
+        &[
+            "spec",
+            "quick",
+            "tasks",
+            "--kind",
+            "bugfix",
+            "--title",
+            "Login redirect loop",
+            "--done-when",
+            "make test",
+            "--regression",
+            "cargo test --test login",
+        ],
+    );
+    assert_eq!(code(&made), 0, "{}", String::from_utf8_lossy(&made.stderr));
+    let lines: Vec<String> = stdout(&made).lines().map(str::to_string).collect();
+    assert_eq!(lines[0], "spec bugfix-login-redirect-loop (approved)");
+    assert_eq!(lines[1], "path docs/specs/bugfix-login-redirect-loop.md");
+    assert!(lines[2].starts_with("commit "), "{lines:?}");
+    assert_eq!(lines[3], "task bugfix-login-redirect-loop/s1");
+    assert_eq!(sim.world.doc_commits().len(), before + 1);
+    let file = String::from_utf8(
+        sim.world
+            .doc("docs/specs/bugfix-login-redirect-loop.md")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        file.contains("kind: bugfix") && file.contains("- `cargo test --test login`"),
+        "{file}"
+    );
+
+    let as_json = saka(
+        &server,
+        &[
+            "--json",
+            "spec",
+            "quick",
+            "tasks",
+            "--kind",
+            "chore",
+            "--title",
+            "Bump deps",
+            "--done-when",
+            "make test",
+            "--done-when",
+            "make lint",
+            "--ac",
+            "Lockfile is current",
+            "--create-only",
+            "--locale",
+            "id",
+        ],
+    );
+    assert_eq!(
+        code(&as_json),
+        0,
+        "{}",
+        String::from_utf8_lossy(&as_json.stderr)
+    );
+    let body = json(&as_json);
+    assert_eq!(body["spec"]["state"], "ready");
+    assert_eq!(body["spec"]["origin"], "quick");
+    assert_eq!(body["path"], "docs/specs/chore-bump-deps.md");
+    assert_eq!(body["work_items"], serde_json::json!([]));
+}
+
+#[test]
+fn spec_quick_prints_the_lint_issues_and_exits_by_the_kind_of_failure() {
+    let sim = Sim::new(SimConfig::default());
+    let server = serve(&sim);
+    let before = sim.world.doc_commits().len();
+
+    let lint = saka(
+        &server,
+        &[
+            "spec",
+            "quick",
+            "tasks",
+            "--kind",
+            "bugfix",
+            "--title",
+            "No proof",
+            "--done-when",
+            "make test",
+        ],
+    );
+    assert_eq!(code(&lint), 1);
+    let err = String::from_utf8_lossy(&lint.stderr).into_owned();
+    assert!(
+        err.contains("spec_not_ready") && err.contains("regression_missing"),
+        "{err}"
+    );
+    assert_eq!(sim.world.doc_commits().len(), before);
+
+    let long = "x".repeat(121);
+    let too_long = saka(
+        &server,
+        &[
+            "spec",
+            "quick",
+            "tasks",
+            "--title",
+            &long,
+            "--done-when",
+            "make test",
+        ],
+    );
+    assert_eq!(code(&too_long), 1);
+    assert!(String::from_utf8_lossy(&too_long.stderr).contains("validation_failed"));
+
+    for args in [
+        vec!["spec", "quick", "tasks", "--done-when", "make test"],
+        vec!["spec", "quick", "tasks", "--title", "No command"],
+        vec![
+            "spec",
+            "quick",
+            "tasks",
+            "--title",
+            "T",
+            "--done-when",
+            "x",
+            "--kind",
+            "hotfix",
+        ],
+        vec![
+            "spec",
+            "quick",
+            "tasks",
+            "--title",
+            "T",
+            "--done-when",
+            "x",
+            "--locale",
+            "fr",
+        ],
+    ] {
+        assert_eq!(code(&saka(&server, &args)), 2, "{args:?}");
+    }
+
+    let first = saka(
+        &server,
+        &[
+            "spec",
+            "quick",
+            "tasks",
+            "--title",
+            "Same",
+            "--done-when",
+            "make test",
+        ],
+    );
+    assert_eq!(code(&first), 0);
+    let clash = saka(
+        &server,
+        &[
+            "spec",
+            "quick",
+            "tasks",
+            "--title",
+            "Same",
+            "--done-when",
+            "make test",
+        ],
+    );
+    assert_eq!(code(&clash), 4, "409 spec_slug_conflict");
+    assert!(String::from_utf8_lossy(&clash.stderr).contains("spec_slug_conflict"));
+}
+
+#[test]
 fn spec_template_prints_the_template_and_approve_reports_warnings_and_dependencies() {
     let sim = Sim::new(SimConfig::default());
     sim.world.put_doc(

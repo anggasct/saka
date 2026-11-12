@@ -36,6 +36,7 @@ pub struct Counters {
     config_checks: Mutex<BTreeMap<(String, String), u64>>,
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     docs_changes: Mutex<BTreeMap<(String, String), u64>>,
+    quick_specs: Mutex<BTreeMap<(String, String), u64>>,
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
@@ -178,6 +179,10 @@ impl Counters {
 
     pub(crate) fn docs_change(&self, outcome: &str) {
         bump(&self.docs_changes, outcome, "");
+    }
+
+    pub(crate) fn quick_spec(&self, kind: &str, outcome: &str) {
+        bump(&self.quick_specs, kind, outcome);
     }
 
     pub(crate) fn dod(&self, outcome: &str) {
@@ -397,6 +402,7 @@ pub struct MetricsSnapshot {
     pub config_checks: Vec<(String, u64)>,
     pub path_scope_violations: Vec<(String, u64)>,
     pub docs_changes: Vec<(String, u64)>,
+    pub quick_specs: Vec<(String, String, u64)>,
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
     pub change_requests_opened: Vec<(String, u64)>,
@@ -595,6 +601,7 @@ impl Engine {
                     ((*outcome).to_string(), n)
                 })
                 .collect(),
+            quick_specs: copy(&self.counters.quick_specs),
             user_link_authorizations: copy(&self.counters.user_link_authorizations),
             user_link_refreshes: copy(&self.counters.user_link_refreshes),
             change_requests_opened: copy(&self.counters.change_requests_opened)

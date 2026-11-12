@@ -514,6 +514,60 @@ enum SpecCmd {
         #[arg(help = "Wait until the architect waits for your reply", long)]
         wait: bool,
     },
+    #[command(
+        about = "Writes a small spec from a few fields, commits it to the base branch and starts its task",
+        after_help = "Prints the spec, its path, the commit and the task key. Exit codes: 0 done, 1 refused or failed lint (the issues are printed), 2 bad arguments, 4 the file or slug exists or the spec could not be approved."
+    )]
+    Quick {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(
+            long,
+            default_value = "feature",
+            value_parser = work_kinds(),
+            help = "Kind of work"
+        )]
+        kind: String,
+        #[arg(long, help = "One line, up to 120 characters")]
+        title: String,
+        #[arg(long, help = "Markdown shown under the title, up to 4000 characters")]
+        description: Option<String>,
+        #[arg(
+            long = "done-when",
+            required = true,
+            help = "A command that must pass before the task is done (repeatable, 1 to 10)"
+        )]
+        done_when: Vec<String>,
+        #[arg(
+            long,
+            help = "A command that fails before the fix and passes after it (repeatable, bugfix only)"
+        )]
+        regression: Vec<String>,
+        #[arg(
+            long = "ac",
+            help = "An acceptance criterion (repeatable, up to 10); one is made from the title when none is given"
+        )]
+        ac: Vec<String>,
+        #[arg(
+            long,
+            help = "Spec file path from the repo root; defaults to <project folder>/specs/<kind>-<title>.md"
+        )]
+        path: Option<String>,
+        #[arg(
+            long,
+            default_value = "en",
+            value_parser = ["en", "id"],
+            help = "Language of the generated sentences"
+        )]
+        locale: String,
+        #[arg(long, help = "Name of the repo binding the step changes")]
+        repo: Option<String>,
+        #[arg(
+            long = "create-only",
+            help = "Commit and register the spec without approving it"
+        )]
+        create_only: bool,
+    },
     #[command(about = "Prints a spec template that passes lint")]
     Template {
         #[arg(long, default_value = "en", help = "Template language: en or id")]
@@ -1103,6 +1157,34 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     }
                 }
             })
+        }
+        Command::Spec(SpecCmd::Quick {
+            project,
+            kind,
+            title,
+            description,
+            done_when,
+            regression,
+            ac,
+            path,
+            locale,
+            repo,
+            create_only,
+        }) => {
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            let body = serde_json::json!({
+                "kind": kind,
+                "title": title,
+                "description": description.unwrap_or_default(),
+                "done_when": done_when,
+                "regression": regression,
+                "ac": ac,
+                "path": path,
+                "locale": locale,
+                "repo": repo,
+                "approve": !create_only,
+            });
+            current_thread()?.block_on(client.spec_quick(&project, &body))
         }
         Command::Spec(SpecCmd::Template { locale, kind }) => {
             let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;

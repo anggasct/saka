@@ -93,6 +93,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::ChangeRequestNotFound { .. } => StatusCode::NOT_FOUND,
         R::RevisionStale | R::VersionStale | R::FileStale { .. } => StatusCode::PRECONDITION_FAILED,
         R::SpecNotReady { .. }
+        | R::QuickSpecRenderMismatch
         | R::ScmIntegrationUnknown { .. }
         | R::ProjectConfigInvalid { .. }
         | R::ScmRepoInaccessible { .. }
@@ -128,6 +129,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::ProjectExists { .. }
         | R::ProjectRepoInUse { .. }
         | R::SpecSlugConflict { .. }
+        | R::QuickSpecNotApproved { .. }
         | R::TaskBranchConflict { .. }
         | R::WorkPacketUnavailable { .. }
         | R::FilePathConflict { .. }

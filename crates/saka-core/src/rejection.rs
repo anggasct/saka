@@ -64,6 +64,10 @@ pub enum Rejection {
     ProjectExists { project_id: String },
     #[error("spec slug is already used")]
     SpecSlugConflict { slug: String, path: String },
+    #[error("the rendered spec does not hold exactly the input")]
+    QuickSpecRenderMismatch,
+    #[error("the spec was committed and registered but not approved")]
+    QuickSpecNotApproved { code: String, spec: Value },
     #[error("task branch is used by another project")]
     TaskBranchConflict { branches: Vec<String> },
     #[error("no SCM integration serves this host")]
@@ -219,6 +223,8 @@ impl Rejection {
             Rejection::NotFound => "not_found",
             Rejection::ProjectExists { .. } => "project_exists",
             Rejection::SpecSlugConflict { .. } => "spec_slug_conflict",
+            Rejection::QuickSpecNotApproved { .. } => "quick_spec_not_approved",
+            Rejection::QuickSpecRenderMismatch => "quick_spec_render_mismatch",
             Rejection::TaskBranchConflict { .. } => "task_branch_conflict",
             Rejection::ScmIntegrationUnknown { .. } => "scm_integration_unknown",
             Rejection::ProjectConfigInvalid { .. } => "project_config_invalid",
@@ -303,6 +309,7 @@ impl Rejection {
             }),
             Rejection::ProjectExists { project_id } => json!({ "project_id": project_id }),
             Rejection::SpecSlugConflict { slug, path } => json!({ "slug": slug, "path": path }),
+            Rejection::QuickSpecNotApproved { code, spec } => json!({ "code": code, "spec": spec }),
             Rejection::TaskBranchConflict { branches } => json!({ "branches": branches }),
             Rejection::ScmIntegrationUnknown { host, repo } => {
                 json!({ "host": host, "repo": repo })

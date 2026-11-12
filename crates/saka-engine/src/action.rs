@@ -20,6 +20,7 @@ pub enum Produced<'a> {
     Reload(&'a crate::reload::ReloadView),
     ConfigCheck(&'a crate::config_check::ConfigCheckView),
     Spec(&'a SpecView, bool),
+    Quick(&'a crate::quick::QuickView),
     Task(&'a Task),
     Taken(&'a Task, bool),
     Draft(&'a Draft),

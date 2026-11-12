@@ -745,6 +745,7 @@ const ERRORS = [
   "not_ready",
   "not_found",
   "validation_failed",
+  "quick_spec_render_mismatch",
   "invalid_state",
   "version_stale",
   "precondition_required",

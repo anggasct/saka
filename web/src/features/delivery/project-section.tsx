@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
+import { QuickDialog } from "@/features/quick/quick-dialog";
 import { useT } from "@/i18n/use-t";
 import { Card } from "@/ui/card";
 import { Skeleton } from "@/ui/skeleton";
@@ -42,6 +43,9 @@ export function ProjectSection({
         >
           {t("project.settings")}
         </Link>
+        <div className="mt-2">
+          <QuickDialog project={project} />
+        </div>
       </header>
       {workItems.isPending && specs.length > 0 ? (
         <div className="space-y-2 border-t border-border p-4">
