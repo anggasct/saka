@@ -61,7 +61,7 @@ macro_rules! vocab_default {
 vocab!(PairingPurpose { Setup => "setup", Passkey => "passkey", Token => "token" });
 vocab!(DeviceKind { LocalCli => "local_cli", Client => "client" });
 vocab!(SpecState { Draft => "draft", Ready => "ready", Approved => "approved", Shipped => "shipped", Withdrawn => "withdrawn" });
-vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "intake" });
+vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "intake", Quick => "quick" });
 vocab!(WorkKind default Feature { Feature => "feature", Bugfix => "bugfix", Refactor => "refactor", Chore => "chore", SecurityPatch => "security_patch" });
 
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });

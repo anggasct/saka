@@ -95,6 +95,7 @@ fn step(n: u32) -> StepPlan {
 
 fn revision(id: SpecRevisionId, steps: Vec<StepPlan>, priority: i64) -> RevisionView {
     RevisionView {
+        kind: saka_core::vocab::WorkKind::Feature,
         id,
         lint_ok: true,
         issues: json!([]),
@@ -111,6 +112,7 @@ fn steps(n: u32) -> Vec<StepPlan> {
 
 fn approved_spec(latest: SpecRevisionId) -> Spec {
     Spec {
+        kind: saka_core::vocab::WorkKind::Feature,
         id: SPEC,
         project_id: PROJECT,
         path: "docs/specs/t.md".into(),
@@ -130,6 +132,7 @@ fn approved_spec(latest: SpecRevisionId) -> Spec {
 
 fn item(n: u32, state: WorkItemState) -> WorkItem {
     WorkItem {
+        kind: Some(saka_core::vocab::WorkKind::Feature),
         id: WorkItemId(Uuid::from_u128(100 + u128::from(n))),
         project_id: PROJECT,
         origin: WorkItemOrigin::SpecStep,
@@ -406,6 +409,7 @@ fn re_approval_repins_supersedes_and_keeps_the_first_approval_time() {
     assert_eq!(
         events[1],
         Event::WorkItemRepinned {
+            kind: saka_core::vocab::WorkKind::Feature,
             work_item_id: tasks[1].id,
             spec_revision_id: TO,
             step_index: 2,
@@ -689,7 +693,7 @@ fn withdraw_supersedes_unstarted_tasks_only_without_active_ones() {
 fn old_approved_events_read_without_a_previous_revision() {
     let old = json!({
         "kind": "spec.spec.approved",
-        "payload": { "spec_id": SPEC, "revision_id": FROM, "reason": null }
+        "payload": { "spec_id": SPEC, "revision_id": FROM, "reason": null, "kind": "feature" }
     });
     let event: Event = serde_json::from_value(old).unwrap();
     assert!(matches!(

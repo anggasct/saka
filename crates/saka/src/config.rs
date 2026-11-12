@@ -61,6 +61,15 @@ pub struct Config {
     pub autonomy: AutonomyConfig,
     #[serde(default)]
     pub auth: Option<Auth>,
+    #[serde(default)]
+    pub workflow: WorkflowConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowConfig {
+    #[serde(default)]
+    pub allow_unreviewed_chore: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1262,6 +1271,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unreviewed_chores_are_off_unless_the_operator_allows_them() {
+        assert!(!Config::parse("").unwrap().workflow.allow_unreviewed_chore);
+        let allowed = Config::parse("[workflow]\nallow_unreviewed_chore = true\n").unwrap();
+        assert!(allowed.workflow.allow_unreviewed_chore);
+        assert!(Config::parse("[workflow]\nallow_unreviewed = true\n").is_err());
+    }
+
+    #[test]
     fn architect_defaults_and_the_field_that_is_out_of_range() {
         let cfg = Config::parse("").unwrap();
         assert_eq!(
@@ -1657,6 +1674,7 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        assert!(!cfg.workflow.allow_unreviewed_chore);
         let auth = cfg.auth_settings().unwrap();
         assert_eq!(auth.origin.serialized(), "https://saka.example.com");
         assert_eq!(

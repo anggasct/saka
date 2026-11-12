@@ -90,6 +90,7 @@ impl Run {
         .unwrap();
         let mut run = Run {
             task: Task::new(saka_core::model::WorkItem {
+                kind: Some(saka_core::vocab::WorkKind::Feature),
                 id: WorkItemId(Uuid::nil()),
                 project_id: ProjectId(Uuid::nil()),
                 origin: saka_core::vocab::WorkItemOrigin::ExternalChange,

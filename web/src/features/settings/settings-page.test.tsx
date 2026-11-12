@@ -286,6 +286,7 @@ describe("Workflow", () => {
         },
         stages: [{ stage: "review", trigger: "auto" }],
         fix_rounds: 2,
+        kinds: {},
       },
     };
     fakeApi(routes({ [PROJECT]: { body: reviewOnly } }));
@@ -312,6 +313,57 @@ describe("Workflow", () => {
     expect(within(filters).getAllByText("Any")).toHaveLength(2);
     expect(within(filters).getByText("Skipped")).toBeInTheDocument();
     expect(within(filters).getByText("Included")).toBeInTheDocument();
+  });
+
+  it("lists the overrides per kind and whether the operator allows unreviewed chores", async () => {
+    const tuned = {
+      ...project,
+      allow_unreviewed_chore: true,
+      workflow: {
+        ...project.workflow,
+        kinds: {
+          bugfix: {
+            stages: { review: "auto", merge: "manual" },
+            autonomy: "standard",
+            test_paths: ["src/**/fixtures/**"],
+          },
+          chore: { stages: { review: "off" }, autonomy: null, test_paths: [] },
+        },
+      },
+    };
+    fakeApi(routes({ [PROJECT]: { body: tuned } }));
+    renderApp(SETTINGS);
+    const workflow = await screen.findByRole("region", { name: "Workflow" });
+    expect(
+      within(workflow).getByText("Allowed by the operator"),
+    ).toBeInTheDocument();
+    const kinds = within(workflow).getByRole("list", {
+      name: "Overrides per kind",
+    });
+    const [bugfix, chore] = Array.from(kinds.children);
+    expect(bugfix).toHaveTextContent("Bugfix");
+    expect(bugfix).toHaveTextContent("Review: automatic");
+    expect(bugfix).toHaveTextContent("Merge: on command");
+    expect(bugfix).toHaveTextContent("Standard");
+    expect(bugfix).toHaveTextContent("src/**/fixtures/**");
+    expect(chore).toHaveTextContent("Chore");
+    expect(chore).toHaveTextContent("Review: off");
+    expect(chore).toHaveTextContent("Same as the repo.");
+    expect(
+      workflow.querySelectorAll("input, select, textarea, button"),
+    ).toHaveLength(0);
+  });
+
+  it("says so when saka.toml overrides no kind and refuses unreviewed chores", async () => {
+    fakeApi(routes());
+    renderApp(SETTINGS);
+    const workflow = await screen.findByRole("region", { name: "Workflow" });
+    expect(within(workflow).getByText("Not allowed")).toBeInTheDocument();
+    expect(
+      within(workflow).getByText(
+        "saka.toml sets no override for any kind of work.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("explains a workflow problem in saka.toml with its line", async () => {

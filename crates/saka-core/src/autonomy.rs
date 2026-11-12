@@ -59,9 +59,12 @@ impl Task {
     }
 
     pub fn autonomy(&self, ceilings: &Ceilings) -> Autonomy {
-        ceilings
+        let level = ceilings
             .levels(&self.policy.full_name, self.policy.requested)
-            .effective
+            .effective;
+        self.workflow
+            .autonomy_cap
+            .map_or(level, |cap| level.min(cap))
     }
 }
 

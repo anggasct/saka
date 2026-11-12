@@ -6965,6 +6965,39 @@
           }
         }
       },
+      "KindOverride": {
+        "type": "object",
+        "required": [
+          "stages",
+          "test_paths"
+        ],
+        "properties": {
+          "autonomy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`strict | standard | autonomous`; `null` when the file sets none. It only lowers the level."
+          },
+          "stages": {
+            "type": "object",
+            "description": "Stage (`dev | review | fix | merge`) to `auto | manual | off`; only the stages the file names.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "test_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra path patterns that mark test files (`path_scope` syntax); only for `bugfix`."
+          }
+        }
+      },
       "Lint": {
         "type": "object",
         "required": [
@@ -7603,10 +7636,15 @@
                 "config_commit",
                 "config_sha256",
                 "warnings",
+                "allow_unreviewed_chore",
                 "created_at",
                 "updated_at"
               ],
               "properties": {
+                "allow_unreviewed_chore": {
+                  "type": "boolean",
+                  "description": "The operator allows a `chore` override to turn the review stage off (`config.toml` `[workflow] allow_unreviewed_chore`)."
+                },
                 "authorship_mode": {
                   "type": "string",
                   "description": "`bot | user | user_pat`: who authors the agent's commits and opens its pull requests."
@@ -7698,6 +7736,8 @@
                 "title",
                 "state",
                 "origin",
+                "kind",
+                "regression",
                 "priority",
                 "depends_on",
                 "revision",
@@ -7756,11 +7796,16 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "kind": {
+                  "type": "string",
+                  "description": "`feature | bugfix | refactor | chore | security_patch`, from the latest revision."
+                },
                 "lint": {
                   "$ref": "#/components/schemas/Lint"
                 },
                 "origin": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "`manual | architect | intake | quick`"
                 },
                 "path": {
                   "type": "string"
@@ -7772,6 +7817,13 @@
                 "project_id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "regression": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The commands of the `## Regression` section in the latest revision; empty when it has none."
                 },
                 "revision": {
                   "$ref": "#/components/schemas/Revision"
@@ -8260,6 +8312,13 @@
                 "id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request."
                 },
                 "merge_auto": {
                   "type": [
@@ -8944,10 +9003,15 @@
           "config_commit",
           "config_sha256",
           "warnings",
+          "allow_unreviewed_chore",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "allow_unreviewed_chore": {
+            "type": "boolean",
+            "description": "The operator allows a `chore` override to turn the review stage off (`config.toml` `[workflow] allow_unreviewed_chore`)."
+          },
           "authorship_mode": {
             "type": "string",
             "description": "`bot | user | user_pat`: who authors the agent's commits and opens its pull requests."
@@ -10076,6 +10140,8 @@
           "title",
           "state",
           "origin",
+          "kind",
+          "regression",
           "priority",
           "depends_on",
           "revision",
@@ -10134,11 +10200,16 @@
             "type": "string",
             "format": "uuid"
           },
+          "kind": {
+            "type": "string",
+            "description": "`feature | bugfix | refactor | chore | security_patch`, from the latest revision."
+          },
           "lint": {
             "$ref": "#/components/schemas/Lint"
           },
           "origin": {
-            "type": "string"
+            "type": "string",
+            "description": "`manual | architect | intake | quick`"
           },
           "path": {
             "type": "string"
@@ -10150,6 +10221,13 @@
           "project_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "regression": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The commands of the `## Regression` section in the latest revision; empty when it has none."
           },
           "revision": {
             "$ref": "#/components/schemas/Revision"
@@ -11668,6 +11746,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request."
+          },
           "merge_auto": {
             "type": [
               "boolean",
@@ -12017,7 +12102,8 @@
           "preset",
           "spec",
           "stages",
-          "fix_rounds"
+          "fix_rounds",
+          "kinds"
         ],
         "properties": {
           "change_request": {
@@ -12036,6 +12122,16 @@
             "format": "int32",
             "description": "How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.",
             "minimum": 0
+          },
+          "kinds": {
+            "type": "object",
+            "description": "Overrides from `[workflow.kinds.<kind>]`, keyed by kind; only the kinds the file names.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KindOverride"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "preset": {
             "type": "string",

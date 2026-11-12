@@ -367,6 +367,8 @@ impl Engine {
         let hook_names = self
             .checked_hook_skip(None, &config)
             .map_err(|issues| config_invalid(&issues))?;
+        self.checked_kinds(&config)
+            .map_err(|issues| config_invalid(&issues))?;
         let workspace = WorkspaceRepo {
             repo: &repo,
             host: &host,

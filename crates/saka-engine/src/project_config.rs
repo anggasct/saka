@@ -12,12 +12,15 @@ use toml::de::{DeTable, DeValue};
 
 mod workflow;
 
+pub use workflow::{KindLines, kind_issue};
+
 use crate::register::{branch_ok, parse_repo_url};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub name: String,
     pub workflow: Workflow,
+    pub kind_lines: KindLines,
     pub hook_skip: Vec<HookSkip>,
     pub repos: Vec<RepoEntry>,
 }
@@ -472,7 +475,7 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
     for repo in &mut repos {
         repo.autonomy = repo.autonomy.or(project_autonomy);
     }
-    let workflow = workflow::parse(&mut c, doc);
+    let (workflow, kind_lines) = workflow::parse(&mut c, doc);
     let hook_skip = hook_skip(&mut c, doc);
     let mut issues = c.issues;
     issues.sort_by_key(|i| i.line.unwrap_or(0));
@@ -480,6 +483,7 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
         Some(name) if issues.is_empty() => Ok(ProjectConfig {
             name,
             workflow,
+            kind_lines,
             hook_skip,
             repos,
         }),

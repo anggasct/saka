@@ -13,7 +13,7 @@ use crate::model::{
 use crate::plan::{RevisionPlan, plan_revision};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
-use crate::vocab::{PlanAction, SpecOrigin, SpecState, SupersedeReason, WorkItemState};
+use crate::vocab::{PlanAction, SpecOrigin, SpecState, SupersedeReason, WorkItemState, WorkKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRevision {
@@ -27,6 +27,7 @@ pub struct NewRevision {
     pub title: String,
     pub parser_version: u32,
     pub priority: i64,
+    pub kind: WorkKind,
 }
 
 pub fn record_revision(
@@ -71,6 +72,7 @@ pub fn record_revision(
         reused: known.is_some(),
         parser_version: revision.parser_version,
         priority: revision.priority,
+        kind: revision.kind,
     });
     events
 }
@@ -171,6 +173,7 @@ pub fn approve(
         revision_id: latest.id,
         reason: approval.reason,
         priority: latest.priority,
+        kind: latest.kind,
         depends_on,
         previous_revision_id: plan.as_ref().map(|p| p.from_revision_id),
     }];
@@ -189,6 +192,7 @@ pub fn approve(
             work: step.work.clone(),
             repo_id,
             priority: latest.priority,
+            kind: latest.kind,
         }
     };
     let Some(plan) = plan else {
@@ -219,6 +223,7 @@ pub fn approve(
                     work: step.work.clone(),
                     repo_id,
                     priority: latest.priority,
+                    kind: latest.kind,
                     restored: planned.action == PlanAction::Restore,
                 });
             }
@@ -496,6 +501,7 @@ pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec>
             title: String::new(),
             state: SpecState::Draft,
             origin: *origin,
+            kind: WorkKind::default(),
             priority: 0,
             latest_revision_id: SpecRevisionId(Uuid::nil()),
             approved_revision_id: None,
@@ -511,11 +517,13 @@ pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec>
                 lint_ok,
                 title,
                 priority,
+                kind,
                 ..
             },
         ) => {
             s.latest_revision_id = *revision_id;
             s.title = title.clone();
+            s.kind = *kind;
             if matches!(s.state, SpecState::Draft | SpecState::Ready) {
                 s.priority = *priority;
                 s.state = if *lint_ok {
@@ -532,11 +540,13 @@ pub fn evolve(spec: Option<Spec>, event: &Event, now: Timestamp) -> Option<Spec>
             Event::SpecApproved {
                 revision_id,
                 priority,
+                kind,
                 ..
             },
         ) => {
             s.state = SpecState::Approved;
             s.priority = *priority;
+            s.kind = *kind;
             s.approved_revision_id = Some(*revision_id);
             s.approved_at = s.approved_at.or(Some(now));
             s.updated_at = now;

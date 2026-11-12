@@ -1964,6 +1964,16 @@ export interface components {
       /** @description The task the item is about, when it is about one. */
       task_key?: string | null;
     };
+    KindOverride: {
+      /** @description `strict | standard | autonomous`; `null` when the file sets none. It only lowers the level. */
+      autonomy?: string | null;
+      /** @description Stage (`dev | review | fix | merge`) to `auto | manual | off`; only the stages the file names. */
+      stages: {
+        [key: string]: string;
+      };
+      /** @description Extra path patterns that mark test files (`path_scope` syntax); only for `bugfix`. */
+      test_paths: string[];
+    };
     Lint: {
       issues: components["schemas"]["LintIssue"][];
       /** @description No issue with severity `error`. */
@@ -2153,6 +2163,8 @@ export interface components {
     /** @description A list page. */
     Page_Project: {
       items: {
+        /** @description The operator allows a `chore` override to turn the review stage off (`config.toml` `[workflow] allow_unreviewed_chore`). */
+        allow_unreviewed_chore: boolean;
         /** @description `bot | user | user_pat`: who authors the agent's commits and opens its pull requests. */
         authorship_mode: string;
         config_commit: string;
@@ -2190,13 +2202,18 @@ export interface components {
         depends_on: components["schemas"]["SpecDependency"][];
         /** Format: uuid */
         id: string;
+        /** @description `feature | bugfix | refactor | chore | security_patch`, from the latest revision. */
+        kind: string;
         lint: components["schemas"]["Lint"];
+        /** @description `manual | architect | intake | quick` */
         origin: string;
         path: string;
         /** Format: int64 */
         priority: number;
         /** Format: uuid */
         project_id: string;
+        /** @description The commands of the `## Regression` section in the latest revision; empty when it has none. */
+        regression: string[];
         revision: components["schemas"]["Revision"];
         revision_plan?: components["schemas"]["RevisionPlan"] | null;
         shipped_at?: string | null;
@@ -2315,6 +2332,8 @@ export interface components {
         gates: components["schemas"]["Gate"][];
         /** Format: uuid */
         id: string;
+        /** @description `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request. */
+        kind?: string | null;
         /**
          * @description `true` when Saka will request the merge itself once review and checks pass: autonomy
          *     `autonomous`, trigger `merge = "auto"`, and a review stage. `null` in the answer to an action.
@@ -2538,6 +2557,8 @@ export interface components {
       type: string;
     };
     Project: {
+      /** @description The operator allows a `chore` override to turn the review stage off (`config.toml` `[workflow] allow_unreviewed_chore`). */
+      allow_unreviewed_chore: boolean;
       /** @description `bot | user | user_pat`: who authors the agent's commits and opens its pull requests. */
       authorship_mode: string;
       config_commit: string;
@@ -2902,13 +2923,18 @@ export interface components {
       depends_on: components["schemas"]["SpecDependency"][];
       /** Format: uuid */
       id: string;
+      /** @description `feature | bugfix | refactor | chore | security_patch`, from the latest revision. */
+      kind: string;
       lint: components["schemas"]["Lint"];
+      /** @description `manual | architect | intake | quick` */
       origin: string;
       path: string;
       /** Format: int64 */
       priority: number;
       /** Format: uuid */
       project_id: string;
+      /** @description The commands of the `## Regression` section in the latest revision; empty when it has none. */
+      regression: string[];
       revision: components["schemas"]["Revision"];
       revision_plan?: components["schemas"]["RevisionPlan"] | null;
       shipped_at?: string | null;
@@ -3380,6 +3406,8 @@ export interface components {
       gates: components["schemas"]["Gate"][];
       /** Format: uuid */
       id: string;
+      /** @description `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request. */
+      kind?: string | null;
       /**
        * @description `true` when Saka will request the merge itself once review and checks pass: autonomy
        *     `autonomous`, trigger `merge = "auto"`, and a review stage. `null` in the answer to an action.
@@ -3491,6 +3519,10 @@ export interface components {
        * @description How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
        */
       fix_rounds: number;
+      /** @description Overrides from `[workflow.kinds.<kind>]`, keyed by kind; only the kinds the file names. */
+      kinds: {
+        [key: string]: components["schemas"]["KindOverride"];
+      };
       /** @description `full_loop | review_only | build_only | custom` */
       preset: string;
       /** @description Whether an approved spec creates tasks. */

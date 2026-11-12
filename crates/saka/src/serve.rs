@@ -1014,6 +1014,9 @@ async fn run(
             diagnostics: DiagnosticLimits::default(),
             hooks: hooks_cfg,
             auth_enabled: cfg.auth.is_some(),
+            workflow_policy: saka_core::workflow::WorkflowPolicy {
+                allow_unreviewed_chore: cfg.workflow.allow_unreviewed_chore,
+            },
         },
     ));
     match engine.recover() {

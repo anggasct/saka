@@ -111,6 +111,9 @@ impl Engine {
             Ok(names) => names,
             Err(issues) => return Err(reject(crate::register::config_invalid(&issues))),
         };
+        if let Err(issues) = self.checked_kinds(&config) {
+            return Err(reject(crate::register::config_invalid(&issues)));
+        }
         let host = parse_repo_url(&repo.url)
             .map(|(h, _, _)| h)
             .unwrap_or_default();

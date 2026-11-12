@@ -291,6 +291,7 @@ fn doctor(host: &Host, server: &str, args: &[&str]) -> Output {
 fn doctor_exit_codes_follow_failures_warnings_and_flags() {
     let sim = Sim::new(SimConfig {
         auth_enabled: true,
+        workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
         ..SimConfig::default()
     });
     sim.engine()

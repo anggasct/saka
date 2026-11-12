@@ -107,6 +107,7 @@ impl World {
         let now = Timestamp(1_000_000);
         let mut ctx = Ctx { now, ids: &mut ids };
         let revision = NewRevision {
+            kind: saka_core::vocab::WorkKind::Feature,
             origin: saka_core::vocab::SpecOrigin::Manual,
             source_commit: "a".repeat(40),
             content_hash: "sha256:x".into(),
@@ -143,6 +144,7 @@ impl World {
 
     fn approve(&mut self) {
         let latest = RevisionView {
+            kind: saka_core::vocab::WorkKind::Feature,
             id: self.spec.latest_revision_id,
             lint_ok: true,
             issues: json!([]),
@@ -807,6 +809,7 @@ fn two_steps_run_in_order_from_approve_to_shipped() {
 fn approval_checks_revision_lint_and_state() {
     let mut w = World::new();
     let latest = RevisionView {
+        kind: saka_core::vocab::WorkKind::Feature,
         id: w.spec.latest_revision_id,
         lint_ok: true,
         issues: json!([]),
@@ -882,6 +885,7 @@ fn same_content_records_nothing_and_old_content_reuses_its_revision() {
         ids: &mut ids,
     };
     let revision = || NewRevision {
+        kind: saka_core::vocab::WorkKind::Feature,
         origin: saka_core::vocab::SpecOrigin::Manual,
         source_commit: "b".repeat(40),
         content_hash: "h".into(),

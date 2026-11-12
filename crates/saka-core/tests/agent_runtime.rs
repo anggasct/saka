@@ -82,6 +82,7 @@ impl Run {
     fn new(dev: Budget) -> Run {
         let now = Timestamp(10_000_000);
         let created = Event::WorkItemCreated {
+            kind: saka_core::vocab::WorkKind::Feature,
             work_item_id: WorkItemId(Uuid::from_u128(1)),
             project_id: ProjectId(Uuid::from_u128(2)),
             spec_id: SpecId(Uuid::from_u128(3)),

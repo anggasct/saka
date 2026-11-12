@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use saka_core::admission::Waiting;
 use saka_core::blocker::primary_action;
 use saka_core::gate::Check;
@@ -108,6 +110,18 @@ pub struct Workflow {
     pub stages: Vec<WorkflowStage>,
     /// How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
     pub fix_rounds: u32,
+    /// Overrides from `[workflow.kinds.<kind>]`, keyed by kind; only the kinds the file names.
+    pub kinds: BTreeMap<String, KindOverride>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct KindOverride {
+    /// Stage (`dev | review | fix | merge`) to `auto | manual | off`; only the stages the file names.
+    pub stages: BTreeMap<String, String>,
+    /// `strict | standard | autonomous`; `null` when the file sets none. It only lowers the level.
+    pub autonomy: Option<String>,
+    /// Extra path patterns that mark test files (`path_scope` syntax); only for `bugfix`.
+    pub test_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -160,6 +174,29 @@ impl From<&saka_core::workflow::Workflow> for Workflow {
                 })
                 .collect(),
             fix_rounds: w.fix_rounds,
+            kinds: w
+                .kinds
+                .iter()
+                .map(|(kind, o)| {
+                    (
+                        kind.as_str().to_string(),
+                        KindOverride {
+                            stages: o
+                                .stages
+                                .iter()
+                                .map(|(stage, trigger)| {
+                                    (
+                                        stage.as_str().to_string(),
+                                        trigger.map_or("off", |t| t.as_str()).to_string(),
+                                    )
+                                })
+                                .collect(),
+                            autonomy: o.autonomy.map(|a| a.as_str().to_string()),
+                            test_paths: o.test_paths.clone(),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -182,6 +219,8 @@ pub struct Project {
     pub config_sha256: String,
     pub config_error: Option<ProjectConfigError>,
     pub warnings: Vec<ProjectWarning>,
+    /// The operator allows a `chore` override to turn the review stage off (`config.toml` `[workflow] allow_unreviewed_chore`).
+    pub allow_unreviewed_chore: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -256,6 +295,7 @@ impl Project {
                     }),
                 })
                 .collect(),
+            allow_unreviewed_chore: v.allow_unreviewed_chore,
             created_at: time(p.created_at),
             updated_at: time(p.updated_at),
         }
@@ -468,7 +508,12 @@ pub struct Spec {
     pub title: String,
     /// `draft | ready | approved | shipped | withdrawn`
     pub state: String,
+    /// `manual | architect | intake | quick`
     pub origin: String,
+    /// `feature | bugfix | refactor | chore | security_patch`, from the latest revision.
+    pub kind: String,
+    /// The commands of the `## Regression` section in the latest revision; empty when it has none.
+    pub regression: Vec<String>,
     pub priority: i64,
     /// Specs that must ship before this one starts, resolved in the project.
     pub depends_on: Vec<SpecDependency>,
@@ -542,6 +587,13 @@ impl Spec {
             title: s.title.clone(),
             state: s.state.as_str().to_string(),
             origin: s.origin.as_str().to_string(),
+            kind: s.kind.as_str().to_string(),
+            regression: r
+                .model
+                .get("regression")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default(),
             priority: s.priority,
             depends_on: v
                 .depends_on
@@ -808,6 +860,8 @@ pub struct WorkItem {
     pub id: Uuid,
     pub project_id: Uuid,
     pub origin: String,
+    /// `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request.
+    pub kind: Option<String>,
     pub spec_id: Option<Uuid>,
     pub spec_revision_id: Option<Uuid>,
     pub step_id: Option<String>,
@@ -1177,6 +1231,7 @@ impl WorkItem {
             id: i.id.0,
             project_id: i.project_id.0,
             origin: i.origin.as_str().to_string(),
+            kind: i.kind.map(|k| k.as_str().to_string()),
             spec_id: i.spec_id.map(|x| x.0),
             spec_revision_id: i.spec_revision_id.map(|x| x.0),
             step_id: i.step_id.clone(),

@@ -934,6 +934,7 @@ fn the_auth_check_skips_without_an_auth_section_fails_without_a_passkey_and_pass
     assert_eq!(auth_finding(true, 1), ("pass".into(), "auth_ready".into()));
     let sim = Sim::new(SimConfig {
         auth_enabled: true,
+        workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
         ..SimConfig::default()
     });
     let app = api(&sim);

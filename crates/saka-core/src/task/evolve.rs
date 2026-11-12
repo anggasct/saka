@@ -25,12 +25,14 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
         branch,
         repo_id,
         priority,
+        kind,
     } = event
     {
         return Some(Task::new(WorkItem {
             id: *work_item_id,
             project_id: *project_id,
             origin: WorkItemOrigin::SpecStep,
+            kind: Some(*kind),
             spec_id: Some(*spec_id),
             spec_revision_id: Some(*spec_revision_id),
             step_id: Some(step_id.clone()),
@@ -75,6 +77,7 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             id: *work_item_id,
             project_id: *project_id,
             origin: WorkItemOrigin::ExternalChange,
+            kind: None,
             spec_id: None,
             spec_revision_id: None,
             step_id: None,
@@ -191,9 +194,11 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             work,
             repo_id,
             priority,
+            kind,
             restored,
             ..
         } => {
+            t.item.kind = Some(*kind);
             t.item.spec_revision_id = Some(*spec_revision_id);
             t.item.step_index = Some(*step_index);
             t.item.work.clone_from(work);

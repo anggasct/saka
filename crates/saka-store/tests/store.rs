@@ -136,6 +136,7 @@ impl World {
         let project = workspace::evolve_project(None, &project_event, now).unwrap();
 
         let revision = NewRevision {
+            kind: saka_core::vocab::WorkKind::Feature,
             origin: saka_core::vocab::SpecOrigin::Manual,
             source_commit: "a".repeat(40),
             content_hash: "sha256:abc".into(),
@@ -257,7 +258,7 @@ impl World {
     fn run_environment(&self, id: WorkItemId) -> EnvironmentId {
         let task = self
             .store
-            .read(|c| read::load_task(c, id))
+            .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
             .unwrap()
             .unwrap();
         EnvironmentId(task.stage_run.unwrap().id.0)
@@ -266,7 +267,7 @@ impl World {
     fn step(&mut self, id: WorkItemId, input: TaskInput) -> Vec<Event> {
         let before = self
             .store
-            .read(|c| read::load_task(c, id))
+            .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
             .unwrap()
             .unwrap();
         let mut ctx = Ctx {
@@ -296,7 +297,7 @@ impl World {
 
         let mut stored = self
             .store
-            .read(|c| read::load_task(c, id))
+            .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
             .unwrap()
             .unwrap();
         stored.retired_sessions.clear();
@@ -504,7 +505,11 @@ fn a_whole_task_round_trips_through_the_schema() {
         TaskInput::Session(SessionInput::TurnAccepted { turn: 1 }),
     );
     w.tick(5000);
-    let stored = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let stored = w
+        .store
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.session.as_ref().unwrap().running_ms_at(w.now), 5000);
 
     w.step(
@@ -612,7 +617,7 @@ fn a_whole_task_round_trips_through_the_schema() {
     );
     let version = w
         .store
-        .read(|c| read::load_task(c, id))
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
         .unwrap()
         .unwrap()
         .item
@@ -624,7 +629,11 @@ fn a_whole_task_round_trips_through_the_schema() {
             reason: None,
         },
     );
-    let queued = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let queued = w
+        .store
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+        .unwrap()
+        .unwrap();
     assert!(queued.stage_run.as_ref().unwrap().queued_at.is_some());
     assert_eq!(queued.item.stage_phase, Some(StagePhase::Queued));
     w.step(id, TaskInput::MergeTurn);
@@ -660,7 +669,11 @@ fn a_whole_task_round_trips_through_the_schema() {
         },
     );
 
-    let done = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let done = w
+        .store
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+        .unwrap()
+        .unwrap();
     assert_eq!(done.item.state, WorkItemState::Done);
     assert_eq!(
         count(&w.store, "stage_run"),
@@ -675,7 +688,13 @@ fn a_whole_task_round_trips_through_the_schema() {
 
     let set = w
         .store
-        .read(|c| read::load_tasks(c, TaskSet::Reconcile))
+        .read(|c| {
+            read::load_tasks(
+                c,
+                TaskSet::Reconcile,
+                &saka_core::workflow::WorkflowPolicy::default(),
+            )
+        })
         .unwrap();
     assert_eq!(set.len(), 2);
     assert_eq!(w.store.read(read::reconcile_specs).unwrap().len(), 1);
@@ -710,12 +729,68 @@ fn approve_writes_the_step_graph_with_the_work_items() {
 }
 
 #[test]
+fn a_task_loads_with_the_workflow_of_its_kind_and_the_project_keeps_the_overrides() {
+    use saka_core::vocab::{Autonomy, Stage, Trigger, WorkKind};
+    use saka_core::workflow::{KindOverride, WorkflowPolicy};
+
+    let mut w = World::new();
+    let tasks = w.approve();
+    assert!(tasks.iter().all(|t| t.item.kind == Some(WorkKind::Feature)));
+    let id = tasks[0].item.id;
+    let load = |w: &World, policy: &WorkflowPolicy| {
+        w.store
+            .read(|c| read::load_task(c, id, policy))
+            .unwrap()
+            .unwrap()
+    };
+    let before = load(&w, &WorkflowPolicy::default());
+    assert_eq!(before.item.kind, Some(WorkKind::Feature));
+    assert_eq!(
+        before.workflow.stage_trigger(Stage::Merge),
+        Some(Trigger::Manual)
+    );
+    assert_eq!(before.workflow.autonomy_cap, None);
+
+    let mut project = w.project.clone();
+    project.workflow.kinds.insert(
+        WorkKind::Feature,
+        KindOverride {
+            stages: [(Stage::Merge, Some(Trigger::Auto))].into_iter().collect(),
+            autonomy: Some(Autonomy::Strict),
+            test_paths: Vec::new(),
+        },
+    );
+    let mut batch = Batch::new(w.now);
+    batch.projects.push(project);
+    w.store.commit(&batch).unwrap();
+
+    let after = load(&w, &WorkflowPolicy::default());
+    assert_eq!(
+        after.workflow.stage_trigger(Stage::Merge),
+        Some(Trigger::Auto)
+    );
+    assert_eq!(after.workflow.autonomy_cap, Some(Autonomy::Strict));
+    assert!(after.workflow.kinds.is_empty());
+    let stored = w
+        .store
+        .read(|c| read::load_project(c, w.project.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.workflow.kinds.len(), 1);
+    assert_eq!(
+        stored.workflow.stage_trigger(Stage::Merge),
+        Some(Trigger::Manual)
+    );
+}
+
+#[test]
 fn re_approval_repins_the_row_and_replaces_its_dependencies() {
     let mut w = World::new();
     let tasks = w.approve();
     let first = w.spec.clone();
     let v2 = SpecRevisionId(w.ids.next_id());
     let recorded = Event::SpecRevisionRecorded {
+        kind: saka_core::vocab::WorkKind::Feature,
         spec_id: w.spec.id,
         revision_id: v2,
         source_commit: "b".repeat(40),
@@ -808,7 +883,13 @@ fn re_approval_repins_the_row_and_replaces_its_dependencies() {
     let s2 = tasks.iter().find(|t| t.item.step_index == Some(2)).unwrap();
     let stored = w
         .store
-        .read(|c| read::load_task(c, s2.item.id))
+        .read(|c| {
+            read::load_task(
+                c,
+                s2.item.id,
+                &saka_core::workflow::WorkflowPolicy::default(),
+            )
+        })
         .unwrap()
         .unwrap();
     assert_eq!(stored.item.spec_revision_id, Some(v2));
@@ -846,7 +927,11 @@ fn blocked_retried_and_cancelled_tasks_round_trip() {
             },
         },
     );
-    let t = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let t = w
+        .store
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+        .unwrap()
+        .unwrap();
     assert_eq!(t.open_blocker().unwrap().code, BlockerCode::EnvSetupFailed);
     w.step(
         id,
@@ -860,7 +945,11 @@ fn blocked_retried_and_cancelled_tasks_round_trip() {
             reason: "not needed".into(),
         },
     );
-    let t = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let t = w
+        .store
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+        .unwrap()
+        .unwrap();
     assert_eq!(t.item.state, WorkItemState::Cancelled);
     assert_eq!(
         read::attempts(&rusqlite_conn(&w), id).unwrap(),
@@ -906,7 +995,13 @@ fn a_failing_projection_write_leaves_nothing_behind() {
     assert_eq!(count(&w.store, "job"), jobs_before);
     let t = w
         .store
-        .read(|c| read::load_task(c, tasks[0].item.id))
+        .read(|c| {
+            read::load_task(
+                c,
+                tasks[0].item.id,
+                &saka_core::workflow::WorkflowPolicy::default(),
+            )
+        })
         .unwrap()
         .unwrap();
     assert_eq!(t.item.version, 1);
@@ -1005,7 +1100,13 @@ fn job_queue_leases_reclaims_retries_and_dies_with_its_blocker() {
     dead.events.push(rec);
     let mut blocked = w
         .store
-        .read(|c| read::load_task(c, tasks[0].item.id))
+        .read(|c| {
+            read::load_task(
+                c,
+                tasks[0].item.id,
+                &saka_core::workflow::WorkflowPolicy::default(),
+            )
+        })
         .unwrap()
         .unwrap();
     let mut ctx = Ctx {
@@ -1122,10 +1223,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(38));
+    assert_eq!(w.store.schema_version().unwrap(), Some(39));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1247,7 +1348,13 @@ fn reconcile_keeps_loading_shipped_tasks_whose_environment_still_needs_cleanup()
 
     let set = w
         .store
-        .read(|c| read::load_tasks(c, TaskSet::Reconcile))
+        .read(|c| {
+            read::load_tasks(
+                c,
+                TaskSet::Reconcile,
+                &saka_core::workflow::WorkflowPolicy::default(),
+            )
+        })
         .unwrap();
     assert_eq!(
         set.iter().map(|t| t.item.id).collect::<Vec<_>>(),
@@ -1396,7 +1503,11 @@ fn runtime_state_round_trips_resume_ledger_rules_and_quota() {
         }),
     );
 
-    let stored = w.store.read(|c| read::load_task(c, id)).unwrap().unwrap();
+    let stored = w
+        .store
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+        .unwrap()
+        .unwrap();
     let run = stored.stage_run.as_ref().unwrap();
     assert!(run.resumed_lost);
     assert_eq!(run.budget.map(|b| b.turns), Some(10));
@@ -1563,7 +1674,7 @@ fn two_live_environments_never_hold_the_same_port_block() {
     );
     let env = w
         .store
-        .read(|c| read::load_task(c, id))
+        .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
         .unwrap()
         .unwrap()
         .environment

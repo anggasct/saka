@@ -30,6 +30,7 @@ pub struct ProjectView {
     pub warnings: Vec<ScopeWarning>,
     pub authorship_mode: saka_core::vocab::AuthorshipMode,
     pub ceilings: saka_core::autonomy::Ceilings,
+    pub allow_unreviewed_chore: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,6 +292,7 @@ impl Engine {
             warnings,
             authorship_mode: saka_core::authorship::mode_of(authorship.as_ref()),
             ceilings: self.cfg.loop_cfg.autonomy.clone(),
+            allow_unreviewed_chore: self.cfg.workflow_policy.allow_unreviewed_chore,
         })
     }
 
@@ -318,7 +320,7 @@ impl Engine {
         let (revision, tasks) = self.store.read(|c| {
             Ok((
                 read::load_revision(c, spec.latest_revision_id)?,
-                read::load_tasks(c, TaskSet::Spec(spec.id))?,
+                read::load_tasks(c, TaskSet::Spec(spec.id), &self.cfg.workflow_policy)?,
             ))
         })?;
         let revision = revision
@@ -426,7 +428,7 @@ impl Engine {
         let (approved, tasks) = self.store.read(|c| {
             Ok((
                 read::revision_view(c, approved_id)?,
-                read::load_tasks(c, TaskSet::Spec(spec.id))?,
+                read::load_tasks(c, TaskSet::Spec(spec.id), &self.cfg.workflow_policy)?,
             ))
         })?;
         let Some(approved) = approved else {
@@ -469,7 +471,7 @@ impl Engine {
             .map(|d| d.depends_on_work_item_id)
             .collect();
         let (dep_tasks, specs) = self.store.read(|c| {
-            let dep_tasks = read::load_tasks(c, TaskSet::Ids(&targets))?;
+            let dep_tasks = read::load_tasks(c, TaskSet::Ids(&targets), &self.cfg.workflow_policy)?;
             let mut specs = Vec::new();
             for d in &spec_deps {
                 if let Some(s) = read::load_spec(c, d.depends_on_spec_id)? {
@@ -489,7 +491,7 @@ impl Engine {
         let ports_full = {
             let live = self
                 .store
-                .read(|c| read::load_tasks(c, TaskSet::Reconcile))?;
+                .read(|c| read::load_tasks(c, TaskSet::Reconcile, &self.cfg.workflow_policy))?;
             saka_core::reconcile::free_port_blocks(&saka_core::reconcile::Snapshot {
                 tasks: live,
                 port_blocks: Some(self.cfg.env.port_blocks()),
@@ -682,7 +684,7 @@ impl Engine {
         let ids: Vec<WorkItemId> = paged.items.iter().map(|(id, _)| *id).collect();
         let mut tasks = self
             .store
-            .read(|c| read::load_tasks(c, TaskSet::Ids(&ids)))?;
+            .read(|c| read::load_tasks(c, TaskSet::Ids(&ids), &self.cfg.workflow_policy))?;
         tasks.sort_by_key(|t| ids.iter().position(|id| *id == t.item.id));
         let waiting = self.waiting(&tasks)?;
         let facts = self.project_facts(&tasks)?;
@@ -726,7 +728,7 @@ impl Engine {
             if !lines.iter().any(|(k, _)| *k == key) {
                 let members = self.store.read(|c| {
                     let ids = read::merge_queue_members(c, key.0, &key.1)?;
-                    read::load_tasks(c, TaskSet::Ids(&ids))
+                    read::load_tasks(c, TaskSet::Ids(&ids), &self.cfg.workflow_policy)
                 })?;
                 lines.push((key.clone(), members));
             }
@@ -758,9 +760,12 @@ impl Engine {
     }
 
     pub fn work_item(&self, id: WorkItemId) -> Result<Option<TaskDetail>> {
-        let (task, stage_runs) = self
-            .store
-            .read(|c| Ok((read::load_task(c, id)?, list::stage_runs(c, id)?)))?;
+        let (task, stage_runs) = self.store.read(|c| {
+            Ok((
+                read::load_task(c, id, &self.cfg.workflow_policy)?,
+                list::stage_runs(c, id)?,
+            ))
+        })?;
         let Some(task) = task else {
             return Ok(None);
         };
