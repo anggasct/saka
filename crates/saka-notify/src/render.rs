@@ -89,6 +89,16 @@ fn headline(lang: Lang, event: &str, subject: &str, project: &str) -> String {
     format!("{word}: {subject} {preposition} {project}")
 }
 
+fn blocker_sentence(lang: Lang, code: &str) -> Option<&'static str> {
+    match code {
+        "regression_not_reproduced" => Some(lang.pick(
+            "The agent did not prove its regression test fails without the fix. Retry to make it write the test first.",
+            "Agent tidak membuktikan test regresinya gagal tanpa perbaikan. Coba lagi agar ia menulis test lebih dulu.",
+        )),
+        _ => None,
+    }
+}
+
 pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>) -> String {
     let params = &notification.params;
     let mut lines = Vec::new();
@@ -108,6 +118,7 @@ pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>)
                     lang.pick("Reason", "Penyebab"),
                     clean(code, 64)
                 ));
+                lines.extend(blocker_sentence(lang, code).map(str::to_string));
             }
             if event == "inbox_item_opened" {
                 let kind = text_at(params, &["inbox", "kind"]).unwrap_or("-");

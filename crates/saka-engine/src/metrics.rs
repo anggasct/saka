@@ -49,6 +49,7 @@ pub struct Counters {
     review_posts: Mutex<BTreeMap<(String, String), u64>>,
     fix_rounds: Mutex<BTreeMap<(String, String), u64>>,
     fix_exhausted: Mutex<BTreeMap<(String, String), u64>>,
+    regression_checks: Mutex<BTreeMap<(String, String), u64>>,
     intake_scan_seconds: Mutex<SecondsHistogram>,
     pub(crate) worker_started: AtomicBool,
     pub(crate) reconciler_started: AtomicBool,
@@ -199,6 +200,10 @@ impl Counters {
 
     pub(crate) fn review_verdict(&self, outcome: &str, basis: &str) {
         bump(&self.review_verdicts, outcome, basis);
+    }
+
+    pub(crate) fn regression_check(&self, outcome: &str) {
+        bump(&self.regression_checks, outcome, "");
     }
 
     pub(crate) fn review_format_rejected(&self, code: &str) {
@@ -415,6 +420,7 @@ pub struct MetricsSnapshot {
     pub review_posts: Vec<(String, u64)>,
     pub fix_rounds: Vec<(String, u64)>,
     pub fix_exhausted: u64,
+    pub regression_checks: Vec<(String, u64)>,
     pub intake_scan_seconds: SecondsHistogram,
 }
 
@@ -625,6 +631,10 @@ impl Engine {
             fix_rounds: copy(&self.counters.fix_rounds)
                 .into_iter()
                 .map(|(cause, _, n)| (cause, n))
+                .collect(),
+            regression_checks: copy(&self.counters.regression_checks)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
                 .collect(),
             fix_exhausted: copy(&self.counters.fix_exhausted)
                 .into_iter()

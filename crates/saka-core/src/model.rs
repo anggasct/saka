@@ -8,8 +8,9 @@ use crate::decision::DecisionOption;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, DecisionRequestId, EnvironmentId, GateResultId,
-    PermissionRequestId, PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId,
-    SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId, WorkItemId,
+    PermissionRequestId, PermissionRuleId, ProjectId, RegressionCheckId, RepoId, ReviewId,
+    SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
+    WorkItemId,
 };
 use crate::review::Finding;
 use crate::time::Timestamp;
@@ -17,9 +18,9 @@ use crate::vocab::{
     Autonomy, BlockerCode, BlockerResolution, BudgetDimension, ChangeRole, ChangeState,
     ContextOrigin, DecisionState, DocsMode, DraftAttemptState, DraftLocale, DraftMode, Effect,
     EnvironmentState, ExternalCause, GateOutcome, GateSource, InterruptBy, LintOutcome, MatchKind,
-    PacketOrigin, PermissionState, ResumeCause, ReviewBasis, ReviewEvent, ReviewOutcome,
-    SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase, StageRunState,
-    TargetKind, Tool, Trigger, WorkItemOrigin, WorkItemState, WorkKind,
+    PacketOrigin, PermissionState, RegressionOutcome, ResumeCause, ReviewBasis, ReviewEvent,
+    ReviewOutcome, SessionState, SpecDraftState, SpecOrigin, SpecState, Stage, StagePhase,
+    StageRunState, TargetKind, Tool, Trigger, WorkItemOrigin, WorkItemState, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -305,6 +306,7 @@ pub struct StageRun {
     pub docs_head_sha: Option<String>,
     pub queued_at: Option<Timestamp>,
     pub queue_native: bool,
+    pub branch_reset_from: Option<String>,
     pub fix: Option<FixRound>,
     pub failure: Option<Coded>,
     pub budget: Option<Budget>,
@@ -621,6 +623,47 @@ impl DecisionRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionRun {
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub duration_ms: u64,
+    pub output_tail: String,
+}
+
+impl RegressionRun {
+    pub fn failed(&self) -> bool {
+        self.timed_out || self.exit_code != Some(0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RegressionCheck {
+    pub id: RegressionCheckId,
+    pub work_item_id: WorkItemId,
+    pub stage_run_id: StageRunId,
+    pub attempt: u32,
+    pub commit_sha: String,
+    pub base_sha: String,
+    pub outcome: Option<RegressionOutcome>,
+    pub checks: Vec<RegressionRun>,
+    pub paths: Vec<String>,
+    pub requested_at: Timestamp,
+    pub observed_at: Option<Timestamp>,
+    pub delivered_at: Option<Timestamp>,
+}
+
+impl RegressionCheck {
+    pub fn awaiting_result(&self) -> bool {
+        self.outcome.is_none()
+    }
+
+    pub fn awaiting_delivery(&self) -> bool {
+        self.outcome.is_some() && self.delivered_at.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub item: WorkItem,
@@ -634,6 +677,7 @@ pub struct Task {
     pub session: Option<Session>,
     pub permissions: Vec<PermissionRequest>,
     pub decisions: Vec<DecisionRequest>,
+    pub regressions: Vec<RegressionCheck>,
     pub attempts: BTreeMap<Stage, u32>,
     pub retries: BTreeMap<Stage, Retries>,
     pub retired_runs: Vec<StageRun>,
@@ -703,6 +747,7 @@ impl Task {
             session: None,
             permissions: Vec::new(),
             decisions: Vec::new(),
+            regressions: Vec::new(),
             attempts: BTreeMap::new(),
             retries: BTreeMap::new(),
             retired_runs: Vec::new(),
@@ -834,6 +879,42 @@ impl Task {
         self.stage_run
             .as_ref()
             .is_some_and(|r| r.queued_at.is_some())
+    }
+
+    pub fn is_bugfix(&self) -> bool {
+        self.item.kind == Some(WorkKind::Bugfix) && self.external.is_none()
+    }
+
+    pub fn run_regressions(&self) -> impl Iterator<Item = &RegressionCheck> {
+        let run = self.stage_run.as_ref().map(|r| r.id);
+        self.regressions
+            .iter()
+            .filter(move |c| Some(c.stage_run_id) == run)
+    }
+
+    pub fn reproduced_regression(&self) -> Option<&RegressionCheck> {
+        self.regressions
+            .iter()
+            .rev()
+            .find(|c| c.outcome == Some(RegressionOutcome::Reproduced))
+    }
+
+    pub fn needs_branch_reset(&self) -> bool {
+        self.is_bugfix()
+            && self.is_at(Stage::Dev, StagePhase::RunningSession)
+            && self.live_session().is_none()
+            && self
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.trigger == Trigger::Manual && r.branch_reset_from.is_none())
+            && self.blocker.as_ref().is_some_and(|b| {
+                b.resolution.is_some() && b.code == BlockerCode::RegressionNotReproduced
+            })
+    }
+
+    pub fn regression_open(&self) -> bool {
+        self.run_regressions()
+            .any(|c| c.awaiting_result() || c.awaiting_delivery())
     }
 }
 

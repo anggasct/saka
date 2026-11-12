@@ -227,19 +227,19 @@ fn another_kind_with_a_regression_section_only_warns() {
 }
 
 #[test]
-fn a_bugfix_with_several_steps_warns_that_the_rule_covers_the_first() {
+fn a_bugfix_with_several_steps_is_refused_because_the_rule_covers_one() {
     let text = "---\nsaka: spec\nkind: bugfix\n---\n# Title\n\n## Acceptance criteria\n\n- **AC-01**: one.\n- **AC-02**: two.\n\n## Regression\n\n- `cargo test`\n\n## Steps\n\n| Step | Work | AC | Done when |\n|------|------|----|-----------|\n| S1 | a | AC-01 | `true` |\n| S2 | b | AC-02 | `true` |\n";
     let parsed = parse("fix.md", text.as_bytes());
     assert_eq!(
         found(&parsed.issues),
         vec![(
-            LintCode::RegressionMultiStep,
-            Severity::Warning,
+            LintCode::BugfixMultiStep,
+            Severity::Error,
             16,
             json!({ "count": 2 })
         )]
     );
-    assert!(parsed.is_ready());
+    assert!(!parsed.is_ready());
 }
 
 #[test]
@@ -626,7 +626,6 @@ fn every_lint_code_has_a_fixed_severity() {
         C::LinksLimitExceeded,
         C::ReferenceNotDoc,
         C::RegressionIgnored,
-        C::RegressionMultiStep,
     ];
     for code in LintCode::ALL {
         let expected = if warnings.contains(&code) {

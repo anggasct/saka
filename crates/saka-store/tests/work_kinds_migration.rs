@@ -156,7 +156,7 @@ fn the_migration_carries_old_rows_as_features_and_adds_kinds_quick_specs_and_reg
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![39]);
+    assert_eq!(store.migration().applied, vec![39, 40]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();
@@ -248,6 +248,31 @@ fn the_migration_carries_old_rows_as_features_and_adds_kinds_quick_specs_and_reg
         )
         .unwrap();
     assert_eq!(defaults, "[][]");
+    let added: Vec<String> = conn
+        .prepare(
+            "SELECT 'regression_check.' || name FROM pragma_table_info('regression_check') WHERE name = 'delivered_at'
+             UNION ALL SELECT 'stage_run.' || name FROM pragma_table_info('stage_run') WHERE name = 'branch_reset_from'",
+        )
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        added,
+        [
+            "regression_check.delivered_at",
+            "stage_run.branch_reset_from"
+        ]
+    );
+    assert!(
+        conn.execute(
+            "UPDATE regression_check SET delivered_at = -1 WHERE id = 'g1'",
+            []
+        )
+        .is_err(),
+        "a delivery time is not negative"
+    );
 
     let broken: i64 = conn
         .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {

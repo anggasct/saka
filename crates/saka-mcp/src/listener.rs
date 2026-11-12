@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use saka_core::ids::SessionId;
 use saka_core::secret::SecretText;
-use saka_ports::{AskRefusal, Decisions};
+use saka_ports::{AskRefusal, Decisions, Regressions, Requested};
 use subtle::ConstantTimeEq;
 use tokio::net::{UnixListener, UnixStream};
 
@@ -30,7 +30,12 @@ pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
     Ok(listener)
 }
 
-pub async fn serve(listener: UnixListener, tokens: Arc<dyn Tokens>, decisions: Arc<dyn Decisions>) {
+pub async fn serve(
+    listener: UnixListener,
+    tokens: Arc<dyn Tokens>,
+    decisions: Arc<dyn Decisions>,
+    regressions: Arc<dyn Regressions>,
+) {
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -38,10 +43,16 @@ pub async fn serve(listener: UnixListener, tokens: Arc<dyn Tokens>, decisions: A
         };
         let tokens = Arc::clone(&tokens);
         let decisions = Arc::clone(&decisions);
+        let regressions = Arc::clone(&regressions);
         tokio::spawn(async move {
             if let Err(e) = tokio::time::timeout(
                 REQUEST_TIMEOUT,
-                handle(stream, tokens.as_ref(), decisions.as_ref()),
+                handle(
+                    stream,
+                    tokens.as_ref(),
+                    decisions.as_ref(),
+                    regressions.as_ref(),
+                ),
             )
             .await
             .unwrap_or_else(|_| Err(std::io::Error::from(std::io::ErrorKind::TimedOut)))
@@ -66,6 +77,7 @@ async fn handle(
     mut stream: UnixStream,
     tokens: &dyn Tokens,
     decisions: &dyn Decisions,
+    regressions: &dyn Regressions,
 ) -> std::io::Result<()> {
     let (read, mut write) = stream.split();
     let reply = match wire::read_line(read).await? {
@@ -90,6 +102,21 @@ async fn handle(
                     }
                 }
             }
+            Ok(Request {
+                session,
+                op: Op::RegressionCheck,
+                ..
+            }) => match regressions.request(session).await {
+                Ok(Requested::Recorded {
+                    attempt,
+                    commit_sha,
+                }) => Reply::RegressionRecorded {
+                    attempt,
+                    commit_sha,
+                },
+                Ok(Requested::DirtyWorktree) => Reply::RegressionDirty,
+                Err(refusal) => refused(refusal.code()),
+            },
         },
     };
     wire::write_line(&mut write, &reply).await

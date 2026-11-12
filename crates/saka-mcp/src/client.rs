@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use saka_core::decision::Question;
 use saka_core::ids::{DecisionRequestId, SessionId};
-use saka_ports::AskRefusal;
+use saka_ports::{AskRefusal, RegressionRefusal, Requested};
 use tokio::net::UnixStream;
 
 use crate::wire::{self, Op, Reply, Request, UNAUTHORIZED};
@@ -20,6 +20,8 @@ pub enum ClientError {
     Protocol,
     #[error("{0}")]
     Refused(AskRefusal),
+    #[error("{0}")]
+    RegressionRefused(RegressionRefusal),
 }
 
 pub struct Client {
@@ -47,6 +49,26 @@ impl Client {
     pub async fn ask(&self, question: Question) -> Result<DecisionRequestId, ClientError> {
         match self.call(Op::Ask { question }).await? {
             Reply::Asked { decision_id } => Ok(decision_id),
+            Reply::Refused { code } => {
+                Err(AskRefusal::from_code(&code)
+                    .map_or(ClientError::Protocol, ClientError::Refused))
+            }
+            _ => Err(ClientError::Protocol),
+        }
+    }
+
+    pub async fn regression_check(&self) -> Result<Requested, ClientError> {
+        match self.call(Op::RegressionCheck).await? {
+            Reply::RegressionRecorded {
+                attempt,
+                commit_sha,
+            } => Ok(Requested::Recorded {
+                attempt,
+                commit_sha,
+            }),
+            Reply::RegressionDirty => Ok(Requested::DirtyWorktree),
+            Reply::Refused { code } => Err(RegressionRefusal::from_code(&code)
+                .map_or(ClientError::Protocol, ClientError::RegressionRefused)),
             _ => Err(ClientError::Protocol),
         }
     }
@@ -63,10 +85,6 @@ impl Client {
             .map_err(ClientError::Unreachable)?;
         match reply {
             Reply::Refused { code } if code == UNAUTHORIZED => Err(ClientError::Unauthorized),
-            Reply::Refused { code } => {
-                Err(AskRefusal::from_code(&code)
-                    .map_or(ClientError::Protocol, ClientError::Refused))
-            }
             other => Ok(other),
         }
     }

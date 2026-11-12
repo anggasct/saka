@@ -170,11 +170,8 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Parsed {
     let regression = regression_commands(doc.regression.as_ref(), front.kind, &mut issues);
     if front.kind == WorkKind::Bugfix && steps.len() > 1 {
         issues.push(
-            LintIssue::new(
-                LintCode::RegressionMultiStep,
-                doc.steps_heading.unwrap_or(1),
-            )
-            .with("count", steps.len()),
+            LintIssue::new(LintCode::BugfixMultiStep, doc.steps_heading.unwrap_or(1))
+                .with("count", steps.len()),
         );
     }
     check_commands(&steps, &mut issues);

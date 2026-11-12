@@ -20,6 +20,7 @@ pub struct Request {
 pub enum Op {
     Hello,
     Ask { question: Question },
+    RegressionCheck,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +28,8 @@ pub enum Op {
 pub enum Reply {
     Hello,
     Asked { decision_id: DecisionRequestId },
+    RegressionRecorded { attempt: u32, commit_sha: String },
+    RegressionDirty,
     Refused { code: String },
 }
 

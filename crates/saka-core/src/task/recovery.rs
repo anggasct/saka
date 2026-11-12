@@ -286,6 +286,9 @@ impl Decider<'_> {
         if kind == JobKind::EnvTeardown {
             return self.teardown_failed(error);
         }
+        if kind == JobKind::GateReproduce {
+            return self.regression_unrunnable(ctx);
+        }
         if kind == JobKind::SessionReattach {
             let gone = SessionInput::Gone {
                 cause: "runner_silent".to_string(),
@@ -359,6 +362,9 @@ impl Decider<'_> {
             | I::RequestMerge { .. } => Err(Rejection::InvalidState {
                 state: self.state_name(),
             }),
+            I::RegressionRequested { .. } => {
+                Err(Rejection::RegressionNotAvailable { reason: "paused" })
+            }
             I::Session(
                 SessionInput::Steer { .. }
                 | SessionInput::Interrupt { .. }
@@ -541,7 +547,8 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         | B::DecisionExpired
         | B::BudgetExhausted
         | B::QuotaExhausted
-        | B::NoChanges => (Stage::Dev, StagePhase::RunningSession),
+        | B::NoChanges
+        | B::RegressionNotReproduced => (Stage::Dev, StagePhase::RunningSession),
         B::PathScopeViolation if params.get("stage").and_then(Value::as_str) == Some("sync") => {
             (Stage::Sync, StagePhase::MergingDocs)
         }

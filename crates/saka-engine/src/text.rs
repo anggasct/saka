@@ -2,13 +2,14 @@ use saka_core::event::Prompt;
 use saka_core::ids::{SpecRevisionId, WorkItemId};
 use saka_core::model::{Coded, Environment, Task};
 use saka_core::rejection::Rejection;
-use saka_core::vocab::SecretPurpose;
+use saka_core::vocab::{SecretPurpose, Stage, WorkKind};
 use saka_spec::{SpecModel, Step};
 use saka_store::{SpecRevisionRow, read};
 use serde_json::Value;
 
 use crate::packet::{
-    self, EnvironmentFacts, Packet, PacketDocs, PacketInput, PacketRepo, PacketSpec, PacketStep,
+    self, EnvironmentFacts, Packet, PacketDocs, PacketInput, PacketRegression, PacketRepo,
+    PacketSpec, PacketStep,
 };
 use crate::recipe::Recipe;
 use crate::{Engine, EngineError, Result};
@@ -37,6 +38,10 @@ pub(crate) struct Pinned {
 impl Pinned {
     pub(crate) fn source_commit(&self) -> &str {
         &self.revision.source_commit
+    }
+
+    pub(crate) fn regression(&self) -> &[String] {
+        &self.model.regression
     }
 
     pub(crate) fn step(&self, task: &Task) -> Option<&Step> {
@@ -109,6 +114,14 @@ impl Engine {
                 .find(|d| d.id == *decision_id)
                 .map(saka_core::decision::answer_text)
                 .ok_or_else(|| EngineError::Internal("decision not in the task".into())),
+            Prompt::Regression {
+                regression_check_id,
+            } => task
+                .regressions
+                .iter()
+                .find(|c| c.id == *regression_check_id)
+                .map(saka_core::regression::turn_text)
+                .ok_or_else(|| EngineError::Internal("regression check not in the task".into())),
             Prompt::VerdictFormat { reason } => {
                 Ok(crate::review_packet::verdict_format_text(reason))
             }
@@ -129,8 +142,10 @@ impl Engine {
             Some(env) => self.environment_facts(task, env)?,
             None => EnvironmentFacts::default(),
         };
+        let regression = self.packet_regression(task, &pinned)?;
         Ok(packet::render(&PacketInput {
             step: packet_step(task, &pinned),
+            regression,
             spec: PacketSpec {
                 revision_id: revision.to_string(),
                 path: pinned.path.clone(),
@@ -140,6 +155,32 @@ impl Engine {
             context,
             environment,
             retry,
+        }))
+    }
+
+    fn packet_regression(&self, task: &Task, pinned: &Pinned) -> Result<Option<PacketRegression>> {
+        if !task.is_bugfix() {
+            return Ok(None);
+        }
+        let project = self
+            .store
+            .read(|c| read::load_project(c, task.item.project_id))?;
+        let extra = project
+            .and_then(|p| {
+                p.workflow
+                    .kinds
+                    .get(&WorkKind::Bugfix)
+                    .map(|o| o.test_paths.clone())
+            })
+            .unwrap_or_default();
+        let dev = task
+            .stage_run
+            .as_ref()
+            .is_some_and(|r| r.stage == Stage::Dev);
+        Ok(Some(PacketRegression {
+            commands: pinned.regression().to_vec(),
+            test_paths: saka_core::regression::test_patterns(&extra),
+            proven: !dev || task.reproduced_regression().is_some(),
         }))
     }
 

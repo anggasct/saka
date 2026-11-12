@@ -1809,3 +1809,82 @@ async fn a_head_is_probed_against_the_base_and_a_merge_commit_names_its_parents(
         None
     );
 }
+
+#[tokio::test]
+async fn a_commit_is_an_ancestor_or_carried_by_a_rebased_head_through_its_patch() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let test = commit_at(&wt, "tests/regression.rs", "fn t() {}\n");
+    let fix = commit_at(&wt, "src/lib.rs", "fn fixed() {}\n");
+
+    assert!(w.repos.is_ancestor(&w.repo, &test, &fix).await.unwrap());
+    assert!(!w.repos.is_ancestor(&w.repo, &fix, &test).await.unwrap());
+    assert!(
+        !w.repos
+            .is_ancestor(&w.repo, &"1".repeat(40), &fix)
+            .await
+            .unwrap()
+    );
+    assert!(w.repos.carries_patch(&w.repo, &test, &fix).await.unwrap());
+
+    assert!(matches!(
+        w.push(&fix, None).await,
+        PushOutcome::Pushed { .. }
+    ));
+    advance_base(&w, "other.txt", "other\n");
+    let Rebase::Rebased { head_sha, .. } = w.repos.rebase(&env, "main", &fix).await.unwrap() else {
+        panic!("the base moved, so the branch is rebased");
+    };
+    assert!(
+        !w.repos
+            .is_ancestor(&w.repo, &test, &head_sha)
+            .await
+            .unwrap()
+    );
+    assert!(
+        w.repos
+            .carries_patch(&w.repo, &test, &head_sha)
+            .await
+            .unwrap()
+    );
+
+    let root = git(&wt, &["rev-parse", &format!("{test}^")]);
+    git(&wt, &["checkout", "-q", "-B", "rewritten", &root]);
+    let squashed = commit_at(&wt, "src/lib.rs", "fn fixed() {}\n");
+    assert!(
+        !w.repos
+            .carries_patch(&w.repo, &test, &squashed)
+            .await
+            .unwrap()
+    );
+    let invalid = w
+        .repos
+        .is_ancestor(&w.repo, "-x", &squashed)
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code, "git_argument_invalid");
+}
+
+#[tokio::test]
+async fn a_branch_is_reset_to_a_commit_and_loses_commits_and_untracked_files() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let wt = PathBuf::from(&env.worktree_path);
+    let base = git(&wt, &["rev-parse", "HEAD"]);
+    commit_at(&wt, "src/lib.rs", "fn fixed() {}\n");
+    std::fs::write(wt.join("scratch.txt"), "x").unwrap();
+
+    w.repos.reset_branch(&env, &base).await.unwrap();
+
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), base);
+    assert_eq!(git(&wt, &["symbolic-ref", "--short", "HEAD"]), BRANCH);
+    assert!(git(&wt, &["status", "--porcelain"]).is_empty());
+    assert!(!wt.join("src/lib.rs").exists() && !wt.join("scratch.txt").exists());
+    let missing = w
+        .repos
+        .reset_branch(&env, &"1".repeat(40))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code, "commit_missing");
+}

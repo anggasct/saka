@@ -85,7 +85,8 @@ fn change_requests_get_a_role_unique_per_task_and_the_new_phase_and_blocker_are_
     assert_eq!(
         store.migration().applied,
         vec![
-            18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39
+            18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+            40
         ]
     );
     drop(store);

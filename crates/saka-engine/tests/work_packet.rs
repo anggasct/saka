@@ -32,6 +32,7 @@ fn full() -> PacketInput {
             ],
             commands: vec!["cd cli && go test ./...".into(), "make lint".into()],
         },
+        regression: None,
         spec: PacketSpec {
             revision_id: "0193f0c4-1b2a-7c3d-9e8f-001122334455".into(),
             path: "docs/specs/tasks-done.md".into(),
@@ -126,4 +127,33 @@ fn the_same_input_always_renders_the_same_bytes() {
     let mut reordered = full();
     reordered.environment.toolchains.reverse();
     assert_eq!(render(&reordered).text, a.text);
+}
+
+fn bugfix(proven: bool) -> PacketInput {
+    let mut input = full();
+    input.regression = Some(saka_engine::packet::PacketRegression {
+        commands: vec!["cargo test --test regression".into()],
+        test_paths: vec!["**/tests/**".into(), "src/**/fixtures/**".into()],
+        proven,
+    });
+    input
+}
+
+#[test]
+fn a_bugfix_packet_asks_for_the_test_first_with_the_commands_and_the_test_paths() {
+    let text = render(&bugfix(false)).text;
+    assert!(text.contains(
+        "Regression commands (they must pass when you finish):\n- `cargo test --test regression`\n"
+    ));
+    assert!(text.contains("matches one of **/tests/**, src/**/fixtures/**"));
+    assert!(text.contains("`regression_check` tool (`mcp__saka__regression_check`)"));
+    assert!(text.contains("Fix the bug only after the result says reproduced."));
+}
+
+#[test]
+fn a_proven_bugfix_packet_keeps_the_test_and_drops_the_protocol() {
+    let text = render(&bugfix(true)).text;
+    assert!(text.contains("Saka already proved your regression test"));
+    assert!(!text.contains("Work test first"));
+    assert!(render(&full()).text.find("Regression commands").is_none());
 }

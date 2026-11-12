@@ -3,8 +3,9 @@ use saka_core::ids::{ProjectId, RepoId, SpecDraftAttemptId, SpecId, WorkItemId};
 use saka_core::job::Job;
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionRequest, Draft, Environment,
-    GateResult, LintRound, PermissionRequest, PermissionRule, Project, Repo, Review, Session,
-    SessionActivity, Spec, SpecDependency, StageRun, Task, UsageRecord, WorkItemDependency,
+    GateResult, LintRound, PermissionRequest, PermissionRule, Project, RegressionCheck, Repo,
+    Review, Session, SessionActivity, Spec, SpecDependency, StageRun, Task, UsageRecord,
+    WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::GateSource;
@@ -734,6 +735,9 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     for r in &t.reviews {
         review(tx, t, r)?;
     }
+    for c in &t.regressions {
+        regression_check(tx, t, c)?;
+    }
     if let Some(cr) = &t.docs_change {
         change_request(tx, t, cr)?;
     }
@@ -1011,11 +1015,11 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
     tx.execute(
         "INSERT INTO stage_run (id, work_item_id, project_id, stage, attempt, state, trigger, reason, entry_phase,
            head_sha, failure, started_at, ended_at, created_at, updated_at, budget, budget_warnings,
-           docs_head_sha, queued_at, queue_native, fix)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+           docs_head_sha, queued_at, queue_native, fix, branch_reset_from)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, head_sha = excluded.head_sha,
            docs_head_sha = excluded.docs_head_sha, queued_at = excluded.queued_at,
-           queue_native = excluded.queue_native,
+           queue_native = excluded.queue_native, branch_reset_from = excluded.branch_reset_from,
            failure = excluded.failure, started_at = excluded.started_at, ended_at = excluded.ended_at,
            updated_at = excluded.updated_at, budget_warnings = excluded.budget_warnings",
         params![
@@ -1040,6 +1044,7 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
             r.queued_at.map(|x| x.0),
             i64::from(r.queue_native),
             r.fix.as_ref().map(to_json).transpose()?,
+            r.branch_reset_from,
         ],
     )?;
     Ok(())
@@ -1087,6 +1092,32 @@ fn review(tx: &Transaction<'_>, t: &Task, r: &Review) -> Result<()> {
             r.posted.as_ref().and_then(|p| p.url.clone()),
             r.posted.as_ref().map(|p| p.at.0),
             r.created_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
+fn regression_check(tx: &Transaction<'_>, t: &Task, c: &RegressionCheck) -> Result<()> {
+    tx.execute(
+        "INSERT INTO regression_check (id, work_item_id, stage_run_id, project_id, attempt, commit_sha, base_sha,
+           outcome, checks, paths, requested_at, observed_at, delivered_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         ON CONFLICT (id) DO UPDATE SET outcome = excluded.outcome, checks = excluded.checks,
+           paths = excluded.paths, observed_at = excluded.observed_at, delivered_at = excluded.delivered_at",
+        params![
+            c.id.to_string(),
+            t.item.id.to_string(),
+            c.stage_run_id.to_string(),
+            t.item.project_id.to_string(),
+            c.attempt,
+            c.commit_sha,
+            c.base_sha,
+            c.outcome.map(|o| o.as_str()),
+            to_json(&c.checks)?,
+            to_json(&c.paths)?,
+            c.requested_at.0,
+            c.observed_at.map(|t| t.0),
+            c.delivered_at.map(|t| t.0),
         ],
     )?;
     Ok(())

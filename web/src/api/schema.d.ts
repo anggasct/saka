@@ -2363,6 +2363,7 @@ export interface components {
         priority: number;
         /** Format: uuid */
         project_id: string;
+        regression?: components["schemas"]["RegressionEvidence"] | null;
         /** Format: uuid */
         repo_id: string;
         /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
@@ -2716,6 +2717,35 @@ export interface components {
       migrations: string;
       reconciler: string;
       worker: string;
+    };
+    RegressionCommand: {
+      command: string;
+      /** Format: int64 */
+      duration_ms: number;
+      /**
+       * Format: int32
+       * @description The exit code; `null` when the command timed out.
+       */
+      exit_code?: number | null;
+      /** @description `failed | passed | timed_out`. A failing regression command is the proof. */
+      result: string;
+    };
+    RegressionEvidence: {
+      /**
+       * Format: int32
+       * @description The checks of the current stage run.
+       */
+      attempts: number;
+      /** @description What the regression commands did at that commit, one entry per command. */
+      commands: components["schemas"]["RegressionCommand"][];
+      /** @description The commit of the check that reproduced the bug, or else of the latest check; `null` before any check. */
+      commit_sha?: string | null;
+      /** @description `reproduced | not_reproduced | invalid_paths | error` for the latest check that finished; `null` before one did. */
+      last_outcome?: string | null;
+      /** @description The paths the latest finished check looked at: the files outside the test paths for `invalid_paths`, the changed files otherwise. */
+      paths: string[];
+      /** @description `pending | reproduced | failed`. `failed` means the blocker `regression_not_reproduced` is open. */
+      state: string;
     };
     /** @description Request body of a reload; no fields. */
     ReloadBody: Record<string, never>;
@@ -3469,6 +3499,7 @@ export interface components {
       priority: number;
       /** Format: uuid */
       project_id: string;
+      regression?: components["schemas"]["RegressionEvidence"] | null;
       /** Format: uuid */
       repo_id: string;
       /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */

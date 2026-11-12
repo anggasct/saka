@@ -262,6 +262,12 @@ pub trait Environments: Send + Sync {
         fetch: bool,
     ) -> PortResult<ChangedPaths>;
 
+    async fn is_ancestor(&self, repo: &RepoRef, ancestor: &str, head_sha: &str)
+    -> PortResult<bool>;
+
+    async fn carries_patch(&self, repo: &RepoRef, commit: &str, head_sha: &str)
+    -> PortResult<bool>;
+
     async fn change_diff(
         &self,
         repo: &RepoRef,
@@ -273,6 +279,8 @@ pub trait Environments: Send + Sync {
     async fn check_out(&self, env: &EnvRef, commit: &str) -> PortResult<()>;
 
     async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase>;
+
+    async fn reset_branch(&self, env: &EnvRef, to_sha: &str) -> PortResult<()>;
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()>;
 

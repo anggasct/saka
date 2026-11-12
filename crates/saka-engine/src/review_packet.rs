@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use saka_core::model::RegressionRun;
 use saka_spec::content_hash;
 
 const OMITTED_LISTED: usize = 50;
@@ -20,7 +21,23 @@ pub enum ReviewBasisInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRegression {
+    pub commands: Vec<String>,
+    pub test_commit: String,
+    pub checks: Vec<RegressionRun>,
+    pub head_passed: Vec<(String, bool)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewKindInput {
+    Plain,
+    Bugfix(Option<ReviewRegression>),
+    SecurityPatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewPacketInput {
+    pub kind: ReviewKindInput,
     pub basis: ReviewBasisInput,
     pub conventions: Vec<(String, String)>,
     pub title: String,
@@ -70,6 +87,66 @@ fn omitted(files: &[String], diff: &str) -> Vec<String> {
         .filter(|f| !diff.contains(&format!("diff --git a/{f} b/{f}")))
         .cloned()
         .collect()
+}
+
+const SECURITY_CHECKLIST: &str = "<security_checklist>\n\
+This change is a security patch. Check each item against the diff; an item the change does not satisfy is a major finding:\n\
+- Untrusted input: every value from a user, a request, a file or a network peer is validated or escaped before it is used.\n\
+- Authorization: every path to the protected data or action checks who is asking, not only the main one.\n\
+- Secrets: no secret is added to code, logs, errors or test fixtures, and none is exposed more widely than before.\n\
+- Dependencies: no dependency is added or upgraded without a reason, and none is pulled from an unusual source.\n\
+- Logs: nothing sensitive is written to logs, errors or metrics.\n\
+</security_checklist>\n\n";
+
+fn bugfix_evidence(out: &mut String, evidence: Option<&ReviewRegression>, head: &str) {
+    out.push_str(
+        "<regression_evidence>\nThis change is a bugfix, written test first. Saka ran the regression commands on the \
+         test-only commit before the fix, and a failure there is the proof of the bug.\n",
+    );
+    let Some(e) = evidence else {
+        out.push_str(
+            "Saka has no recorded proof for this change. Treat that as a major finding.\n</regression_evidence>\n\n",
+        );
+        return;
+    };
+    out.push_str("Regression commands:\n");
+    for command in &e.commands {
+        let _ = writeln!(out, "- {}", escaped(command));
+    }
+    let _ = writeln!(out, "Test commit: {}", escaped(&e.test_commit));
+    for run in &e.checks {
+        let code = run
+            .exit_code
+            .map_or_else(|| "none".to_string(), |c| c.to_string());
+        let _ = writeln!(
+            out,
+            "At the test commit: {} exited with code {code}{} after {} ms.",
+            escaped(&run.command),
+            if run.timed_out { " (timed out)" } else { "" },
+            run.duration_ms
+        );
+        if !run.output_tail.is_empty() {
+            let _ = writeln!(
+                out,
+                "<output_tail>\n{}\n</output_tail>",
+                escaped(run.output_tail.trim_end_matches('\n'))
+            );
+        }
+    }
+    for (command, passed) in &e.head_passed {
+        let _ = writeln!(
+            out,
+            "At the head {head}: {} {} in Saka's gate (exit code {}).",
+            escaped(command),
+            if *passed { "passed" } else { "did not pass" },
+            if *passed { "0" } else { "not 0" }
+        );
+    }
+    out.push_str(
+        "Reply `request_changes` with a major finding when the failure at the test commit does not show the bug the spec \
+         describes: a compile error, a mistyped command, or a test that never touches the broken behaviour.\n\
+         </regression_evidence>\n\n",
+    );
 }
 
 #[must_use]
@@ -146,6 +223,13 @@ pub fn render(input: &ReviewPacketInput) -> ReviewPacket {
             );
         }
     }
+    match &input.kind {
+        ReviewKindInput::Plain => {}
+        ReviewKindInput::Bugfix(evidence) => {
+            bugfix_evidence(&mut out, evidence.as_ref(), &input.head_sha)
+        }
+        ReviewKindInput::SecurityPatch => out.push_str(SECURITY_CHECKLIST),
+    }
     if input.conventions.is_empty() {
         out.push_str("<repository_conventions>\n(none found on the base branch)\n</repository_conventions>\n\n");
     } else {
@@ -218,6 +302,7 @@ mod tests {
 
     fn input(basis: ReviewBasisInput) -> ReviewPacketInput {
         ReviewPacketInput {
+            kind: ReviewKindInput::Plain,
             basis,
             conventions: vec![("AGENTS.md".into(), "Use tabs.\n".into())],
             title: "Add retries".into(),

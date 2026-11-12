@@ -1094,8 +1094,9 @@ fn start_mcp(cfg: &Config, engine: &Arc<Engine>) -> Option<(tokio::task::JoinHan
         sessions_dir: cfg.data_dir().join("sessions"),
     });
     let decisions: Arc<dyn saka_ports::Decisions> = engine.clone();
+    let regressions: Arc<dyn saka_ports::Regressions> = engine.clone();
     Some((
-        tokio::spawn(saka_mcp::serve(listener, tokens, decisions)),
+        tokio::spawn(saka_mcp::serve(listener, tokens, decisions, regressions)),
         socket,
     ))
 }

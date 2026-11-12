@@ -27,6 +27,7 @@ pub struct SessionLaunch {
     pub profile: LaunchProfile,
     pub model: Option<String>,
     pub author: GitIdentity,
+    pub regression_check: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

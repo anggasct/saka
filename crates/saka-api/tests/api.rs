@@ -959,6 +959,70 @@ fn quick_tasks_are_counted_by_kind_and_outcome() {
 }
 
 #[test]
+fn a_bugfix_task_shows_its_regression_evidence_and_a_feature_shows_none() {
+    let mut api = Api::new(SimConfig::default());
+    let spec = api.register_doc("docs/specs/fix-loop.md", BUGFIX_SPEC);
+    let spec_id = spec.body["id"].as_str().unwrap().to_string();
+    assert_eq!(api.approve_reply(&spec).status, StatusCode::OK);
+    api.sim.world.script_edits(vec![
+        vec![("tests/loop.rs".to_string(), Some("a test".to_string()))],
+        vec![("src/lib.rs".to_string(), Some("the fix".to_string()))],
+    ]);
+    api.sim.world.script_regression_calls(vec![true, false]);
+    api.sim
+        .world
+        .script_command("make test-regression", CommandScript::Exit(1));
+    let bugfix = api
+        .get(&format!("/api/v1/work-items?spec_id={spec_id}"))
+        .body["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let uuid: uuid::Uuid = bugfix.parse().unwrap();
+
+    let first = api.get(&format!("/api/v1/work-items/{bugfix}"));
+    assert_eq!(
+        first.body["regression"],
+        json!({
+            "state": "pending",
+            "attempts": 0,
+            "commit_sha": null,
+            "last_outcome": null,
+            "commands": [],
+            "paths": [],
+        })
+    );
+
+    api.sim.run_until(STEPS, |s| {
+        s.all_tasks()
+            .iter()
+            .any(|t| t.item.id.0 == uuid && t.reproduced_regression().is_some())
+    });
+    let shown = api.get(&format!("/api/v1/work-items/{bugfix}"));
+    let evidence = &shown.body["regression"];
+    assert_eq!(evidence["state"], "reproduced");
+    assert_eq!(evidence["attempts"], 1);
+    assert_eq!(evidence["last_outcome"], "reproduced");
+    assert_eq!(evidence["commit_sha"].as_str().unwrap().len(), 40);
+    assert_eq!(
+        evidence["commands"],
+        json!([{
+            "command": "make test-regression",
+            "result": "failed",
+            "exit_code": 1,
+            "duration_ms": 5,
+        }])
+    );
+    assert_eq!(evidence["paths"], json!(["tests/loop.rs"]));
+    let listed = api.get(&format!("/api/v1/work-items?spec_id={spec_id}"));
+    assert_eq!(listed.body["items"][0]["regression"]["state"], "reproduced");
+
+    let feature = api.sim.approve()[0].0;
+    let other = api.get(&format!("/api/v1/work-items/{feature}"));
+    assert_eq!(other.body["regression"], Value::Null);
+}
+
+#[test]
 fn a_reload_that_names_an_unknown_kind_answers_with_the_issue() {
     let api = Api::new(SimConfig::default());
     let project = api.sim.project_id.0;

@@ -23,6 +23,40 @@ use super::{
 };
 use crate::git::{Extra, GitOutput, failed};
 
+const PATCH_SCAN_COMMITS: u32 = 200;
+const PATCH_SCAN_BYTES: usize = 32 * 1024 * 1024;
+
+impl GitRepos {
+    async fn patch_ids(&self, bare: &Path, args: &[&str]) -> PortResult<Vec<(String, String)>> {
+        let log = self
+            .cfg
+            .git
+            .local_capped(bare, args, PATCH_SCAN_BYTES)
+            .await?;
+        if !log.ok() {
+            return Err(failed("log", &log));
+        }
+        let extra = Extra {
+            env: &[],
+            input: Some(&log.stdout),
+        };
+        let ids = self
+            .cfg
+            .git
+            .local_with(bare, &["patch-id", "--stable"], extra)
+            .await?;
+        if !ids.ok() {
+            return Err(failed("patch_id", &ids));
+        }
+        Ok(ids
+            .text()
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(id, commit)| (id.to_string(), commit.to_string()))
+            .collect())
+    }
+}
+
 #[async_trait]
 impl Environments for GitRepos {
     async fn prepare(&self, request: &PrepareRequest) -> PortResult<PreparedEnvironment> {
@@ -470,6 +504,77 @@ impl Environments for GitRepos {
         Ok(ChangedPaths { paths, truncated })
     }
 
+    async fn is_ancestor(
+        &self,
+        repo: &RepoRef,
+        ancestor: &str,
+        head_sha: &str,
+    ) -> PortResult<bool> {
+        sha_arg(ancestor, "ancestor")?;
+        sha_arg(head_sha, "head_sha")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        let bare = self.mirror_path(repo.repo_id);
+        let out = self
+            .cfg
+            .git
+            .local(&bare, &["merge-base", "--is-ancestor", ancestor, head_sha])
+            .await?;
+        match out.code {
+            Some(0) => Ok(true),
+            Some(GIT_NOT_AN_ANCESTOR | GIT_UNKNOWN_COMMIT) => Ok(false),
+            _ => Err(failed("merge_base", &out)),
+        }
+    }
+
+    async fn carries_patch(
+        &self,
+        repo: &RepoRef,
+        commit: &str,
+        head_sha: &str,
+    ) -> PortResult<bool> {
+        sha_arg(commit, "commit")?;
+        sha_arg(head_sha, "head_sha")?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        let bare = self.mirror_path(repo.repo_id);
+        if !self.has_commit(&bare, commit).await? || !self.has_commit(&bare, head_sha).await? {
+            return Ok(false);
+        }
+        let wanted = self
+            .patch_ids(
+                &bare,
+                &[
+                    "show",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--format=commit %H",
+                    commit,
+                ],
+            )
+            .await?;
+        let Some((wanted, _)) = wanted.first() else {
+            return Ok(false);
+        };
+        let window = format!("-{PATCH_SCAN_COMMITS}");
+        let scanned = self
+            .patch_ids(
+                &bare,
+                &[
+                    "log",
+                    "-p",
+                    "--no-merges",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--format=commit %H",
+                    &window,
+                    head_sha,
+                ],
+            )
+            .await?;
+        Ok(scanned.iter().any(|(id, _)| id == wanted))
+    }
+
     async fn change_diff(
         &self,
         repo: &RepoRef,
@@ -608,6 +713,30 @@ impl Environments for GitRepos {
         )
         .await?;
         self.git_ok(&wt, &["clean", "-fd"], "clean").await?;
+        Ok(())
+    }
+
+    async fn reset_branch(&self, env: &EnvRef, to_sha: &str) -> PortResult<()> {
+        sha_arg(to_sha, "to_sha")?;
+        let wt = PathBuf::from(&env.worktree_path);
+        if !wt.join(".git").exists() {
+            return Err(PortError::permanent(
+                "worktree_missing",
+                json!({ "environment_id": env.environment_id }),
+            ));
+        }
+        let lock = self.lock(env.repo.repo_id);
+        let _guard = lock.lock().await;
+        let bare = self.mirror_path(env.repo.repo_id);
+        if !self.has_commit(&bare, to_sha).await? {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": to_sha }),
+            ));
+        }
+        self.git_ok(&wt, &["reset", "--hard", "--quiet", to_sha], "reset")
+            .await?;
+        self.git_ok(&wt, &["clean", "-fdq"], "clean").await?;
         Ok(())
     }
 

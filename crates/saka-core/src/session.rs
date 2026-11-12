@@ -5,13 +5,13 @@ use crate::authorship::SessionAuthor;
 use crate::decision::Question;
 use crate::event::{Event, Prompt};
 use crate::ids::{
-    DecisionRequestId, EnvironmentId, PermissionRequestId, PermissionRuleId, ProjectId, SessionId,
-    UsageRecordId,
+    DecisionRequestId, EnvironmentId, PermissionRequestId, PermissionRuleId, ProjectId,
+    RegressionCheckId, SessionId, UsageRecordId,
 };
 use crate::job::{Job, JobKind};
 use crate::model::{
     AccountQuota, Budget, Coded, DecisionAnswer, DecisionRequest, Environment, PermissionRequest,
-    PermissionRule, RunOwner, Session, ToolchainUse, Usage, UsageRecord,
+    PermissionRule, RegressionCheck, RunOwner, Session, ToolchainUse, Usage, UsageRecord,
 };
 use crate::policy::{Decision, Effect};
 use crate::rejection::Rejection;
@@ -60,6 +60,7 @@ pub struct RunView<'a> {
     pub session: Option<&'a Session>,
     pub permissions: &'a [PermissionRequest],
     pub decisions: &'a [DecisionRequest],
+    pub regressions: &'a [RegressionCheck],
     pub prior_usage: Usage,
     pub budget: Option<Budget>,
     pub budget_warnings: &'a [BudgetDimension],
@@ -86,6 +87,21 @@ impl RunView<'_> {
     pub fn answered_decision(&self) -> Option<&DecisionRequest> {
         self.run_decisions()
             .find(|d| d.state == DecisionState::Answered)
+    }
+
+    pub fn run_regressions(&self) -> impl Iterator<Item = &RegressionCheck> {
+        let run = self.owner.stage_run_id();
+        self.regressions
+            .iter()
+            .filter(move |c| Some(c.stage_run_id) == run)
+    }
+
+    pub fn pending_regression(&self) -> Option<&RegressionCheck> {
+        self.run_regressions().find(|c| c.awaiting_result())
+    }
+
+    pub fn undelivered_regression(&self) -> Option<&RegressionCheck> {
+        self.run_regressions().find(|c| c.awaiting_delivery())
     }
 
     pub fn usage(&self, now: Timestamp) -> Usage {
@@ -149,6 +165,9 @@ pub enum SessionInput {
     },
     DeliverDecision {
         decision_id: DecisionRequestId,
+    },
+    DeliverRegression {
+        regression_check_id: RegressionCheckId,
     },
     TurnEnded {
         turn: u32,
@@ -309,6 +328,9 @@ pub fn decide(
             actor,
         } => SessionOutcome::events(d.answer_decision(decision_id, option, note, &actor)?),
         I::DeliverDecision { decision_id } => d.deliver_decision(decision_id),
+        I::DeliverRegression {
+            regression_check_id,
+        } => d.deliver_regression(regression_check_id),
         I::TurnEnded {
             turn,
             status,
@@ -603,9 +625,16 @@ impl Decider<'_, '_> {
             .view
             .answered_decision()
             .filter(|_| plan.as_ref().is_some_and(|p| p.cli_session_id.is_some()));
-        let prompt = match (&plan, answered) {
-            (_, Some(d)) => Prompt::Decision { decision_id: d.id },
-            (Some(p), _) if p.cli_session_id.is_some() => Prompt::Resume {
+        let regression = self
+            .view
+            .undelivered_regression()
+            .filter(|_| plan.as_ref().is_some_and(|p| p.cli_session_id.is_some()));
+        let prompt = match (&plan, answered, regression) {
+            (_, Some(d), _) => Prompt::Decision { decision_id: d.id },
+            (_, None, Some(c)) => Prompt::Regression {
+                regression_check_id: c.id,
+            },
+            (Some(p), _, _) if p.cli_session_id.is_some() => Prompt::Resume {
                 cause: p.reason,
                 retry_of: p.retry_of.clone(),
             },
@@ -639,6 +668,9 @@ impl Decider<'_, '_> {
             owner: d.owner,
             decision_id: d.id,
         }));
+        if answered.is_none() {
+            events.extend(regression.map(regression_delivered));
+        }
         events
     }
 
@@ -909,11 +941,65 @@ impl Decider<'_, '_> {
         self.decision_turn(session, request, Vec::new())
     }
 
+    fn deliver_regression(&self, id: RegressionCheckId) -> SessionOutcome {
+        let Some(check) = self
+            .view
+            .run_regressions()
+            .find(|c| c.id == id && c.awaiting_delivery())
+        else {
+            return SessionOutcome::default();
+        };
+        let Some(session) = self
+            .view
+            .live_session()
+            .filter(|s| self.between_turns(s) && s.interrupt_requested.is_none())
+        else {
+            return SessionOutcome::default();
+        };
+        self.regression_turn(session, check, Vec::new())
+    }
+
     fn decision_turn(
         &self,
         session: &Session,
         request: &DecisionRequest,
+        events: Vec<Event>,
+    ) -> SessionOutcome {
+        self.answer_turn(
+            session,
+            events,
+            Event::DecisionDelivered {
+                owner: request.owner,
+                decision_id: request.id,
+            },
+            Prompt::Decision {
+                decision_id: request.id,
+            },
+        )
+    }
+
+    fn regression_turn(
+        &self,
+        session: &Session,
+        check: &RegressionCheck,
+        events: Vec<Event>,
+    ) -> SessionOutcome {
+        self.answer_turn(
+            session,
+            events,
+            regression_delivered(check),
+            Prompt::Regression {
+                regression_check_id: check.id,
+            },
+        )
+    }
+
+    fn answer_turn(
+        &self,
+        session: &Session,
         mut events: Vec<Event>,
+        delivered: Event,
+        prompt: Prompt,
     ) -> SessionOutcome {
         let usage = self.view.usage(self.now);
         if let Some(dimension) = self.exhausted(&usage, &[BudgetDimension::Turns]) {
@@ -931,10 +1017,7 @@ impl Decider<'_, '_> {
                 signal: stop.signal,
             };
         }
-        events.push(Event::DecisionDelivered {
-            owner: request.owner,
-            decision_id: request.id,
-        });
+        events.push(delivered);
         if session.state == SessionState::Waiting {
             events.push(state_changed(session, SessionState::Idle, self.now));
         }
@@ -942,9 +1025,7 @@ impl Decider<'_, '_> {
             owner: session.owner,
             session_id: session.id,
             turn: session.turns + 1,
-            prompt: Prompt::Decision {
-                decision_id: request.id,
-            },
+            prompt,
         });
         SessionOutcome::events(events)
     }
@@ -1033,7 +1114,23 @@ impl Decider<'_, '_> {
                     signal: next.signal,
                 };
             }
-            if self.view.asked_decision().is_some() {
+            if let Some(check) = self.view.undelivered_regression() {
+                events.push(state_changed(session, SessionState::Idle, self.now));
+                events.extend(self.budget_warnings(&usage, &spend));
+                let idle = Session {
+                    state: SessionState::Idle,
+                    turns: turn,
+                    recorded_turn: turn,
+                    ..session.clone()
+                };
+                let mut next = self.regression_turn(&idle, check, Vec::new());
+                events.append(&mut next.events);
+                return SessionOutcome {
+                    events,
+                    signal: next.signal,
+                };
+            }
+            if self.view.asked_decision().is_some() || self.view.pending_regression().is_some() {
                 events.push(state_changed(session, SessionState::Waiting, self.now));
                 events.extend(self.budget_warnings(&usage, &spend));
                 return SessionOutcome::events(events);
@@ -1724,6 +1821,14 @@ pub fn react(view: &RunView<'_>, event: &Event, now: Timestamp) -> Vec<Job> {
             .filter(|d| d.id == *decision_id)
             .map(|d| deliver_decision_job(d, now))
             .collect(),
+        E::RegressionObserved {
+            regression_check_id,
+            ..
+        } => view
+            .run_regressions()
+            .filter(|c| c.id == *regression_check_id)
+            .map(|c| deliver_regression_job(c, view.owner, now))
+            .collect(),
         E::PermissionAnswered {
             permission_request_id,
             state: PermissionState::Expired,
@@ -1762,6 +1867,25 @@ pub fn deliver_job(p: &PermissionRequest, now: Timestamp) -> Job {
         }),
         now,
     )
+}
+
+pub fn deliver_regression_job(c: &RegressionCheck, owner: RunOwner, now: Timestamp) -> Job {
+    Job::new(
+        JobKind::SessionDeliverRegression,
+        c.id,
+        json!({
+            "owner": owner,
+            "regression_check_id": c.id,
+        }),
+        now,
+    )
+}
+
+pub fn regression_delivered(c: &RegressionCheck) -> Event {
+    Event::RegressionDelivered {
+        work_item_id: c.work_item_id,
+        regression_check_id: c.id,
+    }
 }
 
 pub fn deliver_decision_job(d: &DecisionRequest, now: Timestamp) -> Job {

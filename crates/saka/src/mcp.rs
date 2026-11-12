@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::cli;
 use crate::serve::EXIT_REFUSED;
 
-pub async fn run(session: &str) -> ExitCode {
+pub async fn run(session: &str, regression_check: bool) -> ExitCode {
     let Ok(session) = Uuid::parse_str(session).map(SessionId) else {
         cli::refuse("mcp_session_invalid", &json!({}));
         return ExitCode::from(EXIT_REFUSED);
@@ -31,7 +31,7 @@ pub async fn run(session: &str) -> ExitCode {
             return ExitCode::from(EXIT_REFUSED);
         }
     }
-    match saka_mcp::run_stdio(client).await {
+    match saka_mcp::run_stdio(client, regression_check).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             cli::refuse("mcp_failed", &json!({ "error": e.to_string() }));

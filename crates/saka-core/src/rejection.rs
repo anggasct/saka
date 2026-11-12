@@ -24,6 +24,8 @@ pub enum Rejection {
     },
     #[error("revision changes steps that already started")]
     RevisionConflict { steps: Value },
+    #[error("the revision changes the kind while a task of the spec has started")]
+    RevisionKindChanged,
     #[error("spec has active tasks")]
     SpecHasActiveTasks { tasks: Value },
     #[error("merge is not ready")]
@@ -46,6 +48,10 @@ pub enum Rejection {
     DecisionOnePerSession,
     #[error("the run asked its last question")]
     DecisionLimitReached,
+    #[error("the regression check is not available: {reason}")]
+    RegressionNotAvailable { reason: &'static str },
+    #[error("the run used its last regression check")]
+    RegressionLimitReached,
     #[error("the draft is not waiting for the operator")]
     DraftNotWaiting,
     #[error("the draft does not pass lint")]
@@ -205,7 +211,9 @@ impl Rejection {
             Rejection::SpecNotReady { .. } => "spec_not_ready",
             Rejection::SpecAlreadyApproved => "spec_already_approved",
             Rejection::SpecReparseRequired { .. } => "spec_reparse_required",
-            Rejection::RevisionConflict { .. } => "revision_conflict",
+            Rejection::RevisionConflict { .. } | Rejection::RevisionKindChanged => {
+                "revision_conflict"
+            }
             Rejection::SpecHasActiveTasks { .. } => "spec_has_active_tasks",
             Rejection::MergeNotReady { .. } => "merge_not_ready",
             Rejection::PermissionAlreadyAnswered => "permission_already_answered",
@@ -214,6 +222,8 @@ impl Rejection {
             Rejection::DecisionAnswerInvalid => "decision_answer_invalid",
             Rejection::DecisionOnePerSession => "decision_one_per_session",
             Rejection::DecisionLimitReached => "decision_limit_reached",
+            Rejection::RegressionNotAvailable { .. } => "regression_not_available",
+            Rejection::RegressionLimitReached => "regression_limit_reached",
             Rejection::DraftNotWaiting => "draft_not_waiting",
             Rejection::DraftLintFailed => "draft_lint_failed",
             Rejection::DraftDecisionOpen => "draft_decision_open",
@@ -293,6 +303,7 @@ impl Rejection {
                 "current_parser_version": current_parser_version,
             }),
             Rejection::RevisionConflict { steps } => json!({ "steps": steps }),
+            Rejection::RevisionKindChanged => json!({ "reason": "kind_changed" }),
             Rejection::SpecHasActiveTasks { tasks } => json!({ "tasks": tasks }),
             Rejection::MergeNotReady {
                 reason,
@@ -363,7 +374,10 @@ impl Rejection {
             Rejection::UserTokenRejected { status } => json!({ "status": status }),
             Rejection::UserTokenRepoInaccessible { repos } => json!({ "repos": repos }),
             Rejection::ReviewAlreadyRequested { head_sha } => json!({ "head_sha": head_sha }),
-            Rejection::FixNotAvailable { reason } => json!({ "reason": reason }),
+            Rejection::FixNotAvailable { reason }
+            | Rejection::RegressionNotAvailable { reason } => {
+                json!({ "reason": reason })
+            }
             Rejection::ChangeRequestNotOpen { number, state } => {
                 json!({ "number": number, "state": state })
             }

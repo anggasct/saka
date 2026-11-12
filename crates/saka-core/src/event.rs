@@ -9,14 +9,14 @@ use crate::hook::HookContext;
 use crate::ids::{
     BlockerId, ChangeRequestId, CredentialId, DecisionRequestId, DeviceId, EnvironmentId,
     GateResultId, HookRunId, InboxItemId, LoginSessionId, PairingId, PermissionRequestId,
-    PermissionRuleId, ProjectId, RepoId, ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId,
-    SpecId, SpecRevisionId, StageRunId, UsageRecordId, UserLinkAuthorizationId, UserLinkId,
-    WorkItemId,
+    PermissionRuleId, ProjectId, RegressionCheckId, RepoId, ReviewId, SessionId,
+    SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
+    UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
     Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, FixRound, ProjectRepo,
-    RunOwner, SpecLink, ToolchainUse,
+    RegressionRun, RunOwner, SpecLink, ToolchainUse,
 };
 use crate::review::Finding;
 use crate::time::Timestamp;
@@ -25,9 +25,9 @@ use crate::vocab::{
     ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect,
     ExternalCause, GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState,
     InboxSubject, InterruptBy, LintOutcome, MatchKind, MergeMethod, PairingPurpose,
-    PermissionState, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis,
-    ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason,
-    TargetKind, TokenInvalidCause, Trigger, WorkKind,
+    PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason,
+    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase,
+    SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -372,6 +372,36 @@ pub enum Event {
         review_id: ReviewId,
         event: ReviewEvent,
         url: Option<String>,
+    },
+    #[serde(rename = "delivery.regression.requested")]
+    RegressionRequested {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        regression_check_id: RegressionCheckId,
+        commit_sha: String,
+        base_sha: String,
+        attempt: u32,
+    },
+    #[serde(rename = "delivery.regression.observed")]
+    RegressionObserved {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        regression_check_id: RegressionCheckId,
+        outcome: RegressionOutcome,
+        checks: Vec<RegressionRun>,
+        paths: Vec<String>,
+    },
+    #[serde(rename = "delivery.regression.branch_reset")]
+    RegressionBranchReset {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        old_head_sha: String,
+        base_sha: String,
+    },
+    #[serde(rename = "delivery.regression.delivered")]
+    RegressionDelivered {
+        work_item_id: WorkItemId,
+        regression_check_id: RegressionCheckId,
     },
     #[serde(rename = "delivery.gate.observed")]
     GateObserved {
@@ -885,6 +915,9 @@ pub enum Prompt {
     Decision {
         decision_id: DecisionRequestId,
     },
+    Regression {
+        regression_check_id: RegressionCheckId,
+    },
     ReviewPacket,
     VerdictFormat {
         reason: String,
@@ -1067,6 +1100,10 @@ impl Event {
             | E::StageRunSucceeded { work_item_id, .. }
             | E::ReviewRecorded { work_item_id, .. }
             | E::ReviewPosted { work_item_id, .. }
+            | E::RegressionRequested { work_item_id, .. }
+            | E::RegressionObserved { work_item_id, .. }
+            | E::RegressionDelivered { work_item_id, .. }
+            | E::RegressionBranchReset { work_item_id, .. }
             | E::GateObserved { work_item_id, .. }
             | E::GateStarted { work_item_id, .. }
             | E::MergeRequested { work_item_id, .. }

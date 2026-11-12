@@ -8,7 +8,9 @@ use saka_spec::SpecModel;
 use saka_store::read;
 use serde_json::{Value, json};
 
-use crate::review_packet::{self, ReviewBasisInput, ReviewPacketInput};
+use crate::review_packet::{
+    self, ReviewBasisInput, ReviewKindInput, ReviewPacketInput, ReviewRegression,
+};
 use crate::worker::{Effect, Execution, field, internal};
 use crate::{Engine, EngineError};
 
@@ -132,7 +134,9 @@ impl Engine {
             }
         }
         let basis = self.review_basis_input(task).map_err(internal)?;
+        let kind = self.review_kind_input(task, &head_sha).map_err(internal)?;
         let packet = review_packet::render(&ReviewPacketInput {
+            kind,
             basis,
             conventions,
             title: clip_text(&summary.title),
@@ -154,6 +158,37 @@ impl Engine {
             "review.packet"
         );
         Ok(packet.text)
+    }
+
+    fn review_kind_input(&self, task: &Task, head_sha: &str) -> crate::Result<ReviewKindInput> {
+        use saka_core::vocab::{GateSource, WorkKind};
+        match task.item.kind.filter(|_| task.external.is_none()) {
+            Some(WorkKind::SecurityPatch) => Ok(ReviewKindInput::SecurityPatch),
+            Some(WorkKind::Bugfix) => {
+                let commands = self.pinned(task)?.regression().to_vec();
+                let gate = task.gate_for(GateSource::Saka, head_sha);
+                let evidence = task.reproduced_regression().map(|check| ReviewRegression {
+                    head_passed: commands
+                        .iter()
+                        .map(|command| {
+                            let passed = gate.is_some_and(|g| {
+                                g.checks.iter().any(|c| {
+                                    c.name == crate::worker::check_name(command)
+                                        && !c.is_failure()
+                                        && c.conclusion.is_some()
+                                })
+                            });
+                            (command.clone(), passed)
+                        })
+                        .collect(),
+                    commands,
+                    test_commit: check.commit_sha.clone(),
+                    checks: check.checks.clone(),
+                });
+                Ok(ReviewKindInput::Bugfix(evidence))
+            }
+            _ => Ok(ReviewKindInput::Plain),
+        }
     }
 
     fn review_basis_input(&self, task: &Task) -> crate::Result<ReviewBasisInput> {

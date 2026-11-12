@@ -51,6 +51,9 @@ job_kinds! {
     EnvTeardown => "env.teardown", 5;
     ScmWebhookPrune => "scm.webhook_prune", 3;
     GateVerify => "gate.verify", 3;
+    GateReproduce => "gate.reproduce", 3;
+    EnvResetBranch => "env.reset_branch", 3;
+    SessionDeliverRegression => "session.deliver_regression", 10;
     ScmReportStatus => "scm.report_status", 3;
     ScmPollCommit => "scm.poll_commit", 5;
     DraftLint => "draft.lint", 3;
@@ -73,9 +76,10 @@ job_kinds! {
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
     let scm = |phase: StagePhase| Some((BlockerCode::ScmUnavailable, json!({ "phase": phase })));
     match kind {
-        JobKind::EnvPrepare | JobKind::EnvInspectWorktree | JobKind::EnvPrepareReview => {
-            Some((BlockerCode::EnvSetupFailed, json!({})))
-        }
+        JobKind::EnvPrepare
+        | JobKind::EnvInspectWorktree
+        | JobKind::EnvPrepareReview
+        | JobKind::EnvResetBranch => Some((BlockerCode::EnvSetupFailed, json!({}))),
         JobKind::SessionStart => Some((
             BlockerCode::SessionFailed,
             json!({ "reason": "launch_failed" }),
@@ -83,6 +87,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         JobKind::SessionSendTurn
         | JobKind::SessionDeliverPermissionAnswer
         | JobKind::SessionDeliverDecision
+        | JobKind::SessionDeliverRegression
         | JobKind::SessionInterrupt
         | JobKind::SessionSteer => Some((
             BlockerCode::SessionLost,
@@ -110,7 +115,8 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
             BlockerCode::CiRed,
             json!({ "source": "saka", "reason": "runner_failed" }),
         )),
-        JobKind::SessionStop
+        JobKind::GateReproduce
+        | JobKind::SessionStop
         | JobKind::SessionReattach
         | JobKind::ScmDeleteBranch
         | JobKind::EnvTeardown
@@ -191,6 +197,9 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::EnvTeardown => "env.teardown",
         JobKind::ScmWebhookPrune => "scm.webhook_prune",
         JobKind::GateVerify => "gate.verify",
+        JobKind::GateReproduce => "gate.reproduce",
+        JobKind::EnvResetBranch => "env.reset_branch",
+        JobKind::SessionDeliverRegression => "regression.deliver",
         JobKind::ScmReportStatus => "scm.report_status",
         JobKind::ScmPollCommit => "scm.poll_commit",
         JobKind::DraftLint => "draft.lint",

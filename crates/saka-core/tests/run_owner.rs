@@ -360,6 +360,7 @@ fn draft_view(session: Option<&Session>) -> RunView<'_> {
         session,
         permissions: &[],
         decisions: &[],
+        regressions: &[],
         prior_usage: Usage::default(),
         budget: None,
         budget_warnings: &[],

@@ -13,7 +13,7 @@ use saka_core::decision::{DecisionOption, Question};
 use saka_core::ids::{DecisionRequestId, SessionId};
 use saka_core::secret::SecretText;
 use saka_mcp::{Client, ClientError, Tokens};
-use saka_ports::{AskRefusal, Asked, Decisions};
+use saka_ports::{AskRefusal, Asked, Decisions, RegressionRefusal, Regressions, Requested};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use uuid::Uuid;
@@ -35,6 +35,20 @@ impl Tokens for OneSession {
 #[derive(Default)]
 struct Recorder {
     asked: Mutex<Vec<SessionId>>,
+    checked: Mutex<Vec<SessionId>>,
+    reply: Mutex<Vec<Result<Requested, RegressionRefusal>>>,
+}
+
+#[async_trait]
+impl Regressions for Recorder {
+    async fn request(&self, session: SessionId) -> Result<Requested, RegressionRefusal> {
+        self.checked.lock().unwrap().push(session);
+        self.reply
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or(Err(RegressionRefusal::ToolUnavailable))
+    }
 }
 
 #[async_trait]
@@ -66,6 +80,7 @@ async fn start(dir: &Path) -> (std::path::PathBuf, Arc<Recorder>) {
     tokio::spawn(saka_mcp::serve(
         listener,
         Arc::new(OneSession),
+        recorder.clone(),
         recorder.clone(),
     ));
     (socket, recorder)
@@ -128,6 +143,45 @@ async fn an_invalid_question_is_refused_by_the_socket_before_the_engine() {
         Err(ClientError::Refused(AskRefusal::InvalidInput))
     ));
     assert!(recorder.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_regression_check_reaches_the_engine_only_with_the_right_token_and_returns_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (socket, recorder) = start(dir.path()).await;
+    let client = |id, token: &str| Client::new(socket.clone(), id, token.into());
+    assert!(matches!(
+        client(session(1), "wrong").regression_check().await,
+        Err(ClientError::Unauthorized)
+    ));
+    assert!(recorder.checked.lock().unwrap().is_empty());
+
+    let recorded = Requested::Recorded {
+        attempt: 2,
+        commit_sha: "a".repeat(40),
+    };
+    recorder.reply.lock().unwrap().extend([
+        Ok(Requested::DirtyWorktree),
+        Err(RegressionRefusal::LimitReached),
+        Ok(recorded.clone()),
+    ]);
+    let good = client(session(1), TOKEN);
+    let ask = || good.regression_check();
+    assert_eq!(ask().await.unwrap(), recorded);
+    assert!(matches!(
+        ask().await,
+        Err(ClientError::RegressionRefused(
+            RegressionRefusal::LimitReached
+        ))
+    ));
+    assert_eq!(ask().await.unwrap(), Requested::DirtyWorktree);
+    assert!(matches!(
+        ask().await,
+        Err(ClientError::RegressionRefused(
+            RegressionRefusal::ToolUnavailable
+        ))
+    ));
+    assert_eq!(recorder.checked.lock().unwrap().len(), 4);
 }
 
 async fn raw(socket: &Path, bytes: &[u8]) -> String {

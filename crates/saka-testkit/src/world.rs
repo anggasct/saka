@@ -294,6 +294,9 @@ struct State {
     inaccessible: BTreeSet<String>,
     prompts: Vec<String>,
     ask_results: Vec<AskResult>,
+    regression_calls: VecDeque<bool>,
+    rewrite_history: bool,
+    regression_results: Vec<RegressionResult>,
     resumes: Vec<Option<String>>,
     recipe: Option<String>,
     recipe_runs: Vec<RecipeRun>,
@@ -409,11 +412,13 @@ pub struct ScopeCheck {
 }
 
 pub type AskResult = Result<DecisionRequestId, saka_ports::AskRefusal>;
+pub type RegressionResult = Result<saka_ports::Requested, saka_ports::RegressionRefusal>;
 
 pub struct FakeWorld {
     clock: Arc<FakeClock>,
     state: Mutex<State>,
     decisions: Mutex<Option<Weak<dyn saka_ports::Decisions>>>,
+    regressions: Mutex<Option<Weak<dyn saka_ports::Regressions>>>,
     accounts: crate::accounts::FakeAccounts,
     host: crate::diagnostics::FakeHost,
 }
@@ -461,6 +466,7 @@ impl FakeWorld {
             host: crate::diagnostics::FakeHost::default(),
             clock,
             decisions: Mutex::new(None),
+            regressions: Mutex::new(None),
             state: Mutex::new(State {
                 script,
                 ci,
@@ -535,6 +541,9 @@ impl FakeWorld {
                 inaccessible: BTreeSet::new(),
                 prompts: Vec::new(),
                 ask_results: Vec::new(),
+                regression_calls: VecDeque::new(),
+                rewrite_history: false,
+                regression_results: Vec::new(),
                 resumes: Vec::new(),
             }),
         }
@@ -558,6 +567,39 @@ impl FakeWorld {
 
     pub fn connect_decisions(&self, engine: Weak<dyn saka_ports::Decisions>) {
         *self.decisions.lock().unwrap() = Some(engine);
+    }
+
+    pub fn connect_regressions(&self, engine: Weak<dyn saka_ports::Regressions>) {
+        *self.regressions.lock().unwrap() = Some(engine);
+    }
+
+    pub fn rewrite_history_on_next_commit(&self) {
+        self.state().rewrite_history = true;
+    }
+
+    pub fn script_regression_calls(&self, calls: Vec<bool>) {
+        self.state().regression_calls = calls.into();
+    }
+
+    pub fn regression_results(&self) -> Vec<RegressionResult> {
+        self.state().regression_results.clone()
+    }
+
+    fn call_regression(&self, session: SessionId) {
+        let engine = self
+            .regressions
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let result = match engine {
+            Some(engine) => engine
+                .request(session)
+                .now_or_never()
+                .unwrap_or(Err(saka_ports::RegressionRefusal::Unavailable)),
+            None => Err(saka_ports::RegressionRefusal::Unavailable),
+        };
+        self.state().regression_results.push(result);
     }
 
     pub fn ask_results(&self) -> Vec<AskResult> {
@@ -1409,7 +1451,12 @@ impl State {
                 }
             }
             if edits.is_some() || s.commits_ahead(&w.base_sha, &w.head) == 0 {
-                let c = s.commit_edits(&w.head, &edits.unwrap_or_default());
+                let parent = if std::mem::take(&mut s.rewrite_history) {
+                    w.base_sha.clone()
+                } else {
+                    w.head.clone()
+                };
+                let c = s.commit_edits(&parent, &edits.unwrap_or_default());
                 if let Some(w) = s.worktrees.get_mut(&env) {
                     w.head = c;
                 }
@@ -1522,6 +1569,33 @@ impl Environments for FakeWorld {
             worktree_path: path,
             base_sha: base,
         })
+    }
+
+    async fn is_ancestor(
+        &self,
+        _repo: &RepoRef,
+        ancestor: &str,
+        head_sha: &str,
+    ) -> PortResult<bool> {
+        Ok(self.state().is_ancestor(ancestor, head_sha))
+    }
+
+    async fn carries_patch(
+        &self,
+        _repo: &RepoRef,
+        commit: &str,
+        head_sha: &str,
+    ) -> PortResult<bool> {
+        let s = self.state();
+        let parent = s
+            .parents
+            .get(commit)
+            .and_then(|p| p.first())
+            .cloned()
+            .unwrap_or_default();
+        let changed = s.diff(&parent, commit);
+        let (mine, head) = (s.tree(commit), s.tree(head_sha));
+        Ok(!changed.is_empty() && changed.iter().all(|p| mine.get(p) == head.get(p)))
     }
 
     async fn change_diff(
@@ -1739,6 +1813,24 @@ impl Environments for FakeWorld {
         w.head = commit.to_string();
         w.dirty = false;
         s.checkouts.push((env.environment_id, commit.to_string()));
+        Ok(())
+    }
+
+    async fn reset_branch(&self, env: &EnvRef, to_sha: &str) -> PortResult<()> {
+        let mut s = self.state();
+        if !s.parents.contains_key(to_sha) {
+            return Err(PortError::permanent(
+                "commit_missing",
+                json!({ "commit": to_sha }),
+            ));
+        }
+        let w = s
+            .worktrees
+            .get_mut(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        w.head = to_sha.to_string();
+        w.dirty = false;
         Ok(())
     }
 
@@ -3181,6 +3273,15 @@ impl Agents for FakeWorld {
             return Ok(());
         }
         s.work(id, turn, at);
+        let call = s
+            .sessions
+            .get(&id)
+            .is_some_and(|f| !f.reviewer && !f.architect)
+            && s.regression_calls.pop_front().unwrap_or(false);
+        drop(s);
+        if call {
+            self.call_regression(id);
+        }
         Ok(())
     }
 

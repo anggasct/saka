@@ -8421,6 +8421,17 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "regression": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RegressionEvidence",
+                      "description": "The test-first proof of a bugfix; `null` for every other kind."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "repo_id": {
                   "type": "string",
                   "format": "uuid"
@@ -9536,6 +9547,85 @@
           },
           "worker": {
             "type": "string"
+          }
+        }
+      },
+      "RegressionCommand": {
+        "type": "object",
+        "required": [
+          "command",
+          "result",
+          "duration_ms"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The exit code; `null` when the command timed out."
+          },
+          "result": {
+            "type": "string",
+            "description": "`failed | passed | timed_out`. A failing regression command is the proof."
+          }
+        }
+      },
+      "RegressionEvidence": {
+        "type": "object",
+        "required": [
+          "state",
+          "attempts",
+          "commands",
+          "paths"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The checks of the current stage run.",
+            "minimum": 0
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegressionCommand"
+            },
+            "description": "What the regression commands did at that commit, one entry per command."
+          },
+          "commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit of the check that reproduced the bug, or else of the latest check; `null` before any check."
+          },
+          "last_outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`reproduced | not_reproduced | invalid_paths | error` for the latest check that finished; `null` before one did."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The paths the latest finished check looked at: the files outside the test paths for `invalid_paths`, the changed files otherwise."
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending | reproduced | failed`. `failed` means the blocker `regression_not_reproduced` is open."
           }
         }
       },
@@ -11953,6 +12043,17 @@
           "project_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "regression": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RegressionEvidence",
+                "description": "The test-first proof of a bugfix; `null` for every other kind."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "repo_id": {
             "type": "string",

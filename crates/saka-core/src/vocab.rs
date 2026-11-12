@@ -64,6 +64,7 @@ vocab!(SpecState { Draft => "draft", Ready => "ready", Approved => "approved", S
 vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "intake", Quick => "quick" });
 vocab!(WorkKind default Feature { Feature => "feature", Bugfix => "bugfix", Refactor => "refactor", Chore => "chore", SecurityPatch => "security_patch" });
 
+vocab!(RegressionOutcome { Reproduced => "reproduced", NotReproduced => "not_reproduced", InvalidPaths => "invalid_paths", Error => "error" });
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });
 vocab!(WorkflowPreset { FullLoop => "full_loop", ReviewOnly => "review_only", BuildOnly => "build_only", Custom => "custom" });
 vocab!(WorkItemOrigin { SpecStep => "spec_step", ExternalChange => "external_change" });
@@ -153,6 +154,7 @@ vocab!(
         BranchMoved => "branch_moved",
         DecisionExpired => "decision_expired",
         ChangeBehindBase => "change_behind_base",
+        RegressionNotReproduced => "regression_not_reproduced",
     }
 );
 vocab!(BlockerAction {

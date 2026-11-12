@@ -452,6 +452,8 @@ impl Sim {
         engine.recover().unwrap();
         let decisions: Arc<dyn saka_ports::Decisions> = engine.clone();
         self.world.connect_decisions(Arc::downgrade(&decisions));
+        let regressions: Arc<dyn saka_ports::Regressions> = engine.clone();
+        self.world.connect_regressions(Arc::downgrade(&regressions));
         self.engine = Some(engine);
     }
 

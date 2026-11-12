@@ -192,6 +192,24 @@ The app talks to one server at a time and restarts when you switch, because the 
 
 **Updates.** The updater is off. It turns on only in a build made with a public key: set the repository variables `SAKA_UPDATER_PUBKEY` and `SAKA_UPDATER_ENDPOINT` (an `https` URL) and the secret `TAURI_SIGNING_PRIVATE_KEY` before running the workflow. No key is generated or stored by Saka, and without them the app never looks for updates.
 
+## Bugfix test-first
+
+A spec with `kind: bugfix` is done only when its test failed on the old code and passes on the new. The spec lists the commands that run the test in a `## Regression` section, one command in backticks per item, at most 10, and has one step (`## Done when`, not a `## Steps` table). The agent of a bugfix task works in two moves:
+
+1. It writes a regression test, changes test files only, commits, and calls the `regression_check` tool. The tool is offered to the dev session of a bugfix task and to no other session. Saka answers at once ("recorded, end your turn") and runs the regression commands at that commit. At least one must fail there: that is the proof. The result reaches the agent as its next message.
+2. Only after `reproduced` does it fix the bug. At the head, the gate runs the regression commands together with the Done when commands and they must pass, and the test commit must still be in the branch (an ancestor, or the same patch after a merge queue rebase). Otherwise the task stops with `ci_red` and the check `saka/regression-commit`.
+
+Saka recognises test files by path: `**/tests/**`, `**/test/**`, `**/__tests__/**`, `**/spec/**`, `**/*_test.*`, `**/*.test.*`, `**/*.spec.*`, `**/test_*.py`, `**/*_spec.rb`, `**/*Test.java`, `**/*Tests.cs` and `**/*Test.kt`. A repo with another layout adds patterns in `saka.toml`:
+
+```toml
+[workflow.kinds.bugfix]
+test_paths = ["src/**/fixtures/**"]
+```
+
+A check ends in one outcome. `reproduced`: a command failed. `not_reproduced`: every command passed, so the test does not catch the bug. `invalid_paths`: the commit changes a file that is not a test, and no command ran. `error`: a command timed out or Saka could not run it. A dirty worktree gets `dirty_worktree` and records nothing. Each check keeps the exit code, the duration and the last 8 KiB of redacted output of every command, shown in the **Regression evidence** panel of the task. A command that fails to compile or is mistyped also counts as a failure, which a machine cannot tell from the bug, so the reviewer of a bugfix receives the exit code and the output and returns `changes_requested` when the failure does not show the bug in the spec.
+
+The agent has three checks per dev run. The third check that is not `reproduced`, or a dev session that ends without `reproduced`, blocks the task with `regression_not_reproduced`. Retry resets the branch of the task to the base it was created from, records the old head in the `delivery.regression.branch_reset` event, and starts a new dev run with the same instructions. A fix round after review does not ask for another check. Metrics: `saka_regression_checks_total{outcome}`.
+
 ## Development
 
 | Path | Contents |

@@ -1,8 +1,8 @@
 use super::queries::count_retry;
 use crate::event::Event;
 use crate::model::{
-    Blocker, ChangeRequest, Coded, ExternalChange, GateResult, Review, ReviewPosted, StageRun,
-    Task, Usage, WorkItem,
+    Blocker, ChangeRequest, Coded, ExternalChange, GateResult, RegressionCheck, Review,
+    ReviewPosted, StageRun, Task, Usage, WorkItem,
 };
 use crate::session;
 use crate::time::Timestamp;
@@ -263,6 +263,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 docs_head_sha: None,
                 queued_at: None,
                 queue_native: false,
+                branch_reset_from: None,
                 fix: fix.clone(),
                 failure: None,
                 budget: *budget,
@@ -439,6 +440,67 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                     url: url.clone(),
                     at: now,
                 });
+            }
+        }
+        E::RegressionRequested {
+            stage_run_id,
+            regression_check_id,
+            commit_sha,
+            base_sha,
+            attempt,
+            ..
+        } => t.regressions.push(RegressionCheck {
+            id: *regression_check_id,
+            work_item_id: t.item.id,
+            stage_run_id: *stage_run_id,
+            attempt: *attempt,
+            commit_sha: commit_sha.clone(),
+            base_sha: base_sha.clone(),
+            outcome: None,
+            checks: Vec::new(),
+            paths: Vec::new(),
+            requested_at: now,
+            observed_at: None,
+            delivered_at: None,
+        }),
+        E::RegressionObserved {
+            regression_check_id,
+            outcome,
+            checks,
+            paths,
+            ..
+        } => {
+            if let Some(c) = t
+                .regressions
+                .iter_mut()
+                .find(|c| c.id == *regression_check_id)
+            {
+                c.outcome = Some(*outcome);
+                c.checks = checks.clone();
+                c.paths = paths.clone();
+                c.observed_at = Some(now);
+            }
+        }
+        E::RegressionBranchReset {
+            stage_run_id,
+            old_head_sha,
+            ..
+        } => {
+            if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id) {
+                run.branch_reset_from = Some(old_head_sha.clone());
+                run.updated_at = now;
+            }
+        }
+        E::RegressionDelivered {
+            regression_check_id,
+            ..
+        } => {
+            if let Some(c) = t
+                .regressions
+                .iter_mut()
+                .find(|c| c.id == *regression_check_id)
+            {
+                c.delivered_at = Some(now);
             }
         }
         E::WorkItemBlocked {

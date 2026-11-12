@@ -424,6 +424,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
     );
     t.sample("saka_fix_exhausted_total", &[], m.fix_exhausted);
     t.family(
+        "saka_regression_checks_total",
+        "counter",
+        "Regression checks of bugfix tasks, by outcome.",
+    );
+    for (outcome, n) in &m.regression_checks {
+        t.sample("saka_regression_checks_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_review_posts_total",
         "counter",
         "Native reviews posted, by review event.",

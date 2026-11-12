@@ -48,7 +48,8 @@ pub fn designated(code: BlockerCode) -> BlockerAction {
         | B::ScmUnavailable
         | B::DodFailed
         | B::DocsMergeFailed
-        | B::HookFailed => A::Retry,
+        | B::HookFailed
+        | B::RegressionNotReproduced => A::Retry,
         B::ChangeClosed => A::Cancel,
         B::BranchMoved => A::Takeover,
         B::SecretMissing | B::SecretUnreadable => A::SetSecret,

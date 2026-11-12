@@ -290,6 +290,7 @@ pub fn run_view(task: &Task) -> Option<RunView<'_>> {
         session,
         permissions: &task.permissions,
         decisions: &task.decisions,
+        regressions: &task.regressions,
         prior_usage: task.prior_usage,
         budget: run.budget,
         budget_warnings: &run.budget_warnings,

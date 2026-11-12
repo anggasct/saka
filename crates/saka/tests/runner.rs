@@ -731,6 +731,7 @@ fn launch_in(fx: &Fixture, root: &Path) -> SessionLaunch {
         profile: LaunchProfile::Task,
         model: None,
         author: saka(),
+        regression_check: false,
     }
 }
 

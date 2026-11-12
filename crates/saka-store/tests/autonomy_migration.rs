@@ -81,7 +81,7 @@ fn the_autonomy_migration_moves_the_level_to_the_repo_binding_and_keeps_every_ro
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+        vec![28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
     );
     drop(store);
 

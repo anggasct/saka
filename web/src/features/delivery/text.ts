@@ -52,6 +52,7 @@ const GATE_REASONS = [
   "runner_failed",
   "not_in_base",
   "docs_not_in_base",
+  "regression_commit_missing",
 ];
 
 function gateCase(code: string, params: Record<string, unknown>): string {
@@ -103,6 +104,8 @@ export function blockerText(
     used: text(params.used),
     limit: text(params.limit),
     tool: text(params.tool),
+    attempts: number(params.attempts),
+    last_outcome: text(params.last_outcome) || "other",
     summary: text(params.summary),
     question: text(params.question),
     recommended: text(params.recommended),
