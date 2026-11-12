@@ -378,6 +378,23 @@ const VARIANTS: [string, Record<string, unknown>][] = [
     "decision_expired",
     { question: "Where?", recommended: "Local disk", hours: 72 },
   ],
+  ["regression_not_reproduced", { attempts: 0, last_outcome: "none" }],
+  [
+    "regression_not_reproduced",
+    { attempts: 3, last_outcome: "not_reproduced" },
+  ],
+  ["regression_not_reproduced", { attempts: 3, last_outcome: "invalid_paths" }],
+  ["regression_not_reproduced", { attempts: 1, last_outcome: "error" }],
+  ["regression_not_reproduced", {}],
+  [
+    "ci_red",
+    {
+      source: "saka",
+      checks: ["saka/regression-commit"],
+      reason: "regression_commit_missing",
+      head_sha: HEAD,
+    },
+  ],
   ["budget_exhausted", { dimension: "running_minutes", used: 60, limit: 60 }],
   ["budget_exhausted", { dimension: "turns", used: 10, limit: 10 }],
   ["budget_exhausted", { dimension: "tokens", used: 9, limit: 9 }],

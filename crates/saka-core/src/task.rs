@@ -4,6 +4,7 @@ mod gates;
 mod merge;
 mod queries;
 mod recovery;
+mod regression;
 mod reviewing;
 
 use std::collections::BTreeMap;
@@ -16,9 +17,13 @@ use crate::autonomy::Ceilings;
 use crate::event::{Event, Prompt};
 use crate::external;
 use crate::gate::Check;
-use crate::ids::{BlockerId, ChangeRequestId, EnvironmentId, ReviewId, SessionId, StageRunId};
+use crate::ids::{
+    BlockerId, ChangeRequestId, EnvironmentId, RegressionCheckId, ReviewId, SessionId, StageRunId,
+};
 use crate::job::JobKind;
-use crate::model::{Budget, Coded, EnvironmentSetup, FixRound, Review, Task, WorkItem};
+use crate::model::{
+    Budget, Coded, EnvironmentSetup, FixRound, RegressionRun, Review, Task, WorkItem,
+};
 use crate::rejection::Rejection;
 use crate::review;
 use crate::scope::ScopeViolation;
@@ -26,8 +31,8 @@ use crate::session::{self, SessionConfig, SessionInput, SessionOutcome, SessionS
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerAction, BlockerCode, ChangeCredentialKind, ChangeRole, ChangeState, ExternalCause,
-    MergeMethod, ResumeTrigger, ReviewEvent, ScopeStage, SessionState, Severity, Stage, StagePhase,
-    StageRunState, Trigger, WorkItemOrigin, WorkItemState,
+    MergeMethod, RegressionOutcome, ResumeTrigger, ReviewEvent, ScopeStage, SessionState, Severity,
+    Stage, StagePhase, StageRunState, Trigger, WorkItemOrigin, WorkItemState,
 };
 
 pub use evolve::evolve;
@@ -301,6 +306,21 @@ pub enum TaskInput {
         review_id: ReviewId,
         event: ReviewEvent,
         url: Option<String>,
+    },
+    RegressionRequested {
+        regression_check_id: RegressionCheckId,
+        commit_sha: String,
+        base_sha: String,
+    },
+    RegressionBranchReset {
+        old_head_sha: String,
+        base_sha: String,
+    },
+    RegressionObserved {
+        regression_check_id: RegressionCheckId,
+        outcome: RegressionOutcome,
+        checks: Vec<RegressionRun>,
+        paths: Vec<String>,
     },
 }
 
@@ -604,6 +624,21 @@ pub fn decide(
             event,
             url,
         } => d.review_posted(review_id, event, url, ctx),
+        I::RegressionRequested {
+            regression_check_id,
+            commit_sha,
+            base_sha,
+        } => return d.regression_requested(regression_check_id, commit_sha, base_sha),
+        I::RegressionBranchReset {
+            old_head_sha,
+            base_sha,
+        } => d.regression_branch_reset(old_head_sha, base_sha),
+        I::RegressionObserved {
+            regression_check_id,
+            outcome,
+            checks,
+            paths,
+        } => d.regression_observed(regression_check_id, outcome, checks, paths, ctx),
     })
 }
 
@@ -996,6 +1031,15 @@ impl Decider<'_> {
             .filter(|d| !d.dirty && d.commits_ahead > 0)
             .and_then(|d| d.outside.clone().map(|v| (v, d.head_sha.clone())));
         if committed && outside.is_none() && !docs_dirty && docs_violation.is_none() {
+            if let Some(params) = self.regression_unproven() {
+                let mut events = self.end_session(
+                    SessionState::Ended,
+                    "regression_not_reproduced",
+                    params.clone(),
+                );
+                events.extend(self.block(BlockerCode::RegressionNotReproduced, params, ctx));
+                return events;
+            }
             let docs_head = docs.filter(|d| d.commits_ahead > 0).map(|d| d.head_sha);
             let mut events = self.end_session(SessionState::Ended, "completed", json!({}));
             events.extend(self.phase_docs(StagePhase::Pushing, Some(head_sha), docs_head));

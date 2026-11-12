@@ -93,6 +93,9 @@ impl Engine {
                 profile,
                 model: None,
                 author: resolved.identity,
+                regression_check: !reviewing
+                    && task.is_bugfix()
+                    && task.is_at(Stage::Dev, StagePhase::RunningSession),
             })
             .await?;
         Ok(Effect::Fact(TaskInput::Session(SessionInput::Launched {

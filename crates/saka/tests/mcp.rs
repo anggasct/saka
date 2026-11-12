@@ -17,7 +17,7 @@ use saka_core::decision::Question;
 use saka_core::ids::{DecisionRequestId, SessionId};
 use saka_core::secret::SecretText;
 use saka_mcp::{SOCKET_ENV, TOKEN_ENV, Tokens};
-use saka_ports::{AskRefusal, Asked, Decisions};
+use saka_ports::{AskRefusal, Asked, Decisions, RegressionRefusal, Regressions, Requested};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -36,6 +36,8 @@ impl Tokens for FixedToken {
 struct Scripted {
     asked: Mutex<Vec<(SessionId, Question)>>,
     refusals: Mutex<VecDeque<AskRefusal>>,
+    checked: Mutex<Vec<SessionId>>,
+    checks: Mutex<VecDeque<Result<Requested, RegressionRefusal>>>,
 }
 
 #[async_trait]
@@ -46,6 +48,20 @@ impl Decisions for Scripted {
             Some(refusal) => Err(refusal),
             None => Ok(Asked {
                 decision_id: DecisionRequestId(Uuid::from_u128(7)),
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl Regressions for Scripted {
+    async fn request(&self, session: SessionId) -> Result<Requested, RegressionRefusal> {
+        self.checked.lock().unwrap().push(session);
+        match self.checks.lock().unwrap().pop_front() {
+            Some(answer) => answer,
+            None => Ok(Requested::Recorded {
+                attempt: 1,
+                commit_sha: "c".repeat(40),
             }),
         }
     }
@@ -73,6 +89,7 @@ fn engine() -> Engine {
             listener,
             Arc::new(FixedToken),
             decisions.clone(),
+            decisions.clone(),
         ));
     }
     Engine {
@@ -88,8 +105,13 @@ fn session() -> String {
 }
 
 fn saka_mcp(socket: Option<&Path>, token: Option<&str>) -> Child {
+    saka_mcp_with(socket, token, &[])
+}
+
+fn saka_mcp_with(socket: Option<&Path>, token: Option<&str>, extra: &[&str]) -> Child {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_saka"));
     cmd.args(["mcp", "--session", &session()])
+        .args(extra)
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -111,7 +133,11 @@ struct Peer {
 
 impl Peer {
     fn start(engine: &Engine) -> Peer {
-        let mut child = saka_mcp(Some(&engine.socket), Some(TOKEN));
+        Peer::start_with(engine, &[])
+    }
+
+    fn start_with(engine: &Engine, extra: &[&str]) -> Peer {
+        let mut child = saka_mcp_with(Some(&engine.socket), Some(TOKEN), extra);
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (tx, lines) = mpsc::channel();
@@ -233,6 +259,74 @@ fn it_serves_initialize_tools_list_and_tools_call_over_stdio() {
         assert_eq!(asked[0].1.options[0].detail.as_deref(), Some("Simple"));
         assert_eq!(asked[0].1.options[1].detail, None);
     }
+    assert!(peer.finish().success());
+}
+
+#[test]
+fn the_regression_tool_is_listed_and_served_only_when_the_session_was_launched_for_it() {
+    let engine = engine();
+    let mut plain = Peer::start(&engine);
+    plain.handshake();
+    let listed = plain.call(2, "tools/list", json!({}));
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["request_decision"]);
+    let refused = plain.call(
+        3,
+        "tools/call",
+        json!({ "name": "regression_check", "arguments": {} }),
+    );
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert_eq!(text_of(&refused), "tool_unavailable");
+    assert!(engine.decisions.checked.lock().unwrap().is_empty());
+    assert!(plain.finish().success());
+
+    let mut peer = Peer::start_with(&engine, &["--regression-check"]);
+    peer.handshake();
+    let listed = peer.call(2, "tools/list", json!({}));
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["request_decision", "regression_check"]);
+    assert_eq!(tools[1]["inputSchema"]["additionalProperties"], false);
+
+    let called = peer.call(
+        3,
+        "tools/call",
+        json!({ "name": "regression_check", "arguments": {} }),
+    );
+    assert_ne!(called["result"]["isError"], true, "{called}");
+    let body: Value = serde_json::from_str(&text_of(&called)).unwrap();
+    assert_eq!(body["status"], "recorded");
+    assert_eq!(body["attempt"], 1);
+    assert!(
+        body["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("End your turn")
+    );
+    {
+        let mut checks = engine.decisions.checks.lock().unwrap();
+        checks.push_back(Ok(Requested::DirtyWorktree));
+        checks.push_back(Err(RegressionRefusal::LimitReached));
+    }
+    let dirty = peer.call(
+        4,
+        "tools/call",
+        json!({ "name": "regression_check", "arguments": {} }),
+    );
+    assert_eq!(dirty["result"]["isError"], true, "{dirty}");
+    assert!(text_of(&dirty).starts_with("dirty_worktree"));
+    let limit = peer.call(
+        5,
+        "tools/call",
+        json!({ "name": "regression_check", "arguments": {} }),
+    );
+    assert!(text_of(&limit).starts_with("limit_reached"));
+    assert_eq!(engine.decisions.checked.lock().unwrap().len(), 3);
     assert!(peer.finish().success());
 }
 

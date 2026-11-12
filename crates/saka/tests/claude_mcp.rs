@@ -51,6 +51,16 @@ impl Decisions for Recorder {
     }
 }
 
+#[async_trait]
+impl saka_ports::Regressions for Recorder {
+    async fn request(
+        &self,
+        _session: SessionId,
+    ) -> Result<saka_ports::Requested, saka_ports::RegressionRefusal> {
+        Err(saka_ports::RegressionRefusal::ToolUnavailable)
+    }
+}
+
 fn read_request(stream: &mut TcpStream) -> Option<(String, Vec<u8>)> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
     let mut line = String::new();
@@ -257,6 +267,7 @@ impl Fixture {
                 &session.to_string(),
                 &self.socket,
                 token,
+                false,
             );
             std::fs::write(paths.mcp_config_file(), config).unwrap();
         }
@@ -392,6 +403,7 @@ fn check_session(tools: Option<&str>) {
         rt.spawn(saka_mcp::serve(
             listener,
             Arc::new(FixedToken),
+            recorder.clone(),
             recorder.clone(),
         ));
     }

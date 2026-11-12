@@ -503,6 +503,30 @@ fn a_returning_step_is_restored_with_its_key_and_branch() {
 }
 
 #[test]
+fn a_re_approval_that_changes_the_kind_is_refused_once_a_task_started_and_repins_before() {
+    let from = revision(FROM, steps(1), 0);
+    let mut to = revision(TO, steps(1), 0);
+    to.kind = saka_core::vocab::WorkKind::Bugfix;
+    let spec = approved_spec(TO);
+    for state in [
+        WorkItemState::Admitted,
+        WorkItemState::InStage,
+        WorkItemState::Blocked,
+        WorkItemState::Done,
+    ] {
+        let tasks = vec![item(1, state)];
+        let refused = approve(&spec, &from, &to, &tasks);
+        assert_eq!(refused, Err(Rejection::RevisionKindChanged), "{state:?}");
+    }
+    let error = Rejection::RevisionKindChanged;
+    assert_eq!(error.code(), "revision_conflict");
+    assert_eq!(error.params(), json!({ "reason": "kind_changed" }));
+
+    let queued = vec![item(1, WorkItemState::Queued)];
+    assert!(approve(&spec, &from, &to, &queued).is_ok());
+}
+
+#[test]
 fn re_approval_refuses_conflicts_and_keeps_the_first_approval_checks() {
     let from = revision(FROM, steps(2), 0);
     let mut to_steps = steps(2);

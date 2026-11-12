@@ -48,7 +48,10 @@ pub fn plan(view: &RunView<'_>) -> Option<ResumePlan> {
 }
 
 pub fn wants_session(view: &RunView<'_>) -> bool {
-    if view.live_session().is_some() || view.asked_decision().is_some() {
+    if view.live_session().is_some()
+        || view.asked_decision().is_some()
+        || view.pending_regression().is_some()
+    {
         return false;
     }
     match view.session {

@@ -6,6 +6,7 @@ pub mod docs;
 pub mod env;
 pub mod git;
 pub mod hook;
+pub mod regressions;
 pub mod scm;
 pub mod secret;
 pub mod supervisor;
@@ -41,6 +42,7 @@ pub use hook::{
     HostCommand, HostCommands, HostOutcome, Notification, Notifier, WebhookPost, WebhookReceipt,
     Webhooks,
 };
+pub use regressions::{RegressionRefusal, Regressions, Requested};
 pub use scm::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, EnqueueOutcome, IdentityLookup, MAX_CHANGE_FILES, MAX_CHANGE_TEXT_BYTES,

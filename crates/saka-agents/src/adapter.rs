@@ -228,12 +228,13 @@ fn write_mcp(
     command: &Path,
     session_id: &str,
     socket: &Path,
+    regression_check: bool,
 ) -> std::io::Result<()> {
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(std::io::Error::other)?;
     let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
     write_private(&paths.mcp_token_file(), token.as_bytes())?;
-    let config = launch::mcp_config(command, session_id, socket, &token);
+    let config = launch::mcp_config(command, session_id, socket, &token, regression_check);
     write_private(&paths.mcp_config_file(), config.as_bytes())
 }
 
@@ -274,8 +275,14 @@ impl Agents for ClaudeAgents {
         if let Some(socket) = self.cfg.mcp_socket.as_deref()
             && spec.args.iter().any(|a| a == "--mcp-config")
         {
-            write_mcp(&paths, &self.cfg.runner_program, &id_of(launch), socket)
-                .map_err(|e| io_error("launch_write_failed", &e))?;
+            write_mcp(
+                &paths,
+                &self.cfg.runner_program,
+                &id_of(launch),
+                socket,
+                launch.regression_check,
+            )
+            .map_err(|e| io_error("launch_write_failed", &e))?;
         }
         let secrets = paths.secrets_file();
         if spec.secrets_path.is_some() {
@@ -571,6 +578,7 @@ mod tests {
                 name: "Octo Cat".into(),
                 email: "1+octo@users.noreply.github.com".into(),
             },
+            regression_check: false,
         }
     }
 
@@ -636,7 +644,7 @@ mod tests {
         );
         std::fs::create_dir_all(&paths.session_dir).unwrap_or_else(|e| panic!("{e}"));
         let socket = dir.path().join("run/saka/mcp.sock");
-        write_mcp(&paths, Path::new("/usr/bin/saka"), "s-1", &socket)
+        write_mcp(&paths, Path::new("/usr/bin/saka"), "s-1", &socket, false)
             .unwrap_or_else(|e| panic!("{e}"));
         let token =
             std::fs::read_to_string(paths.mcp_token_file()).unwrap_or_else(|e| panic!("{e}"));
@@ -658,11 +666,19 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600, "{file:?}");
         }
-        write_mcp(&paths, Path::new("/usr/bin/saka"), "s-1", &socket)
+        write_mcp(&paths, Path::new("/usr/bin/saka"), "s-1", &socket, true)
             .unwrap_or_else(|e| panic!("{e}"));
         let again =
             std::fs::read_to_string(paths.mcp_token_file()).unwrap_or_else(|e| panic!("{e}"));
         assert_ne!(again, token, "every launch gets its own token");
+        let config: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(paths.mcp_config_file()).unwrap_or_else(|e| panic!("{e}")),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            config["mcpServers"]["saka"]["args"],
+            json!(["mcp", "--session", "s-1", "--regression-check"])
+        );
     }
 
     #[test]

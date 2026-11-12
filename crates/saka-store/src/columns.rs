@@ -81,7 +81,7 @@ macro_rules! stage_run_columns {
         stage_run_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "work_item_id", "project_id", "stage", "attempt", "state", "trigger", "reason", "entry_phase", "head_sha", "failure", "started_at", "ended_at", "created_at", "updated_at", "budget", "budget_warnings", "docs_head_sha", "queued_at", "queue_native", "fix")
+        qualified!($prefix: "id", "work_item_id", "project_id", "stage", "attempt", "state", "trigger", "reason", "entry_phase", "head_sha", "failure", "started_at", "ended_at", "created_at", "updated_at", "budget", "budget_warnings", "docs_head_sha", "queued_at", "queue_native", "fix", "branch_reset_from")
     };
 }
 
@@ -154,6 +154,15 @@ macro_rules! review_columns {
     };
     ($prefix:literal) => {
         qualified!($prefix: "id", "work_item_id", "stage_run_id", "session_id", "head_sha", "outcome", "basis", "summary", "findings", "questions", "posted_event", "posted_url", "posted_at", "created_at")
+    };
+}
+
+macro_rules! regression_check_columns {
+    () => {
+        regression_check_columns!("")
+    };
+    ($prefix:literal) => {
+        qualified!($prefix: "id", "work_item_id", "stage_run_id", "project_id", "attempt", "commit_sha", "base_sha", "outcome", "checks", "paths", "requested_at", "observed_at", "delivered_at")
     };
 }
 
@@ -310,6 +319,7 @@ mod tests {
             ("change_request", change_request_columns!()),
             ("external_change", external_change_columns!()),
             ("review", review_columns!()),
+            ("regression_check", regression_check_columns!()),
             ("gate_result", gate_result_columns!()),
             ("usage_record", usage_record_columns!()),
             ("permission_rule", permission_rule_columns!()),

@@ -8,7 +8,9 @@ use crate::shell;
 pub const BUILTIN_PATH_OUTSIDE_WORKTREE: &str = "path_outside_worktree";
 pub const BUILTIN_GIT_PUSH: &str = "git_push";
 pub const BUILTIN_REQUEST_DECISION: &str = "request_decision";
+pub const BUILTIN_REGRESSION_CHECK: &str = "regression_check";
 pub const DECISION_TOOL: &str = "mcp__saka__request_decision";
+pub const REGRESSION_TOOL: &str = "mcp__saka__regression_check";
 
 pub use crate::vocab::Effect;
 
@@ -152,6 +154,12 @@ impl Policy {
             return Decision::new(
                 Effect::Allow,
                 DecisionSource::Builtin(BUILTIN_REQUEST_DECISION.to_string()),
+            );
+        }
+        if request.tool == REGRESSION_TOOL {
+            return Decision::new(
+                Effect::Allow,
+                DecisionSource::Builtin(BUILTIN_REGRESSION_CHECK.to_string()),
             );
         }
         if let Some(rule) = project_first(Effect::Deny, request, project, true) {

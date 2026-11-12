@@ -72,7 +72,7 @@ pub enum LintCode {
     RegressionCommandInvalid,
     RegressionTooMany,
     RegressionIgnored,
-    RegressionMultiStep,
+    BugfixMultiStep,
 }
 
 impl LintCode {
@@ -128,7 +128,7 @@ impl LintCode {
         LintCode::RegressionCommandInvalid,
         LintCode::RegressionTooMany,
         LintCode::RegressionIgnored,
-        LintCode::RegressionMultiStep,
+        LintCode::BugfixMultiStep,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -184,7 +184,7 @@ impl LintCode {
             LintCode::RegressionCommandInvalid => "regression_command_invalid",
             LintCode::RegressionTooMany => "regression_too_many",
             LintCode::RegressionIgnored => "regression_ignored",
-            LintCode::RegressionMultiStep => "regression_multi_step",
+            LintCode::BugfixMultiStep => "bugfix_multi_step",
         }
     }
 
@@ -196,8 +196,7 @@ impl LintCode {
             | LintCode::StepParallelStart
             | LintCode::LinksLimitExceeded
             | LintCode::ReferenceNotDoc
-            | LintCode::RegressionIgnored
-            | LintCode::RegressionMultiStep => Severity::Warning,
+            | LintCode::RegressionIgnored => Severity::Warning,
             LintCode::NotASpec
             | LintCode::FileTooLarge
             | LintCode::InvalidUtf8
@@ -241,7 +240,8 @@ impl LintCode {
             | LintCode::KindInvalid
             | LintCode::RegressionMissing
             | LintCode::RegressionCommandInvalid
-            | LintCode::RegressionTooMany => Severity::Error,
+            | LintCode::RegressionTooMany
+            | LintCode::BugfixMultiStep => Severity::Error,
         }
     }
 }

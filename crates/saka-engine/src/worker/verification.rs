@@ -78,7 +78,55 @@ impl Engine {
         let started = std::time::Instant::now();
         let mut checks = Vec::new();
         let mut failure = None;
-        for (index, command) in step_commands.iter().chain(&policy.commands).enumerate() {
+        let mut regression_commands = Vec::new();
+        if task.is_bugfix() {
+            regression_commands = pinned
+                .regression()
+                .iter()
+                .filter(|c| !step_commands.contains(c))
+                .cloned()
+                .collect();
+            if let (true, Some(reproduced)) = (in_gate, task.reproduced_regression()) {
+                let repo = self.repo_ref(task)?;
+                let present = self
+                    .ports
+                    .env
+                    .is_ancestor(&repo, &reproduced.commit_sha, &head)
+                    .await?
+                    || self
+                        .ports
+                        .env
+                        .carries_patch(&repo, &reproduced.commit_sha, &head)
+                        .await?;
+                checks.push(Check {
+                    name: saka_core::regression::COMMIT_CHECK.to_string(),
+                    kind: CheckKind::Command,
+                    status: CheckStatus::Completed,
+                    conclusion: Some(if present {
+                        CheckConclusion::Success
+                    } else {
+                        CheckConclusion::Failure
+                    }),
+                    url: None,
+                });
+                if !present {
+                    failure = Some(json!({
+                        "reason": "regression_commit_missing",
+                        "commit": reproduced.commit_sha,
+                    }));
+                }
+            }
+        }
+        let commands: Vec<&String> = if failure.is_some() {
+            Vec::new()
+        } else {
+            step_commands
+                .iter()
+                .chain(&regression_commands)
+                .chain(&policy.commands)
+                .collect()
+        };
+        for (index, command) in commands.into_iter().enumerate() {
             let run = RecipeCommand {
                 phase: RecipePhase::Gate,
                 index,

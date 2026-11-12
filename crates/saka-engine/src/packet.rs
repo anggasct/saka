@@ -51,8 +51,16 @@ pub struct EnvironmentFacts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacketRegression {
+    pub commands: Vec<String>,
+    pub test_paths: Vec<String>,
+    pub proven: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacketInput {
     pub step: PacketStep,
+    pub regression: Option<PacketRegression>,
     pub spec: PacketSpec,
     pub context: Vec<(ContextRef, Vec<u8>)>,
     pub environment: EnvironmentFacts,
@@ -112,6 +120,30 @@ pub fn sources(text: &str) -> std::collections::BTreeMap<u32, String> {
         rest = next;
     }
     out
+}
+
+fn push_regression(out: &mut String, regression: &PacketRegression) {
+    out.push_str(
+        "\nThis step fixes a bug. Regression commands (they must pass when you finish):\n",
+    );
+    for command in &regression.commands {
+        let _ = writeln!(out, "- `{command}`");
+    }
+    if regression.proven {
+        out.push_str(
+            "Saka already proved your regression test: the commands fail without the fix. Keep that test committed and unchanged, and make the commands pass.\n",
+        );
+        return;
+    }
+    let _ = write!(
+        out,
+        "\nWork test first:\n\
+         1. Write a regression test that fails on the current code because of the bug. Change test files only: a file counts as a test when its path matches one of {}.\n\
+         2. Commit it with a Conventional Commits message, and leave the worktree clean.\n\
+         3. Call the `regression_check` tool (`mcp__saka__regression_check`), then end your turn. Saka runs the regression commands at that commit, and they must fail there. The result arrives as your next message. You get three checks.\n\
+         4. Fix the bug only after the result says reproduced. Then make the regression commands and the Done when commands pass, and commit. Do not push.\n",
+        regression.test_paths.join(", ")
+    );
 }
 
 fn push_docs_line(out: &mut String, docs: &PacketDocs) {
@@ -201,6 +233,9 @@ pub fn render(input: &PacketInput) -> Packet {
     text.push_str("Done when (run these and make them pass before you finish):\n");
     for command in &step.commands {
         let _ = writeln!(text, "- `{command}`");
+    }
+    if let Some(regression) = &input.regression {
+        push_regression(&mut text, regression);
     }
 
     let env = &input.environment;
@@ -587,6 +622,7 @@ mod tests {
                 criteria: vec![("AC-01".into(), "`tasks done` marks a task.".into())],
                 commands: vec!["cd cli && go test ./...".into()],
             },
+            regression: None,
             spec: PacketSpec {
                 revision_id: "rev-1".into(),
                 path: "docs/specs/tasks-done.md".into(),

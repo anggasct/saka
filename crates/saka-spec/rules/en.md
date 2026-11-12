@@ -44,7 +44,7 @@ A spec is one markdown file. Saka reads its structure exactly as written here; a
 - A `bugfix` needs a level 2 heading `## Regression` with a list. Each item holds exactly one command in backticks, at most 10.
 - The commands run the test that reproduces the bug. Saka runs them on the agent's test-only commit and requires at least one to fail, then requires all of them to pass on the fix.
 - The test commit may change test files only; Saka recognises them by path (`tests/`, `test/`, `__tests__/`, `spec/`, `*_test.*`, `*.test.*`, `*.spec.*`, and similar).
-- A bugfix without the section is an error. In any other kind the section is a warning and is ignored. A bugfix with several steps is a warning: the rule applies to the first step only.
+- A bugfix without the section is an error. In any other kind the section is a warning and is ignored. A bugfix with several steps is an error: the rule covers one step, so write one spec per bug.
 
 ## Context links
 
@@ -126,4 +126,4 @@ Each line is one code Saka can report, when it is reported, and its level. Any e
 - `regression_command_invalid` — a Regression item does not hold exactly one command. Error.
 - `regression_too_many` — the Regression section lists more than 10 commands. Error.
 - `regression_ignored` — a spec that is not a bugfix has a Regression section, which Saka ignores. Warning.
-- `regression_multi_step` — a bugfix has more than one step, and the test-first rule covers the first. Warning.
+- `bugfix_multi_step` — a bugfix has more than one step, and the test-first rule covers one. Split it into one spec per bug. Error.

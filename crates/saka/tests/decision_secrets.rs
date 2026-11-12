@@ -75,7 +75,13 @@ fn a_project_secret_pasted_into_a_question_never_reaches_the_store_the_events_or
         saka_mcp::bind(&socket).unwrap()
     };
     let decisions: Arc<dyn saka_ports::Decisions> = sim.engine();
-    rt.spawn(saka_mcp::serve(listener, Arc::new(Fixed), decisions));
+    let regressions: Arc<dyn saka_ports::Regressions> = sim.engine();
+    rt.spawn(saka_mcp::serve(
+        listener,
+        Arc::new(Fixed),
+        decisions,
+        regressions,
+    ));
 
     let option = |label: String| DecisionOption {
         label,

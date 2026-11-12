@@ -123,6 +123,14 @@ fn every_hook_event_renders_in_both_languages() {
         assert_eq!(render(Lang::En, &n, link), en, "{event} en");
         assert_eq!(render(Lang::Id, &n, link), id, "{event} id");
     }
+    let mut regression = hook_event("blocked");
+    regression["blocker"]["code"] = json!("regression_not_reproduced");
+    let n = notification("ops", "hook.event", regression);
+    assert_eq!(
+        render(Lang::En, &n, link),
+        "Blocked: tasks/s1 in tasks\nReason: regression_not_reproduced\nThe agent did not prove its regression test fails without the fix. Retry to make it write the test first.\nhttps://saka.example.com/delivery/tasks/0193f0c4-0000-7000-8000-000000000004"
+    );
+    assert!(render(Lang::Id, &n, link).contains("Coba lagi agar ia menulis test lebih dulu."),);
     let mut spec = hook_event("spec_shipped");
     spec["task"] = Value::Null;
     let n = notification("ops", "hook.event", spec);

@@ -983,6 +983,9 @@ impl Engine {
             | K::ScmUserLinkPoll
             | K::ScmUserLinkRefresh
             | K::GateVerify
+            | K::GateReproduce
+            | K::EnvResetBranch
+            | K::SessionDeliverRegression
             | K::ScmReportStatus
             | K::ScmPollCommit
             | K::ScmDeleteBranch
@@ -1210,6 +1213,7 @@ impl Engine {
                 },
                 model: self.cfg.architect_model.clone(),
                 author: self.cfg.git_identity.clone(),
+                regression_check: false,
             })
             .await?;
         Ok(Effect::Draft {
@@ -1277,6 +1281,7 @@ impl Engine {
             | Prompt::DocsUncommitted { .. }
             | Prompt::DocsOutOfScope { .. }
             | Prompt::ReviewPacket
+            | Prompt::Regression { .. }
             | Prompt::VerdictFormat { .. } => {
                 return Err(PortError::permanent(
                     "prompt_invalid",

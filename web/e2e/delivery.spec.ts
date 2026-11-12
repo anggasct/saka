@@ -109,7 +109,27 @@ const tasks = [
       primary_action: { kind: "retry", params: {} },
     },
   }),
-  task(2, { state: "in_stage", stage: "dev", stage_phase: "running_session" }),
+  task(2, {
+    state: "in_stage",
+    stage: "dev",
+    stage_phase: "running_session",
+    kind: "bugfix",
+    regression: {
+      state: "reproduced",
+      attempts: 2,
+      commit_sha: "c0ffee".padEnd(40, "0"),
+      last_outcome: "reproduced",
+      commands: [
+        {
+          command: "make test-regression",
+          result: "failed",
+          exit_code: 1,
+          duration_ms: 5,
+        },
+      ],
+      paths: ["tests/login.rs"],
+    },
+  }),
   task(4, {
     origin: "external_change",
     spec_id: null,
@@ -237,6 +257,24 @@ for (const width of [375, 1280]) {
     const blocker = page.getByRole("region", { name: "Blocker" });
     await expect(blocker).toBeVisible();
     await expect(blocker.getByRole("button", { name: "Retry" })).toBeVisible();
+    await noOverflow(page);
+    const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    expect(results.violations).toEqual([]);
+  });
+}
+
+for (const width of [375, 1280]) {
+  test(`a bugfix shows its regression evidence at ${width} px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page, false);
+    await page.goto("/delivery");
+    await page.getByRole("link", { name: "Step S2" }).click();
+    const evidence = page.getByRole("region", { name: "Regression evidence" });
+    await expect(evidence).toBeVisible();
+    await expect(evidence.getByText("make test-regression")).toBeVisible();
+    await expect(evidence.getByText("Failed: the proof")).toBeVisible();
     await noOverflow(page);
     const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
     expect(results.violations).toEqual([]);

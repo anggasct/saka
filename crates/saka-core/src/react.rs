@@ -22,6 +22,7 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
     match event {
         E::StageRunCreated { .. }
         | E::StagePhaseChanged { .. }
+        | E::RegressionBranchReset { .. }
         | E::WorkItemCancelled { .. }
         | E::BranchPushed {
             target: ChangeRole::Docs,
@@ -45,7 +46,8 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             && task
                 .live_session()
                 .is_some_and(|s| s.id == *session_id && s.interrupt_requested.is_none())
-            && !run_view(task).is_some_and(|v| v.run_decisions().any(|d| d.is_open())) =>
+            && !run_view(task).is_some_and(|v| v.run_decisions().any(|d| d.is_open()))
+            && !task.regression_open() =>
         {
             vec![Job::new(
                 JobKind::EnvInspectWorktree,
@@ -54,6 +56,21 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
                 now,
             )]
         }
+        E::RegressionRequested {
+            work_item_id,
+            stage_run_id,
+            regression_check_id,
+            ..
+        } => vec![Job::new(
+            JobKind::GateReproduce,
+            regression_check_id,
+            json!({
+                "work_item_id": work_item_id,
+                "stage_run_id": stage_run_id,
+                "regression_check_id": regression_check_id,
+            }),
+            now,
+        )],
         E::GateStarted {
             gate_result_id,
             source: GateSource::Saka,
@@ -515,6 +532,17 @@ fn session_jobs(task: &Task, now: Timestamp) -> Vec<Job> {
     let mut jobs = Vec::new();
     let run_id = task.stage_run.as_ref().map(|r| r.id);
     let view = run_view(task);
+    if task.needs_branch_reset() {
+        if let (Some(run_id), Some(owner)) = (run_id, task.run_owner()) {
+            jobs.push(Job::new(
+                JobKind::EnvResetBranch,
+                run_id,
+                json!({ "owner": owner, "environment_id": task.environment.as_ref().map(|e| e.id) }),
+                now,
+            ));
+        }
+        return jobs;
+    }
     if let (Some(run_id), Some(view)) = (run_id, view.as_ref().filter(|v| resume::wants_session(v)))
     {
         let plan = resume::plan(view);
@@ -552,6 +580,11 @@ fn session_jobs(task: &Task, now: Timestamp) -> Vec<Job> {
             view.run_decisions()
                 .filter(|d| d.state == DecisionState::Answered)
                 .map(|d| session::deliver_decision_job(d, now)),
+        );
+        jobs.extend(
+            view.run_regressions()
+                .filter(|c| c.awaiting_delivery())
+                .map(|c| session::deliver_regression_job(c, view.owner, now)),
         );
     }
     jobs

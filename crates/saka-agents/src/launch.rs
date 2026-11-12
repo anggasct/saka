@@ -169,13 +169,23 @@ pub fn mcp_token_path(sessions_dir: &Path, session_id: &str) -> PathBuf {
     sessions_dir.join(session_id).join(MCP_TOKEN_FILE)
 }
 
-pub fn mcp_config(command: &Path, session_id: &str, socket: &Path, token: &str) -> String {
+pub fn mcp_config(
+    command: &Path,
+    session_id: &str,
+    socket: &Path,
+    token: &str,
+    regression_check: bool,
+) -> String {
+    let mut args = vec!["mcp", "--session", session_id];
+    if regression_check {
+        args.push("--regression-check");
+    }
     serde_json::json!({
         "mcpServers": {
             MCP_SERVER: {
                 "type": "stdio",
                 "command": s(command),
-                "args": ["mcp", "--session", session_id],
+                "args": args,
                 "env": {
                     "SAKA_MCP_SOCKET": s(socket),
                     "SAKA_MCP_TOKEN": token,

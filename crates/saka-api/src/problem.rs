@@ -114,12 +114,15 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::SpecAlreadyApproved
         | R::SpecReparseRequired { .. }
         | R::RevisionConflict { .. }
+        | R::RevisionKindChanged
         | R::SpecHasActiveTasks { .. }
         | R::MergeNotReady { .. }
         | R::PermissionAlreadyAnswered
         | R::DecisionAlreadyAnswered
         | R::DecisionOnePerSession
         | R::DecisionLimitReached
+        | R::RegressionNotAvailable { .. }
+        | R::RegressionLimitReached
         | R::DraftNotWaiting
         | R::DraftLintFailed
         | R::DraftDecisionOpen

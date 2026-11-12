@@ -4,14 +4,14 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use saka_core::autonomy::RepoPolicy;
 use saka_core::ids::{
     BlockerId, ChangeRequestId, DecisionRequestId, EnvironmentId, GateResultId,
-    PermissionRequestId, ProjectId, RepoId, ReviewId, SessionId, SpecDraftId, SpecId,
-    SpecRevisionId, StageRunId, WorkItemId,
+    PermissionRequestId, ProjectId, RegressionCheckId, RepoId, ReviewId, SessionId, SpecDraftId,
+    SpecId, SpecRevisionId, StageRunId, WorkItemId,
 };
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionAnswer, DecisionRequest, Environment,
-    ExternalChange, GateResult, PermissionRequest, PermissionRule, Project, ProjectRepo, Repo,
-    Review, ReviewPosted, RevisionView, RunOwner, Session, Spec, SpecDependency, SpecLink,
-    StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
+    ExternalChange, GateResult, PermissionRequest, PermissionRule, Project, ProjectRepo,
+    RegressionCheck, Repo, Review, ReviewPosted, RevisionView, RunOwner, Session, Spec,
+    SpecDependency, SpecLink, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger, WorkKind};
@@ -330,6 +330,22 @@ pub fn load_tasks(
             t.reviews.push(r);
         }
     }
+    for c in rows(
+        conn,
+        concat!(
+            "SELECT ",
+            regression_check_columns!(),
+            " FROM regression_check"
+        ),
+        selection,
+        "requested_at, id",
+        b,
+        regression_check,
+    )? {
+        if let Some(t) = tasks.get_mut(&c.work_item_id) {
+            t.regressions.push(c);
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     for g in rows(
         conn,
@@ -601,6 +617,7 @@ pub(crate) fn stage_run(row: &Row<'_>) -> Result<StageRun> {
         docs_head_sha: row.get("docs_head_sha")?,
         queued_at: opt_ts(row, "queued_at")?,
         queue_native: row.get::<_, i64>("queue_native")? != 0,
+        branch_reset_from: row.get("branch_reset_from")?,
         fix: opt_json(row, "fix")?,
         failure: opt_json(row, "failure")?,
         budget: budget_col(row, "budget")?,
@@ -643,6 +660,23 @@ fn gate(row: &Row<'_>) -> Result<GateResult> {
         outcome: vocab(row, "outcome")?,
         checks: json(row, "checks")?,
         observed_at: ts(row, "observed_at")?,
+    })
+}
+
+fn regression_check(row: &Row<'_>) -> Result<RegressionCheck> {
+    Ok(RegressionCheck {
+        id: RegressionCheckId(uuid(row, "id")?),
+        work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+        stage_run_id: StageRunId(uuid(row, "stage_run_id")?),
+        attempt: u32_col(row, "attempt")?,
+        commit_sha: row.get("commit_sha")?,
+        base_sha: row.get("base_sha")?,
+        outcome: opt_vocab(row, "outcome")?,
+        checks: json(row, "checks")?,
+        paths: json(row, "paths")?,
+        requested_at: ts(row, "requested_at")?,
+        observed_at: opt_ts(row, "observed_at")?,
+        delivered_at: opt_ts(row, "delivered_at")?,
     })
 }
 

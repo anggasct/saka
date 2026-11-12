@@ -197,6 +197,64 @@ fn a_reload_with_other_overrides_changes_the_workflow_of_tasks_that_have_not_sta
 }
 
 #[test]
+fn a_reload_in_the_middle_of_a_task_only_changes_the_stages_it_has_not_entered() {
+    let mut sim = Sim::multi_repo(
+        SimConfig {
+            agent: saka_testkit::AgentScript {
+                outcome: saka_testkit::AgentOutcome::Hang,
+                ..saka_testkit::AgentScript::default()
+            },
+            ..SimConfig::default()
+        },
+        &Layout {
+            saka_toml: config("[workflow.kinds.bugfix]\nstages = { merge = \"manual\" }\n"),
+            ..Layout::default()
+        },
+    );
+    let bugfix = sim.register(
+        "docs/specs/fix.md",
+        &spec_text("Fix", "kind: bugfix\n", BUGFIX_BODY),
+    );
+    sim.approve_spec(bugfix.spec_id, bugfix.revision_id)
+        .unwrap();
+    let task = |sim: &Sim| sim.tasks_of(bugfix.spec_id).remove(0);
+    assert!(sim.run_until(4_000, |s| {
+        task(s).is_at(Stage::Dev, saka_core::vocab::StagePhase::RunningSession)
+    }));
+    let before = task(&sim);
+    assert_eq!(
+        before.workflow.stage_trigger(Stage::Dev),
+        Some(Trigger::Auto)
+    );
+    assert_eq!(
+        before.workflow.stage_trigger(Stage::Merge),
+        Some(Trigger::Manual)
+    );
+
+    sim.world.put_doc(
+        "docs/saka.toml",
+        config("[workflow.kinds.bugfix]\nstages = { merge = \"auto\" }\n").as_bytes(),
+    );
+    assert_eq!(sim.reload().unwrap().outcome, ReloadOutcome::Changed);
+
+    let after = task(&sim);
+    assert!(after.is_at(Stage::Dev, saka_core::vocab::StagePhase::RunningSession));
+    assert_eq!(
+        after.stage_run.as_ref().unwrap().id,
+        before.stage_run.as_ref().unwrap().id
+    );
+    assert_eq!(
+        after.workflow.stage_trigger(Stage::Dev),
+        Some(Trigger::Auto)
+    );
+    assert_eq!(
+        after.workflow.stage_trigger(Stage::Merge),
+        Some(Trigger::Auto)
+    );
+    assert_eq!(after.item.state, WorkItemState::InStage);
+}
+
+#[test]
 fn an_unknown_kind_or_key_rejects_the_reload_and_the_old_overrides_stay() {
     let sim = sim(
         "[workflow.kinds.bugfix]\nstages = { merge = \"manual\" }\n",

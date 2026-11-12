@@ -898,6 +898,8 @@ pub struct WorkItem {
     pub review: Option<ReviewSummary>,
     /// The latest fix round of the task; `null` before a round ran and when the workflow has no `fix` stage.
     pub fix: Option<FixProgress>,
+    /// The test-first proof of a bugfix; `null` for every other kind.
+    pub regression: Option<RegressionEvidence>,
     /// Latest result per gate source for the current change request head, `scm` first.
     pub gates: Vec<Gate>,
     pub blocker: Option<Blocker>,
@@ -971,6 +973,82 @@ impl FixProgress {
                 "review"
             }
             .to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RegressionEvidence {
+    /// `pending | reproduced | failed`. `failed` means the blocker `regression_not_reproduced` is open.
+    pub state: String,
+    /// The checks of the current stage run.
+    pub attempts: u32,
+    /// The commit of the check that reproduced the bug, or else of the latest check; `null` before any check.
+    pub commit_sha: Option<String>,
+    /// `reproduced | not_reproduced | invalid_paths | error` for the latest check that finished; `null` before one did.
+    pub last_outcome: Option<String>,
+    /// What the regression commands did at that commit, one entry per command.
+    pub commands: Vec<RegressionCommand>,
+    /// The paths the latest finished check looked at: the files outside the test paths for `invalid_paths`, the changed files otherwise.
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RegressionCommand {
+    pub command: String,
+    /// `failed | passed | timed_out`. A failing regression command is the proof.
+    pub result: String,
+    /// The exit code; `null` when the command timed out.
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+}
+
+impl RegressionEvidence {
+    fn of(t: &Task) -> Option<RegressionEvidence> {
+        if !t.is_bugfix() {
+            return None;
+        }
+        let reproduced = t.reproduced_regression();
+        let finished = t.regressions.iter().rev().find(|c| c.outcome.is_some());
+        let shown = reproduced.or(finished);
+        let state = if reproduced.is_some() {
+            "reproduced"
+        } else if t
+            .open_blocker()
+            .is_some_and(|b| b.code == saka_core::vocab::BlockerCode::RegressionNotReproduced)
+        {
+            "failed"
+        } else {
+            "pending"
+        };
+        Some(RegressionEvidence {
+            state: state.to_string(),
+            attempts: u32::try_from(t.run_regressions().count()).unwrap_or(u32::MAX),
+            commit_sha: shown.or(t.regressions.last()).map(|c| c.commit_sha.clone()),
+            last_outcome: finished
+                .and_then(|c| c.outcome)
+                .map(|o| o.as_str().to_string()),
+            commands: shown
+                .map(|c| {
+                    c.checks
+                        .iter()
+                        .map(|r| RegressionCommand {
+                            command: r.command.clone(),
+                            result: if r.timed_out {
+                                "timed_out"
+                            } else if r.failed() {
+                                "failed"
+                            } else {
+                                "passed"
+                            }
+                            .to_string(),
+                            exit_code: r.exit_code,
+                            duration_ms: r.duration_ms,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            paths: shown.map(|c| c.paths.clone()).unwrap_or_default(),
         })
     }
 }
@@ -1273,6 +1351,7 @@ impl WorkItem {
             external: t.external.as_ref().map(ExternalChange::from),
             review: latest_review(t).map(|r| ReviewSummary::of(r, t)),
             fix: FixProgress::of(t),
+            regression: RegressionEvidence::of(t),
             gates: gates_at_head(t),
             blocker: t
                 .open_blocker()

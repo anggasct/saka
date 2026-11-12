@@ -408,17 +408,18 @@ async fn a_message_gets_a_button_only_for_what_a_press_can_run() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "1" })))
         .mount(&server)
         .await;
-    let blocked = |action: Value| Notification {
+    let blocked_by = |code: &str, action: Value| Notification {
         channel: "chat".into(),
         code: "hook.event".into(),
         params: json!({
             "event": "blocked",
             "project": { "name": "tasks" },
             "task": { "id": "0193f0c4-0000-7000-8000-000000000004", "key": "tasks/s1" },
-            "blocker": { "id": Uuid::from_u128(BLOCKER).to_string(), "code": "ci_red", "action": action }
+            "blocker": { "id": Uuid::from_u128(BLOCKER).to_string(), "code": code, "action": action }
         }),
         dedupe_key: "run".into(),
     };
+    let blocked = |action: Value| blocked_by("ci_red", action);
     let with_actions = notifier(&server, Some(vec![OPERATOR.to_string()]));
     with_actions.send(&blocked(json!("retry"))).await.unwrap();
     with_actions.send(&blocked(json!("cancel"))).await.unwrap();
@@ -428,6 +429,10 @@ async fn a_message_gets_a_button_only_for_what_a_press_can_run() {
         .unwrap();
     notifier(&server, None)
         .send(&blocked(json!("retry")))
+        .await
+        .unwrap();
+    with_actions
+        .send(&blocked_by("regression_not_reproduced", json!("retry")))
         .await
         .unwrap();
 
@@ -449,4 +454,10 @@ async fn a_message_gets_a_button_only_for_what_a_press_can_run() {
     assert!(custom_id().len() <= 100);
     assert_eq!(button(2), None, "an action that needs input has no button");
     assert_eq!(button(3), None, "a channel without actions has no button");
+    let content = sent[4]["content"].as_str().unwrap();
+    assert!(
+        content.contains("did not prove its regression test"),
+        "{content}"
+    );
+    assert_eq!(button(4).unwrap()["label"], "Retry");
 }

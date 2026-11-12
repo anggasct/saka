@@ -149,6 +149,7 @@ pub fn run_view(d: &Draft) -> Option<RunView<'_>> {
         session: d.session.as_ref().filter(|s| s.owner == owner),
         permissions: &d.permissions,
         decisions: &d.decisions,
+        regressions: &[],
         prior_usage: d.prior_usage,
         budget: Some(attempt.budget),
         budget_warnings: &attempt.budget_warnings,

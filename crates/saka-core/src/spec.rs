@@ -121,6 +121,9 @@ pub fn approve(
                 .ok_or_else(|| Rejection::InvalidState {
                     state: spec.state.as_str().to_string(),
                 })?;
+            if from.kind != latest.kind && approval.tasks.iter().any(|t| t.state.has_started()) {
+                return Err(Rejection::RevisionKindChanged);
+            }
             let plan = plan_revision(from, latest, approval.tasks, approval.parser_version);
             if !plan.conflicts().is_empty() {
                 return Err(Rejection::RevisionConflict {

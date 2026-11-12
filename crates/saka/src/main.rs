@@ -70,6 +70,8 @@ enum Command {
     Mcp {
         #[arg(long)]
         session: String,
+        #[arg(long)]
+        regression_check: bool,
     },
     #[command(
         about = "Sets up this repo for Saka: docs location, saka.toml, toolchain versions, and a setup recipe; registers the project once saka.toml is pushed",
@@ -901,7 +903,10 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
             let code = current_thread()?.block_on(saka_agents::runner::run(&session, &launch));
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
-        Command::Mcp { session } => current_thread()?.block_on(mcp::run(&session)),
+        Command::Mcp {
+            session,
+            regression_check,
+        } => current_thread()?.block_on(mcp::run(&session, regression_check)),
         Command::Secret(cmd) => {
             let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
             current_thread()?.block_on(async {

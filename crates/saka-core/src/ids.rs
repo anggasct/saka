@@ -54,4 +54,5 @@ id_type!(
     CredentialId,
     PairingId,
     LoginSessionId,
+    RegressionCheckId,
 );

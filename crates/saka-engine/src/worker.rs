@@ -1,6 +1,7 @@
 mod changes;
 mod environments;
 mod merging;
+mod regressions;
 mod sessions;
 mod updating;
 mod verification;
@@ -130,7 +131,7 @@ impl Refusal {
 
 const CHECK_NAME_MAX: usize = 120;
 
-fn check_name(command: &str) -> String {
+pub(crate) fn check_name(command: &str) -> String {
     if command.chars().count() <= CHECK_NAME_MAX {
         return command.to_string();
     }
@@ -234,6 +235,11 @@ impl Engine {
                     decision_id: field(p, "decision_id")?,
                 })))
             }
+            JobKind::SessionDeliverRegression => Ok(SessionJob::Input(Box::new(
+                SessionInput::DeliverRegression {
+                    regression_check_id: field(p, "regression_check_id")?,
+                },
+            ))),
             JobKind::SessionInterrupt => {
                 let Some(target) = stopping_ref(session, field(p, "session_id")?) else {
                     return Ok(SessionJob::Skipped);
@@ -401,6 +407,7 @@ impl Engine {
             }
             JobKind::SessionDeliverPermissionAnswer
             | JobKind::SessionDeliverDecision
+            | JobKind::SessionDeliverRegression
             | JobKind::SessionInterrupt
             | JobKind::SessionSteer
             | JobKind::SessionReattach
@@ -427,6 +434,11 @@ impl Engine {
             JobKind::ScmWebhookPrune => Ok(Effect::Skipped),
             JobKind::GateVerify => {
                 self.gate_verify(&task, field(p, "stage_run_id")?, field(p, "head_sha")?)
+                    .await
+            }
+            JobKind::EnvResetBranch => self.reset_branch(&task).await,
+            JobKind::GateReproduce => {
+                self.reproduce(&task, field(p, "regression_check_id")?)
                     .await
             }
             JobKind::ScmReportStatus => self.report_status(&task, p).await,

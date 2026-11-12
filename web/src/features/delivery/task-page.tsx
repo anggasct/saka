@@ -18,6 +18,7 @@ import {
   useWorkItem,
   useWorkItems,
 } from "./queries";
+import { RegressionSection } from "./regression-section";
 import { ReviewSection } from "./review-section";
 import { DecisionSection } from "@/features/decisions/decision-section";
 
@@ -106,6 +107,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       <GatesSection task={item} />
       <ReviewSection task={item} />
       <FixSection task={item} />
+      <RegressionSection task={item} />
       <StageRunsSection task={item} spec={spec.data} tasks={tasks} />
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />
