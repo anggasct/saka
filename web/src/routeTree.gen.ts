@@ -14,6 +14,7 @@ import { Route as ConnectionsRouteImport } from './routes/connections'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as DeliveryIndexRouteImport } from './routes/delivery.index'
+import { Route as DeploymentsProjectIdRouteImport } from './routes/deployments.$projectId'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
 import { Route as InboxItemIdRouteImport } from './routes/inbox.$itemId'
@@ -49,6 +50,11 @@ const SetupRoute = SetupRouteImport.update({
 const DeliveryIndexRoute = DeliveryIndexRouteImport.update({
   id: '/delivery/',
   path: '/delivery/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeploymentsProjectIdRoute = DeploymentsProjectIdRouteImport.update({
+  id: '/deployments/$projectId',
+  path: '/deployments/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsIndexRoute = DocsIndexRouteImport.update({
@@ -114,6 +120,7 @@ export interface FileRoutesByFullPath {
   '/connections': typeof ConnectionsRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/deployments/$projectId': typeof DeploymentsProjectIdRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
@@ -132,6 +139,7 @@ export interface FileRoutesByTo {
   '/connections': typeof ConnectionsRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/deployments/$projectId': typeof DeploymentsProjectIdRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/connections': typeof ConnectionsRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/deployments/$projectId': typeof DeploymentsProjectIdRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
@@ -171,6 +180,7 @@ export interface FileRouteTypes {
     | '/connections'
     | '/login'
     | '/setup'
+    | '/deployments/$projectId'
     | '/docs/$projectId'
     | '/inbox/$itemId'
     | '/sessions/$sessionId'
@@ -189,6 +199,7 @@ export interface FileRouteTypes {
     | '/connections'
     | '/login'
     | '/setup'
+    | '/deployments/$projectId'
     | '/docs/$projectId'
     | '/inbox/$itemId'
     | '/sessions/$sessionId'
@@ -207,6 +218,7 @@ export interface FileRouteTypes {
     | '/connections'
     | '/login'
     | '/setup'
+    | '/deployments/$projectId'
     | '/docs/$projectId'
     | '/inbox/$itemId'
     | '/sessions/$sessionId'
@@ -226,6 +238,7 @@ export interface RootRouteChildren {
   ConnectionsRoute: typeof ConnectionsRoute
   LoginRoute: typeof LoginRoute
   SetupRoute: typeof SetupRoute
+  DeploymentsProjectIdRoute: typeof DeploymentsProjectIdRoute
   DocsProjectIdRoute: typeof DocsProjectIdRoute
   InboxItemIdRoute: typeof InboxItemIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
@@ -275,6 +288,13 @@ declare module '@tanstack/react-router' {
       path: '/delivery'
       fullPath: '/delivery/'
       preLoaderRoute: typeof DeliveryIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/deployments/$projectId': {
+      id: '/deployments/$projectId'
+      path: '/deployments/$projectId'
+      fullPath: '/deployments/$projectId'
+      preLoaderRoute: typeof DeploymentsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/docs/': {
@@ -362,6 +382,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectionsRoute: ConnectionsRoute,
   LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
+  DeploymentsProjectIdRoute: DeploymentsProjectIdRoute,
   DocsProjectIdRoute: DocsProjectIdRoute,
   InboxItemIdRoute: InboxItemIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,

@@ -7,6 +7,7 @@ import { fakeApi, page } from "@/test/fake-api";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID, spec } from "@/test/fixtures";
 import { REQUESTS, RULES } from "@/test/permission-fixtures";
+import { ENVIRONMENTS } from "@/test/deploy-fixtures";
 import { HOOK_RUNS, HOOKS } from "@/test/hooks-fixtures";
 import { issueProject } from "@/test/issue-fixtures";
 import { renderApp } from "@/test/render";
@@ -30,6 +31,7 @@ function routes(extra: Routes = {}): Routes {
     [PROJECTS]: { body: page([project]) },
     [PROJECT]: { body: project },
     [SECRETS]: { body: { items: [] } },
+    [ENVIRONMENTS]: { body: { items: [] } },
     [HOOKS]: { body: { items: [] } },
     [HOOK_RUNS]: { body: page([]) },
     [RULES]: { body: { items: [], operator_rules: [] } },

@@ -261,6 +261,51 @@ When the revert cannot be made, the task blocks with `revert_conflict` and a rea
 
 When the revert merges, the original task stays `done` and shows `reverted_by` (Delivery, `GET /api/v1/work-items/{id}`, and `saka task show <id>`); the revert task shows `revert_of`. In the spec view the step carries a "reverted" mark. A spec that already shipped stays shipped. Reverting is not redoing: bringing a reverted step back takes a new spec. `saka_reverts_total{outcome}` counts reverts that merged, hit a conflict, or were cancelled.
 
+## Deploying and verifying
+
+A task is done when its change merged. With an environment configured, it is done when the change is also running and healthy. Environments live only in the operator config (`config.toml`); how to check one lives in the repo (`saka.toml`), reviewed with the code. Saka calls your deploy tool as it is: a script on this host, a command in a throwaway environment, or a signed webhook to your pipeline. It is not a deploy engine and it never rolls back through the tool: recovery is a revert or a fix.
+
+```toml
+[[deploy]]
+project = "tasks"
+environment = "staging"            # ^[a-z0-9-]{1,32}$, unique per project
+repo = "app"                       # required when the project binds more than one repo
+branch = "main"                    # default: the base branch of the repo
+action = "run_host"                # run | run_host | webhook
+command = "./deploy.sh staging"
+target_url = "https://staging.example.com"
+gate = true                        # default: a task waits for a healthy deployment
+on_failure = "revert"              # required: revert | fix
+verify_secrets = ["SMOKE_TOKEN"]   # project secrets for the probe and the checks
+
+[[deploy]]
+project = "tasks"
+environment = "preview"
+repo = "app"
+action = "webhook"
+url = "https://ci.example.com/hooks/deploy"
+secret = "DEPLOY_SIGNING_KEY"      # signs the body with HMAC-SHA256
+gate = false
+on_failure = "fix"
+```
+
+```toml
+[verify.staging]
+ready = 'curl -fsS "$SAKA_DEPLOY_URL/version" | grep -qx "$SAKA_SHA"'
+ready_timeout_secs = 600           # 10..=3600, default 300
+ready_interval_secs = 15           # 5..=300, default 15
+commands = ["npm --prefix e2e run smoke"]   # up to 10, one line each
+timeout_secs = 600                 # per command, default 300
+```
+
+Every merge of a code change to the environment's branch queues a deployment. An environment has one deployment running and at most one waiting: a merge that arrives while one waits joins it, and the sha is the branch tip read when the deployment starts, so a late or out-of-order merge never deploys an older commit. Then Saka runs the deploy action and, if `[verify.<environment>]` has a `ready` command, runs it every `ready_interval_secs` until it succeeds or `ready_timeout_secs` passes. That is how a webhook to an asynchronous pipeline waits until the target reports the new version. Then it runs every check command in a throwaway environment checked out at the deployed sha, with the repo's recipe and toolchain, and runs all of them even when one fails so the evidence is complete. An environment without `[verify.<environment>]` passes when the deploy action does, and `saka doctor` warns (`deploy.verify_missing`; `deploy.ready_missing` for a webhook without a probe).
+
+The deploy action, the probe and the checks get `SAKA_DEPLOY_ID`, `SAKA_DEPLOY_ENV`, `SAKA_DEPLOY_URL` (when `target_url` is set), `SAKA_SHA`, `SAKA_PREVIOUS_SHA` (the last healthy sha), `SAKA_BRANCH`, `SAKA_REPO` and `SAKA_PROJECT`. A `run` action also gets the project secrets listed in `secrets`; the probe and the checks get `verify_secrets`; a `run_host` action never gets a secret, and it follows the host-hook rules: the config file must not be writable by anyone else, it runs in its own cgroup with a timeout, and it is not started again after a restart. A webhook body is `{ id, event: "deploy", environment, project, repo, branch, sha, previous_sha, target_url, tasks, occurred_at }`, signed like a hook webhook, with `X-Saka-Delivery` set to the deployment id so the receiver can drop a repeat.
+
+With `gate = true` (the default) a task whose merge the environment matches stays in the sync stage until the deployment that carries its change succeeds; with `gate = false` the deployment still runs and is recorded but holds nothing. When a deployment fails, each task it holds is blocked with `deploy_unverified` naming the environment, the phase and the code, and the primary action comes from `on_failure`: Revert makes the revert task and Draft a fix asks the architect for a bugfix spec. A fix draft states the facts Saka knows (environment, sha, the last healthy sha, phase, code, the held tasks, your note) and puts the output of the target, which is untrusted text, only in a fenced data block. Other actions are Retry (a new deployment of the branch tip), and Accept without verification (needs a reason, recorded in the audit trail). The blocker closes by itself as soon as a later deployment that carries the change succeeds, whatever started it. A failed deployment that holds no task (`gate = false`, a merge made outside Saka) opens an Inbox item with Redeploy, or Draft a fix when `on_failure = "fix"`, that the next successful deployment closes.
+
+See the evidence in Delivery: the task shows each gate, the Deployments page of the project lists deployments and shows each phase with its commands, durations and output tail, and Settings shows the environments from the config. `saka deploy list <project>`, `saka deploy show <id>`, `saka deploy redeploy <project> <environment> --reason "<why>"` and `saka deploy cancel <id> --reason "<why>"` do the same from the terminal; the API is under `/api/v1/projects/{id}/environments`, `/api/v1/projects/{id}/deployments` and `/api/v1/deployments/{id}`. Hooks `deployed` and `deploy_failed` fire when a deployment ends and take an `environments = [...]` filter; they cannot be gates. `saka_deployments_total{environment,outcome}` and `saka_deploy_checks_total{phase,state}` count what happened. Not in this version: promotion between environments, deploys triggered by tags, a human approval before a deploy (use `gate = false` and deploy by hand), and an end-to-end scenario in `make e2e`.
+
 ## Development
 
 | Path | Contents |

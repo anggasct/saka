@@ -794,6 +794,13 @@ const LABELS: Record<string, string[]> = {
 };
 
 const ERRORS = [
+  "deployment_queued",
+  "deployment_running",
+  "deployment_finished",
+  "deployment_not_failed",
+  "fix_draft_in_progress",
+  "environment_not_found",
+  "architect_unavailable",
   "issue_not_found",
   "intake_active",
   "intake_already_approved",

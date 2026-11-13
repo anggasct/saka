@@ -444,6 +444,17 @@ fn a_task_held_by_a_failed_deployment_shows_its_gate_and_can_be_accepted_without
     assert_eq!(gate["deployment"]["phase"], "verify");
     assert_eq!(shown.body["blocker"]["code"], "deploy_unverified");
     assert_eq!(shown.body["blocker"]["params"]["environment"], "staging");
+    let offered: Vec<&str> = shown.body["available_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert!(
+        offered.contains(&"retry") && offered.contains(&"accept_unverified"),
+        "{offered:?}"
+    );
+    assert!(!offered.contains(&"takeover"), "{offered:?}");
 
     let path = format!("/api/v1/work-items/{item}/actions/accept-unverified");
     let wrong = api.post(

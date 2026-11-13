@@ -9,7 +9,7 @@ use crate::vocab::{
 
 pub const PRIORITY: i64 = i32::MAX as i64;
 
-fn held_by_deploy(task: &Task) -> bool {
+pub fn held_by_deploy(task: &Task) -> bool {
     task.item.state == WorkItemState::Blocked
         && task
             .open_blocker()

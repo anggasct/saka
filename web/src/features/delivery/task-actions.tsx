@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 
 import { QUERY_ROOTS } from "@/api/events";
+import { acceptUnverified } from "@/features/deployments/queries";
 import { useT } from "@/i18n/use-t";
 
 import { ActionDialog } from "./action-dialog";
@@ -104,20 +105,41 @@ function MergeDialog({ task }: { task: WorkItem }) {
   );
 }
 
-function RevertDialog({ task }: { task: WorkItem }) {
+type Run = (reason: string, idempotencyKey: string) => Promise<void>;
+
+function primaryRun(task: WorkItem): Run | undefined {
+  const blocker = task.blocker;
+  if (!blocker) {
+    return undefined;
+  }
+  return (reason, key) => runPrimaryAction(task.id, blocker.id, reason, key);
+}
+
+export function RevertDialog({
+  task,
+  primary = false,
+}: {
+  task: WorkItem;
+  primary?: boolean;
+}) {
   const t = useT();
   const after = useAfterAction();
   const change = task.change_request;
+  const run = primaryRun(task);
   return (
     <ActionDialog
       trigger={t("task.revert.trigger")}
-      triggerVariant="outline"
+      triggerVariant={primary ? "default" : "outline"}
       title={t("task.revert.title")}
       description={t("task.revert.description")}
       reason={{ label: t("dialog.reason"), required: true }}
       submit={t("task.revert.submit")}
       onSubmit={(reason, key) =>
-        after(() => revertTask(task.id, task.version, reason ?? "", key))
+        after(() =>
+          primary && run
+            ? run(reason ?? "", key)
+            : revertTask(task.id, task.version, reason ?? "", key),
+        )
       }
     >
       {change && (
@@ -138,14 +160,25 @@ function RevertDialog({ task }: { task: WorkItem }) {
   );
 }
 
-type Run = (reason: string, idempotencyKey: string) => Promise<void>;
-
-function primaryRun(task: WorkItem): Run | undefined {
+export function AcceptUnverifiedDialog({ task }: { task: WorkItem }) {
+  const t = useT();
+  const after = useAfterAction();
   const blocker = task.blocker;
   if (!blocker) {
-    return undefined;
+    return null;
   }
-  return (reason, key) => runPrimaryAction(task.id, blocker.id, reason, key);
+  return (
+    <ActionDialog
+      trigger={t("task.acceptUnverified.trigger")}
+      title={t("task.acceptUnverified.title")}
+      description={t("task.acceptUnverified.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      submit={t("task.acceptUnverified.submit")}
+      onSubmit={(reason, key) =>
+        after(() => acceptUnverified(task.id, blocker.id, reason ?? "", key))
+      }
+    />
+  );
 }
 
 export function RetryDialog({
@@ -403,6 +436,9 @@ export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
       {actions.includes("return") && <ReturnDialog task={task} />}
       {actions.includes("takeover") && <TakeoverDialog task={task} />}
       {actions.includes("revert") && <RevertDialog task={task} />}
+      {actions.includes("accept_unverified") && (
+        <AcceptUnverifiedDialog task={task} />
+      )}
       {actions.includes("cancel") && <CancelDialog task={task} />}
     </div>
   );

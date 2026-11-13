@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { CATALOGS } from "@/i18n/messages";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { announce, deploy } from "@/test/hooks-fixtures";
+import type { Hook } from "./queries";
 
 import { hookDetails, hookErrorText, hookSummary } from "./hook-text";
 
@@ -86,5 +87,27 @@ describe("hook text", () => {
       "url",
       "secret",
     ]);
+  });
+
+  it("names the deploy events and the environments a hook is limited to", () => {
+    const en = translator("en");
+    const id = translator("id");
+    const limited: Hook = {
+      ...deploy,
+      on: "deploy_failed",
+      environments: ["staging", "production"],
+    };
+    expect(hookSummary(en, limited)).toBe("on deploy failed, after, run");
+    expect(hookSummary(en, { ...limited, on: "deployed" })).toBe(
+      "on deployed, after, run",
+    );
+    expect(hookSummary(id, { ...limited, on: "deployed" })).toBe(
+      "saat di-deploy, after, run",
+    );
+    expect(hookDetails(en, limited)).toContainEqual({
+      key: "environments",
+      name: "Environments",
+      value: "staging, production",
+    });
   });
 });
