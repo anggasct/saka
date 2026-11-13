@@ -11400,6 +11400,7 @@
                 "deploy_gates",
                 "gates",
                 "pending_permission_count",
+                "permissions_asked",
                 "available_actions",
                 "version",
                 "created_at",
@@ -11563,6 +11564,12 @@
                 "pending_permission_count": {
                   "type": "integer",
                   "format": "int32",
+                  "minimum": 0
+                },
+                "permissions_asked": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Permission requests the task's sessions have raised so far, whatever the decision.",
                   "minimum": 0
                 },
                 "priority": {
@@ -15164,6 +15171,7 @@
           "deploy_gates",
           "gates",
           "pending_permission_count",
+          "permissions_asked",
           "available_actions",
           "version",
           "created_at",
@@ -15327,6 +15335,12 @@
           "pending_permission_count": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "permissions_asked": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Permission requests the task's sessions have raised so far, whatever the decision.",
             "minimum": 0
           },
           "priority": {

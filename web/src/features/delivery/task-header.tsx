@@ -91,6 +91,10 @@ export function TaskHeader({
         <dd className="break-all">
           <code>{task.branch}</code>
         </dd>
+        <dt className="font-medium">{t("task.permissionsAsked")}</dt>
+        <dd>
+          {t("task.permissionsAskedCount", { count: task.permissions_asked })}
+        </dd>
         {task.autonomy !== null && task.autonomy !== undefined && (
           <>
             <dt className="font-medium">{t("task.autonomy")}</dt>

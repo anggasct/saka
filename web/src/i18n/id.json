@@ -276,6 +276,8 @@
   "task.key": "Kunci task",
   "task.branch": "Branch",
   "task.autonomy": "Otonomi",
+  "task.permissionsAsked": "Permintaan izin",
+  "task.permissionsAskedCount": "{count, number}",
   "task.spec": "Spec",
   "task.project": "Project",
   "task.admitted": "Di-admit",

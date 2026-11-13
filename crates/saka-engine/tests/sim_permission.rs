@@ -96,6 +96,34 @@ fn a_compound_command_with_one_unknown_part_waits_for_the_operator() {
 }
 
 #[test]
+fn every_permission_request_is_counted_by_tool_and_outcome_and_on_the_task() {
+    let mut sim = sim(asking("ls"), vec![allow_bash("list", "ls")]);
+    assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
+    let asked = sim.task(1).permissions.len();
+    let counted: u64 = sim
+        .engine()
+        .metrics()
+        .unwrap()
+        .permission_requests
+        .iter()
+        .filter(|(tool, outcome, _)| tool == "Bash" && outcome == "allowed")
+        .map(|(_, _, n)| *n)
+        .sum();
+    assert_eq!(counted, asked as u64);
+
+    let mut waiting = self::sim(asking("rm -rf build"), vec![]);
+    assert!(waiting.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));
+    assert!(
+        waiting
+            .engine()
+            .metrics()
+            .unwrap()
+            .permission_requests
+            .contains(&("Bash".to_string(), "pending".to_string(), 1))
+    );
+}
+
+#[test]
 fn always_allow_on_a_compound_command_remembers_each_part_and_the_next_run_does_not_ask() {
     let mut sim = sim(asking("git status && ls"), vec![]);
     assert!(sim.run_until(STEPS, |s| !s.task(1).permissions.is_empty()));

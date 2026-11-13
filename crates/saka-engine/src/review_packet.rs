@@ -3,6 +3,8 @@ use std::fmt::Write as _;
 use saka_core::model::RegressionRun;
 use saka_spec::content_hash;
 
+use crate::packet::REVIEWER_COMMANDS;
+
 const OMITTED_LISTED: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +184,8 @@ pub fn render(input: &ReviewPacketInput) -> ReviewPacket {
         );
     }
     out.push('\n');
+    out.push_str(REVIEWER_COMMANDS);
+    out.push('\n');
     match &input.basis {
         ReviewBasisInput::Step {
             spec_path,
@@ -354,6 +358,15 @@ mod tests {
         let claim = t.find("`## Summary`").unwrap();
         assert!(rules < claim && claim < spec);
         assert!(t.contains("not evidence: check each statement against the diff"));
+    }
+
+    #[test]
+    fn the_reviewer_is_told_its_directory_and_that_commands_are_refused() {
+        let t = render(&input(step())).text;
+        let commands = t.find("Commands:\n").unwrap();
+        assert!(t.find("Rules:").unwrap() < commands && commands < t.find("<spec_step>").unwrap());
+        assert!(t.contains("Your working directory is the checkout of this commit."));
+        assert!(t.contains("every Bash call is refused."));
     }
 
     #[test]

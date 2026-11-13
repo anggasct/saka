@@ -172,6 +172,40 @@ fn push_docs_line(out: &mut String, docs: &PacketDocs) {
     }
 }
 
+const WRAPPER_WORDS: &[&str] = &[
+    "nice", "ionice", "timeout", "env", "flock", "time", "nohup", "setsid", "stdbuf", "sudo",
+    "xargs", "sh", "bash", "for", "while", "until",
+];
+
+fn is_wrapped(command: &str) -> bool {
+    command.contains("$(")
+        || command.contains('`')
+        || command
+            .split_whitespace()
+            .any(|word| WRAPPER_WORDS.contains(&word))
+}
+
+#[must_use]
+pub(crate) fn commands_section(done_when: &[String]) -> String {
+    let mut out = String::from(
+        "Commands:\n\
+         - Your working directory is already this repository's worktree. Never `cd` into it or prefix a command with its path.\n\
+         - Run one simple command per tool call. Do not use `$(…)`, backticks, subshells `( … )`, loops, `&`, variable assignments, or wrappers such as `nice`, `timeout`, `env`, or `flock`.\n\
+         - To use a path or a value that another command prints, run that command by itself, then write the result into the next call as plain text.\n\
+         - A command that matches no permission rule waits for the operator, and your turn waits with it. Prefer a simple form of the command over one that may wait.\n",
+    );
+    if done_when.iter().any(|c| is_wrapped(c)) {
+        out.push_str(
+            "- Saka runs the Done when commands itself at the gate, exactly as written. A Done when command that is wrapped or compound (for example `flock … nice …`) needs no wrapper from you: run only its core command, as one simple command.\n",
+        );
+    }
+    out
+}
+
+pub(crate) const REVIEWER_COMMANDS: &str = "Commands:\n\
+     - Your working directory is the checkout of this commit. Never `cd` into it or prefix a path with it.\n\
+     - You cannot run commands: every Bash call is refused. Read files with Read, Glob, Grep and LS, one call at a time, with paths inside the checkout.\n";
+
 fn listed(items: &[String]) -> String {
     if items.is_empty() {
         "none".to_string()
@@ -279,6 +313,8 @@ pub fn render(input: &PacketInput) -> Packet {
         listed(&toolchains),
         listed(&secrets)
     );
+    text.push_str(&commands_section(&step.commands));
+    text.push('\n');
     if let Some(previous) = &input.previous_attempt {
         let _ = writeln!(text, "{previous}");
     }
@@ -726,6 +762,36 @@ mod tests {
     }
 
     #[test]
+    fn the_packet_carries_the_commands_section_after_the_environment_and_before_the_rules() {
+        let text = render(&input()).text;
+        let commands = text.find("Commands:\n").unwrap();
+        assert!(text.find("Environment:\n").unwrap() < commands);
+        assert!(commands < text.find("Rules:\n").unwrap());
+        for line in [
+            "Never `cd` into it or prefix a command with its path.",
+            "Run one simple command per tool call.",
+            "wrappers such as `nice`, `timeout`, `env`, or `flock`.",
+            "waits for the operator, and your turn waits with it.",
+        ] {
+            assert!(text[commands..].contains(line), "{line}");
+        }
+        assert!(!text.contains("Saka runs the Done when commands itself"));
+    }
+
+    #[test]
+    fn a_wrapped_done_when_command_is_run_by_saka_and_the_agent_runs_its_core() {
+        let mut wrapped = input();
+        wrapped.step.commands = vec!["flock /tmp/l nice go test ./...".into()];
+        assert!(render(&wrapped).text.contains(
+            "- Saka runs the Done when commands itself at the gate, exactly as written."
+        ));
+        wrapped.step.commands = vec!["d=$(go list -m) && ls $d".into()];
+        assert!(render(&wrapped).text.contains("run only its core command"));
+        wrapped.step.commands = vec!["go test ./...".into(), "cargo test -p a".into()];
+        assert!(!render(&wrapped).text.contains("Saka runs the Done when"));
+    }
+
+    #[test]
     fn one_context_document_is_named_in_the_singular() {
         let mut one = input();
         one.context = vec![doc("docs/a.md", b"# A")];
@@ -799,7 +865,7 @@ mod tests {
         assert!(
             packet
                 .text
-                .contains("variables: none\n\nCI failed on abc: test. Fix it.\n\nRules:\n")
+                .contains("wait.\n\nCI failed on abc: test. Fix it.\n\nRules:\n")
         );
     }
 }

@@ -95,6 +95,7 @@ impl Engine {
                     permission_request_id,
                     summary,
                     decision,
+                    tool,
                     ..
                 } = &next
                 {
@@ -103,6 +104,7 @@ impl Engine {
                         Effect::Deny => "denied",
                         Effect::Ask => "pending",
                     };
+                    self.counters.permission_request(tool, state);
                     permission = Some((*permission_request_id, summary.clone(), state));
                 }
                 vec![next]
