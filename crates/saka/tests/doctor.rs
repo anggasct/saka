@@ -107,12 +107,24 @@ impl Host {
     }
 
     fn calls_text(&self) -> String {
-        let path = self.path("bin/calls");
-        match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => panic!("reading {}: {e}", path.display()),
-        }
+        let dir = self.path("bin/calls.d");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return String::new(),
+            Err(e) => panic!("reading {}: {e}", dir.display()),
+        };
+        let mut records: Vec<PathBuf> = entries
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| !path.file_name().unwrap().to_string_lossy().starts_with('.'))
+            .collect();
+        records.sort();
+        records
+            .iter()
+            .map(|path| {
+                std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+            })
+            .collect()
     }
 
     fn bin_listing(&self) -> Vec<String> {

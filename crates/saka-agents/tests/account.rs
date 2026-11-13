@@ -58,7 +58,21 @@ impl FakeCli {
     }
 
     fn calls(&self) -> Vec<(String, BTreeMap<String, String>)> {
-        let text = std::fs::read_to_string(self.bin.join("calls")).unwrap_or_default();
+        let text = match std::fs::read_dir(self.bin.join("calls.d")) {
+            Ok(entries) => {
+                let mut records: Vec<_> = entries
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| !path.file_name().unwrap().to_string_lossy().starts_with('.'))
+                    .collect();
+                records.sort();
+                records
+                    .iter()
+                    .map(|path| std::fs::read_to_string(path).unwrap())
+                    .collect::<String>()
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => panic!("reading calls.d: {e}"),
+        };
         let mut calls = Vec::new();
         let mut argv = String::new();
         let mut env = BTreeMap::new();
