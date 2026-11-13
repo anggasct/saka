@@ -455,6 +455,17 @@ pub struct InboxRef {
     pub id: InboxItemId,
     pub kind: InboxKind,
     pub subject: InboxSubject,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incident: Option<Box<IncidentRef>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncidentRef {
+    pub source: String,
+    pub severity: crate::vocab::IncidentSeverity,
+    pub environment: Option<String>,
+    pub title: String,
+    pub occurrences: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

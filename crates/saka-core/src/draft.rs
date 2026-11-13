@@ -122,6 +122,7 @@ pub struct NewDraft {
     pub kind: WorkKind,
     pub context_paths: Vec<String>,
     pub deployment_id: Option<crate::ids::DeploymentId>,
+    pub incident_id: Option<crate::ids::IncidentId>,
 }
 
 #[must_use]
@@ -138,6 +139,7 @@ pub fn request(new: NewDraft) -> Event {
         kind: new.kind,
         context_paths: new.context_paths,
         deployment_id: new.deployment_id,
+        incident_id: new.incident_id,
     }
 }
 
@@ -802,6 +804,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
         kind,
         context_paths,
         deployment_id,
+        incident_id,
     } = event
     {
         return Some(Draft::new(SpecDraft {
@@ -816,6 +819,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
             kind: *kind,
             context_paths: context_paths.clone(),
             deployment_id: *deployment_id,
+            incident_id: *incident_id,
             state: SpecDraftState::Queued,
             attempt: 0,
             current_attempt_id: None,

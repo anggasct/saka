@@ -40,6 +40,7 @@ fn spec_draft(row: &Row<'_>) -> Result<SpecDraft> {
         kind: vocab(row, "kind")?,
         context_paths: json(row, "context_paths")?,
         deployment_id: opt_uuid(row, "deployment_id")?.map(saka_core::ids::DeploymentId),
+        incident_id: opt_uuid(row, "incident_id")?.map(saka_core::ids::IncidentId),
         state: vocab(row, "state")?,
         attempt: u32_col(row, "attempt")?,
         current_attempt_id: opt_uuid(row, "current_attempt_id")?.map(SpecDraftAttemptId),

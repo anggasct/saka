@@ -37,3 +37,14 @@ pub struct DecodedDelivery {
 pub trait SignalDecoder: Send + Sync {
     fn decode(&self, request: &SignalRequest<'_>) -> PortResult<DecodedDelivery>;
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct RawDelivery<'a> {
+    pub headers: &'a [(String, String)],
+    pub body: &'a [u8],
+    pub now: Timestamp,
+}
+
+pub trait Signals: Send + Sync {
+    fn decode(&self, source: &str, delivery: &RawDelivery<'_>) -> PortResult<DecodedDelivery>;
+}

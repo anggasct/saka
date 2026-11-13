@@ -54,11 +54,24 @@ impl Engine {
         cause: &Cause,
         action: Option<&Action<'_>>,
     ) -> Result<Vec<Event>> {
+        self.revert_linked(id, Some(expected_version), why, None, cause, action)
+            .map(|(events, _)| events)
+    }
+
+    pub(crate) fn revert_linked(
+        &self,
+        id: WorkItemId,
+        expected_version: Option<u64>,
+        why: &str,
+        incident: Option<saka_core::ids::IncidentId>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<(Vec<Event>, Task)> {
         let reason = revert_reason(why)?;
         let _guard = self.locked()?;
         let now = self.now();
         let origin = self.load_task(id)?;
-        if origin.item.version != expected_version {
+        if expected_version.is_some_and(|v| origin.item.version != v) {
             return Err(Rejection::VersionStale.into());
         }
         let reverts = self.store.read(|c| read::reverts_of(c, id))?;
@@ -87,6 +100,17 @@ impl Engine {
         }
         batch.tasks.push(origin_after);
         batch.tasks.push(revert_task.clone());
+        if let Some(incident_id) = incident {
+            let origin_project = revert_task.item.project_id;
+            self.link_incident(
+                &mut batch,
+                incident_id,
+                saka_core::incident::Recovery::Revert(revert_task.item.id),
+                origin_project,
+                cause,
+                now,
+            )?;
+        }
         self.commit(&batch)?;
         tracing::info!(
             work_item_id = %id,
@@ -94,7 +118,7 @@ impl Engine {
             task_key = revert_task.item.task_key,
             "delivery.revert.requested"
         );
-        Ok(events)
+        Ok((events, revert_task))
     }
 
     pub(crate) fn finish_revert(

@@ -164,6 +164,7 @@ pub struct Batch {
     pub deploy_gates: Vec<crate::deployment::DeployGateRow>,
     pub deployment_checks: Vec<(saka_core::ids::DeploymentId, saka_core::deploy::CheckRecord)>,
     pub incidents: Vec<saka_core::incident::Incident>,
+    pub incident_deliveries: Vec<crate::incident::DeliveryRow>,
     pub activities: Vec<(ProjectId, SessionActivity)>,
     pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
     pub jobs: Vec<NewJob>,
@@ -458,6 +459,9 @@ pub(crate) fn write(
     }
     for incident in &b.incidents {
         crate::incident::upsert(tx, incident)?;
+    }
+    for delivery in &b.incident_deliveries {
+        crate::incident::upsert_delivery(tx, delivery)?;
     }
     for p in &b.new_pairings {
         crate::identity::insert_pairing(tx, p, b.now)?;
@@ -915,9 +919,9 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
     tx.execute(
         "INSERT INTO spec_draft (id, project_id, path, slug, idea, locale, mode, target_kind, context_paths, state,
            attempt, current_attempt_id, retries, queued_at, awaiting_since, failure, spec_id, commit_sha, version,
-           created_by, created_at, updated_at, finished_at, kind, deployment_id)
+           created_by, created_at, updated_at, finished_at, kind, deployment_id, incident_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25)
+           ?23, ?24, ?25, ?26)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, attempt = excluded.attempt,
            current_attempt_id = excluded.current_attempt_id, retries = excluded.retries,
            queued_at = excluded.queued_at, awaiting_since = excluded.awaiting_since, failure = excluded.failure, spec_id = excluded.spec_id,
@@ -949,6 +953,7 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
             x.finished_at.map(|t| t.0),
             x.kind.as_str(),
             x.deployment_id.map(|id| id.to_string()),
+            x.incident_id.map(|id| id.to_string()),
         ],
     )?;
     if let Some(a) = &d.attempt {

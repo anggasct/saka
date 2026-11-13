@@ -230,6 +230,22 @@ pub fn last_succeeded(
     Ok(found.into_iter().next())
 }
 
+pub fn last_succeeded_before(
+    conn: &Connection,
+    project: ProjectId,
+    environment: &str,
+    at: saka_core::time::Timestamp,
+) -> Result<Option<Deployment>> {
+    let project = project.to_string();
+    let found = query(
+        conn,
+        "WHERE project_id = ?1 AND environment = ?2 AND state = 'succeeded' AND finished_at <= ?3
+         ORDER BY finished_at DESC, id DESC LIMIT 1",
+        &[&project, &environment, &at.0],
+    )?;
+    Ok(found.into_iter().next())
+}
+
 pub fn checks(conn: &Connection, id: DeploymentId) -> Result<Vec<CheckRecord>> {
     let mut stmt = conn.prepare(&format!(
         "{CHECK_SELECT} WHERE deployment_id = ?1 ORDER BY started_at, ordinal"

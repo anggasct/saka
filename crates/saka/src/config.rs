@@ -838,6 +838,35 @@ impl Config {
         Ok(sources)
     }
 
+    pub fn incident_signals(&self) -> Result<saka_intake::IntakeSources, ConfigError> {
+        use saka_core::vocab::IncidentSourceKind as Kind;
+        let mut signals = saka_intake::IntakeSources::new();
+        for source in self.incident_sources_parsed()? {
+            let invalid = || err("config_secret_file_invalid", source.name.clone());
+            let text = std::fs::read_to_string(&source.secret_file).map_err(|_| invalid())?;
+            let secret = text.trim_end_matches(['\n', '\r']).to_string();
+            if secret.trim().is_empty() {
+                return Err(invalid());
+            }
+            let decoder: Box<dyn saka_ports::SignalDecoder> = match source.kind {
+                Kind::Alertmanager => Box::new(saka_intake::AlertmanagerDecoder::new(
+                    saka_intake::AlertmanagerOptions {
+                        environment_label: source.environment_label.clone(),
+                        severity_label: source.severity_label.clone(),
+                    },
+                )),
+                Kind::Sentry => Box::new(saka_intake::SentryDecoder::new()),
+                Kind::Generic => Box::new(saka_intake::GenericDecoder::new()),
+            };
+            signals.insert(
+                &source.name,
+                decoder,
+                saka_core::secret::SecretText::new(secret),
+            );
+        }
+        Ok(signals)
+    }
+
     pub fn check_incident_secrets(&self) -> Result<(), ConfigError> {
         for source in self.incident_sources_parsed()? {
             let invalid = || err("config_secret_file_invalid", source.name.clone());
@@ -958,12 +987,19 @@ impl Config {
                     "hooks.listen must differ from server.listen",
                 ));
             }
-            if self.scm.iter().all(|s| s.webhook_secret_file.is_none()) {
+            if self.scm.iter().all(|s| s.webhook_secret_file.is_none())
+                && self.incident.source.is_empty()
+            {
                 return Err(err(
                     "config_invalid",
-                    "hooks needs at least one scm.webhook_secret_file",
+                    "hooks needs at least one scm.webhook_secret_file or incident.source",
                 ));
             }
+        } else if !self.incident.source.is_empty() {
+            return Err(err(
+                "config_invalid",
+                "incident.source needs a [hooks] section: the sources post to its listener",
+            ));
         }
         if !(1..=16).contains(&self.scheduler.max_active_tasks) {
             return Err(err(
@@ -1714,7 +1750,7 @@ mod tests {
 
     fn incident_config(extra: &str) -> String {
         format!(
-            "[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = \"/etc/saka/prod.secret\"\n{extra}"
+            "[hooks]\nlisten = \"0.0.0.0:7421\"\n[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = \"/etc/saka/prod.secret\"\n{extra}"
         )
     }
 
@@ -1753,7 +1789,11 @@ mod tests {
                 );
             }
         }
-        let twice = format!("{}{}", incident_config(""), incident_config(""));
+        let twice = format!(
+            "{}{}",
+            incident_config(""),
+            incident_config("").replacen("[hooks]\nlisten = \"0.0.0.0:7421\"\n", "", 1)
+        );
         assert!(
             Config::parse(&twice)
                 .unwrap_err()
@@ -1768,7 +1808,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let secret = dir.path().join("prod.secret");
         let cfg = Config::parse(&format!(
-            "[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = {:?}\n",
+            "[hooks]\nlisten = \"0.0.0.0:7421\"\n[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = {:?}\n",
             secret.display().to_string()
         ))
         .unwrap();
@@ -1789,6 +1829,54 @@ mod tests {
             Config::parse("").unwrap().check_incident_secrets().is_ok(),
             "no sources, nothing to check"
         );
+    }
+
+    #[test]
+    fn incident_signals_decode_with_the_decoder_of_each_source_and_its_secret_file() {
+        use saka_ports::{RawDelivery, Signals};
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("prod.secret");
+        std::fs::write(&secret, "s3cr3t-value\n").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let cfg = Config::parse(&format!(
+            "[hooks]\nlisten = \"0.0.0.0:7421\"\n[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"alertmanager\"\nsecret_file = {:?}\n",
+            secret.display().to_string()
+        ))
+        .unwrap();
+        let signals = cfg.incident_signals().unwrap();
+        let body = br#"{"version":"4","alerts":[{"status":"firing","fingerprint":"f1","labels":{"alertname":"Down"}}]}"#;
+        let decode = |source: &str, bearer: &str| {
+            let headers = vec![("Authorization".to_string(), format!("Bearer {bearer}"))];
+            signals.decode(
+                source,
+                &RawDelivery {
+                    headers: &headers,
+                    body,
+                    now: saka_core::time::Timestamp(0),
+                },
+            )
+        };
+        assert_eq!(decode("prod", "s3cr3t-value").unwrap().signals.len(), 1);
+        assert_eq!(
+            decode("prod", "wrong").unwrap_err().code,
+            "webhook_signature_invalid"
+        );
+        assert_eq!(
+            decode("other", "s3cr3t-value").unwrap_err().code,
+            "incident_source_unknown"
+        );
+    }
+
+    #[test]
+    fn incident_sources_need_the_hooks_listener_that_then_needs_no_scm_secret() {
+        let source = "[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = \"/etc/saka/prod.secret\"\n";
+        let without = Config::parse(source).unwrap_err();
+        assert_eq!(without.code, "config_invalid");
+        assert!(without.detail.contains("[hooks]"), "{}", without.detail);
+        Config::parse(&format!("[hooks]\nlisten = \"0.0.0.0:7421\"\n{source}")).unwrap();
+        let bare = Config::parse("[hooks]\nlisten = \"0.0.0.0:7421\"\n").unwrap_err();
+        assert_eq!(bare.code, "config_invalid");
     }
 
     #[test]

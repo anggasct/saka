@@ -3,14 +3,17 @@ use serde_json::{Value, json};
 use crate::autonomy::Ceilings;
 use crate::blocker::primary_action;
 use crate::deploy::Deployment;
-use crate::ids::{DeploymentId, IssueIntakeId, ProjectId, SpecDraftId, SpecId, WorkItemId};
+use crate::ids::{
+    DeploymentId, IncidentId, IssueIntakeId, ProjectId, SpecDraftId, SpecId, WorkItemId,
+};
+use crate::incident::Incident;
 use crate::issue_intake::{IssueIntake, MANUAL_RETRY_LIMIT};
 use crate::model::{Blocker, DecisionRequest, Draft, PermissionRequest, Spec, Task};
 use crate::task::{auto_merge_enabled, merge_ready};
 use crate::vocab::{
     BlockerCode, DecisionState, DeploymentState, InboxActionKind, InboxKind, InboxState,
-    InboxSubject, IssueIntakeState, OnFailure, PermissionState, SpecState, Stage, StagePhase,
-    WorkItemOrigin, WorkItemState,
+    InboxSubject, IncidentState, IssueIntakeState, OnFailure, PermissionState, SpecState, Stage,
+    StagePhase, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -20,6 +23,7 @@ pub enum Source<'a> {
     Spec(&'a Spec),
     Intake(&'a IssueIntake),
     Deployment(&'a Deployment, bool),
+    Incident(&'a Incident, bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +33,7 @@ pub enum Scope {
     Spec(SpecId),
     Intake(IssueIntakeId),
     Deployment(DeploymentId),
+    Incident(IncidentId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +62,7 @@ pub fn scope(source: Source<'_>) -> Scope {
         Source::Spec(spec) => Scope::Spec(spec.id),
         Source::Intake(intake) => Scope::Intake(intake.id),
         Source::Deployment(deployment, _) => Scope::Deployment(deployment.id),
+        Source::Incident(incident, _) => Scope::Incident(incident.id),
     }
 }
 
@@ -71,6 +77,7 @@ pub fn desired(source: Source<'_>, ceilings: &Ceilings) -> Vec<InboxDraft> {
         Source::Spec(spec) => for_spec(spec),
         Source::Intake(intake) => for_intake(intake),
         Source::Deployment(deployment, gated) => for_deployment(deployment, gated),
+        Source::Incident(incident, listed) => for_incident(incident, listed),
     }
 }
 
@@ -300,6 +307,37 @@ fn for_deployment(deployment: &Deployment, gated: bool) -> Vec<InboxDraft> {
                     "environment": deployment.environment,
                 }),
             },
+        },
+    }]
+}
+
+fn for_incident(incident: &Incident, listed: bool) -> Vec<InboxDraft> {
+    if incident.state != IncidentState::Open || !listed {
+        return Vec::new();
+    }
+    let mut params = json!({
+        "source": incident.source,
+        "severity": incident.severity,
+        "title": incident.title,
+        "environment": incident.environment,
+        "occurrences": incident.occurrences,
+        "deployment_id": incident.deployment_id,
+    });
+    if let Some(cause) = incident.released {
+        params["failure"] = json!({ "code": cause });
+    }
+    vec![InboxDraft {
+        kind: InboxKind::Incident,
+        subject: InboxSubject::Incident,
+        source_id: incident.id.to_string(),
+        state: InboxState::Open,
+        project_id: incident.project_id,
+        work_item_id: None,
+        spec_id: None,
+        params,
+        action: InboxAction {
+            kind: InboxActionKind::DraftFix,
+            params: json!({ "incident_id": incident.id }),
         },
     }]
 }

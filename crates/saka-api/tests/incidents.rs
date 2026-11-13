@@ -61,7 +61,7 @@ impl Api {
                     s.kind = "sentry".into();
                     s.action = Some("draft".into());
                     s.min_severity = Some("critical".into());
-                    s.repo = Some("tasks".into());
+                    s.repo = Some("app".into());
                 }),
             ],
             public_url: Some("https://saka.example.com".into()),
@@ -77,6 +77,24 @@ impl Api {
         let req = Request::get(path)
             .header("host", "127.0.0.1:7420")
             .body(Body::empty())
+            .unwrap();
+        self.sim.block_on(async {
+            let response = self.app.clone().oneshot(req).await.unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            Reply {
+                status,
+                body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            }
+        })
+    }
+
+    fn post(&self, path: &str, key: &str, body: Value) -> Reply {
+        let req = Request::post(path)
+            .header("host", "127.0.0.1:7420")
+            .header("content-type", "application/json")
+            .header("idempotency-key", key)
+            .body(Body::from(body.to_string()))
             .unwrap();
         self.sim.block_on(async {
             let response = self.app.clone().oneshot(req).await.unwrap();
@@ -204,7 +222,7 @@ fn sources_list_their_endpoint_and_settings_and_never_the_secret() {
                 "action": "draft",
                 "min_severity": "critical",
                 "max_open": 50,
-                "repo": "tasks",
+                "repo": "app",
                 "open": 0
             },
             {
@@ -363,4 +381,129 @@ fn an_incident_without_a_deployment_has_no_range_and_an_unknown_one_is_not_found
     let missing = api.get(&format!("/api/v1/incidents/{}", Uuid::from_u128(9)));
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
     assert_eq!(missing.body["code"], "not_found");
+}
+
+#[test]
+fn dismissing_an_open_incident_replays_by_key_and_refuses_a_second_dismissal_and_a_blank_reason() {
+    let api = Api::new();
+    let id = api.open(
+        "prod-alerts",
+        "fp",
+        IncidentSeverity::High,
+        None,
+        None,
+        1_000,
+    );
+    let path = format!("/api/v1/incidents/{id}/actions/dismiss");
+
+    let blank = api.post(&path, "k0", json!({ "reason": "  " }));
+    assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(blank.body["code"], "validation_failed");
+
+    let done = api.post(&path, "k1", json!({ "reason": "known noise" }));
+    assert_eq!(done.status, StatusCode::OK);
+    assert_eq!(done.body["state"], "dismissed");
+    assert_eq!(done.body["dismiss_reason"], "known noise");
+    let replay = api.post(&path, "k1", json!({ "reason": "known noise" }));
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(replay.body, done.body);
+
+    let second = api.post(&path, "k2", json!({ "reason": "again" }));
+    assert_eq!(second.status, StatusCode::CONFLICT);
+    assert_eq!(second.body["code"], "invalid_state");
+    let missing = api.post(
+        &format!("/api/v1/incidents/{}/actions/dismiss", Uuid::from_u128(9)),
+        "k3",
+        json!({ "reason": "x" }),
+    );
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn a_draft_fix_queues_a_bugfix_draft_for_the_incident_and_a_second_one_is_refused() {
+    let api = Api::new();
+    let id = api.open(
+        "errors",
+        "fp",
+        IncidentSeverity::Critical,
+        None,
+        None,
+        1_000,
+    );
+    let path = format!("/api/v1/incidents/{id}/actions/draft-fix");
+    let long = api.post(&path, "k0", json!({ "note": "x".repeat(1001) }));
+    assert_eq!(long.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let made = api.post(&path, "k1", json!({ "note": "started with the deploy" }));
+    assert_eq!(made.status, StatusCode::ACCEPTED, "{}", made.body);
+    assert_eq!(made.body["kind"], "bugfix");
+    assert_eq!(made.body["incident_id"], id.to_string());
+    assert_eq!(made.body["deployment_id"], Value::Null);
+    assert!(
+        made.body["path"]
+            .as_str()
+            .unwrap()
+            .contains("bugfix-incident-errors-")
+    );
+    let replay = api.post(&path, "k1", json!({ "note": "started with the deploy" }));
+    assert_eq!(replay.body["id"], made.body["id"]);
+
+    let linked = api.get(&format!("/api/v1/incidents/{id}"));
+    assert_eq!(linked.body["state"], "handling");
+    assert_eq!(linked.body["draft"]["id"], made.body["id"]);
+    assert_eq!(linked.body["draft"]["state"], "queued");
+    assert_eq!(linked.body["spec"], Value::Null);
+
+    let busy = api.post(&path, "k2", json!({}));
+    assert_eq!(busy.status, StatusCode::CONFLICT);
+    assert_eq!(busy.body["code"], "incident_handling");
+    let dismiss = api.post(
+        &format!("/api/v1/incidents/{id}/actions/dismiss"),
+        "k3",
+        json!({ "reason": "x" }),
+    );
+    assert_eq!(dismiss.status, StatusCode::CONFLICT);
+    assert_eq!(dismiss.body["code"], "invalid_state");
+}
+
+#[test]
+fn a_revert_of_a_task_that_is_not_a_suspect_is_refused_and_a_closed_incident_says_so() {
+    let api = Api::new();
+    let id = api.open(
+        "prod-alerts",
+        "fp",
+        IncidentSeverity::High,
+        None,
+        None,
+        1_000,
+    );
+    let revert = format!("/api/v1/incidents/{id}/actions/revert");
+    let stranger = api.post(
+        &revert,
+        "k1",
+        json!({ "work_item_id": Uuid::from_u128(5), "reason": "it broke" }),
+    );
+    assert_eq!(stranger.status, StatusCode::CONFLICT);
+    assert_eq!(stranger.body["code"], "incident_suspect_unknown");
+    let unknown_field = api.post(&revert, "k2", json!({ "work_item_id": Uuid::from_u128(5) }));
+    assert_eq!(unknown_field.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    api.post(
+        &format!("/api/v1/incidents/{id}/actions/dismiss"),
+        "k3",
+        json!({ "reason": "noise" }),
+    );
+    let closed = api.post(
+        &revert,
+        "k4",
+        json!({ "work_item_id": Uuid::from_u128(5), "reason": "late" }),
+    );
+    assert_eq!(closed.status, StatusCode::CONFLICT);
+    assert_eq!(closed.body["code"], "incident_closed");
+    let draft = api.post(
+        &format!("/api/v1/incidents/{id}/actions/draft-fix"),
+        "k5",
+        json!({}),
+    );
+    assert_eq!(draft.body["code"], "incident_closed");
 }

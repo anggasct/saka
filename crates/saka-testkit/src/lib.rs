@@ -12,6 +12,7 @@ pub mod fixtures;
 mod hooks;
 pub mod logs;
 mod releases;
+mod signals;
 mod sim;
 mod world;
 
@@ -26,6 +27,7 @@ pub use fixtures::{
 };
 pub use hooks::{FakeHooks, HostScript, WebhookRecord, WebhookScript};
 pub use releases::FakeReleases;
+pub use signals::{FakeSignals, delivery};
 pub use sim::{
     DOCS_REPO, Layout, Operator, SECOND_INTEGRATION, SECOND_WEB_URL, SHOP_REPO, Sim, SimConfig,
     SimOutcome, Step, WEB_REPO, ZERO_SHA256, draft_config, without_fix, without_review,

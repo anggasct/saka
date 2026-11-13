@@ -146,6 +146,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::DeploymentQueued { .. }
         | R::IncidentHandling
         | R::IncidentClosed
+        | R::IncidentSuspectUnknown
         | R::DeploymentRunning
         | R::DeploymentNotFailed
         | R::FixDraftInProgress { .. }

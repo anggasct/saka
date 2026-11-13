@@ -195,6 +195,7 @@ vocab!(InboxKind {
     SpecUnclear => "spec_unclear",
     Intake => "intake",
     Deployment => "deployment",
+    Incident => "incident",
 });
 vocab!(InboxSubject {
     Spec => "spec",
@@ -205,6 +206,7 @@ vocab!(InboxSubject {
     Decision => "decision",
     Intake => "intake",
     Deployment => "deployment",
+    Incident => "incident",
 });
 vocab!(InboxState { Open => "open", Answered => "answered", Resolved => "resolved", Dismissed => "dismissed" });
 vocab!(InboxActionKind {

@@ -9,7 +9,7 @@ macro_rules! spec_draft_columns {
         spec_draft_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "path", "slug", "idea", "locale", "mode", "context_paths", "state", "attempt", "current_attempt_id", "retries", "queued_at", "awaiting_since", "failure", "spec_id", "commit_sha", "version", "created_by", "created_at", "updated_at", "finished_at", "target_kind", "kind", "deployment_id")
+        qualified!($prefix: "id", "project_id", "path", "slug", "idea", "locale", "mode", "context_paths", "state", "attempt", "current_attempt_id", "retries", "queued_at", "awaiting_since", "failure", "spec_id", "commit_sha", "version", "created_by", "created_at", "updated_at", "finished_at", "target_kind", "kind", "deployment_id", "incident_id")
     };
 }
 
@@ -54,7 +54,16 @@ macro_rules! incident_columns {
         incident_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "source", "fingerprint", "state", "resolution", "signal_status", "severity", "title", "summary", "environment", "url", "labels", "occurrences", "started_at", "first_seen", "last_seen", "deployment_id", "draft_id", "revert_id", "dismiss_reason", "actor", "resolved_at", "created_at", "updated_at")
+        qualified!($prefix: "id", "project_id", "source", "fingerprint", "state", "resolution", "signal_status", "severity", "title", "summary", "environment", "url", "labels", "occurrences", "started_at", "first_seen", "last_seen", "deployment_id", "draft_id", "revert_id", "dismiss_reason", "actor", "resolved_at", "created_at", "updated_at", "released")
+    };
+}
+
+macro_rules! incident_delivery_columns {
+    () => {
+        incident_delivery_columns!("")
+    };
+    ($prefix:literal) => {
+        qualified!($prefix: "id", "source", "delivery_key", "received_at", "outcome", "signals")
     };
 }
 
@@ -344,6 +353,7 @@ mod tests {
             ("deployment", deployment_columns!()),
             ("deployment_check", deployment_check_columns!()),
             ("incident", incident_columns!()),
+            ("incident_delivery", incident_delivery_columns!()),
             ("inbox_item", inbox_item_columns!()),
             ("project", project_columns!()),
             ("repo", repo_columns!()),

@@ -1224,10 +1224,11 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+            47
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(46));
+    assert_eq!(w.store.schema_version().unwrap(), Some(47));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1743,6 +1744,7 @@ fn a_draft_attempt_and_its_packet_round_trip_and_one_live_draft_holds_a_path() {
             kind: WorkKind::Feature,
             context_paths: vec!["docs/prd.md".into()],
             deployment_id: None,
+            incident_id: None,
         })
     };
     let id = SpecDraftId(w.ids.next_id());
@@ -2160,6 +2162,69 @@ fn incidents_round_trip_keep_one_live_per_fingerprint_and_list_by_filter() {
             ("prod-alerts".to_string(), 2),
             ("sentry-web".to_string(), 1)
         ]
+    );
+}
+
+#[test]
+fn incident_queries_find_the_latest_live_and_handled_incidents_and_deliveries_deduplicate_by_key() {
+    use saka_core::time::Timestamp;
+    use saka_core::vocab::{IncidentCause, IncidentSeverity};
+    use saka_store::incident::{DeliveryRow, delivery_seen, handling, latest_of, live_count};
+    let mut w = World::new();
+    let mut first = open_incident(&mut w, "prod-alerts", "fp", IncidentSeverity::High);
+    first.released = Some(IncidentCause::DraftFailed);
+    let mut batch = Batch::new(w.now);
+    batch.incidents.push(first.clone());
+    w.store.commit(&batch).unwrap();
+    let found = w
+        .store
+        .read(|c| latest_of(c, "prod-alerts", "fp"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(found, first);
+    assert_eq!(found.released, Some(IncidentCause::DraftFailed));
+    assert_eq!(w.store.read(|c| live_count(c, "prod-alerts")).unwrap(), 1);
+    assert_eq!(w.store.read(|c| live_count(c, "elsewhere")).unwrap(), 0);
+    assert!(w.store.read(handling).unwrap().is_empty());
+
+    let delivery = |at: i64, signals: u32| DeliveryRow {
+        id: uuid::Uuid::from_u128(u128::try_from(at).unwrap() + 1),
+        source: "prod-alerts".into(),
+        delivery_key: "key-1".into(),
+        received_at: Timestamp(at),
+        outcome: "accepted",
+        signals,
+    };
+    assert_eq!(
+        w.store
+            .read(|c| delivery_seen(c, "prod-alerts", "key-1"))
+            .unwrap(),
+        None
+    );
+    let mut recorded = Batch::new(w.now);
+    recorded.incident_deliveries.push(delivery(100, 2));
+    w.store.commit(&recorded).unwrap();
+    assert_eq!(
+        w.store
+            .read(|c| delivery_seen(c, "prod-alerts", "key-1"))
+            .unwrap(),
+        Some(Timestamp(100))
+    );
+    let mut again = Batch::new(w.now);
+    again.incident_deliveries.push(delivery(900, 1));
+    w.store.commit(&again).unwrap();
+    assert_eq!(
+        w.store
+            .read(|c| delivery_seen(c, "prod-alerts", "key-1"))
+            .unwrap(),
+        Some(Timestamp(900)),
+        "a body digest seen again after its window is recorded once more"
+    );
+    assert_eq!(
+        w.store
+            .read(|c| delivery_seen(c, "other", "key-1"))
+            .unwrap(),
+        None
     );
 }
 

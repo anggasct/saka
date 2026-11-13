@@ -387,6 +387,9 @@ impl Engine {
         if job.kind == JobKind::ScmIssueClose {
             return self.issue_close_job(job).await;
         }
+        if job.kind == JobKind::IncidentDraft {
+            return self.incident_draft_job(job).await;
+        }
         if job.kind == JobKind::ScmUserLinkPoll {
             return self.user_link_poll_job(job).await;
         }
@@ -472,6 +475,7 @@ impl Engine {
             | JobKind::IntakeIssueRender
             | JobKind::ScmIssueComment
             | JobKind::ScmIssueClose
+            | JobKind::IncidentDraft
             | JobKind::ScmUserLinkPoll
             | JobKind::ScmUserLinkRefresh
             | JobKind::HookRun

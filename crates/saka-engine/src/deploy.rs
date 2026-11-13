@@ -932,6 +932,7 @@ impl Engine {
                     kind: WorkKind::Bugfix,
                     context_paths: Vec::new(),
                     deployment_id: Some(id),
+                    incident_id: None,
                 },
                 cause,
                 action,

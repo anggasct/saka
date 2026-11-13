@@ -248,6 +248,7 @@ pub struct SimOutcome {
 pub struct Sim {
     pub world: Arc<FakeWorld>,
     pub hooks: Arc<crate::hooks::FakeHooks>,
+    pub signals: Arc<crate::signals::FakeSignals>,
     pub clock: Arc<FakeClock>,
     pub ids: Arc<FakeIds>,
     pub cfg: SimConfig,
@@ -281,6 +282,7 @@ impl Sim {
         let mut sim = Sim {
             world,
             hooks: Arc::new(crate::hooks::FakeHooks::default()),
+            signals: Arc::new(crate::signals::FakeSignals::default()),
             clock,
             ids,
             cfg,
@@ -427,6 +429,7 @@ impl Sim {
             webhooks: self.hooks.clone(),
             notifier: self.hooks.clone(),
             host: self.hooks.clone(),
+            signals: self.signals.clone(),
         };
         let cfg = EngineConfig {
             loop_cfg: self.cfg.loop_cfg.clone(),
@@ -714,6 +717,7 @@ impl Sim {
                 kind: saka_core::vocab::WorkKind::Feature,
                 context_paths: context_paths.iter().map(|p| (*p).to_string()).collect(),
                 deployment_id: None,
+                incident_id: None,
             },
             &cause,
             None,

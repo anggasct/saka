@@ -1,13 +1,13 @@
 use saka_core::deploy::Deployment;
 use saka_core::diagnostics::{self as eval, Finding, IncidentSourceFacts, SecretFileState};
-use saka_core::ids::{IncidentId, ProjectId, WorkItemId};
+use saka_core::ids::{IncidentId, ProjectId, SpecDraftId, SpecId, WorkItemId};
 use saka_core::incident::{Incident, Source};
 use saka_core::model::Project;
 use saka_core::rejection::Rejection;
-use saka_core::vocab::{IncidentSeverity, IncidentState};
+use saka_core::vocab::{IncidentSeverity, IncidentState, SpecDraftState, SpecState, WorkItemState};
 use saka_store::incident::IncidentFilter;
 use saka_store::list::{self, Page};
-use saka_store::{deployment, incident, read};
+use saka_store::{deployment, incident, issue_intake, read};
 
 use crate::{Engine, EngineError, Paged, Result};
 
@@ -23,6 +23,9 @@ pub struct SourceView {
 pub struct IncidentRow {
     pub incident: Incident,
     pub deployment: Option<Deployment>,
+    pub draft: Option<(SpecDraftId, SpecDraftState)>,
+    pub spec: Option<(SpecId, String, SpecState)>,
+    pub revert: Option<(WorkItemId, String, WorkItemState)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,14 +127,32 @@ impl Engine {
         })
     }
 
-    fn incident_row(&self, incident: Incident) -> Result<IncidentRow> {
+    pub(crate) fn incident_row(&self, incident: Incident) -> Result<IncidentRow> {
         let deployment = match incident.deployment_id {
             Some(id) => self.store.read(|c| deployment::load(c, id))?,
             None => None,
         };
+        let (draft, spec, revert) = self.store.read(|c| {
+            let outcome = match incident.draft_id {
+                Some(id) => issue_intake::draft_outcome(c, id)?.map(|o| (id, o)),
+                None => None,
+            };
+            let spec = match outcome.as_ref().and_then(|(_, o)| o.spec_id) {
+                Some(id) => read::load_spec(c, id)?.map(|s| (s.id, s.path, s.state)),
+                None => None,
+            };
+            let revert = match incident.revert_id {
+                Some(id) => incident::revert_brief(c, id)?.map(|(key, state)| (id, key, state)),
+                None => None,
+            };
+            Ok((outcome.map(|(id, o)| (id, o.state)), spec, revert))
+        })?;
         Ok(IncidentRow {
             incident,
             deployment,
+            draft,
+            spec,
+            revert,
         })
     }
 
@@ -183,6 +204,26 @@ impl Engine {
             range,
             suspects,
         })
+    }
+
+    pub(crate) fn incident_suspect_count(&self, incident: &Incident) -> usize {
+        let Some(deployment) = incident.deployment_id else {
+            return 0;
+        };
+        let found = self.store.read(|c| {
+            Ok((
+                deployment::tasks_of(c, deployment)?,
+                deployment::merge_refs(c, deployment)?,
+            ))
+        });
+        let Ok((tasks, merges)) = found else {
+            return 0;
+        };
+        tasks.len()
+            + merges
+                .iter()
+                .filter(|m| !tasks.iter().any(|t| t.work_item_id == m.work_item_id))
+                .count()
     }
 
     pub(crate) async fn incident_source_findings(&self) -> Vec<Finding> {
