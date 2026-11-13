@@ -36,6 +36,7 @@ pub use world::{
     APP_CREDENTIAL, AgentOutcome, AgentScript, BOT_AUTHOR, ChangeSpec, CiScript, CommandScript,
     DocsCheckoutState, DocsTurn, DraftTurn, FAKE_CAPABILITIES, FAKE_INTEGRATION,
     FAKE_SIGNATURE_HEADER, FAKE_TOKEN_CAPABILITIES, FakeWorld, FileEdit, HOME_REPO, IssueSpec,
-    Launch, PostedComment, Pr, PrMeta, Prepared, RecipeRun, ReviewReply, SIM_RUNNER_VERSION,
-    ScmCall, ScopeCheck, Stats, ToolchainScript, TurnUsage, fake_signature, git_blob,
+    Launch, PostedComment, Pr, PrMeta, Prepared, RecipeRun, RerunScript, ReviewReply,
+    SIM_RUNNER_VERSION, ScmCall, ScopeCheck, Stats, ToolchainScript, TurnUsage, fake_signature,
+    git_blob,
 };

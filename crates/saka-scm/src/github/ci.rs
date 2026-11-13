@@ -64,6 +64,47 @@ pub fn from_statuses(statuses: &[Value]) -> Vec<Check> {
     by_context.into_values().collect()
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RerunPlan {
+    pub runs: Vec<(u64, Vec<String>)>,
+    pub unsupported: Vec<String>,
+}
+
+fn actions_run_id(run: &Value) -> Option<u64> {
+    if run["app"]["slug"].as_str() != Some("github-actions") {
+        return None;
+    }
+    let link = run["details_url"]
+        .as_str()
+        .or_else(|| run["html_url"].as_str())?;
+    let (_, tail) = link.split_once("/actions/runs/")?;
+    let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+pub fn rerun_plan(runs: &[Value], statuses: &[Value]) -> RerunPlan {
+    let mut plan = RerunPlan::default();
+    let mut by_run: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+    for check in from_check_runs(runs).into_iter().filter(Check::is_failure) {
+        let newest = runs
+            .iter()
+            .filter(|r| r["name"].as_str() == Some(check.name.as_str()))
+            .max_by_key(|r| r["id"].as_u64().unwrap_or(0));
+        match newest.and_then(actions_run_id) {
+            Some(id) => by_run.entry(id).or_default().push(check.name),
+            None => plan.unsupported.push(check.name),
+        }
+    }
+    plan.runs = by_run.into_iter().collect();
+    plan.unsupported.extend(
+        from_statuses(statuses)
+            .into_iter()
+            .filter(Check::is_failure)
+            .map(|c| c.name),
+    );
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use saka_core::gate::outcome;
@@ -115,5 +156,38 @@ mod tests {
         assert_eq!(checks[2].conclusion, Some(CheckConclusion::Success));
         assert!(checks.iter().all(|c| c.kind == CheckKind::CommitStatus));
         assert_eq!(outcome(&checks), GateOutcome::Failed);
+    }
+
+    #[test]
+    fn only_failed_actions_runs_are_rerunnable_and_the_rest_is_unsupported() {
+        let actions = |id: u64, name: &str, run: u64, conclusion: &str| {
+            json!({
+                "id": id, "name": name, "status": "completed", "conclusion": conclusion,
+                "app": { "slug": "github-actions" },
+                "details_url": format!("https://github.com/acme/shop/actions/runs/{run}/job/{id}"),
+            })
+        };
+        let runs = [
+            actions(1, "unit", 700, "failure"),
+            actions(2, "unit", 701, "failure"),
+            actions(3, "lint", 701, "timed_out"),
+            actions(4, "build", 702, "success"),
+            json!({ "id": 5, "name": "codecov", "status": "completed", "conclusion": "failure",
+                    "app": { "slug": "codecov" }, "details_url": "https://codecov.io/x" }),
+            json!({ "id": 6, "name": "sonar", "status": "completed", "conclusion": "failure",
+                    "app": { "slug": "github-actions" }, "details_url": "https://sonar.example/x" }),
+        ];
+        let statuses = [json!({ "context": "ci/legacy", "state": "failure" })];
+        assert_eq!(
+            rerun_plan(&runs, &statuses),
+            RerunPlan {
+                runs: vec![(701, vec!["lint".to_string(), "unit".to_string()]),],
+                unsupported: vec![
+                    "codecov".to_string(),
+                    "sonar".to_string(),
+                    "ci/legacy".to_string()
+                ],
+            }
+        );
     }
 }

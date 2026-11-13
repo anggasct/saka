@@ -28,10 +28,11 @@ use saka_ports::{
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
     Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess,
-    RepoInfo, RepoRef, RevertRequest, Reverted, ReviewPost, RunnerEvent, RunnerEventKind,
-    RunnerUnit, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport,
-    Supervisor, TokenRefresh, Toolchains, UpdateOutcome, WebhookDelivery, WebhookSignature,
-    WebhookTarget, WorktreeChange, WorktreeFile, WorktreeState, check_comment_body, check_sha,
+    RepoInfo, RepoRef, RerunOutcome, RevertRequest, Reverted, ReviewPost, RunnerEvent,
+    RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch,
+    SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains, UpdateOutcome, WebhookDelivery,
+    WebhookSignature, WebhookTarget, WorktreeChange, WorktreeFile, WorktreeState,
+    check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -183,6 +184,15 @@ pub enum CiScript {
     Silent,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RerunScript {
+    #[default]
+    Unsupported,
+    Passes,
+    StillFails,
+    Refused,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stats {
     pub prepares: u32,
@@ -202,6 +212,7 @@ pub struct Stats {
     pub mirror_reads: u32,
     pub change_listings: u32,
     pub change_file_reads: u32,
+    pub ci_reruns: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +280,7 @@ struct FakeSession {
 struct State {
     script: AgentScript,
     ci: CiScript,
+    rerun: RerunScript,
     commit_ci: CiScript,
     commit_reads_fail: bool,
     doc_opens_fail: bool,
@@ -476,6 +488,7 @@ impl FakeWorld {
             state: Mutex::new(State {
                 script,
                 ci,
+                rerun: RerunScript::default(),
                 commit_ci: CiScript::Silent,
                 commit_reads_fail: false,
                 doc_opens_fail: false,
@@ -725,6 +738,10 @@ impl FakeWorld {
 
     pub fn set_ci(&self, ci: CiScript) {
         self.state().ci = ci;
+    }
+
+    pub fn set_rerun(&self, rerun: RerunScript) {
+        self.state().rerun = rerun;
     }
 
     pub fn set_lose_merges(&self, lose: bool) {
@@ -2734,6 +2751,40 @@ impl Scm for FakeWorld {
             url: url(number),
             head_sha: head,
         }))
+    }
+
+    async fn rerun_failed_checks(
+        &self,
+        _repo: &RepoRef,
+        _head_sha: &str,
+    ) -> PortResult<RerunOutcome> {
+        let mut s = self.state();
+        s.call("rerun_failed_checks");
+        let failing: Vec<String> = script_checks(&s.ci)
+            .into_iter()
+            .filter(Check::is_failure)
+            .map(|c| c.name)
+            .collect();
+        match s.rerun {
+            RerunScript::Unsupported => Ok(RerunOutcome {
+                rerun: Vec::new(),
+                unsupported: failing,
+            }),
+            RerunScript::Passes | RerunScript::StillFails => {
+                s.stats.ci_reruns += 1;
+                if s.rerun == RerunScript::Passes {
+                    s.ci = CiScript::Pass;
+                }
+                Ok(RerunOutcome {
+                    rerun: failing,
+                    unsupported: Vec::new(),
+                })
+            }
+            RerunScript::Refused => Err(PortError::permanent(
+                "scm_rerun_refused",
+                json!({ "status": 403 }),
+            )),
+        }
     }
 
     async fn commit_checks(&self, _repo: &RepoRef, _sha: &str) -> PortResult<Vec<Check>> {

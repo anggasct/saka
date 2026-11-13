@@ -54,6 +54,12 @@ enum UpdateAnswer {
     HeadChanged,
 }
 
+enum RerunAnswer {
+    Accepted,
+    Refused(u16),
+    NotCalled,
+}
+
 enum Signing {
     Valid,
     UpperHex,
@@ -112,6 +118,8 @@ trait Harness: Sync {
         self.checks_at(HEAD, checks, pending_status).await;
     }
     async fn checks_at(&self, sha: &str, checks: &[Check], pending_status: &str);
+    async fn failing_checks(&self, rerunnable: &[&str], foreign: &[&str]);
+    async fn rerun_answers(&self, answer: RerunAnswer);
     async fn merge_answers(&self, number: u64, answer: MergeAnswer);
     async fn queue_state(&self, enabled: bool);
     async fn enqueue_answers(&self, number: u64, answer: Enqueue);
@@ -279,6 +287,60 @@ impl Harness for GitHubHarness {
                 "state": "pending",
                 "statuses": [{ "context": pending_status, "state": "pending", "target_url": "https://ci.example/1" }],
             })))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn failing_checks(&self, rerunnable: &[&str], foreign: &[&str]) {
+        let mut runs: Vec<Value> = rerunnable
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                json!({
+                    "id": 40 + i, "name": name, "status": "completed", "conclusion": "failure",
+                    "app": { "slug": "github-actions" },
+                    "details_url": format!("https://github.com/acme/app/actions/runs/700/job/{}", 40 + i),
+                })
+            })
+            .collect();
+        runs.extend(foreign.iter().enumerate().map(|(i, name)| {
+            json!({
+                "id": 60 + i, "name": name, "status": "completed", "conclusion": "failure",
+                "app": { "slug": "codecov" }, "details_url": "https://codecov.example/run/1",
+            })
+        }));
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/repos/acme/app/commits/{HEAD}/check-runs").as_str(),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "total_count": runs.len(), "check_runs": runs })),
+            )
+            .mount(&self.w.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/repos/acme/app/commits/{HEAD}/status").as_str(),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "state": "failure", "statuses": [] })),
+            )
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn rerun_answers(&self, answer: RerunAnswer) {
+        let (status, times) = match answer {
+            RerunAnswer::Accepted => (201, 1),
+            RerunAnswer::Refused(status) => (status, 1),
+            RerunAnswer::NotCalled => (201, 0),
+        };
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/app/actions/runs/700/rerun-failed-jobs"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({})))
+            .expect(times)
             .mount(&self.w.server)
             .await;
     }
@@ -760,6 +822,51 @@ impl Harness for GitLabHarness {
             .await;
     }
 
+    async fn failing_checks(&self, rerunnable: &[&str], foreign: &[&str]) {
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp/pipelines"))
+            .and(query_param("sha", HEAD))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 100 }])))
+            .mount(&self.w.server)
+            .await;
+        let jobs: Vec<Value> = rerunnable
+            .iter()
+            .enumerate()
+            .map(|(i, name)| json!({ "id": 40 + i, "name": name, "status": "failed" }))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/projects/acme%2Fapp/pipelines/100/jobs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jobs))
+            .mount(&self.w.server)
+            .await;
+        let statuses: Vec<Value> = foreign
+            .iter()
+            .enumerate()
+            .map(|(i, name)| json!({ "id": 900 + i, "name": name, "status": "failed" }))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path(
+                format!("/projects/acme%2Fapp/repository/commits/{HEAD}/statuses").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(statuses))
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn rerun_answers(&self, answer: RerunAnswer) {
+        let (status, times) = match answer {
+            RerunAnswer::Accepted => (201, 1),
+            RerunAnswer::Refused(status) => (status, 1),
+            RerunAnswer::NotCalled => (201, 0),
+        };
+        Mock::given(method("POST"))
+            .and(path("/projects/acme%2Fapp/pipelines/100/retry"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({ "id": 100 })))
+            .expect(times)
+            .mount(&self.w.server)
+            .await;
+    }
+
     async fn merge_answers(&self, number: u64, answer: MergeAnswer) {
         let title = format!("Add the first step (#{number})");
         let (status, body) = match answer {
@@ -1235,6 +1342,44 @@ async fn checks_are_read_for_a_commit(h: &dyn Harness) {
             ),
         ]
     );
+}
+
+async fn failed_checks_are_rerun_and_the_ones_that_cannot_be_are_named(h: &dyn Harness) {
+    h.failing_checks(&["unit", "lint"], &["codecov"]).await;
+    h.rerun_answers(RerunAnswer::Accepted).await;
+    let outcome = h.scm().rerun_failed_checks(&h.repo(), HEAD).await.unwrap();
+    assert_eq!(outcome.rerun, ["lint", "unit"]);
+    assert_eq!(outcome.unsupported, ["codecov"]);
+}
+
+async fn a_head_with_nothing_the_provider_can_rerun_makes_no_request(h: &dyn Harness) {
+    h.failing_checks(&[], &["codecov"]).await;
+    h.rerun_answers(RerunAnswer::NotCalled).await;
+    let outcome = h.scm().rerun_failed_checks(&h.repo(), HEAD).await.unwrap();
+    assert!(outcome.rerun.is_empty());
+    assert_eq!(outcome.unsupported, ["codecov"]);
+}
+
+async fn a_refused_rerun_is_a_permanent_coded_error(h: &dyn Harness) {
+    h.failing_checks(&["unit"], &[]).await;
+    h.rerun_answers(RerunAnswer::Refused(403)).await;
+    let err = h
+        .scm()
+        .rerun_failed_checks(&h.repo(), HEAD)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "scm_rerun_refused");
+    assert!(!err.retryable);
+    assert_eq!(err.params["status"], 403);
+}
+
+async fn a_rerun_names_a_full_head_sha(h: &dyn Harness) {
+    let err = h
+        .scm()
+        .rerun_failed_checks(&h.repo(), "abc")
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "git_argument_invalid");
 }
 
 async fn merged_change_reports_its_merge_commit(h: &dyn Harness) {
@@ -1723,6 +1868,10 @@ conformance!(github_conformance, GitHubHarness:
     change_request_snapshot_normalizes_checks_and_statuses,
     latest_rerun_of_a_check_wins,
     checks_are_read_for_a_commit,
+    failed_checks_are_rerun_and_the_ones_that_cannot_be_are_named,
+    a_head_with_nothing_the_provider_can_rerun_makes_no_request,
+    a_refused_rerun_is_a_permanent_coded_error,
+    a_rerun_names_a_full_head_sha,
     merged_change_reports_its_merge_commit,
     merge_reports_its_outcomes,
     merge_at_a_stale_head_is_head_changed,
@@ -1756,6 +1905,10 @@ conformance!(gitlab_conformance, GitLabHarness:
     change_request_snapshot_normalizes_checks_and_statuses,
     latest_rerun_of_a_check_wins,
     checks_are_read_for_a_commit,
+    failed_checks_are_rerun_and_the_ones_that_cannot_be_are_named,
+    a_head_with_nothing_the_provider_can_rerun_makes_no_request,
+    a_refused_rerun_is_a_permanent_coded_error,
+    a_rerun_names_a_full_head_sha,
     merged_change_reports_its_merge_commit,
     merge_reports_its_outcomes,
     merge_at_a_stale_head_is_head_changed,

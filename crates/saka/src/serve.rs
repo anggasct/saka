@@ -28,8 +28,8 @@ use saka_ports::{
     EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, IntakeCapabilities, IntakeSource,
     Issue, IssueCloseOutcome, IssueListing, IssueRef, IssueSignal, MergeOutcome, MergeRequest,
     OpenChangeRequest, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
-    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
-    UnitLimits, UpdateOutcome, WebhookDelivery,
+    RepoInfo, RepoRef, Repos, RerunOutcome, ReviewPost, Scm, ScmCapabilities, StatusReport,
+    TokenRefresh, UnitLimits, UpdateOutcome, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -181,6 +181,15 @@ impl Scm for ScmRouter {
     ) -> PortResult<Vec<saka_core::gate::Check>> {
         self.get(&repo.integration_id)?
             .commit_checks(repo, sha)
+            .await
+    }
+    async fn rerun_failed_checks(
+        &self,
+        repo: &RepoRef,
+        head_sha: &str,
+    ) -> PortResult<RerunOutcome> {
+        self.get(&repo.integration_id)?
+            .rerun_failed_checks(repo, head_sha)
             .await
     }
     async fn list_open_changes(
