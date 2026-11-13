@@ -123,7 +123,7 @@ impl Engine {
             .collect()
     }
 
-    fn load_project_row(&self, id: ProjectId) -> Result<Project> {
+    pub(crate) fn load_project_row(&self, id: ProjectId) -> Result<Project> {
         self.store
             .read(|c| read::load_project(c, id))?
             .ok_or(EngineError::Rejected(Rejection::NotFound))

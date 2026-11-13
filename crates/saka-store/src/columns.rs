@@ -49,6 +49,15 @@ macro_rules! deployment_columns {
     };
 }
 
+macro_rules! incident_columns {
+    () => {
+        incident_columns!("")
+    };
+    ($prefix:literal) => {
+        qualified!($prefix: "id", "project_id", "source", "fingerprint", "state", "resolution", "signal_status", "severity", "title", "summary", "environment", "url", "labels", "occurrences", "started_at", "first_seen", "last_seen", "deployment_id", "draft_id", "revert_id", "dismiss_reason", "actor", "resolved_at", "created_at", "updated_at")
+    };
+}
+
 macro_rules! deployment_check_columns {
     () => {
         deployment_check_columns!("")
@@ -334,6 +343,7 @@ mod tests {
             ("hook_run", hook_run_columns!()),
             ("deployment", deployment_columns!()),
             ("deployment_check", deployment_check_columns!()),
+            ("incident", incident_columns!()),
             ("inbox_item", inbox_item_columns!()),
             ("project", project_columns!()),
             ("repo", repo_columns!()),

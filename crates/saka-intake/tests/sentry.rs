@@ -8,7 +8,7 @@ mod support;
 
 use saka_core::time::Timestamp;
 use saka_intake::SentryDecoder;
-use saka_ports::{BODY_DEDUP_WINDOW_SECS, SignalDecoder, SignalSeverity, SignalStatus};
+use saka_ports::{BODY_DEDUP_WINDOW_SECS, IncidentSeverity, SignalDecoder, SignalStatus};
 use support::{SECRET, fixture, headers, hmac_hex, request};
 
 fn signed(resource: &str, body: &[u8], request_id: Option<&str>) -> Vec<(String, String)> {
@@ -37,7 +37,7 @@ fn a_created_issue_fires_with_the_issue_id_as_fingerprint() {
     let signal = &delivery.signals[0];
     assert_eq!(signal.fingerprint, "4510233781");
     assert_eq!(signal.status, SignalStatus::Firing);
-    assert_eq!(signal.severity, SignalSeverity::High);
+    assert_eq!(signal.severity, IncidentSeverity::High);
     assert!(signal.title.starts_with("TypeError"));
     assert_eq!(signal.summary, "app/checkout/summary in renderTotals");
     assert_eq!(
@@ -100,7 +100,7 @@ fn an_event_alert_fires_with_its_environment_on_the_same_fingerprint() {
     let signal = &delivery.signals[0];
     assert_eq!(signal.fingerprint, "4510233781");
     assert_eq!(signal.status, SignalStatus::Firing);
-    assert_eq!(signal.severity, SignalSeverity::Critical);
+    assert_eq!(signal.severity, IncidentSeverity::Critical);
     assert_eq!(signal.environment.as_deref(), Some("production"));
     assert_eq!(
         signal.labels.get("rule").map(String::as_str),

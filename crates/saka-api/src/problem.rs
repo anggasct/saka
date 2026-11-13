@@ -144,6 +144,8 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::RevertNotAllowed { .. }
         | R::RevertInProgress { .. }
         | R::DeploymentQueued { .. }
+        | R::IncidentHandling
+        | R::IncidentClosed
         | R::DeploymentRunning
         | R::DeploymentNotFailed
         | R::FixDraftInProgress { .. }

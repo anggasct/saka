@@ -12,10 +12,10 @@ use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
     BlockerId, ChangeRequestId, CredentialId, DecisionRequestId, DeploymentId, DeviceId,
-    EnvironmentId, GateResultId, HookRunId, InboxItemId, IssueIntakeId, LoginSessionId, PairingId,
-    PermissionRequestId, PermissionRuleId, ProjectId, RegressionCheckId, RepoId, ReviewId,
-    SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
-    UserLinkAuthorizationId, UserLinkId, WorkItemId,
+    EnvironmentId, GateResultId, HookRunId, InboxItemId, IncidentId, IssueIntakeId, LoginSessionId,
+    PairingId, PermissionRequestId, PermissionRuleId, ProjectId, RegressionCheckId, RepoId,
+    ReviewId, SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId,
+    UsageRecordId, UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
 use crate::model::{
@@ -28,11 +28,12 @@ use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, ChangeRole, DeployActionKind, DeployCause, DeployGateState, DeployPhase,
     DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect, ExternalCause, GateOutcome,
-    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, InterruptBy,
-    IssueCause, IssueClosedBy, IssueIntakeState, IssueLane, LintOutcome, MatchKind, MergeMethod,
-    OnFailure, PairingPurpose, PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger,
-    ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin,
-    Stage, StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
+    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, IncidentCause,
+    IncidentResolution, IncidentSeverity, IncidentState, InterruptBy, IssueCause, IssueClosedBy,
+    IssueIntakeState, IssueLane, LintOutcome, MatchKind, MergeMethod, OnFailure, PairingPurpose,
+    PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason,
+    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SignalStatus, SpecOrigin, Stage,
+    StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -972,6 +973,45 @@ pub enum Event {
         deployment_id: Option<DeploymentId>,
         reason: Option<String>,
     },
+    #[serde(rename = "incident.incident.opened")]
+    IncidentOpened {
+        incident_id: IncidentId,
+        project_id: ProjectId,
+        source: String,
+        fingerprint: String,
+        severity: IncidentSeverity,
+        signal_status: SignalStatus,
+        title: String,
+        summary: String,
+        environment: Option<String>,
+        url: Option<String>,
+        labels: BTreeMap<String, String>,
+        started_at: Option<Timestamp>,
+        deployment_id: Option<DeploymentId>,
+    },
+    #[serde(rename = "incident.incident.updated")]
+    IncidentUpdated {
+        incident_id: IncidentId,
+        occurrences: u32,
+        severity: IncidentSeverity,
+        signal_status: SignalStatus,
+    },
+    #[serde(rename = "incident.incident.state_changed")]
+    IncidentStateChanged {
+        incident_id: IncidentId,
+        from: IncidentState,
+        to: IncidentState,
+        cause: IncidentCause,
+        resolution: Option<IncidentResolution>,
+        reason: Option<String>,
+        actor: Option<String>,
+    },
+    #[serde(rename = "incident.incident.linked")]
+    IncidentLinked {
+        incident_id: IncidentId,
+        draft_id: Option<SpecDraftId>,
+        revert_id: Option<WorkItemId>,
+    },
     #[serde(rename = "delivery.inbox_item.dismissed")]
     InboxItemDismissed {
         inbox_item_id: InboxItemId,
@@ -1098,6 +1138,7 @@ pub enum Stream {
     Credential(CredentialId),
     IssueIntake(IssueIntakeId),
     Deployment(DeploymentId),
+    Incident(IncidentId),
 }
 
 impl Stream {
@@ -1121,6 +1162,7 @@ impl Stream {
             Stream::Credential(_) => "credential",
             Stream::IssueIntake(_) => "issue_intake",
             Stream::Deployment(_) => "deployment",
+            Stream::Incident(_) => "incident",
         }
     }
 
@@ -1144,6 +1186,7 @@ impl Stream {
             Stream::Credential(id) => id.0,
             Stream::IssueIntake(id) => id.0,
             Stream::Deployment(id) => id.0,
+            Stream::Incident(id) => id.0,
         }
     }
 }
@@ -1315,6 +1358,10 @@ impl Event {
             | E::DeploymentSucceeded { deployment_id }
             | E::DeploymentFailed { deployment_id, .. }
             | E::DeploymentCancelled { deployment_id, .. } => Stream::Deployment(*deployment_id),
+            E::IncidentOpened { incident_id, .. }
+            | E::IncidentUpdated { incident_id, .. }
+            | E::IncidentStateChanged { incident_id, .. }
+            | E::IncidentLinked { incident_id, .. } => Stream::Incident(*incident_id),
             E::DeployGateChanged { work_item_id, .. } => Stream::WorkItem(*work_item_id),
             E::InboxItemDismissed { inbox_item_id, .. } => Stream::InboxItem(*inbox_item_id),
             E::PairingCreated { pairing_id, .. } => Stream::Pairing(*pairing_id),

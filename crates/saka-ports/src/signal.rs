@@ -1,8 +1,7 @@
-use std::collections::BTreeMap;
-use std::fmt;
-use std::str::FromStr;
-
 use saka_core::time::Timestamp;
+
+pub use saka_core::incident::IncidentSignal;
+pub use saka_core::vocab::{IncidentSeverity, SignalStatus};
 
 use crate::PortResult;
 
@@ -17,99 +16,6 @@ pub const MAX_LABEL_VALUE_CHARS: usize = 256;
 pub const MAX_DELIVERY_ID_CHARS: usize = 128;
 pub const TIMESTAMP_WINDOW_SECS: i64 = 300;
 pub const BODY_DEDUP_WINDOW_SECS: u64 = 600;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SignalSeverity {
-    Info,
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-impl SignalSeverity {
-    pub const ALL: &'static [SignalSeverity] = &[
-        SignalSeverity::Info,
-        SignalSeverity::Low,
-        SignalSeverity::Medium,
-        SignalSeverity::High,
-        SignalSeverity::Critical,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SignalSeverity::Info => "info",
-            SignalSeverity::Low => "low",
-            SignalSeverity::Medium => "medium",
-            SignalSeverity::High => "high",
-            SignalSeverity::Critical => "critical",
-        }
-    }
-}
-
-impl fmt::Display for SignalSeverity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for SignalSeverity {
-    type Err = ();
-
-    fn from_str(value: &str) -> Result<SignalSeverity, ()> {
-        SignalSeverity::ALL
-            .iter()
-            .copied()
-            .find(|severity| severity.as_str() == value)
-            .ok_or(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SignalStatus {
-    Firing,
-    Resolved,
-}
-
-impl SignalStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SignalStatus::Firing => "firing",
-            SignalStatus::Resolved => "resolved",
-        }
-    }
-}
-
-impl fmt::Display for SignalStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for SignalStatus {
-    type Err = ();
-
-    fn from_str(value: &str) -> Result<SignalStatus, ()> {
-        match value {
-            "firing" => Ok(SignalStatus::Firing),
-            "resolved" => Ok(SignalStatus::Resolved),
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IncidentSignal {
-    pub fingerprint: String,
-    pub status: SignalStatus,
-    pub severity: SignalSeverity,
-    pub title: String,
-    pub summary: String,
-    pub environment: Option<String>,
-    pub url: Option<String>,
-    pub started_at: Option<Timestamp>,
-    pub labels: BTreeMap<String, String>,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SignalRequest<'a> {

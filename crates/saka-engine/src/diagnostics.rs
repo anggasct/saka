@@ -823,6 +823,7 @@ impl Engine {
                 }
                 .boxed(),
                 CheckId::ToolchainSources => sources(&*self.ports.releases).boxed(),
+                CheckId::IncidentSource => self.incident_source_findings().boxed(),
                 CheckId::AuthConfig => async move {
                     one(self
                         .store

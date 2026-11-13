@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use saka_core::time::Timestamp;
 use saka_ports::{
-    MAX_FINGERPRINT_CHARS, MAX_LABEL_KEY_CHARS, MAX_LABEL_VALUE_CHARS, MAX_LABELS,
-    MAX_SUMMARY_BYTES, MAX_TITLE_CHARS, MAX_URL_BYTES, SignalSeverity,
+    IncidentSeverity, MAX_FINGERPRINT_CHARS, MAX_LABEL_KEY_CHARS, MAX_LABEL_VALUE_CHARS,
+    MAX_LABELS, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS, MAX_URL_BYTES,
 };
 
 const MAX_ENVIRONMENT_CHARS: usize = 64;
@@ -93,13 +93,13 @@ pub(crate) fn labels<'p>(
     kept
 }
 
-pub(crate) fn level_severity(level: &str) -> SignalSeverity {
+pub(crate) fn level_severity(level: &str) -> IncidentSeverity {
     match level.to_ascii_lowercase().as_str() {
-        "fatal" => SignalSeverity::Critical,
-        "error" => SignalSeverity::High,
-        "warning" => SignalSeverity::Medium,
-        "info" | "debug" => SignalSeverity::Info,
-        _ => SignalSeverity::Medium,
+        "fatal" => IncidentSeverity::Critical,
+        "error" => IncidentSeverity::High,
+        "warning" => IncidentSeverity::Medium,
+        "info" | "debug" => IncidentSeverity::Info,
+        _ => IncidentSeverity::Medium,
     }
 }
 

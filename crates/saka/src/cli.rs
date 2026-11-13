@@ -756,6 +756,35 @@ impl Client {
         }
     }
 
+    pub async fn incident_list(
+        &self,
+        project: &str,
+        filter: &[(&str, Option<&str>)],
+        limit: u32,
+    ) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let mut path = format!("/api/v1/projects/{id}/incidents?limit={limit}");
+        for (key, value) in filter {
+            if let Some(value) = value {
+                path.push_str(&format!("&{key}={value}"));
+            }
+        }
+        match self.get(&path).await {
+            Ok(a) => self.finish(&a, |body| lines(body, incident_line)),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn incident_show(&self, id: &str) -> ExitCode {
+        match self.get(&format!("/api/v1/incidents/{id}")).await {
+            Ok(a) => self.finish(&a, incident_detail),
+            Err(code) => code,
+        }
+    }
+
     pub async fn hook_rerun(&self, id: &str, reason: &str) -> ExitCode {
         match self
             .post(
@@ -1960,6 +1989,50 @@ fn deployment_detail(d: &Value) -> String {
             text(&check["state"]),
             text(&check["duration_ms"])
         ));
+    }
+    out.join("\n")
+}
+
+fn incident_line(i: &Value) -> String {
+    format!(
+        "{}  {}  {}  {}  {}x  {}  {}",
+        text(&i["id"]),
+        text(&i["severity"]),
+        text(&i["state"]),
+        text(&i["environment"]),
+        text(&i["occurrences"]),
+        text(&i["last_seen"]),
+        text(&i["title"])
+    )
+}
+
+fn incident_detail(i: &Value) -> String {
+    let mut out = vec![incident_line(i)];
+    out.push(format!("source  {}", text(&i["source"])));
+    if let Some(deployment) = i["deployment"].as_object() {
+        let sha = |key: &str| {
+            deployment
+                .get(key)
+                .map(text)
+                .unwrap_or_default()
+                .chars()
+                .take(8)
+                .collect::<String>()
+        };
+        out.push(format!(
+            "deployment  {}  {}  {}",
+            deployment.get("id").map(text).unwrap_or_default(),
+            deployment.get("state").map(text).unwrap_or_default(),
+            sha("sha")
+        ));
+    }
+    for suspect in i["suspects"].as_array().into_iter().flatten() {
+        let name = if suspect["work_item"].is_object() {
+            text(&suspect["work_item"]["key"])
+        } else {
+            format!("#{}", text(&suspect["change"]["number"]))
+        };
+        out.push(format!("suspect  {}  {name}", text(&suspect["kind"])));
     }
     out.join("\n")
 }

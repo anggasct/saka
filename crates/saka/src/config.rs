@@ -58,6 +58,8 @@ pub struct Config {
     #[serde(default)]
     pub deploy: Vec<saka_core::environment::RawEnvironment>,
     #[serde(default)]
+    pub incident: IncidentConfig,
+    #[serde(default)]
     pub notify: Notify,
     #[serde(default)]
     pub autonomy: AutonomyConfig,
@@ -65,6 +67,13 @@ pub struct Config {
     pub auth: Option<Auth>,
     #[serde(default)]
     pub workflow: WorkflowConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncidentConfig {
+    #[serde(default)]
+    pub source: Vec<saka_core::incident::RawSource>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -814,6 +823,34 @@ impl Config {
         Ok(environments)
     }
 
+    pub fn incident_sources_parsed(&self) -> Result<Vec<saka_core::incident::Source>, ConfigError> {
+        let mut sources =
+            saka_core::incident::parse_all(&self.incident.source).map_err(|issue| {
+                let field = issue.field.map(|f| format!(".{f}")).unwrap_or_default();
+                err(
+                    "config_incident_invalid",
+                    format!("{}: source {:?}{field}", issue.code, issue.source_name),
+                )
+            })?;
+        for source in &mut sources {
+            source.secret_file = expand(&source.secret_file).to_string_lossy().into_owned();
+        }
+        Ok(sources)
+    }
+
+    pub fn check_incident_secrets(&self) -> Result<(), ConfigError> {
+        for source in self.incident_sources_parsed()? {
+            let invalid = || err("config_secret_file_invalid", source.name.clone());
+            let path = std::path::Path::new(&source.secret_file);
+            check_private_file(path).map_err(|_| invalid())?;
+            let bytes = std::fs::read(path).map_err(|_| invalid())?;
+            if bytes.iter().all(u8::is_ascii_whitespace) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
     fn check_hook_file(&self, path: &std::path::Path) -> Result<(), ConfigError> {
         use std::os::unix::fs::MetadataExt;
         let runs_host = self.hook.iter().any(|h| h.action == "run_host")
@@ -943,6 +980,7 @@ impl Config {
         }
         let hooks = self.hooks_parsed()?;
         self.environments_parsed()?;
+        self.incident_sources_parsed()?;
         self.notify.validate()?;
         for hook in &hooks {
             if let saka_core::hook::HookAction::Notify { channel } = &hook.action
@@ -1674,6 +1712,85 @@ mod tests {
         cfg.check_key_files().unwrap();
     }
 
+    fn incident_config(extra: &str) -> String {
+        format!(
+            "[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = \"/etc/saka/prod.secret\"\n{extra}"
+        )
+    }
+
+    #[test]
+    fn incident_sources_are_checked_with_a_coded_error_that_names_the_source_and_field() {
+        assert_eq!(
+            Config::parse(&incident_config(""))
+                .unwrap()
+                .incident
+                .source
+                .len(),
+            1
+        );
+        for (extra, detail) in [
+            (
+                "max_open = 0\n",
+                "incident_source_limit_invalid: source \"prod\".max_open",
+            ),
+            (
+                "action = \"page\"\n",
+                "incident_source_field_invalid: source \"prod\".action",
+            ),
+            (
+                "environment_label = \"env\"\n",
+                "incident_source_field_invalid: source \"prod\".environment_label",
+            ),
+            ("unknown_key = 1\n", ""),
+        ] {
+            let error = Config::parse(&incident_config(extra)).unwrap_err();
+            if detail.is_empty() {
+                assert_eq!(error.code, "config_unknown_field");
+            } else {
+                assert_eq!(
+                    (error.code, error.detail.as_str()),
+                    ("config_incident_invalid", detail)
+                );
+            }
+        }
+        let twice = format!("{}{}", incident_config(""), incident_config(""));
+        assert!(
+            Config::parse(&twice)
+                .unwrap_err()
+                .detail
+                .starts_with("incident_source_duplicate")
+        );
+    }
+
+    #[test]
+    fn an_incident_secret_file_must_exist_hold_a_secret_and_be_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("prod.secret");
+        let cfg = Config::parse(&format!(
+            "[[incident.source]]\nname = \"prod\"\nproject = \"tasks\"\nkind = \"generic\"\nsecret_file = {:?}\n",
+            secret.display().to_string()
+        ))
+        .unwrap();
+        let refused = |cfg: &Config| {
+            let error = cfg.check_incident_secrets().unwrap_err();
+            (error.code, error.detail)
+        };
+        let expected = ("config_secret_file_invalid", "prod".to_string());
+        assert_eq!(refused(&cfg), expected, "missing");
+        std::fs::write(&secret, "s3cr3t-value\n").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(refused(&cfg), expected, "readable by others");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        cfg.check_incident_secrets().unwrap();
+        std::fs::write(&secret, "\n").unwrap();
+        assert_eq!(refused(&cfg), expected, "empty");
+        assert!(
+            Config::parse("").unwrap().check_incident_secrets().is_ok(),
+            "no sources, nothing to check"
+        );
+    }
+
     #[test]
     fn the_example_config_parses_with_every_field_set() {
         let cfg = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
@@ -1736,6 +1853,22 @@ mod tests {
         assert_eq!(environments[0].timeout_ms, 900_000);
         assert!(environments[0].gate && !environments[1].gate);
         assert_eq!(environments[1].action.kind().as_str(), "webhook");
+        let sources = cfg.incident_sources_parsed().unwrap();
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].name, "prod-alerts");
+        assert_eq!(sources[0].environment_label, "env");
+        assert_eq!(
+            sources[0].environment_of("prod").as_deref(),
+            Some("production")
+        );
+        assert!(
+            sources[0]
+                .secret_file
+                .ends_with("/.config/saka/prod-alerts.secret")
+        );
+        assert!(!sources[0].secret_file.starts_with('~'));
+        assert_eq!(sources[1].kind.as_str(), "sentry");
+        assert_eq!(sources[1].action.as_str(), "draft");
         assert_eq!(
             cfg.scm[0].client_id.as_deref(),
             Some("Iv23liAbCdEfGh123456")

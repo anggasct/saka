@@ -261,6 +261,7 @@ impl World {
                 diagnostics: DiagnosticLimits::default(),
                 hooks: Vec::new(),
                 environments: Vec::new(),
+                incident_sources: Vec::new(),
                 auth_enabled: false,
                 workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
                 public_url: None,

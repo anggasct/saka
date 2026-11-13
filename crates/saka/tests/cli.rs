@@ -2362,6 +2362,116 @@ fn deployments_are_listed_and_shown_with_their_evidence() {
 }
 
 #[test]
+fn incidents_are_listed_and_shown_with_their_deployment() {
+    use saka_core::Ctx;
+    use saka_core::ids::IdSource;
+    use saka_core::incident::{self, Arrival, IncidentSignal, Observed};
+    use saka_core::time::Timestamp;
+    use saka_core::vocab::{IncidentSeverity, SignalStatus};
+
+    struct Ids(u128);
+    impl IdSource for Ids {
+        fn next_id(&mut self) -> uuid::Uuid {
+            self.0 += 1;
+            uuid::Uuid::from_u128(self.0)
+        }
+    }
+
+    let sim = Sim::new(SimConfig::default());
+    let open = |fingerprint: &str, severity, at: i64, base: u128| {
+        let signal = IncidentSignal {
+            fingerprint: fingerprint.into(),
+            status: SignalStatus::Firing,
+            severity,
+            title: format!("{fingerprint} failing"),
+            summary: String::new(),
+            environment: Some("production".into()),
+            url: None,
+            started_at: None,
+            labels: Default::default(),
+        };
+        let arrival = Arrival {
+            project_id: sim.project_id,
+            source: "prod-alerts",
+            max_open: 50,
+            live_in_source: 0,
+            deployment_id: None,
+        };
+        let mut ids = Ids(base);
+        let mut ctx = Ctx {
+            now: Timestamp(at),
+            ids: &mut ids,
+        };
+        let Observed::Opened(events) = incident::observe(None, &signal, &arrival, &mut ctx) else {
+            panic!("expected an incident");
+        };
+        let created = incident::evolve_all(None, &events, Timestamp(at)).unwrap();
+        let mut batch = saka_store::Batch::new(Timestamp(at));
+        batch.incidents.push(created.clone());
+        sim.engine().store().commit(&batch).unwrap();
+        created
+    };
+    let quiet = open("quiet", IncidentSeverity::Low, 1_000, 100);
+    let loud = open("loud", IncidentSeverity::Critical, 2_000, 200);
+    let server = serve(&sim);
+
+    let listed = saka(&server, &["incident", "list", "tasks"]);
+    assert_eq!(
+        code(&listed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let text = stdout(&listed);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(
+        lines[0].starts_with(&format!("{}  critical  open  production  1x  ", loud.id)),
+        "{text}"
+    );
+    assert!(lines[0].ends_with("  loud failing"), "{text}");
+    assert!(lines[1].contains(&quiet.id.to_string()), "{text}");
+
+    let critical = saka(
+        &server,
+        &["incident", "list", "tasks", "--severity", "critical"],
+    );
+    assert_eq!(stdout(&critical).lines().count(), 1);
+    let dismissed = saka(
+        &server,
+        &["incident", "list", "tasks", "--state", "dismissed"],
+    );
+    assert_eq!(code(&dismissed), 0);
+    assert!(stdout(&dismissed).trim().is_empty());
+    let bad = saka(&server, &["incident", "list", "tasks", "--state", "gone"]);
+    assert_eq!(code(&bad), 1, "422 validation_failed");
+
+    let shown = saka(&server, &["incident", "show", &loud.id.to_string()]);
+    assert_eq!(
+        code(&shown),
+        0,
+        "{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    assert!(
+        stdout(&shown).contains("source  prod-alerts"),
+        "{}",
+        stdout(&shown)
+    );
+    let raw = saka(
+        &server,
+        &["--json", "incident", "show", &loud.id.to_string()],
+    );
+    assert_eq!(json(&raw)["severity"], "critical");
+    assert_eq!(json(&raw)["suspects"], serde_json::json!([]));
+    let unknown = saka(
+        &server,
+        &["incident", "show", "0193f0c4-0000-7000-8000-000000000000"],
+    );
+    assert_eq!(code(&unknown), 1);
+}
+
+#[test]
 fn a_deployment_is_redeployed_and_cancelled_from_the_cli_with_the_documented_codes() {
     use saka_core::environment::{self, RawEnvironment};
 

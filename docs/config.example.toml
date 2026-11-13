@@ -276,3 +276,30 @@ url = "https://ci.example.com/hooks/deploy"   # signed like a hook webhook; X-Sa
 secret = "DEPLOY_SIGNING_KEY"      # a project secret that signs the body with HMAC-SHA256
 gate = false
 on_failure = "fix"
+
+# An [[incident.source]] entry turns alerts from a monitoring tool into incidents. The tool posts to
+# <public_url>/hooks/incident/<name> and proves itself with the secret in secret_file. Saka opens one incident per
+# alert fingerprint, links it to the last succeeded deployment of its environment, and waits for you to draft a fix
+# or revert a suspect. A source belongs to one project. Sources live only here: saka.toml and .saka/ cannot define them.
+# `saka serve` refuses to start when a secret file is missing, empty, or readable by anyone else (mode 0600).
+
+[[incident.source]]
+name = "prod-alerts"               # ^[a-z0-9-]{1,32}$, unique
+project = "tasks"                  # a project name, or its id
+kind = "alertmanager"              # alertmanager | sentry | generic
+secret_file = "~/.config/saka/prod-alerts.secret"
+environment_label = "env"          # alertmanager only: the label that names the environment (default "environment")
+severity_label = "severity"        # alertmanager only: the label that carries the severity (default "severity")
+environments = { prod = "production" }   # optional: value from the source -> environment name in saka.toml
+action = "inbox"                   # inbox (default) | draft: draft a fix automatically
+max_open = 50                      # 1..=500, default 50: open or handled incidents per source
+repo = "app"                       # repo binding name for drafts; required when the project binds more than one repo
+
+[[incident.source]]
+name = "web-errors"
+project = "tasks"
+kind = "sentry"
+secret_file = "~/.config/saka/web-errors.secret"
+action = "draft"
+min_severity = "high"              # with action = "draft": critical | high | medium | low | info (default high)
+repo = "app"

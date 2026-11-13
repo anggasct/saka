@@ -138,6 +138,9 @@ enum Command {
     #[command(about = "Deployments of a project's environments: list them and read their evidence")]
     #[command(subcommand)]
     Deploy(DeployCmd),
+    #[command(about = "Incidents raised by production alerts: list them and read their evidence")]
+    #[command(subcommand)]
+    Incident(IncidentCmd),
     #[command(about = "Chat notification channels from the operator config")]
     #[command(subcommand)]
     Notify(NotifyCmd),
@@ -304,6 +307,33 @@ enum DeployCmd {
         #[arg(long)]
         reason: String,
     },
+}
+
+#[derive(Subcommand)]
+enum IncidentCmd {
+    #[command(
+        about = "Lists the incidents of a project, most recently seen first",
+        after_help = "Exit codes: 0 ok, 1 failed, 3 problems."
+    )]
+    List {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "open, handling, resolved, or dismissed", long)]
+        state: Option<String>,
+        #[arg(help = "critical, high, medium, low, or info", long)]
+        severity: Option<String>,
+        #[arg(help = "Only incidents of this environment", long)]
+        environment: Option<String>,
+        #[arg(help = "Only incidents of this source", long)]
+        source: Option<String>,
+        #[arg(help = "How many incidents, 1 to 200", long, default_value_t = 20)]
+        limit: u32,
+    },
+    #[command(
+        about = "Shows an incident with the deployment it is linked to and the suspects",
+        after_help = "Exit codes: 0 ok, 1 failed."
+    )]
+    Show { id: String },
 }
 
 #[derive(Subcommand)]
@@ -1083,6 +1113,30 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .await
                     }
                     DeployCmd::Cancel { id, reason } => client.deploy_cancel(&id, &reason).await,
+                }
+            })
+        }
+        Command::Incident(cmd) => {
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            current_thread()?.block_on(async {
+                match cmd {
+                    IncidentCmd::List {
+                        project,
+                        state,
+                        severity,
+                        environment,
+                        source,
+                        limit,
+                    } => {
+                        let filter = [
+                            ("state", state.as_deref()),
+                            ("severity", severity.as_deref()),
+                            ("environment", environment.as_deref()),
+                            ("source", source.as_deref()),
+                        ];
+                        client.incident_list(&project, &filter, limit).await
+                    }
+                    IncidentCmd::Show { id } => client.incident_show(&id).await,
                 }
             })
         }

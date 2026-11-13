@@ -163,6 +163,7 @@ pub struct Batch {
     pub deployments: Vec<saka_core::deploy::Deployment>,
     pub deploy_gates: Vec<crate::deployment::DeployGateRow>,
     pub deployment_checks: Vec<(saka_core::ids::DeploymentId, saka_core::deploy::CheckRecord)>,
+    pub incidents: Vec<saka_core::incident::Incident>,
     pub activities: Vec<(ProjectId, SessionActivity)>,
     pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
     pub jobs: Vec<NewJob>,
@@ -454,6 +455,9 @@ pub(crate) fn write(
     }
     for (id, check) in &b.deployment_checks {
         crate::deployment::upsert_check(tx, *id, check)?;
+    }
+    for incident in &b.incidents {
+        crate::incident::upsert(tx, incident)?;
     }
     for p in &b.new_pairings {
         crate::identity::insert_pairing(tx, p, b.now)?;
