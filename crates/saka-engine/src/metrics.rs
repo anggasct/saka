@@ -36,6 +36,7 @@ pub struct Counters {
     config_checks: Mutex<BTreeMap<(String, String), u64>>,
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     docs_changes: Mutex<BTreeMap<(String, String), u64>>,
+    reverts: Mutex<BTreeMap<(String, String), u64>>,
     quick_specs: Mutex<BTreeMap<(String, String), u64>>,
     issue_intakes: Mutex<BTreeMap<(String, String, String), u64>>,
     issue_denied: Mutex<BTreeMap<(String, String), u64>>,
@@ -184,6 +185,10 @@ impl Counters {
 
     pub(crate) fn docs_change(&self, outcome: &str) {
         bump(&self.docs_changes, outcome, "");
+    }
+
+    pub(crate) fn revert(&self, outcome: &str) {
+        bump(&self.reverts, outcome, "");
     }
 
     pub(crate) fn issue_intake(&self, lane: &str, kind: &str, cause: &str) {
@@ -430,6 +435,7 @@ pub struct MetricsSnapshot {
     pub config_checks: Vec<(String, u64)>,
     pub path_scope_violations: Vec<(String, u64)>,
     pub docs_changes: Vec<(String, u64)>,
+    pub reverts: Vec<(String, u64)>,
     pub quick_specs: Vec<(String, String, u64)>,
     pub issue_intakes: Vec<(String, String, String, u64)>,
     pub issue_denied: u64,
@@ -623,6 +629,16 @@ impl Engine {
             path_scope_violations: copy(&self.counters.path_scope_violations)
                 .into_iter()
                 .map(|(stage, _, n)| (stage, n))
+                .collect(),
+            reverts: ["merged", "conflict", "cancelled"]
+                .iter()
+                .map(|outcome| {
+                    let n = copy(&self.counters.reverts)
+                        .into_iter()
+                        .find(|(o, _, _)| o == outcome)
+                        .map_or(0, |(_, _, n)| n);
+                    ((*outcome).to_string(), n)
+                })
                 .collect(),
             docs_changes: ["merged", "skipped"]
                 .iter()

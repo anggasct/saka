@@ -326,6 +326,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_docs_changes_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_reverts_total",
+        "counter",
+        "Revert tasks, by how they ended: merged, stopped on a conflict, or cancelled.",
+    );
+    for (outcome, n) in &m.reverts {
+        t.sample("saka_reverts_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_quick_specs_total",
         "counter",
         "Quick tasks, by kind and outcome (created, approved, not_approved, refused).",

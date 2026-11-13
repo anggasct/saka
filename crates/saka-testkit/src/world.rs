@@ -28,10 +28,10 @@ use saka_ports::{
     MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
     PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
     Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess,
-    RepoInfo, RepoRef, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit, Scm, ScmCapabilities,
-    Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor, TokenRefresh,
-    Toolchains, UpdateOutcome, WebhookDelivery, WebhookSignature, WebhookTarget, WorktreeChange,
-    WorktreeFile, WorktreeState, check_comment_body, check_sha,
+    RepoInfo, RepoRef, RevertRequest, Reverted, ReviewPost, RunnerEvent, RunnerEventKind,
+    RunnerUnit, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport,
+    Supervisor, TokenRefresh, Toolchains, UpdateOutcome, WebhookDelivery, WebhookSignature,
+    WebhookTarget, WorktreeChange, WorktreeFile, WorktreeState, check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -345,6 +345,8 @@ struct State {
     enqueue_refusals: VecDeque<String>,
     enqueue_calls: Vec<(u64, String)>,
     rebases: Vec<(EnvironmentId, String, String)>,
+    revert_script: VecDeque<Reverted>,
+    reverts: Vec<RevertRequest>,
 }
 
 impl State {
@@ -515,6 +517,8 @@ impl FakeWorld {
                 enqueue_refusals: VecDeque::new(),
                 enqueue_calls: Vec::new(),
                 rebases: Vec::new(),
+                revert_script: VecDeque::new(),
+                reverts: Vec::new(),
                 docs_refusal: None,
                 docs_turns: VecDeque::new(),
                 merge_scripts: HashMap::new(),
@@ -1010,6 +1014,14 @@ impl FakeWorld {
 
     pub fn rebases(&self) -> Vec<(EnvironmentId, String, String)> {
         self.state().rebases.clone()
+    }
+
+    pub fn script_revert(&self, outcome: Reverted) {
+        self.state().revert_script.push_back(outcome);
+    }
+
+    pub fn reverts(&self) -> Vec<RevertRequest> {
+        self.state().reverts.clone()
     }
 
     pub fn push_to_base(&self) -> String {
@@ -1837,6 +1849,63 @@ impl Environments for FakeWorld {
         w.head = to_sha.to_string();
         w.dirty = false;
         Ok(())
+    }
+
+    async fn revert(&self, env: &EnvRef, request: &RevertRequest) -> PortResult<Reverted> {
+        let mut s = self.state();
+        s.reverts.push(request.clone());
+        let base = s
+            .worktrees
+            .get(&env.environment_id)
+            .filter(|w| !w.torn_down)
+            .map(|w| w.base_sha.clone())
+            .ok_or_else(|| PortError::permanent("worktree_missing", json!({})))?;
+        if let Some(scripted) = s.revert_script.pop_front() {
+            return Ok(scripted);
+        }
+        let merged = request.merge_commit.as_str();
+        if !s.parents.contains_key(merged) || !s.is_ancestor(merged, &base) {
+            return Ok(Reverted::NotInBase);
+        }
+        let parent = s
+            .parents
+            .get(merged)
+            .and_then(|p| p.first())
+            .cloned()
+            .unwrap_or_default();
+        let (base_tree, merged_tree, parent_tree) =
+            (s.tree(&base), s.tree(merged), s.tree(&parent));
+        let touched = s.diff(&parent, merged);
+        let conflicts: Vec<String> = touched
+            .iter()
+            .filter(|p| {
+                base_tree.get(*p) != merged_tree.get(*p) && base_tree.get(*p) != parent_tree.get(*p)
+            })
+            .cloned()
+            .collect();
+        if !conflicts.is_empty() {
+            let count = conflicts.len();
+            return Ok(Reverted::Conflict {
+                paths: conflicts,
+                count,
+            });
+        }
+        let mut tree = base_tree.clone();
+        for path in &touched {
+            match parent_tree.get(path) {
+                Some(text) => tree.insert(path.clone(), text.clone()),
+                None => tree.remove(path),
+            };
+        }
+        if tree == base_tree {
+            return Ok(Reverted::Empty);
+        }
+        let head = s.new_commit(vec![base]);
+        s.trees.insert(head.clone(), tree);
+        if let Some(w) = s.worktrees.get_mut(&env.environment_id) {
+            w.head = head.clone();
+        }
+        Ok(Reverted::Committed { head_sha: head })
     }
 
     async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase> {

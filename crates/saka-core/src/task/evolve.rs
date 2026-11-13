@@ -1,7 +1,7 @@
 use super::queries::count_retry;
 use crate::event::Event;
 use crate::model::{
-    Blocker, ChangeRequest, Coded, ExternalChange, GateResult, RegressionCheck, Review,
+    Blocker, ChangeRequest, Coded, ExternalChange, GateResult, RegressionCheck, Revert, Review,
     ReviewPosted, StageRun, Task, Usage, WorkItem,
 };
 use crate::session;
@@ -52,6 +52,50 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             created_at: now,
             updated_at: now,
         }));
+    }
+    if let Event::WorkItemRevertCreated {
+        work_item_id,
+        project_id,
+        repo_id,
+        revert_of,
+        revert_of_key,
+        task_key,
+        work,
+        branch,
+        priority,
+        reason,
+    } = event
+    {
+        let mut t = Task::new(WorkItem {
+            id: *work_item_id,
+            project_id: *project_id,
+            origin: WorkItemOrigin::Revert,
+            kind: None,
+            spec_id: None,
+            spec_revision_id: None,
+            step_id: None,
+            step_index: None,
+            task_key: task_key.clone(),
+            work: work.clone(),
+            repo_id: *repo_id,
+            branch: branch.clone(),
+            state: WorkItemState::Queued,
+            stage: None,
+            stage_phase: None,
+            priority: *priority,
+            version: 1,
+            admitted_at: None,
+            done_at: None,
+            start_approved_at: None,
+            created_at: now,
+            updated_at: now,
+        });
+        t.revert = Some(Revert {
+            of: *revert_of,
+            of_key: revert_of_key.clone(),
+            reason: reason.clone(),
+        });
+        return Some(t);
     }
     if let Event::ExternalChangeAccepted {
         work_item_id,
@@ -245,7 +289,10 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
             t.prior_usage = Usage::default();
             let queued = *entry_phase == StagePhase::AwaitingReview;
-            let waiting = *entry_phase == StagePhase::PreparingEnvironment || queued;
+            let waiting = matches!(
+                *entry_phase,
+                StagePhase::PreparingEnvironment | StagePhase::Reverting
+            ) || queued;
             t.stage_run = Some(StageRun {
                 id: *stage_run_id,
                 work_item_id: t.item.id,
@@ -684,6 +731,9 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             }
         }
         E::WorkItemCreated { .. }
+        | E::WorkItemRevertCreated { .. }
+        | E::WorkItemRevertRequested { .. }
+        | E::WorkItemReverted { .. }
         | E::ExternalChangeAccepted { .. }
         | E::RepoRegistered { .. }
         | E::ProjectRegistered { .. }

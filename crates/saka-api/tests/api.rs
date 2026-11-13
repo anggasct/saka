@@ -6409,3 +6409,169 @@ fn active_sessions_leave_the_list_when_they_end_and_need_a_filter_or_active() {
         "cursor_invalid",
     );
 }
+
+#[test]
+fn a_merged_task_is_reverted_through_the_action_and_both_tasks_link_to_each_other() {
+    let mut api = Api::new(SimConfig::default());
+    api.sim.world.script_edits(vec![vec![(
+        "src/change.rs".to_string(),
+        Some("change\n".to_string()),
+    )]]);
+    api.sim.approve();
+    assert!(api.sim.run_to_shipped(STEPS));
+    let origin = api.sim.task(1);
+    let path = format!("/api/v1/work-items/{}", origin.item.id.0);
+    let detail = api.get(&path);
+    assert!(
+        detail.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("revert")),
+        "{}",
+        detail.body
+    );
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+    let revert = format!("{path}/actions/revert");
+
+    let missing = api.post(&revert, &[], json!({ "reason": "broken" }));
+    problem(
+        &missing,
+        StatusCode::PRECONDITION_REQUIRED,
+        "precondition_required",
+    );
+    let stale = api.post(
+        &revert,
+        &[("if-match", "W/\"1\"")],
+        json!({ "reason": "broken" }),
+    );
+    problem(&stale, StatusCode::PRECONDITION_FAILED, "version_stale");
+    for reason in ["", "  ", &"x".repeat(501)] {
+        let r = api.post(&revert, &[("if-match", &etag)], json!({ "reason": reason }));
+        problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    }
+    let extra = api.post(
+        &revert,
+        &[("if-match", &etag)],
+        json!({ "reason": "ok", "paths": [] }),
+    );
+    assert_eq!(
+        extra.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        extra.body
+    );
+
+    let key = api.key();
+    let body = json!({ "reason": "it broke the build\nbadly" });
+    let before = api.last_seq();
+    let made = api.post_with(&revert, Some(&key), &[("if-match", &etag)], &body);
+    assert_eq!(made.status, StatusCode::ACCEPTED, "{}", made.body);
+    assert_eq!(made.body["origin"], "revert");
+    assert_eq!(made.body["state"], "queued");
+    assert_eq!(
+        made.body["task_key"],
+        format!("{}-R1", origin.item.task_key)
+    );
+    assert_eq!(made.body["revert_of"]["id"], origin.item.id.0.to_string());
+    assert_eq!(made.body["revert_of"]["key"], origin.item.task_key);
+    assert_eq!(made.body["reverted_by"], Value::Null);
+    assert_eq!(made.body["spec_id"], Value::Null);
+    let kinds: Vec<String> = api
+        .sim
+        .engine()
+        .events_after(before, 50)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "delivery.work_item.revert_requested",
+            "delivery.work_item.revert_created"
+        ]
+    );
+    let replay = api.post_with(&revert, Some(&key), &[("if-match", &etag)], &body);
+    assert_eq!(replay.status, StatusCode::ACCEPTED);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(replay.body, made.body);
+
+    let shown = api.get(&path);
+    let by = &shown.body["reverted_by"];
+    assert_eq!(by["id"], made.body["id"]);
+    assert_eq!(by["state"], "queued");
+    assert!(
+        !shown.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("revert"))
+    );
+    let new_etag = shown.headers["etag"].to_str().unwrap().to_string();
+    let second = api.post(
+        &revert,
+        &[("if-match", &new_etag)],
+        json!({ "reason": "again" }),
+    );
+    problem(&second, StatusCode::CONFLICT, "revert_in_progress");
+    assert_eq!(second.body["params"]["work_item_id"], made.body["id"]);
+
+    let revert_path = format!("/api/v1/work-items/{}", made.body["id"].as_str().unwrap());
+    let child = api.get(&revert_path);
+    assert_eq!(child.body["revert_of"]["key"], origin.item.task_key);
+    let child_etag = child.headers["etag"].to_str().unwrap().to_string();
+    let nested = api.post(
+        &format!("{revert_path}/actions/revert"),
+        &[("if-match", &child_etag)],
+        json!({ "reason": "revert the revert" }),
+    );
+    problem(&nested, StatusCode::CONFLICT, "revert_not_allowed");
+    assert_eq!(nested.body["params"]["reason"], "revert_task");
+
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.engine()
+            .work_item(saka_core::ids::WorkItemId(
+                made.body["id"].as_str().unwrap().parse().unwrap(),
+            ))
+            .unwrap()
+            .is_some_and(|d| d.task.item.state == WorkItemState::Done)
+    }));
+    let done = api.get(&path);
+    assert_eq!(done.body["state"], "done");
+    assert_eq!(done.body["reverted_by"]["state"], "done");
+    let after = done.headers["etag"].to_str().unwrap().to_string();
+    let once_more = api.post(
+        &revert,
+        &[("if-match", &after)],
+        json!({ "reason": "late" }),
+    );
+    problem(&once_more, StatusCode::CONFLICT, "already_reverted");
+    let metrics = api.get_text("/metrics");
+    for (outcome, n) in [("merged", 1), ("conflict", 0), ("cancelled", 0)] {
+        let line = format!("saka_reverts_total{{outcome=\"{outcome}\"}} {n}");
+        assert!(metrics.contains(&line), "{line}\n{metrics}");
+    }
+}
+
+#[test]
+fn a_task_without_a_merged_change_cannot_be_reverted() {
+    let mut api = Api::new(SimConfig::default());
+    api.sim.approve();
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).item.state == WorkItemState::InStage
+    }));
+    let id = api.sim.task(1).item.id.0;
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert!(
+        !detail.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("revert"))
+    );
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+    let r = api.post(
+        &format!("/api/v1/work-items/{id}/actions/revert"),
+        &[("if-match", &etag)],
+        json!({ "reason": "too early" }),
+    );
+    problem(&r, StatusCode::CONFLICT, "invalid_state");
+}

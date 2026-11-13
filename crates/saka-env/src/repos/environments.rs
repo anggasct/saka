@@ -10,7 +10,7 @@ use saka_ports::{
     BaseProbe, BestEffort, ChangeDiff, ChangedPaths, Checkout, CommandUnit, DOCS_MAX_BYTES,
     DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, PortError, PortResult,
     PrepareRequest, PreparedDocs, PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome,
-    RepoRef, TreeEntry, WorktreeChange, WorktreeFile, WorktreeState,
+    RepoRef, RevertRequest, Reverted, TreeEntry, WorktreeChange, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -27,7 +27,11 @@ const PATCH_SCAN_COMMITS: u32 = 200;
 const PATCH_SCAN_BYTES: usize = 32 * 1024 * 1024;
 
 impl GitRepos {
-    async fn patch_ids(&self, bare: &Path, args: &[&str]) -> PortResult<Vec<(String, String)>> {
+    pub(super) async fn patch_ids(
+        &self,
+        bare: &Path,
+        args: &[&str],
+    ) -> PortResult<Vec<(String, String)>> {
         let log = self
             .cfg
             .git
@@ -738,6 +742,10 @@ impl Environments for GitRepos {
             .await?;
         self.git_ok(&wt, &["clean", "-fdq"], "clean").await?;
         Ok(())
+    }
+
+    async fn revert(&self, env: &EnvRef, request: &RevertRequest) -> PortResult<Reverted> {
+        self.revert_commit(env, request).await
     }
 
     async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase> {

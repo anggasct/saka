@@ -2,6 +2,7 @@ mod changes;
 mod environments;
 mod merging;
 mod regressions;
+mod reverting;
 mod sessions;
 mod updating;
 mod verification;
@@ -403,6 +404,7 @@ impl Engine {
         let p = &job.payload;
         match job.kind {
             JobKind::EnvPrepare => self.env_prepare(&task, owner_run(p)?).await,
+            JobKind::EnvRevert => self.revert_job(&task, owner_run(p)?).await,
             JobKind::EnvPrepareReview => {
                 self.prepare_review(&task, field(p, "stage_run_id")?).await
             }
@@ -711,7 +713,13 @@ impl Engine {
     }
 
     fn base_branch(&self, task: &Task) -> std::result::Result<String, PortError> {
-        self.bound(task).map(|(_, binding)| binding.base_branch)
+        let landed = self
+            .origin_of(task)?
+            .and_then(|origin| origin.change_request.map(|cr| cr.base_branch));
+        match landed {
+            Some(branch) => Ok(branch),
+            None => self.bound(task).map(|(_, binding)| binding.base_branch),
+        }
     }
 
     fn docs_request(

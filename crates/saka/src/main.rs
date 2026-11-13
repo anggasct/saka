@@ -611,6 +611,17 @@ enum TaskCmd {
     },
     #[command(about = "Approves a step that waits for you before it starts")]
     Start { id: String },
+    #[command(about = "Prints one task: its state, blocker, and the revert it makes or has")]
+    Show { id: String },
+    #[command(
+        about = "Reverts a merged task through a revert pull request that Saka runs",
+        after_help = "Prints the key of the revert task. Exit codes: 0 revert task created, 4 refused (not merged, already reverted, a revert is running, or a revert task)."
+    )]
+    Revert {
+        id: String,
+        #[arg(help = "Why the change is pulled back (1 to 500 characters)", long)]
+        reason: String,
+    },
     #[command(about = "Tries the stopped stage again")]
     Retry {
         id: String,
@@ -1272,6 +1283,8 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     }
                     TaskCmd::Fix { id } => client.task_fix(&id).await,
                     TaskCmd::Start { id } => client.task_start(&id).await,
+                    TaskCmd::Show { id } => client.task_show(&id).await,
+                    TaskCmd::Revert { id, reason } => client.task_revert(&id, &reason).await,
                     TaskCmd::Retry { id, reason } => {
                         client.task_action(&id, "retry", &reason).await
                     }

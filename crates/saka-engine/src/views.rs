@@ -502,7 +502,9 @@ impl Engine {
             .iter()
             .map(|t| {
                 let mut waits = waiting_on(t, &dep_tasks, &specs, &item_deps, &spec_deps);
-                if t.item.state == WorkItemState::Queued {
+                if t.item.state == WorkItemState::Queued
+                    && t.item.origin != saka_core::vocab::WorkItemOrigin::Revert
+                {
                     waits.extend(quota.iter().cloned());
                     if ports_full {
                         waits.push(Waiting::PortBlock);

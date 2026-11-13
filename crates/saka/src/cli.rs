@@ -1108,6 +1108,43 @@ impl Client {
         self.task_versioned(id, "merge", reason, "merging").await
     }
 
+    pub async fn task_revert(&self, id: &str, reason: &str) -> ExitCode {
+        self.task_versioned(id, "revert", Some(reason), "revert")
+            .await
+    }
+
+    pub async fn task_show(&self, id: &str) -> ExitCode {
+        match self.get(&format!("/api/v1/work-items/{id}")).await {
+            Ok(a) => self.finish(&a, |b| {
+                let place = match (b["stage"].as_str(), b["stage_phase"].as_str()) {
+                    (Some(s), Some(p)) => format!("{s}/{p}"),
+                    (Some(s), None) => s.to_string(),
+                    _ => String::new(),
+                };
+                let mut out = format!(
+                    "{} {} {} {}",
+                    text(&b["task_key"]),
+                    text(&b["state"]),
+                    place,
+                    b["blocker"]["code"].as_str().unwrap_or_default()
+                )
+                .trim_end()
+                .to_string();
+                if let Some(key) = b["revert_of"]["key"].as_str() {
+                    out.push_str(&format!("\nreverts {key}"));
+                }
+                if let Some(key) = b["reverted_by"]["key"].as_str() {
+                    out.push_str(&format!(
+                        "\nreverted by {key} {}",
+                        text(&b["reverted_by"]["state"])
+                    ));
+                }
+                out
+            }),
+            Err(code) => code,
+        }
+    }
+
     pub async fn task_start(&self, id: &str) -> ExitCode {
         self.task_versioned(id, "start", None, "starting").await
     }

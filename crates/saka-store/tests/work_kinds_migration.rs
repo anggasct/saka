@@ -156,7 +156,7 @@ fn the_migration_carries_old_rows_as_features_and_adds_kinds_quick_specs_and_reg
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![39, 40, 41]);
+    assert_eq!(store.migration().applied, vec![39, 40, 41, 42]);
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

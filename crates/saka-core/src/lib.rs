@@ -26,6 +26,7 @@ pub mod redact;
 pub mod regression;
 pub mod rejection;
 pub mod resume;
+pub mod revert;
 pub mod review;
 pub mod rule;
 pub mod scope;

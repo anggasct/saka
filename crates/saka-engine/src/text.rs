@@ -291,6 +291,9 @@ impl Engine {
     }
 
     pub(crate) fn change_text(&self, task: &Task) -> Result<(String, String)> {
+        if task.revert.is_some() {
+            return self.revert_text(task);
+        }
         let pinned = self.pinned(task)?;
         let step = pinned.step(task);
         let short: String = pinned.revision.source_commit.chars().take(7).collect();

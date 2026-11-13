@@ -10,8 +10,8 @@ use saka_core::ids::{
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionAnswer, DecisionRequest, Environment,
     ExternalChange, GateResult, PermissionRequest, PermissionRule, Project, ProjectRepo,
-    RegressionCheck, Repo, Review, ReviewPosted, RevisionView, RunOwner, Session, Spec,
-    SpecDependency, SpecLink, StageRun, StepPlan, Task, WorkItem, WorkItemDependency,
+    RegressionCheck, Repo, Revert, Review, ReviewPosted, RevisionView, RunOwner, Session, Spec,
+    SpecDependency, SpecLink, StageRun, StepPlan, Task, TaskLink, WorkItem, WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger, WorkKind};
@@ -318,6 +318,52 @@ pub fn load_tasks(
             t.policy = repo_policy;
         }
     }
+    for (id, revert) in rows_of(
+        conn,
+        "SELECT w.id, w.revert_of, w.revert_reason, o.task_key AS of_key FROM work_item w
+           JOIN work_item o ON o.id = w.revert_of",
+        "w.id",
+        selection,
+        "w.id",
+        b,
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "id")?),
+                Revert {
+                    of: WorkItemId(uuid(row, "revert_of")?),
+                    of_key: row.get("of_key")?,
+                    reason: row.get("revert_reason")?,
+                },
+            ))
+        },
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.revert = Some(revert);
+        }
+    }
+    for (id, link) in rows_of(
+        conn,
+        "SELECT o.id, w.id AS revert_id, w.task_key, w.state FROM work_item o
+           JOIN work_item w ON w.revert_of = o.id AND w.state NOT IN ('cancelled', 'superseded')",
+        "o.id",
+        selection,
+        "w.created_at DESC, w.id",
+        b,
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "id")?),
+                TaskLink {
+                    id: WorkItemId(uuid(row, "revert_id")?),
+                    key: row.get("task_key")?,
+                    state: vocab(row, "state")?,
+                },
+            ))
+        },
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.reverted_by.get_or_insert(link);
+        }
+    }
     for r in rows(
         conn,
         concat!("SELECT ", review_columns!(), " FROM review"),
@@ -530,6 +576,22 @@ pub fn merge_queue_members(
         ids.push(WorkItemId(uuid(row, "id")?));
     }
     Ok(ids)
+}
+
+pub fn reverts_of(conn: &Connection, origin: WorkItemId) -> Result<Vec<TaskLink>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, task_key, state FROM work_item WHERE revert_of = ?1 ORDER BY created_at, id",
+    )?;
+    let mut rows = stmt.query(params![origin.0.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(TaskLink {
+            id: WorkItemId(uuid(row, "id")?),
+            key: row.get("task_key")?,
+            state: vocab(row, "state")?,
+        });
+    }
+    Ok(out)
 }
 
 pub fn blocker_work_item(conn: &Connection, id: BlockerId) -> Result<Option<WorkItemId>> {

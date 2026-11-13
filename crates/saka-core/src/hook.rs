@@ -457,6 +457,7 @@ pub struct HookContext {
     pub project: NamedRef,
     pub repo: Option<RepoRef>,
     pub task: Option<TaskRef>,
+    pub revert_of: Option<TaskRef>,
     pub spec: Option<SpecRef>,
     pub change: Option<ChangeRef>,
     pub branch: Option<String>,
@@ -542,6 +543,10 @@ pub fn task_context(
             id: item.id,
             key: item.task_key.clone(),
         }),
+        revert_of: task.revert.as_ref().map(|r| TaskRef {
+            id: r.of,
+            key: r.of_key.clone(),
+        }),
         spec: item
             .spec_id
             .zip(facts.spec_path.clone())
@@ -568,6 +573,7 @@ pub fn spec_context(spec: &Spec, project_name: &str, now: Timestamp) -> HookCont
         },
         repo: None,
         task: None,
+        revert_of: None,
         spec: Some(SpecRef {
             id: spec.id,
             path: spec.path.clone(),
@@ -594,6 +600,7 @@ pub fn inbox_context(
         project,
         repo: None,
         task,
+        revert_of: None,
         spec,
         change: None,
         branch: None,
@@ -1150,6 +1157,7 @@ mod tests {
                 full_name: "acme/api".into(),
             }),
             task: None,
+            revert_of: None,
             spec: None,
             change: None,
             branch: Some("release/1".into()),

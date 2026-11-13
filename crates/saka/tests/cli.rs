@@ -3092,3 +3092,53 @@ fn issue_commands_take_issues_in_list_them_and_turn_them_down() {
     let unknown = saka(&server, &["issue", "list", "nope"]);
     assert_eq!(code(&unknown), 1);
 }
+
+#[test]
+fn a_merged_task_is_reverted_from_the_cli_and_both_tasks_show_the_link() {
+    let mut sim = Sim::new(SimConfig::default());
+    sim.world.script_edits(vec![vec![(
+        "src/change.rs".to_string(),
+        Some("change\n".to_string()),
+    )]]);
+    sim.approve();
+    assert!(sim.run_to_shipped(8_000));
+    let server = serve(&sim);
+    let origin = sim.task(1);
+    let id = origin.item.id.to_string();
+    let key = origin.item.task_key.clone();
+
+    let refused = saka(&server, &["task", "revert", &id, "--reason", ""]);
+    assert_eq!(code(&refused), 1, "422 validation_failed");
+    let reverted = saka(&server, &["task", "revert", &id, "--reason", "it broke"]);
+    assert_eq!(
+        code(&reverted),
+        0,
+        "{}",
+        String::from_utf8_lossy(&reverted.stderr)
+    );
+    assert_eq!(stdout(&reverted).trim(), format!("revert {key}-R1"));
+    let again = saka(&server, &["task", "revert", &id, "--reason", "twice"]);
+    assert_eq!(code(&again), 4, "409 revert_in_progress");
+    assert!(String::from_utf8_lossy(&again.stderr).contains("revert_in_progress"));
+
+    let shown = saka(&server, &["task", "show", &id]);
+    assert_eq!(code(&shown), 0);
+    assert!(
+        stdout(&shown).contains(&format!("reverted by {key}-R1 queued")),
+        "{}",
+        stdout(&shown)
+    );
+    let revert = sim
+        .all_tasks()
+        .into_iter()
+        .find(|t| t.item.task_key == format!("{key}-R1"))
+        .unwrap();
+    let shown = saka(&server, &["task", "show", &revert.item.id.to_string()]);
+    assert!(
+        stdout(&shown).contains(&format!("reverts {key}")),
+        "{}",
+        stdout(&shown)
+    );
+    let raw = saka(&server, &["--json", "task", "show", &id]);
+    assert_eq!(json(&raw)["reverted_by"]["key"], format!("{key}-R1"));
+}

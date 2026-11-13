@@ -185,8 +185,16 @@ impl Decider<'_> {
         ctx: &mut Ctx<'_>,
     ) -> Vec<Event> {
         let phase = block.phase();
-        let waiting = self.task.is_writing_at(phase)
-            && (phase != StagePhase::RunningSession || self.task.live_session().is_none());
+        let reverting = phase == StagePhase::RunningSession
+            && self.preparing()
+            && self
+                .task
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.entry_phase == StagePhase::Reverting);
+        let waiting = reverting
+            || (self.task.is_writing_at(phase)
+                && (phase != StagePhase::RunningSession || self.task.live_session().is_none()));
         if !waiting {
             return vec![];
         }

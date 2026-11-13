@@ -1300,6 +1300,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/revert": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["revert"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/review": {
     parameters: {
       query?: never;
@@ -2529,7 +2545,7 @@ export interface components {
          *     operator's ceiling and what `saka.toml` asks for. `null` in the answer to an action.
          */
         autonomy?: string | null;
-        /** @description Subset of `merge`, `retry`, `cancel`, `review`. */
+        /** @description Subset of `merge`, `retry`, `cancel`, `review`, `revert`. */
         available_actions: string[];
         blocker?: components["schemas"]["Blocker"] | null;
         branch: string;
@@ -2545,7 +2561,7 @@ export interface components {
         gates: components["schemas"]["Gate"][];
         /** Format: uuid */
         id: string;
-        /** @description `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request. */
+        /** @description `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request and for a revert. */
         kind?: string | null;
         /**
          * @description `true` when Saka will request the merge itself once review and checks pass: autonomy
@@ -2553,6 +2569,7 @@ export interface components {
          */
         merge_auto?: boolean | null;
         merge_queue?: components["schemas"]["MergeQueue"] | null;
+        /** @description `spec_step | external_change | revert` */
         origin: string;
         /** Format: int32 */
         pending_permission_count: number;
@@ -2565,6 +2582,8 @@ export interface components {
         repo_id: string;
         /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
         repo_name?: string | null;
+        revert_of?: components["schemas"]["WorkItemRef"] | null;
+        reverted_by?: components["schemas"]["RevertedBy"] | null;
         review?: components["schemas"]["ReviewSummary"] | null;
         session?: components["schemas"]["SessionBrief"] | null;
         /** Format: uuid */
@@ -2984,6 +3003,13 @@ export interface components {
       reason: string;
       /** @description `dev`, `review`, `fix`, or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`. */
       stage?: string | null;
+    };
+    RevertedBy: {
+      /** Format: uuid */
+      id: string;
+      key: string;
+      /** @description The work item states: `queued | admitted | in_stage | blocked | taken_over | done`. */
+      state: string;
     };
     /** @description Request body of a review request; no fields. */
     ReviewBody: Record<string, never>;
@@ -3668,7 +3694,7 @@ export interface components {
        *     operator's ceiling and what `saka.toml` asks for. `null` in the answer to an action.
        */
       autonomy?: string | null;
-      /** @description Subset of `merge`, `retry`, `cancel`, `review`. */
+      /** @description Subset of `merge`, `retry`, `cancel`, `review`, `revert`. */
       available_actions: string[];
       blocker?: components["schemas"]["Blocker"] | null;
       branch: string;
@@ -3684,7 +3710,7 @@ export interface components {
       gates: components["schemas"]["Gate"][];
       /** Format: uuid */
       id: string;
-      /** @description `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request. */
+      /** @description `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request and for a revert. */
       kind?: string | null;
       /**
        * @description `true` when Saka will request the merge itself once review and checks pass: autonomy
@@ -3692,6 +3718,7 @@ export interface components {
        */
       merge_auto?: boolean | null;
       merge_queue?: components["schemas"]["MergeQueue"] | null;
+      /** @description `spec_step | external_change | revert` */
       origin: string;
       /** Format: int32 */
       pending_permission_count: number;
@@ -3704,6 +3731,8 @@ export interface components {
       repo_id: string;
       /** @description Name of the binding of `repo_id` in the project now; `null` once a reload removed it. */
       repo_name?: string | null;
+      revert_of?: components["schemas"]["WorkItemRef"] | null;
+      reverted_by?: components["schemas"]["RevertedBy"] | null;
       review?: components["schemas"]["ReviewSummary"] | null;
       session?: components["schemas"]["SessionBrief"] | null;
       /** Format: uuid */
@@ -3753,6 +3782,11 @@ export interface components {
       state: string;
       /** @description Toolchains on `PATH`; empty when the repo declares no versions. */
       toolchains: components["schemas"]["Toolchain"][];
+    };
+    WorkItemRef: {
+      /** Format: uuid */
+      id: string;
+      key: string;
     };
     WorkPacket: {
       /**
@@ -7042,6 +7076,44 @@ export interface operations {
         };
         content: {
           "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  revert: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+        /** @description W/"<version>" */
+        "If-Match": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
         };
       };
       "4XX": {

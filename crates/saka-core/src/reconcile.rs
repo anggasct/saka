@@ -97,7 +97,9 @@ pub fn waiting(
     snapshot
         .tasks
         .iter()
-        .filter(|t| t.item.state == WorkItemState::Queued)
+        .filter(|t| {
+            t.item.state == WorkItemState::Queued && t.item.origin != WorkItemOrigin::Revert
+        })
         .map(|t| {
             let mut waits = admission::waiting_on(
                 t,
@@ -162,11 +164,13 @@ pub fn reconcile(
     let active = tasks
         .iter()
         .filter(|t| {
-            t.item.origin == WorkItemOrigin::SpecStep
-                && matches!(
-                    t.item.state,
-                    WorkItemState::Admitted | WorkItemState::InStage
-                )
+            matches!(
+                t.item.origin,
+                WorkItemOrigin::SpecStep | WorkItemOrigin::Revert
+            ) && matches!(
+                t.item.state,
+                WorkItemState::Admitted | WorkItemState::InStage
+            )
         })
         .count();
     let reviewing = tasks.iter().filter(|t| holds_review_slot(t)).count();
@@ -179,6 +183,16 @@ pub fn reconcile(
         .filter(|t| t.item.state == WorkItemState::Queued)
         .filter(|t| !holds_for_start(t))
         .filter_map(|t| {
+            if t.item.origin == WorkItemOrigin::Revert {
+                return Some(Candidate {
+                    work_item_id: t.item.id,
+                    priority: t.item.priority,
+                    spec_approved_at: t.item.created_at,
+                    step_index: 0,
+                    waiting_on: Vec::new(),
+                    spec_has_cancelled_task: false,
+                });
+            }
             let spec_id = t.item.spec_id?;
             let spec = snapshot
                 .specs
@@ -199,10 +213,19 @@ pub fn reconcile(
             })
         })
         .collect();
+    let is_revert = |c: &Candidate| {
+        tasks
+            .iter()
+            .any(|t| t.item.id == c.work_item_id && t.item.origin == WorkItemOrigin::Revert)
+    };
+    let (reverts, steps): (Vec<Candidate>, Vec<Candidate>) =
+        candidates.into_iter().partition(is_revert);
+    let mut admitted = admission::select(&reverts, 0, max_active_tasks.saturating_sub(active));
     let slots = max_active_tasks
         .saturating_sub(active)
+        .saturating_sub(admitted.len())
         .min(free_port_blocks(snapshot).unwrap_or(usize::MAX));
-    let admitted = admission::select(&candidates, 0, slots);
+    admitted.extend(admission::select(&steps, 0, slots));
     let free = max_active_tasks
         .saturating_sub(active)
         .saturating_sub(admitted.len());

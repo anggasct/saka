@@ -145,6 +145,12 @@ pub enum BranchUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum RevertOutcome {
+    Committed { head_sha: String },
+    Blocked { params: Value },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ObservedChange {
     pub state: ChangeState,
     pub head_sha: String,
@@ -165,6 +171,13 @@ pub enum TaskInput {
         params: Value,
     },
     Session(SessionInput),
+    RevertAttempted {
+        environment_id: EnvironmentId,
+        root_path: String,
+        worktree_path: String,
+        base_sha: String,
+        outcome: RevertOutcome,
+    },
     WorktreeInspected {
         turn: u32,
         dirty: bool,
@@ -381,6 +394,14 @@ pub fn decide(
             _ => return Err(Rejection::Unsupported),
         }
     }
+    if task.item.origin == WorkItemOrigin::Revert
+        && matches!(
+            input,
+            TaskInput::FixRequested { .. } | TaskInput::StartReview
+        )
+    {
+        return Err(Rejection::Unsupported);
+    }
     if task.item.state == WorkItemState::Superseded {
         return Err(Rejection::InvalidState {
             state: task.item.state.as_str().to_string(),
@@ -409,6 +430,20 @@ pub fn decide(
         } => d.environment_prepared(environment_id, root_path, worktree_path, base_sha, *setup),
         I::EnvironmentFailed { code, params } => d.environment_failed(code, params, ctx),
         I::Session(input) => return d.session(input, ctx),
+        I::RevertAttempted {
+            environment_id,
+            root_path,
+            worktree_path,
+            base_sha,
+            outcome,
+        } => d.revert_attempted(
+            environment_id,
+            root_path,
+            worktree_path,
+            base_sha,
+            outcome,
+            ctx,
+        ),
         I::WorktreeInspected {
             turn,
             dirty,
@@ -668,7 +703,10 @@ pub fn takeable(stage: Stage, phase: Option<StagePhase>) -> bool {
 }
 
 fn takeover_place(task: &Task) -> Result<(Option<Stage>, Option<StagePhase>), Rejection> {
-    if task.item.origin != WorkItemOrigin::SpecStep {
+    if !matches!(
+        task.item.origin,
+        WorkItemOrigin::SpecStep | WorkItemOrigin::Revert
+    ) {
         return Err(Rejection::Unsupported);
     }
     let place = match task.item.state {
@@ -920,18 +958,16 @@ impl Decider<'_> {
         if self.item().state != WorkItemState::Queued {
             return vec![];
         }
+        let entry = if self.item().origin == WorkItemOrigin::Revert {
+            StagePhase::Reverting
+        } else {
+            StagePhase::PreparingEnvironment
+        };
         vec![
             Event::WorkItemAdmitted {
                 work_item_id: self.item().id,
             },
-            self.new_run(
-                Stage::Dev,
-                Trigger::Auto,
-                StagePhase::PreparingEnvironment,
-                None,
-                None,
-                ctx,
-            ),
+            self.new_run(Stage::Dev, Trigger::Auto, entry, None, None, ctx),
         ]
     }
 
@@ -946,10 +982,24 @@ impl Decider<'_> {
         if !self.preparing() {
             return vec![];
         }
+        let mut events =
+            self.prepared_event(environment_id, root_path, worktree_path, base_sha, setup);
+        events.extend(self.phase(StagePhase::RunningSession, None));
+        events
+    }
+
+    fn prepared_event(
+        &self,
+        environment_id: EnvironmentId,
+        root_path: String,
+        worktree_path: String,
+        base_sha: String,
+        setup: EnvironmentSetup,
+    ) -> Vec<Event> {
         let Some(owner) = self.task.run_owner() else {
             return vec![];
         };
-        let mut events = vec![Event::EnvironmentPrepared {
+        vec![Event::EnvironmentPrepared {
             owner,
             environment_id,
             repo_id: self.item().repo_id,
@@ -965,12 +1015,46 @@ impl Decider<'_> {
             toolchains: setup.toolchains,
             path_scope: setup.path_scope,
             docs: setup.docs.map(Box::new),
-        }];
-        events.extend(self.phase(StagePhase::RunningSession, None));
+        }]
+    }
+
+    fn revert_attempted(
+        &self,
+        environment_id: EnvironmentId,
+        root_path: String,
+        worktree_path: String,
+        base_sha: String,
+        outcome: RevertOutcome,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let reverting = self.preparing()
+            && self
+                .task
+                .stage_run
+                .as_ref()
+                .is_some_and(|r| r.entry_phase == StagePhase::Reverting);
+        if !reverting {
+            return vec![];
+        }
+        let mut events = self.prepared_event(
+            environment_id,
+            root_path,
+            worktree_path,
+            base_sha,
+            EnvironmentSetup::default(),
+        );
+        match outcome {
+            RevertOutcome::Committed { head_sha } => {
+                events.extend(self.phase(StagePhase::Pushing, Some(head_sha)));
+            }
+            RevertOutcome::Blocked { params } => {
+                events.extend(self.block(BlockerCode::RevertConflict, params, ctx));
+            }
+        }
         events
     }
 
-    fn preparing(&self) -> bool {
+    pub(super) fn preparing(&self) -> bool {
         self.item().state == WorkItemState::Admitted
             && self
                 .task
