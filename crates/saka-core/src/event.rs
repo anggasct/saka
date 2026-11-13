@@ -220,6 +220,11 @@ pub enum Event {
         intake_id: IssueIntakeId,
         reason: Option<String>,
     },
+    #[serde(rename = "intake.issue.comment_posted")]
+    IssueIntakeCommentPosted {
+        intake_id: IssueIntakeId,
+        event: String,
+    },
 
     #[serde(rename = "spec.draft.requested")]
     SpecDraftRequested {
@@ -1099,7 +1104,8 @@ impl Event {
             | E::IssueIntakeStateChanged { intake_id, .. }
             | E::IssueIntakeFailed { intake_id, .. }
             | E::IssueIntakeRetried { intake_id, .. }
-            | E::IssueIntakeDismissed { intake_id, .. } => Stream::IssueIntake(*intake_id),
+            | E::IssueIntakeDismissed { intake_id, .. }
+            | E::IssueIntakeCommentPosted { intake_id, .. } => Stream::IssueIntake(*intake_id),
             E::SpecDraftRequested { spec_draft_id, .. }
             | E::SpecDraftAttemptStarted { spec_draft_id, .. }
             | E::SpecDraftPacketRendered { spec_draft_id, .. }

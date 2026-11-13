@@ -30,11 +30,54 @@ impl Engine {
             .chain(batch.specs.iter().map(Source::Spec))
             .chain(batch.issue_intakes.iter().map(Source::Intake));
         sources
-            .map(|source| InboxSync {
-                scope: inbox::scope(source),
-                desired: inbox::desired(source, ceilings),
+            .map(|source| {
+                let mut desired = inbox::desired(source, ceilings);
+                if let Source::Spec(spec) = source
+                    && let Some(issue) = self.issue_link(batch, spec.id)
+                {
+                    for item in desired
+                        .iter_mut()
+                        .filter(|d| d.subject == saka_core::vocab::InboxSubject::Spec)
+                    {
+                        item.params["issue"] = issue.clone();
+                    }
+                }
+                InboxSync {
+                    scope: inbox::scope(source),
+                    desired,
+                }
             })
             .collect()
+    }
+
+    fn issue_link(
+        &self,
+        batch: &Batch,
+        spec_id: saka_core::ids::SpecId,
+    ) -> Option<serde_json::Value> {
+        let intake = match batch
+            .issue_intakes
+            .iter()
+            .find(|i| i.spec_id == Some(spec_id))
+        {
+            Some(found) => found.clone(),
+            None => self
+                .store
+                .read(|c| saka_store::issue_intake::issue_intake_of_spec(c, spec_id))
+                .ok()
+                .flatten()?,
+        };
+        let repo = self
+            .store
+            .read(|c| saka_store::read::load_repo(c, intake.repo_id))
+            .ok()
+            .flatten()?;
+        Some(serde_json::json!({
+            "url": intake.url,
+            "number": intake.number,
+            "title": intake.title,
+            "repo": repo.full_name,
+        }))
     }
 
     pub(crate) fn plan_inbox_hooks(&self, opened: &[OpenedItem], now: Timestamp) -> Option<Batch> {

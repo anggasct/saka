@@ -131,6 +131,13 @@ pub struct ChangeCursorRow {
     pub seen_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueScanCursorRow {
+    pub project_id: ProjectId,
+    pub repo_id: RepoId,
+    pub through: Timestamp,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Batch {
     pub now: Timestamp,
@@ -161,6 +168,8 @@ pub struct Batch {
     pub webhook_deliveries: Vec<WebhookDeliveryRow>,
     pub prune_webhook_deliveries_before: Option<Timestamp>,
     pub change_cursors: Vec<ChangeCursorRow>,
+    pub issue_cursors: Vec<ChangeCursorRow>,
+    pub issue_scan_cursors: Vec<IssueScanCursorRow>,
     pub open_changes_seen: Vec<(RepoId, Vec<u64>)>,
     pub user_link_authorizations: Vec<crate::user_link::AuthorizationRow>,
     pub user_links: Vec<crate::user_link::UserLinkRow>,
@@ -304,6 +313,32 @@ pub(crate) fn write(
         tx.execute(
             "DELETE FROM webhook_delivery WHERE received_at < ?1",
             [before.0],
+        )?;
+    }
+    for c in &b.issue_cursors {
+        tx.execute(
+            "INSERT INTO issue_signal_cursor (repo_id, number, updated_at, through, seen_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (repo_id, number) DO UPDATE SET updated_at = excluded.updated_at,
+               through = excluded.through, seen_ids = excluded.seen_ids",
+            params![
+                c.repo_id.0.to_string(),
+                i64_of(c.number)?,
+                c.updated_at.0,
+                c.through.0,
+                to_json(&c.seen_ids)?,
+            ],
+        )?;
+    }
+    for c in &b.issue_scan_cursors {
+        tx.execute(
+            "INSERT INTO issue_scan_cursor (project_id, repo_id, through) VALUES (?1, ?2, ?3)
+             ON CONFLICT (project_id, repo_id) DO UPDATE SET through = excluded.through",
+            params![
+                c.project_id.0.to_string(),
+                c.repo_id.0.to_string(),
+                c.through.0
+            ],
         )?;
     }
     for c in &b.change_cursors {

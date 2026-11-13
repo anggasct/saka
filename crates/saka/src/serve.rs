@@ -25,10 +25,11 @@ use saka_env::{
 use saka_ports::BestEffort;
 use saka_ports::{
     ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, Clock, DeviceCode, DevicePoll,
-    EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, MergeOutcome, MergeRequest,
-    OpenChangeRequest, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
-    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
-    UnitLimits, UpdateOutcome, WebhookDelivery,
+    EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, IntakeCapabilities, IntakeSource,
+    Issue, IssueListing, IssueRef, IssueSignal, MergeOutcome, MergeRequest, OpenChangeRequest,
+    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
+    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh, UnitLimits, UpdateOutcome,
+    WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -69,6 +70,51 @@ impl Ids for UuidV7 {
 
 fn unknown_integration(id: &str) -> PortError {
     PortError::permanent("scm_integration_unknown", json!({ "integration_id": id }))
+}
+
+struct IntakeRouter(HashMap<String, Arc<dyn IntakeSource>>);
+
+impl IntakeRouter {
+    fn get(&self, id: &str) -> PortResult<&Arc<dyn IntakeSource>> {
+        self.0.get(id).ok_or_else(|| unknown_integration(id))
+    }
+}
+
+#[async_trait]
+impl IntakeSource for IntakeRouter {
+    fn capabilities(&self, integration_id: &str) -> Option<IntakeCapabilities> {
+        self.0.get(integration_id)?.capabilities(integration_id)
+    }
+    async fn list_issues(
+        &self,
+        repo: &RepoRef,
+        updated_since: saka_core::time::Timestamp,
+        labels: &[String],
+    ) -> PortResult<IssueListing> {
+        self.get(&repo.integration_id)?
+            .list_issues(repo, updated_since, labels)
+            .await
+    }
+    async fn issue(&self, issue: &IssueRef) -> PortResult<Issue> {
+        self.get(&issue.repo.integration_id)?.issue(issue).await
+    }
+    async fn issue_signals(
+        &self,
+        issue: &IssueRef,
+        since: saka_core::time::Timestamp,
+    ) -> PortResult<Vec<IssueSignal>> {
+        self.get(&issue.repo.integration_id)?
+            .issue_signals(issue, since)
+            .await
+    }
+    async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool> {
+        IntakeSource::can_write(self.get(&repo.integration_id)?.as_ref(), repo, login).await
+    }
+    async fn post_issue_comment(&self, issue: &IssueRef, body: &str) -> PortResult<()> {
+        self.get(&issue.repo.integration_id)?
+            .post_issue_comment(issue, body)
+            .await
+    }
 }
 
 struct ScmRouter(HashMap<String, Arc<dyn Scm>>);
@@ -329,21 +375,27 @@ impl ScmClient {
         }
     }
 
-    fn scm(self, repos: Arc<dyn Repos>, secret: Option<Vec<u8>>) -> Arc<dyn Scm> {
+    fn adapters(
+        self,
+        repos: Arc<dyn Repos>,
+        secret: Option<Vec<u8>>,
+    ) -> (Arc<dyn Scm>, Arc<dyn IntakeSource>) {
         match self {
             ScmClient::GitHub(app) => {
                 let github = GitHub::new(app, repos);
-                Arc::new(match secret {
+                let github = Arc::new(match secret {
                     Some(secret) => github.with_webhook_secret(secret),
                     None => github,
-                })
+                });
+                (github.clone(), github)
             }
             ScmClient::GitLab(client) => {
                 let gitlab = GitLab::new(client, repos);
-                Arc::new(match secret {
+                let gitlab = Arc::new(match secret {
                     Some(secret) => gitlab.with_webhook_secret(secret),
                     None => gitlab,
-                })
+                });
+                (gitlab.clone(), gitlab)
             }
         }
     }
@@ -906,15 +958,16 @@ async fn run(
                 .collect(),
         )),
     ));
-    let scm = ScmRouter(
-        clients
-            .into_iter()
-            .map(|(id, client)| {
-                let secret = webhooks.secrets.remove(&id);
-                (id, client.scm(repos.clone(), secret))
-            })
-            .collect(),
-    );
+    let mut scm_adapters = HashMap::new();
+    let mut intake_adapters = HashMap::new();
+    for (id, client) in clients {
+        let secret = webhooks.secrets.remove(&id);
+        let (scm, intake) = client.adapters(repos.clone(), secret);
+        scm_adapters.insert(id.clone(), scm);
+        intake_adapters.insert(id, intake);
+    }
+    let scm = ScmRouter(scm_adapters);
+    let intake = IntakeRouter(intake_adapters);
     if let Some((code, integration)) = capability_refusal(cfg, |id| scm.capabilities(id)) {
         tracing::error!(code, integration = %integration, "the integration lacks a capability the config asks for");
         stop_http(&stop, http).await;
@@ -976,6 +1029,7 @@ async fn run(
             entropy: Arc::new(OsEntropy),
             env: repos.clone(),
             scm: Arc::new(scm),
+            intake: Arc::new(intake),
             agents: Arc::new(agents),
             docs: Arc::new(GitDocs::new(repos)),
             toolchains,
@@ -1017,6 +1071,7 @@ async fn run(
             workflow_policy: saka_core::workflow::WorkflowPolicy {
                 allow_unreviewed_chore: cfg.workflow.allow_unreviewed_chore,
             },
+            public_url: cfg.notify.public_url.clone(),
         },
     ));
     match engine.recover() {

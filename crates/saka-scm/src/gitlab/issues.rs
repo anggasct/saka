@@ -44,6 +44,7 @@ fn summary(item: &Value) -> PortResult<IssueSummary> {
             .filter_map(|l| l.as_str().map(String::from))
             .collect(),
         confidential: item["confidential"] == true,
+        created_at: parse_time(&item["created_at"]).unwrap_or_default(),
         updated_at: parse_time(&item["updated_at"]).unwrap_or_default(),
     })
 }
@@ -222,7 +223,7 @@ mod tests {
     fn item() -> Value {
         json!({
             "iid": 7, "title": "Crash on start", "web_url": "https://gitlab.test/acme/app/-/issues/7",
-            "state": "opened", "updated_at": "2026-11-04T10:00:00Z", "author": { "username": "alice" },
+            "state": "opened", "created_at": "2026-11-03T10:00:00Z", "updated_at": "2026-11-04T10:00:00Z", "author": { "username": "alice" },
             "labels": ["bug", "saka:intake"], "confidential": true,
         })
     }
@@ -234,6 +235,7 @@ mod tests {
         assert_eq!(s.labels, ["bug", "saka:intake"]);
         assert_eq!(s.state, IssueState::Open);
         assert!(s.confidential);
+        assert_eq!(s.created_at, Timestamp(1_793_700_000_000));
         let mut closed = item();
         closed["state"] = json!("closed");
         assert_eq!(summary(&closed).unwrap().state, IssueState::Closed);

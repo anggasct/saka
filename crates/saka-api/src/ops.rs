@@ -338,6 +338,32 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_issue_intakes_total",
+        "counter",
+        "Issue intakes accepted, by lane, kind and what started them.",
+    );
+    for (lane, kind, cause, n) in &m.issue_intakes {
+        t.sample(
+            "saka_issue_intakes_total",
+            &[("lane", lane), ("kind", kind), ("cause", cause)],
+            n,
+        );
+    }
+    t.family(
+        "saka_issue_intake_denied_total",
+        "counter",
+        "Issue triggers from users without write access that were ignored.",
+    );
+    t.sample("saka_issue_intake_denied_total", &[], m.issue_denied);
+    t.family(
+        "saka_issue_comments_total",
+        "counter",
+        "Status comments on issues, by outcome (posted, failed).",
+    );
+    for (outcome, n) in &m.issue_comments {
+        t.sample("saka_issue_comments_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_user_link_authorizations_total",
         "counter",
         "Device-flow authorizations that link an SCM account, by integration and the state reached.",

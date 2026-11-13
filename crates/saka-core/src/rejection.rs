@@ -194,6 +194,12 @@ pub enum Rejection {
     LastCredential,
     #[error("the device cannot be revoked")]
     DeviceNotRevocable,
+    #[error("the issue does not exist")]
+    IssueNotFound,
+    #[error("the issue already has a live intake")]
+    IntakeActive {
+        intake_id: crate::ids::IssueIntakeId,
+    },
     #[error("the intake is already approved")]
     IntakeAlreadyApproved,
     #[error("the intake is already finished")]
@@ -262,6 +268,8 @@ impl Rejection {
             Rejection::InboxItemNotFound => "inbox_item_not_found",
             Rejection::InboxItemNotDismissible { .. } => "inbox_item_not_dismissible",
             Rejection::InboxItemClosed { .. } => "inbox_item_closed",
+            Rejection::IssueNotFound => "issue_not_found",
+            Rejection::IntakeActive { .. } => "intake_active",
             Rejection::IntakeAlreadyApproved => "intake_already_approved",
             Rejection::IntakeClosed { .. } => "intake_closed",
             Rejection::IntakeNotFailed => "intake_not_failed",
@@ -367,6 +375,7 @@ impl Rejection {
             Rejection::InboxItemNotDismissible { subject } => json!({ "subject": subject }),
             Rejection::InboxItemClosed { state } => json!({ "state": state }),
             Rejection::IntakeClosed { state } => json!({ "state": state }),
+            Rejection::IntakeActive { intake_id } => json!({ "intake_id": intake_id }),
             Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
             Rejection::HookRunGated { work_item_id } => json!({ "work_item_id": work_item_id }),
             Rejection::RuleDuplicate { rule_id } => json!({ "rule_id": rule_id }),

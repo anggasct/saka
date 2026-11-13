@@ -367,6 +367,15 @@ impl Engine {
         if job.kind == JobKind::ScmScanChanges {
             return self.scan_job(job).await;
         }
+        if job.kind == JobKind::ScmScanIssues {
+            return self.issue_scan_job(job).await;
+        }
+        if job.kind == JobKind::IntakeIssueRender {
+            return self.issue_render_job(job).await;
+        }
+        if job.kind == JobKind::ScmIssueComment {
+            return self.issue_comment_job(job).await;
+        }
         if job.kind == JobKind::ScmUserLinkPoll {
             return self.user_link_poll_job(job).await;
         }
@@ -447,6 +456,9 @@ impl Engine {
             | JobKind::DraftCommit
             | JobKind::WorkspaceReloadConfig
             | JobKind::ScmScanChanges
+            | JobKind::ScmScanIssues
+            | JobKind::IntakeIssueRender
+            | JobKind::ScmIssueComment
             | JobKind::ScmUserLinkPoll
             | JobKind::ScmUserLinkRefresh
             | JobKind::HookRun => Ok(Effect::Skipped),

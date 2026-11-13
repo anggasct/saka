@@ -1473,6 +1473,87 @@ impl Client {
         ExitCode::SUCCESS
     }
 
+    pub async fn issue_list(&self, project: &str, state: Option<&str>) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let filter = state.map(|s| format!("&state={s}")).unwrap_or_default();
+        let mut items: Vec<Value> = Vec::new();
+        let mut cursor = String::new();
+        loop {
+            let a = match self
+                .get(&format!(
+                    "/api/v1/projects/{id}/issue-intakes?limit=200&cursor={cursor}{filter}"
+                ))
+                .await
+            {
+                Ok(a) if a.ok() => a,
+                Ok(a) => return self.finish(&a, |_| String::new()),
+                Err(code) => return code,
+            };
+            items.extend(a.body["items"].as_array().cloned().unwrap_or_default());
+            match a.body["next_cursor"].as_str() {
+                Some(next) => cursor = next.to_string(),
+                None => break,
+            }
+        }
+        if self.json {
+            out(&json!({ "items": items }).to_string());
+        } else {
+            for i in &items {
+                out(&intake_line(i));
+            }
+        }
+        ExitCode::SUCCESS
+    }
+
+    pub async fn issue_intake(&self, project: &str, number: u64, repo: Option<&str>) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self
+            .post(
+                &format!("/api/v1/projects/{id}/issue-intakes"),
+                &json!({ "number": number, "repo": repo }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, intake_line),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn issue_dismiss(&self, id: &str, reason: Option<String>) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/issue-intakes/{id}/actions/dismiss"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, intake_line),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn issue_retry(&self, id: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/issue-intakes/{id}/actions/retry"),
+                &json!({}),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, intake_line),
+            Err(code) => code,
+        }
+    }
+
     pub async fn draft_show(&self, id: &str) -> ExitCode {
         match self.get(&format!("/api/v1/spec-drafts/{id}")).await {
             Ok(a) => self.finish(&a, draft_summary),
@@ -1738,6 +1819,18 @@ fn lines(body: &Value, line: impl Fn(&Value) -> String) -> String {
         .as_array()
         .map(|items| items.iter().map(&line).collect::<Vec<_>>().join("\n"))
         .unwrap_or_default()
+}
+
+fn intake_line(i: &Value) -> String {
+    format!(
+        "{}  #{}  {}  {} {}  {}",
+        text(&i["id"]),
+        text(&i["issue"]["number"]),
+        text(&i["state"]),
+        text(&i["kind"]),
+        text(&i["lane"]),
+        text(&i["issue"]["title"])
+    )
 }
 
 fn draft_line(d: &Value) -> String {

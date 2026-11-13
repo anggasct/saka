@@ -37,6 +37,9 @@ pub struct Counters {
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     docs_changes: Mutex<BTreeMap<(String, String), u64>>,
     quick_specs: Mutex<BTreeMap<(String, String), u64>>,
+    issue_intakes: Mutex<BTreeMap<(String, String, String), u64>>,
+    issue_denied: Mutex<BTreeMap<(String, String), u64>>,
+    issue_comments: Mutex<BTreeMap<(String, String), u64>>,
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
@@ -180,6 +183,21 @@ impl Counters {
 
     pub(crate) fn docs_change(&self, outcome: &str) {
         bump(&self.docs_changes, outcome, "");
+    }
+
+    pub(crate) fn issue_intake(&self, lane: &str, kind: &str, cause: &str) {
+        if let Ok(mut m) = self.issue_intakes.lock() {
+            *m.entry((lane.to_string(), kind.to_string(), cause.to_string()))
+                .or_default() += 1;
+        }
+    }
+
+    pub(crate) fn issue_denied(&self) {
+        bump(&self.issue_denied, "denied", "");
+    }
+
+    pub(crate) fn issue_comment(&self, outcome: &str) {
+        bump(&self.issue_comments, outcome, "");
     }
 
     pub(crate) fn quick_spec(&self, kind: &str, outcome: &str) {
@@ -408,6 +426,9 @@ pub struct MetricsSnapshot {
     pub path_scope_violations: Vec<(String, u64)>,
     pub docs_changes: Vec<(String, u64)>,
     pub quick_specs: Vec<(String, String, u64)>,
+    pub issue_intakes: Vec<(String, String, String, u64)>,
+    pub issue_denied: u64,
+    pub issue_comments: Vec<(String, u64)>,
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
     pub change_requests_opened: Vec<(String, u64)>,
@@ -608,6 +629,24 @@ impl Engine {
                 })
                 .collect(),
             quick_specs: copy(&self.counters.quick_specs),
+            issue_intakes: self
+                .counters
+                .issue_intakes
+                .lock()
+                .map(|m| {
+                    m.iter()
+                        .map(|((l, k, c), n)| (l.clone(), k.clone(), c.clone(), *n))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            issue_denied: copy(&self.counters.issue_denied)
+                .into_iter()
+                .map(|(_, _, n)| n)
+                .sum(),
+            issue_comments: copy(&self.counters.issue_comments)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
             user_link_authorizations: copy(&self.counters.user_link_authorizations),
             user_link_refreshes: copy(&self.counters.user_link_refreshes),
             change_requests_opened: copy(&self.counters.change_requests_opened)

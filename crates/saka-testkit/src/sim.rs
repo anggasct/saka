@@ -91,6 +91,7 @@ pub struct SimConfig {
     pub auth_enabled: bool,
     pub workflow_policy: saka_core::workflow::WorkflowPolicy,
     pub workflow: saka_core::workflow::Workflow,
+    pub public_url: Option<String>,
     pub autonomy_request: Option<saka_core::vocab::Autonomy>,
 }
 
@@ -212,6 +213,7 @@ impl Default for SimConfig {
             auth_enabled: false,
             workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
             workflow: saka_core::workflow::Workflow::default(),
+            public_url: None,
             autonomy_request: None,
         }
     }
@@ -408,6 +410,7 @@ impl Sim {
             entropy: Arc::new(FakeEntropy::default()),
             env: self.world.clone(),
             scm: self.world.clone(),
+            intake: self.world.clone(),
             agents: self.world.clone(),
             docs: self.world.clone(),
             toolchains: self.world.clone(),
@@ -447,6 +450,7 @@ impl Sim {
             hooks: self.cfg.hooks.clone(),
             auth_enabled: self.cfg.auth_enabled,
             workflow_policy: self.cfg.workflow_policy,
+            public_url: self.cfg.public_url.clone(),
         };
         let engine = Arc::new(Engine::new(Arc::new(store), ports, cfg));
         engine.recover().unwrap();

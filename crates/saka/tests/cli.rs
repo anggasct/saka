@@ -3018,3 +3018,77 @@ fn spec_session_and_draft_message_commit_and_discard_run_a_conversation() {
     assert_eq!(code(&discarded), 0, "{}", err(&discarded));
     assert_eq!(draft_state(&sim, revise_id), SpecDraftState::Cancelled);
 }
+
+#[test]
+fn issue_commands_take_issues_in_list_them_and_turn_them_down() {
+    let mut text = saka_toml("shop", &[repo_entry("shop", SHOP_REPO, "")]);
+    text.push_str(
+        "\n[workflow.issue]\n\n[workflow.issue.bugfix]\ndone_when = [\"cargo test\"]\nregression = [\"cargo test bug\"]\n",
+    );
+    let sim = Sim::multi_repo(
+        SimConfig::default(),
+        &Layout {
+            saka_toml: text,
+            ..Layout::default()
+        },
+    );
+    sim.world.open_issue(
+        SHOP_REPO,
+        saka_testkit::IssueSpec::new("Crash on start", "alice").labels(&["bug"]),
+    );
+    let server = serve(&sim);
+
+    let taken = saka(&server, &["--json", "issue", "intake", "shop", "1"]);
+    assert_eq!(
+        code(&taken),
+        0,
+        "{}",
+        String::from_utf8_lossy(&taken.stderr)
+    );
+    let id = json(&taken)["id"].as_str().unwrap().to_string();
+    assert_eq!(json(&taken)["lane"], "bugfix");
+
+    let again = saka(&server, &["issue", "intake", "shop", "1"]);
+    assert_eq!(code(&again), 4, "409 intake_active");
+    assert!(String::from_utf8_lossy(&again.stderr).contains("intake_active"));
+    let missing = saka(&server, &["issue", "intake", "shop", "77"]);
+    assert_eq!(code(&missing), 1, "404 issue_not_found");
+
+    let listed = saka(&server, &["issue", "list", "shop"]);
+    assert_eq!(code(&listed), 0);
+    assert!(
+        stdout(&listed).contains(&format!(
+            "{id}  #1  accepted  bugfix bugfix  Crash on start"
+        )),
+        "{}",
+        stdout(&listed)
+    );
+    let machine = saka(
+        &server,
+        &["--json", "issue", "list", "shop", "--state", "accepted"],
+    );
+    assert_eq!(json(&machine)["items"].as_array().unwrap().len(), 1);
+    let none = saka(
+        &server,
+        &["--json", "issue", "list", "shop", "--state", "done"],
+    );
+    assert!(json(&none)["items"].as_array().unwrap().is_empty());
+
+    let retry = saka(&server, &["issue", "retry", &id]);
+    assert_eq!(code(&retry), 4, "409 intake_not_failed");
+    let dismissed = saka(
+        &server,
+        &["--json", "issue", "dismiss", &id, "--reason", "duplicate"],
+    );
+    assert_eq!(
+        code(&dismissed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&dismissed.stderr)
+    );
+    assert_eq!(json(&dismissed)["state"], "dismissed");
+    let twice = saka(&server, &["issue", "dismiss", &id]);
+    assert_eq!(code(&twice), 4, "409 intake_closed");
+    let unknown = saka(&server, &["issue", "list", "nope"]);
+    assert_eq!(code(&unknown), 1);
+}

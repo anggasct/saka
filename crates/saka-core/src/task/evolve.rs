@@ -705,6 +705,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::IssueIntakeFailed { .. }
         | E::IssueIntakeRetried { .. }
         | E::IssueIntakeDismissed { .. }
+        | E::IssueIntakeCommentPosted { .. }
         | E::SpecDraftRequested { .. }
         | E::SpecDraftAttemptStarted { .. }
         | E::SpecDraftPacketRendered { .. }

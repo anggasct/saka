@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::scope::PathScope;
-use crate::vocab::{Autonomy, IssueTrigger, Stage, Trigger, WorkKind, WorkflowPreset};
+use crate::vocab::{Autonomy, IssueLane, IssueTrigger, Stage, Trigger, WorkKind, WorkflowPreset};
 
 pub const MAX_FILTER_ENTRIES: usize = 16;
 pub const MAX_FILTER_BYTES: usize = 100;
@@ -92,6 +92,88 @@ impl Default for IssueEntry {
             include_confidential: false,
             max_open: DEFAULT_ISSUE_MAX_OPEN,
             bugfix: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssueCandidate<'a> {
+    pub labels: &'a [String],
+    pub open: bool,
+    pub confidential: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueSkip {
+    Closed,
+    Excluded,
+    MissingLabel,
+    Confidential,
+}
+
+impl IssueSkip {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IssueSkip::Closed => "closed",
+            IssueSkip::Excluded => "excluded",
+            IssueSkip::MissingLabel => "missing_label",
+            IssueSkip::Confidential => "confidential",
+        }
+    }
+}
+
+fn kind_safety(kind: WorkKind) -> u8 {
+    match kind {
+        WorkKind::SecurityPatch => 4,
+        WorkKind::Bugfix => 3,
+        WorkKind::Refactor => 2,
+        WorkKind::Chore => 1,
+        WorkKind::Feature => 0,
+    }
+}
+
+impl IssueEntry {
+    pub fn screen(&self, candidate: &IssueCandidate<'_>) -> Result<(), IssueSkip> {
+        if !candidate.open {
+            return Err(IssueSkip::Closed);
+        }
+        if candidate.confidential && !self.include_confidential {
+            return Err(IssueSkip::Confidential);
+        }
+        if candidate
+            .labels
+            .iter()
+            .any(|l| contains_ignore_case(&self.exclude_labels, l))
+        {
+            return Err(IssueSkip::Excluded);
+        }
+        if !self
+            .labels
+            .iter()
+            .all(|required| contains_ignore_case(candidate.labels, required))
+        {
+            return Err(IssueSkip::MissingLabel);
+        }
+        Ok(())
+    }
+
+    pub fn is_trigger_label(&self, label: &str) -> bool {
+        self.trigger_label.eq_ignore_ascii_case(label)
+    }
+
+    pub fn kind_for(&self, labels: &[String]) -> WorkKind {
+        labels
+            .iter()
+            .filter_map(|l| self.kind_labels.get(&l.to_lowercase()).copied())
+            .max_by_key(|kind| kind_safety(*kind))
+            .unwrap_or(self.default_kind)
+    }
+
+    pub fn lane_for(&self, kind: WorkKind) -> IssueLane {
+        if kind == WorkKind::Bugfix && self.bugfix.is_some() {
+            IssueLane::Bugfix
+        } else {
+            IssueLane::Draft
         }
     }
 }
@@ -648,5 +730,85 @@ mod tests {
         assert!(!filter_text_ok(""));
         assert!(!filter_text_ok(&"x".repeat(MAX_FILTER_BYTES + 1)));
         assert!(!filter_text_ok("a\nb"));
+    }
+
+    fn labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    #[test]
+    fn an_issue_is_a_candidate_when_open_visible_and_carrying_the_required_labels() {
+        let entry = IssueEntry {
+            labels: labels(&["triage"]),
+            ..IssueEntry::default()
+        };
+        let candidate = |names: &[String], open, confidential| {
+            entry.screen(&IssueCandidate {
+                labels: names,
+                open,
+                confidential,
+            })
+        };
+        let ok = labels(&["Triage", "bug"]);
+        assert_eq!(candidate(&ok, true, false), Ok(()));
+        assert_eq!(candidate(&ok, false, false), Err(IssueSkip::Closed));
+        assert_eq!(
+            candidate(&labels(&["bug"]), true, false),
+            Err(IssueSkip::MissingLabel)
+        );
+        assert_eq!(
+            candidate(&labels(&["triage", "WontFix"]), true, false),
+            Err(IssueSkip::Excluded)
+        );
+        assert_eq!(candidate(&ok, true, true), Err(IssueSkip::Confidential));
+        let open = IssueEntry {
+            include_confidential: true,
+            ..entry.clone()
+        };
+        let seen = IssueCandidate {
+            labels: &ok,
+            open: true,
+            confidential: true,
+        };
+        assert_eq!(open.screen(&seen), Ok(()));
+    }
+
+    #[test]
+    fn the_kind_comes_from_the_labels_with_the_strongest_safety_winning() {
+        let entry = IssueEntry::default();
+        assert_eq!(entry.kind_for(&labels(&[])), WorkKind::Feature);
+        assert_eq!(entry.kind_for(&labels(&["docs"])), WorkKind::Feature);
+        assert_eq!(entry.kind_for(&labels(&["Chore"])), WorkKind::Chore);
+        assert_eq!(entry.kind_for(&labels(&["chore", "bug"])), WorkKind::Bugfix);
+        assert_eq!(
+            entry.kind_for(&labels(&["bug", "refactor", "security"])),
+            WorkKind::SecurityPatch
+        );
+        let chore_default = IssueEntry {
+            default_kind: WorkKind::Chore,
+            ..IssueEntry::default()
+        };
+        assert_eq!(chore_default.kind_for(&labels(&[])), WorkKind::Chore);
+    }
+
+    #[test]
+    fn only_a_bugfix_with_commands_takes_the_light_lane() {
+        let mut entry = IssueEntry::default();
+        assert_eq!(entry.lane_for(WorkKind::Bugfix), IssueLane::Draft);
+        entry.bugfix = Some(IssueBugfix {
+            done_when: vec!["cargo test".into()],
+            regression: vec!["cargo test bug".into()],
+        });
+        assert_eq!(entry.lane_for(WorkKind::Bugfix), IssueLane::Bugfix);
+        for kind in [
+            WorkKind::Feature,
+            WorkKind::Refactor,
+            WorkKind::Chore,
+            WorkKind::SecurityPatch,
+        ] {
+            assert_eq!(entry.lane_for(kind), IssueLane::Draft, "{kind}");
+        }
+        assert!(entry.is_trigger_label("SAKA:Intake"));
+        assert!(!entry.is_trigger_label("saka"));
     }
 }

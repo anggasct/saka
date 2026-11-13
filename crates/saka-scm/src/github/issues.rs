@@ -39,6 +39,7 @@ fn summary(item: &Value) -> PortResult<IssueSummary> {
             .filter_map(|l| l["name"].as_str().map(String::from))
             .collect(),
         confidential: false,
+        created_at: parse_time(&item["created_at"]).unwrap_or_default(),
         updated_at: parse_time(&item["updated_at"]).unwrap_or_default(),
     })
 }
@@ -199,7 +200,7 @@ mod tests {
     fn item() -> Value {
         json!({
             "number": 42, "title": "Crash on start", "html_url": "https://github.com/acme/app/issues/42",
-            "state": "open", "updated_at": "2026-11-04T10:00:00Z", "user": { "login": "alice" },
+            "state": "open", "created_at": "2026-11-03T10:00:00Z", "updated_at": "2026-11-04T10:00:00Z", "user": { "login": "alice" },
             "labels": [{ "name": "bug" }, { "name": "saka:intake" }],
         })
     }
@@ -212,6 +213,7 @@ mod tests {
         assert_eq!(s.state, IssueState::Open);
         assert!(!s.confidential);
         assert_eq!(s.updated_at, Timestamp(1_793_786_400_000));
+        assert_eq!(s.created_at, Timestamp(1_793_700_000_000));
     }
 
     #[test]

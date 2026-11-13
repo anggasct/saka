@@ -253,6 +253,43 @@ impl Engine {
         Ok((task, packet))
     }
 
+    fn closing_line(&self, task: &Task, pinned: &Pinned) -> Result<String> {
+        let Some(spec_id) = task.item.spec_id else {
+            return Ok(String::new());
+        };
+        let last = pinned
+            .model
+            .steps
+            .last()
+            .map(|s| s.id.as_str())
+            .is_some_and(|last| task.item.step_id.as_deref() == Some(last));
+        if !last {
+            return Ok(String::new());
+        }
+        let found = self.store.read(|c| {
+            let Some(intake) = saka_store::issue_intake::issue_intake_of_spec(c, spec_id)? else {
+                return Ok(None);
+            };
+            let repo = saka_store::read::load_repo(c, intake.repo_id)?;
+            Ok(repo.map(|r| (intake, r.id)))
+        })?;
+        let Some((intake, issue_repo)) = found else {
+            return Ok(String::new());
+        };
+        if !intake.is_live() && intake.state != saka_core::vocab::IssueIntakeState::Done {
+            return Ok(String::new());
+        }
+        if issue_repo == task.item.repo_id {
+            return Ok(format!("Closes #{}\n\n", intake.number));
+        }
+        let full_name = self
+            .store
+            .read(|c| saka_store::read::load_repo(c, issue_repo))?
+            .map(|r| r.full_name)
+            .unwrap_or_default();
+        Ok(format!("Closes {full_name}#{}\n\n", intake.number))
+    }
+
     pub(crate) fn change_text(&self, task: &Task) -> Result<(String, String)> {
         let pinned = self.pinned(task)?;
         let step = pinned.step(task);
@@ -261,8 +298,9 @@ impl Engine {
         let commands: String = step
             .map(|s| s.commands.iter().map(|c| format!("- `{c}`\n")).collect())
             .unwrap_or_default();
+        let closes = self.closing_line(task, &pinned)?;
         let body = format!(
-            "{work}\n\n**Spec:** `{path}` @ `{short}`, step {step_id}\n**Acceptance criteria:** {acs}\n**Done when:**\n{commands}\n{marker}\n",
+            "{work}\n\n**Spec:** `{path}` @ `{short}`, step {step_id}\n**Acceptance criteria:** {acs}\n**Done when:**\n{commands}\n{closes}{marker}\n",
             work = task.item.work,
             path = pinned.path,
             step_id = task.item.step_id.as_deref().unwrap_or_default(),

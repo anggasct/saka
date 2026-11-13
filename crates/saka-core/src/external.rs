@@ -46,7 +46,7 @@ impl Command {
     }
 }
 
-pub fn parse_commands(body: &str) -> Vec<Command> {
+fn command_words(body: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut fenced = false;
     for line in body.lines() {
@@ -62,18 +62,27 @@ pub fn parse_commands(body: &str) -> Vec<Command> {
         let (Some(prefix), Some(word)) = (words.next(), words.next()) else {
             continue;
         };
-        if !prefix.eq_ignore_ascii_case("/saka") {
-            continue;
+        if prefix.eq_ignore_ascii_case("/saka") {
+            found.push(word.to_ascii_lowercase());
         }
-        let command = match word.to_ascii_lowercase().as_str() {
-            "review" => Command::Review,
-            "fix" => Command::Fix,
-            "merge" => Command::Merge,
-            _ => continue,
-        };
-        found.push(command);
     }
     found
+}
+
+pub fn parse_commands(body: &str) -> Vec<Command> {
+    command_words(body)
+        .iter()
+        .filter_map(|word| match word.as_str() {
+            "review" => Some(Command::Review),
+            "fix" => Some(Command::Fix),
+            "merge" => Some(Command::Merge),
+            _ => None,
+        })
+        .collect()
+}
+
+pub fn asks_intake(body: &str) -> bool {
+    command_words(body).iter().any(|word| word == "intake")
 }
 
 pub fn task_key_tokens(text: &str) -> Vec<(String, u32)> {
@@ -510,6 +519,28 @@ mod tests {
             [Command::Review],
             "a command after a closed fence counts"
         );
+    }
+
+    #[test]
+    fn the_intake_command_follows_the_same_rules_as_the_review_commands() {
+        for text in [
+            "/saka intake",
+            "  /SAKA Intake please",
+            "thanks\n/saka intake",
+        ] {
+            assert!(asks_intake(text), "{text:?}");
+        }
+        for text in [
+            "please run /saka intake",
+            "> /saka intake",
+            "```\n/saka intake\n```",
+            "/sakaintake",
+            "/saka review",
+            "",
+        ] {
+            assert!(!asks_intake(text), "{text:?}");
+        }
+        assert!(parse_commands("/saka intake").is_empty());
     }
 
     #[test]
