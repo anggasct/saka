@@ -71,6 +71,41 @@ pub struct PreparedDocs {
     pub base_sha: String,
 }
 
+pub const CODE_DIR: &str = "code";
+pub const CODE_MAX_FILES: u64 = 50_000;
+pub const CODE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[must_use]
+pub fn code_path(root_path: &str, name: &str) -> String {
+    format!("{}/{CODE_DIR}/{name}", root_path.trim_end_matches('/'))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeRequest {
+    pub environment_id: EnvironmentId,
+    pub repo: RepoRef,
+    pub name: String,
+    pub base_branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedCode {
+    pub path: String,
+    pub base_sha: String,
+    pub files: u64,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeCheckout {
+    Ready(PreparedCode),
+    TooLarge {
+        base_sha: String,
+        files: u64,
+        bytes: u64,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvRef {
     pub environment_id: EnvironmentId,
@@ -251,6 +286,15 @@ pub trait Environments: Send + Sync {
     async fn prepare_docs(&self, request: &DocsRequest) -> PortResult<PreparedDocs>;
 
     async fn teardown_docs(&self, environment_id: EnvironmentId, repo: &RepoRef) -> PortResult<()>;
+
+    async fn prepare_code(&self, request: &CodeRequest) -> PortResult<CodeCheckout>;
+
+    async fn teardown_code(
+        &self,
+        environment_id: EnvironmentId,
+        repo: &RepoRef,
+        name: &str,
+    ) -> PortResult<()>;
 
     async fn inspect(&self, env: &EnvRef, base_sha: &str) -> PortResult<WorktreeState>;
 

@@ -23,6 +23,7 @@ use saka_store::draft as rows;
 use saka_store::{Batch, DraftSet, list, read};
 use serde_json::{Value, json};
 
+use self::code::CodeSet;
 use crate::action::{Action, Produced};
 use crate::commands::{SpecFile, reason};
 use crate::packet::{self, ArchitectInput, ArchitectPacket, PreviousAttempt};
@@ -30,6 +31,8 @@ use crate::register::{invalid, path_code};
 use crate::views::{self, DecisionView, PermissionView};
 use crate::worker::{Effect, Execution, field, internal, session_ref};
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
+
+mod code;
 
 pub const ARCHITECT_ACTOR: &str = "system:architect";
 pub const IDEA_MAX: usize = 8000;
@@ -1053,6 +1056,7 @@ impl Engine {
             secrets: Vec::new(),
             extra_dirs: Vec::new(),
         };
+        let code = self.prepare_code(d, &project, environment_id).await?;
         let previous = self.previous_attempt(d, attempt.attempt)?;
         if let Some((_, Some(content))) = &previous {
             self.ports
@@ -1061,13 +1065,13 @@ impl Engine {
                 .await?;
         }
         let previous = previous.map(|(p, _)| p);
-        let note = attempt.note.clone();
         let rendered = self
-            .architect_packet(d, &project, &repo, &prepared.base_sha, previous, note)
+            .architect_packet(d, &project, &repo, &prepared.base_sha, &code, previous)
             .await?;
         let packet = match rendered {
             Ok(packet) => packet,
             Err(missing) => {
+                self.teardown_code(&project, environment_id).await?;
                 self.ports.env.teardown(&env).await?;
                 return Ok(Effect::Draft {
                     input: DraftInput::EnvironmentFailed {
@@ -1097,6 +1101,7 @@ impl Engine {
                     text: packet.text,
                     sha256: packet.sha256,
                     documents: packet.documents,
+                    code_commits: code.commits(),
                 },
             },
             events: Vec::new(),
@@ -1143,8 +1148,8 @@ impl Engine {
         project: &Project,
         repo: &RepoRef,
         base_sha: &str,
+        code: &CodeSet,
         previous: Option<PreviousAttempt>,
-        note: Option<String>,
     ) -> std::result::Result<std::result::Result<ArchitectPacket, String>, PortError> {
         let docs = &self.ports.docs;
         let mut selected = Vec::new();
@@ -1198,8 +1203,10 @@ impl Engine {
             always,
             unreadable,
             index,
+            code: code.entries.clone(),
+            code_skipped: code.skipped.clone(),
             previous,
-            note,
+            note: d.running_attempt().and_then(|a| a.note.clone()),
         })))
     }
 
@@ -1226,13 +1233,15 @@ impl Engine {
             return Ok(Effect::Skipped);
         };
         let (project, repo) = self.workspace(d)?;
+        let mut environment = self.draft_env_ref(repo, env);
+        environment.extra_dirs = self.code_extra_dirs(d);
         let launched = self
             .ports
             .agents
             .start(&SessionLaunch {
                 session_id,
                 owner,
-                environment: self.draft_env_ref(repo, env),
+                environment,
                 resume_cli_session_id: saka_core::resume::plan(&view)
                     .and_then(|p| p.cli_session_id),
                 profile: LaunchProfile::Architect {
@@ -1661,11 +1670,13 @@ impl Engine {
         else {
             return Ok(Effect::Skipped);
         };
-        let (_, repo) = self.workspace(d)?;
+        let (project, repo) = self.workspace(d)?;
+        let code = self.teardown_code(&project, id).await;
         self.ports
             .env
             .teardown(&self.draft_env_ref(repo, env))
             .await?;
+        code?;
         Ok(Effect::Draft {
             input: DraftInput::EnvironmentTornDown { environment_id: id },
             events: Vec::new(),

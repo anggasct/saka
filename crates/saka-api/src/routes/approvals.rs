@@ -336,6 +336,7 @@ pub async fn evaluate_permission(
             path,
             inside_worktree: true,
             through_symlink: false,
+            in_reference: false,
         }),
     };
     let decision = tri!(engine.evaluate_permission(project, &request));

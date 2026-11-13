@@ -178,6 +178,22 @@ fn project_path_arg(path: &str) -> PortResult<()> {
     }
 }
 
+fn code_name_arg(name: &str) -> PortResult<()> {
+    let plain = !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'));
+    if plain {
+        Ok(())
+    } else {
+        Err(PortError::permanent(
+            "git_argument_invalid",
+            json!({ "field": "code_name" }),
+        ))
+    }
+}
+
 fn is_sha(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -838,6 +854,7 @@ pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
         path: raw.to_string(),
         inside_worktree: false,
         through_symlink: false,
+        in_reference: false,
     };
     let Ok(root) = worktree.canonicalize() else {
         return outside();
@@ -878,6 +895,7 @@ pub fn resolve(worktree: &Path, raw: &str) -> RequestPath {
             path: rel.to_string_lossy().into_owned(),
             inside_worktree: true,
             through_symlink,
+            in_reference: false,
         },
         Err(_) => outside(),
     }

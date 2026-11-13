@@ -148,16 +148,16 @@ impl ClaudeAgents {
             &worktree,
         );
         let add_dirs = match launch.profile {
-            LaunchProfile::Task => launch
+            LaunchProfile::Task | LaunchProfile::Architect { .. } => launch
                 .environment
                 .extra_dirs
                 .iter()
                 .map(|dir| {
                     std::fs::canonicalize(&dir.path)
-                        .map_err(|e| io_error("docs_dir_unreadable", &e))
+                        .map_err(|e| io_error("extra_dir_unreadable", &e))
                 })
                 .collect::<PortResult<Vec<_>>>()?,
-            LaunchProfile::Architect { .. } | LaunchProfile::Reviewer => Vec::new(),
+            LaunchProfile::Reviewer => Vec::new(),
         };
         let options = LaunchOptions {
             cwd: &cwd,
@@ -726,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn a_task_session_gets_the_docs_checkout_as_an_added_dir_and_its_path_in_the_env() {
+    fn task_and_architect_sessions_get_their_extra_dirs_as_added_dirs() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let root = dir
             .path()
@@ -759,13 +759,18 @@ mod tests {
 
         let mut architect = launch(&root, LaunchProfile::Architect { cwd: ".".into() }, None);
         architect.environment.extra_dirs = vec![saka_ports::ExtraDir {
-            path: docs_dir,
-            writable: true,
+            path: docs_dir.clone(),
+            writable: false,
         }];
         let (spec, _paths) = agents
             .launch_spec(Path::new("/usr/bin/claude"), &architect)
             .unwrap_or_else(|e| panic!("{e:?}"));
-        assert!(!spec.args.contains(&"--add-dir".to_string()));
+        let at = spec
+            .args
+            .iter()
+            .position(|a| a == "--add-dir")
+            .unwrap_or_else(|| panic!("no --add-dir in {:?}", spec.args));
+        assert_eq!(spec.args[at + 1], docs_dir);
 
         task.environment.extra_dirs = vec![saka_ports::ExtraDir {
             path: root.join("gone").to_string_lossy().into_owned(),
@@ -774,7 +779,7 @@ mod tests {
         let missing = agents
             .launch_spec(Path::new("/usr/bin/claude"), &task)
             .unwrap_err();
-        assert_eq!(missing.code, "docs_dir_unreadable");
+        assert_eq!(missing.code, "extra_dir_unreadable");
     }
 
     #[test]

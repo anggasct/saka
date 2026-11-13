@@ -18,7 +18,7 @@ macro_rules! spec_draft_attempt_columns {
         spec_draft_attempt_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "spec_draft_id", "project_id", "attempt", "trigger", "reason", "note", "state", "base_sha", "budget", "budget_warnings", "resumed_lost", "rounds", "packet", "packet_sha256", "failure", "started_at", "ended_at")
+        qualified!($prefix: "id", "spec_draft_id", "project_id", "attempt", "trigger", "reason", "note", "state", "base_sha", "budget", "budget_warnings", "resumed_lost", "rounds", "packet", "packet_sha256", "failure", "started_at", "ended_at", "code_commits")
     };
 }
 

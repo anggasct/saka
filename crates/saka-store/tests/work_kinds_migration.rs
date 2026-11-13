@@ -158,7 +158,7 @@ fn the_migration_carries_old_rows_as_features_and_adds_kinds_quick_specs_and_reg
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
+        vec![39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
     );
     drop(store);
 

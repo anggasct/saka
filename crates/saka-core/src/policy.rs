@@ -37,6 +37,7 @@ pub struct RequestPath {
     pub path: String,
     pub inside_worktree: bool,
     pub through_symlink: bool,
+    pub in_reference: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,7 +298,7 @@ impl Rule {
         }
         if let Some(paths) = &self.paths {
             match &request.path {
-                Some(p) if p.inside_worktree && paths.is_match(&p.path) => {}
+                Some(p) if (p.inside_worktree || p.in_reference) && paths.is_match(&p.path) => {}
                 _ => return false,
             }
         }
@@ -346,13 +347,15 @@ fn architect_with(
     writable: impl Fn(&RequestPath) -> bool,
     denied: &str,
 ) -> Decision {
-    if let Some(name) = builtin_deny(request) {
+    let tool = request.tool.as_str();
+    let reads_reference = ARCHITECT_READ_TOOLS.contains(&tool)
+        && request.path.as_ref().is_some_and(|p| p.in_reference);
+    if !reads_reference && let Some(name) = builtin_deny(request) {
         return Decision::new(Effect::Deny, DecisionSource::Builtin(name.to_string()));
     }
     if let Some(rule) = operator.first(Effect::Deny, request) {
         return rule;
     }
-    let tool = request.tool.as_str();
     let allow =
         |name: &str| Decision::new(Effect::Allow, DecisionSource::Architect(name.to_string()));
     if tool == DECISION_TOOL {
@@ -477,6 +480,7 @@ mod tests {
                 path: path.into(),
                 inside_worktree: inside,
                 through_symlink: false,
+                in_reference: false,
             }),
         }
     }
@@ -1117,6 +1121,7 @@ mod tests {
                         path: path.into(),
                         inside_worktree: inside,
                         through_symlink: false,
+                        in_reference: false,
                     }),
                 }),
         ]
@@ -1168,7 +1173,7 @@ mod tests {
 
         #[test]
         fn paths_outside_the_worktree_are_always_denied(specs in rules(), path in "[a-z./]{1,12}") {
-            let req = ToolRequest { tool: "Edit".into(), command: None, path: Some(RequestPath { path, inside_worktree: false, through_symlink: false }) };
+            let req = ToolRequest { tool: "Edit".into(), command: None, path: Some(RequestPath { path, inside_worktree: false, through_symlink: false, in_reference: false }) };
             prop_assert_eq!(Policy::compile(&specs).unwrap().evaluate(&req).effect, Effect::Deny);
         }
     }
@@ -1190,6 +1195,7 @@ mod architect_tests {
                 path: path.into(),
                 inside_worktree: inside,
                 through_symlink: symlink,
+                in_reference: false,
             }),
         }
     }
@@ -1233,6 +1239,59 @@ mod architect_tests {
         }
         let todo = architect(&at("TodoWrite", None, None), TARGET, &operator());
         assert_eq!(source(&todo).as_deref(), Some("policy:architect:read"));
+    }
+
+    fn in_reference(tool: &str) -> ToolRequest {
+        ToolRequest {
+            tool: tool.into(),
+            command: None,
+            path: Some(RequestPath {
+                path: "src/lib.rs".into(),
+                inside_worktree: false,
+                through_symlink: false,
+                in_reference: true,
+            }),
+        }
+    }
+
+    #[test]
+    fn read_tools_in_a_reference_checkout_are_allowed_and_nothing_else_is() {
+        for tool in ARCHITECT_READ_TOOLS {
+            for d in [
+                architect(&in_reference(tool), TARGET, &operator()),
+                architect_session(&in_reference(tool), "docs", &operator()),
+            ] {
+                assert_eq!(d.effect, Effect::Allow, "{tool}");
+                assert_eq!(source(&d).as_deref(), Some("policy:architect:read"));
+            }
+        }
+        for tool in ARCHITECT_WRITE_TOOLS
+            .iter()
+            .chain(&["Bash", "NotebookEdit"])
+        {
+            for d in [
+                architect(&in_reference(tool), TARGET, &operator()),
+                architect_session(&in_reference(tool), "docs", &operator()),
+            ] {
+                assert_eq!(d.effect, Effect::Deny, "{tool}");
+            }
+        }
+        let secret = ToolRequest {
+            path: in_reference("Read").path.map(|p| RequestPath {
+                path: "config/.env".into(),
+                ..p
+            }),
+            ..in_reference("Read")
+        };
+        assert_eq!(architect(&secret, TARGET, &operator()).effect, Effect::Deny);
+    }
+
+    #[test]
+    fn a_task_or_reviewer_never_reads_through_a_reference_checkout() {
+        let read = in_reference("Read");
+        assert_eq!(reviewer(&read, &operator()).effect, Effect::Deny);
+        let d = operator().evaluate(&read);
+        assert_eq!(d.effect, Effect::Deny);
     }
 
     #[test]
@@ -1458,6 +1517,7 @@ mod architect_tests {
                     path,
                     inside_worktree: inside,
                     through_symlink: symlink,
+                    in_reference: false,
                 }),
             })
     }
@@ -1508,6 +1568,7 @@ mod reviewer_tests {
                 path: path.into(),
                 inside_worktree: inside,
                 through_symlink: symlink,
+                in_reference: false,
             }),
         }
     }
@@ -1642,6 +1703,7 @@ mod reviewer_tests {
                     path,
                     inside_worktree: inside,
                     through_symlink: symlink,
+                    in_reference: false,
                 }),
             })
     }

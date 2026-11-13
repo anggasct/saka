@@ -973,14 +973,14 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
             .map(|(_, text)| text.as_str());
         tx.execute(
             "INSERT INTO spec_draft_attempt (id, spec_draft_id, project_id, attempt, trigger, reason, note, state,
-               base_sha, budget, budget_warnings, resumed_lost, rounds, packet, packet_sha256, failure, started_at,
-               ended_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+               base_sha, budget, budget_warnings, resumed_lost, rounds, packet, packet_sha256, code_commits, failure,
+               started_at, ended_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT (id) DO UPDATE SET state = excluded.state, base_sha = excluded.base_sha,
                budget_warnings = excluded.budget_warnings, resumed_lost = excluded.resumed_lost,
                rounds = excluded.rounds, packet = coalesce(spec_draft_attempt.packet, excluded.packet),
                packet_sha256 = coalesce(spec_draft_attempt.packet_sha256, excluded.packet_sha256),
-               failure = excluded.failure, ended_at = excluded.ended_at",
+               code_commits = excluded.code_commits, failure = excluded.failure, ended_at = excluded.ended_at",
             params![
                 a.id.to_string(),
                 x.id.to_string(),
@@ -997,6 +997,7 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
                 a.rounds,
                 packet,
                 packet.and(a.packet_sha256.as_deref()),
+                to_json(&a.code_commits)?,
                 a.failure.as_ref().map(to_json).transpose()?,
                 a.started_at.0,
                 a.ended_at.map(|t| t.0),

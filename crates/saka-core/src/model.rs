@@ -1074,6 +1074,7 @@ pub struct SpecDraftAttempt {
     pub resumed_lost: bool,
     pub rounds: u32,
     pub packet_sha256: Option<String>,
+    pub code_commits: BTreeMap<String, String>,
     pub failure: Option<Coded>,
     pub started_at: Timestamp,
     pub ended_at: Option<Timestamp>,

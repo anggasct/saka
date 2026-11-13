@@ -31,11 +31,12 @@ pub use docs::{
     DocFilesCommit, DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite,
 };
 pub use env::{
-    BaseProbe, ChangeDiff, ChangedPaths, Checkout, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest,
-    EnvRef, Environments, ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest,
-    PreparedDocs, PreparedEnvironment, REVERT_PATHS_MAX, Rebase, RecipeCommand,
-    RecipeCommandOutcome, RecipePhase, Release, ReleaseIndex, RevertRequest, Reverted,
-    WorktreeChange, WorktreeFile, WorktreeState, output_tail,
+    BaseProbe, CODE_DIR, CODE_MAX_BYTES, CODE_MAX_FILES, ChangeDiff, ChangedPaths, Checkout,
+    CodeCheckout, CodeRequest, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest, EnvRef, Environments,
+    ExtraDir, OUTPUT_TAIL_BYTES, OUTPUT_TAIL_LINES, PrepareRequest, PreparedCode, PreparedDocs,
+    PreparedEnvironment, REVERT_PATHS_MAX, Rebase, RecipeCommand, RecipeCommandOutcome,
+    RecipePhase, Release, ReleaseIndex, RevertRequest, Reverted, WorktreeChange, WorktreeFile,
+    WorktreeState, code_path, output_tail,
 };
 pub use git::{
     Blob, CommitFile, CommitFiles, CommitPush, EntryKind, GitAccess, GitRemote, PushCommit, Repos,

@@ -41,6 +41,7 @@ fn request_of(p: &PermissionRequest) -> ToolRequest {
             path: path.to_string(),
             inside_worktree: true,
             through_symlink: false,
+            in_reference: false,
         });
     ToolRequest {
         tool: p.tool.clone(),

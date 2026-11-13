@@ -18,6 +18,7 @@ pub fn resolve_in(worktree: &Path, cwd: &str, raw: &str) -> RequestPath {
             path: raw.to_string(),
             inside_worktree: false,
             through_symlink: resolved.through_symlink,
+            in_reference: false,
         }
     }
 }

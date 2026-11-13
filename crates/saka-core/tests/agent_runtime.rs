@@ -965,6 +965,7 @@ fn remember_makes_an_exact_project_rule_that_never_beats_a_deny() {
             path: "/etc/passwd".into(),
             inside_worktree: false,
             through_symlink: false,
+            in_reference: false,
         }),
     };
     assert_eq!(p.evaluate_with(&outside, &wide).effect, Effect::Deny);

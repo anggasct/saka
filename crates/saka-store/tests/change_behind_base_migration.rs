@@ -109,7 +109,7 @@ fn the_migration_keeps_blockers_accepts_the_new_code_and_adds_the_update_marker(
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
+        vec![38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
     );
     drop(store);
 

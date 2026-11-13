@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use crate::Ctx;
@@ -40,6 +42,7 @@ pub struct PacketFacts {
     pub text: String,
     pub sha256: String,
     pub documents: Vec<DraftDocument>,
+    pub code_commits: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -337,6 +340,7 @@ impl Decider<'_> {
                 base_sha,
                 packet_sha256: packet.sha256,
                 documents: packet.documents,
+                code_commits: packet.code_commits,
             },
         ]
     }
@@ -914,6 +918,7 @@ fn apply(d: &mut Draft, event: &Event, now: Timestamp) {
                 resumed_lost: false,
                 rounds: 0,
                 packet_sha256: None,
+                code_commits: BTreeMap::new(),
                 failure: None,
                 started_at: now,
                 ended_at: None,
@@ -923,11 +928,13 @@ fn apply(d: &mut Draft, event: &Event, now: Timestamp) {
             attempt_id,
             base_sha,
             packet_sha256,
+            code_commits,
             ..
         } => {
             if let Some(a) = d.attempt.as_mut().filter(|a| a.id == *attempt_id) {
                 a.base_sha = Some(base_sha.clone());
                 a.packet_sha256 = Some(packet_sha256.clone());
+                a.code_commits.clone_from(code_commits);
                 d.draft.state = SpecDraftState::Drafting;
             }
         }
