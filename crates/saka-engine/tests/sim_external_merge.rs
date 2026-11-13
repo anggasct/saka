@@ -2,12 +2,13 @@
 
 use saka_core::model::Task;
 use saka_core::vocab::{
-    BlockerAction, BlockerCode, BlockerResolution, Stage, StagePhase, WorkItemState,
+    BlockerAction, BlockerCode, BlockerResolution, CheckConclusion, GateSource, Stage, StagePhase,
+    WorkItemState,
 };
 use saka_ports::{ScmCapabilities, UpdateOutcome};
 use saka_testkit::{
-    ChangeSpec, FAKE_CAPABILITIES, Layout, ReviewReply, SHOP_REPO, Sim, SimConfig, repo_entry,
-    saka_toml,
+    ChangeSpec, CiScript, FAKE_CAPABILITIES, Layout, ReviewReply, SHOP_REPO, Sim, SimConfig,
+    repo_entry, saka_toml,
 };
 
 const STEPS: usize = 12_000;
@@ -315,4 +316,73 @@ fn a_provider_without_branch_updates_asks_the_author_instead() {
     );
     assert!(sim.run_until(STEPS, |s| s.world.comments().len() == 1));
     assert!(sim.world.update_calls().is_empty());
+}
+
+fn scm_gate_checks(task: &Task) -> Vec<(String, Option<CheckConclusion>)> {
+    let head = &task.change_request.as_ref().unwrap().head_sha;
+    task.gate_for(GateSource::Scm, head)
+        .map(|g| {
+            g.checks
+                .iter()
+                .map(|c| (c.name.clone(), c.conclusion))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn an_approved_outside_change_with_failing_ci_blocks_as_ci_red_instead_of_awaiting_the_merge() {
+    let mut sim = sim(REVIEW_ONLY);
+    sim.world.set_commit_ci(CiScript::Fail(vec!["test".into()]));
+    sim.world.script_reviews(vec![ReviewReply::approve()]);
+    open(&sim, change());
+    assert!(sim.run_until(STEPS, |s| {
+        s.externals().iter().any(|t| {
+            t.open_blocker()
+                .is_some_and(|b| b.code == BlockerCode::CiRed)
+                || t.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+        })
+    }));
+    let task = only(&sim);
+    assert!(!task.is_at(Stage::Merge, StagePhase::AwaitingMerge));
+    assert_eq!(task.open_blocker().unwrap().code, BlockerCode::CiRed);
+    assert_eq!(
+        scm_gate_checks(&task),
+        [("test".to_string(), Some(CheckConclusion::Failure))]
+    );
+    assert!(sim.world.merge_calls().is_empty());
+}
+
+#[test]
+fn an_approved_outside_change_with_passing_ci_awaits_the_merge_with_its_checks_as_evidence() {
+    let mut sim = sim(REVIEW_ONLY);
+    sim.world.set_commit_ci(CiScript::Pass);
+    sim.world.script_reviews(vec![ReviewReply::approve()]);
+    open(&sim, change());
+    awaiting_merge(&mut sim);
+    assert_eq!(
+        scm_gate_checks(&only(&sim)),
+        [("test".to_string(), Some(CheckConclusion::Success))]
+    );
+}
+
+#[test]
+fn an_outside_change_in_review_reads_no_ci_checks() {
+    let mut sim = sim(REVIEW_ONLY);
+    sim.world.set_commit_ci(CiScript::Pass);
+    sim.world
+        .script_reviews(vec![ReviewReply::request_changes("handle the timeout")]);
+    open(&sim, change());
+    assert!(sim.run_until(STEPS, |s| {
+        s.externals().iter().any(|t| !t.reviews.is_empty())
+    }));
+    let polls = |sim: &Sim, op: &str| sim.world.scm_calls().iter().filter(|c| c.op == op).count();
+    let before = polls(&sim, "change_summary");
+    for _ in 0..400 {
+        sim.step();
+    }
+    let task = only(&sim);
+    assert!(!task.is_at_stage(Stage::Merge));
+    assert!(polls(&sim, "change_summary") > before);
+    assert_eq!(polls(&sim, "commit_checks"), 0);
 }

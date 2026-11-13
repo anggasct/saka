@@ -404,13 +404,21 @@ impl Engine {
         } else {
             (None, None)
         };
+        let checks = if summary.state == ChangeState::Open && task.is_at_stage(Stage::Merge) {
+            self.ports
+                .scm
+                .commit_checks(&repo, &summary.head_sha)
+                .await?
+        } else {
+            Vec::new()
+        };
         Ok(Effect::Fact(TaskInput::ChangeObserved {
             role: ChangeRole::Code,
             state: summary.state,
             head_sha: summary.head_sha,
             merge_commit_sha,
             merged_at,
-            checks: Vec::new(),
+            checks,
         }))
     }
 
