@@ -184,6 +184,8 @@ vocab!(BlockerAction {
     SetUserToken => "set_user_token",
     EditSpec => "edit_spec",
     UpdateBranch => "update_branch",
+    Revert => "revert",
+    DraftFix => "draft_fix",
 });
 vocab!(InboxKind {
     Decision => "decision",
@@ -222,6 +224,8 @@ vocab!(InboxActionKind {
     RetryIntake => "retry_intake",
     DismissIntake => "dismiss_intake",
     Redeploy => "redeploy",
+    Revert => "revert",
+    DraftFix => "draft_fix",
 });
 vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
 vocab!(ChangeRole { Code => "code", Docs => "docs" });

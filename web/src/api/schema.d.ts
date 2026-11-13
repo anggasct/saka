@@ -276,6 +276,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/deployments/{deployment_id}/actions/draft-fix": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["draft_fix"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/diagnostics": {
     parameters: {
       query?: never;
@@ -1848,6 +1864,7 @@ export interface components {
       environment: string;
       error?: components["schemas"]["DeploymentError"] | null;
       finished_at?: string | null;
+      fix_draft?: components["schemas"]["DeploymentFixDraft"] | null;
       /** Format: uuid */
       id: string;
       /** @description The merges the deployment carries. Only in the detail. */
@@ -1895,6 +1912,12 @@ export interface components {
     DeploymentError: {
       code: string;
       params: unknown;
+    };
+    DeploymentFixDraft: {
+      /** Format: uuid */
+      id: string;
+      /** @description `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled` */
+      state: string;
     };
     DeploymentMerge: {
       /** Format: uuid */
@@ -2003,6 +2026,10 @@ export interface components {
       /** @description `open`, `merged` or `closed`. */
       state: string;
       url: string;
+    };
+    DraftFixBody: {
+      /** @description Up to 1000 characters, added to the idea as the operator's own text. */
+      note?: string | null;
     };
     EmptyBody: Record<string, never>;
     EnvironmentDocs: {
@@ -2509,6 +2536,7 @@ export interface components {
         environment: string;
         error?: components["schemas"]["DeploymentError"] | null;
         finished_at?: string | null;
+        fix_draft?: components["schemas"]["DeploymentFixDraft"] | null;
         /** Format: uuid */
         id: string;
         /** @description The merges the deployment carries. Only in the detail. */
@@ -2738,6 +2766,11 @@ export interface components {
         commit?: string | null;
         context_paths: string[];
         created_at: string;
+        /**
+         * Format: uuid
+         * @description The failed deployment the draft proposes a fix for; `null` for every other draft.
+         */
+        deployment_id?: string | null;
         failure?: components["schemas"]["Failure"] | null;
         finished_at?: string | null;
         /** Format: uuid */
@@ -3569,6 +3602,11 @@ export interface components {
       commit?: string | null;
       context_paths: string[];
       created_at: string;
+      /**
+       * Format: uuid
+       * @description The failed deployment the draft proposes a fix for; `null` for every other draft.
+       */
+      deployment_id?: string | null;
       failure?: components["schemas"]["Failure"] | null;
       finished_at?: string | null;
       /** Format: uuid */
@@ -4667,6 +4705,42 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Deployment"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  draft_fix: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        deployment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DraftFixBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
         };
       };
       "4XX": {

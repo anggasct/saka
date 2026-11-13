@@ -708,6 +708,64 @@
         }
       }
     },
+    "/api/v1/deployments/{deployment_id}/actions/draft-fix": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "draft_fix",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftFixBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/diagnostics": {
       "get": {
         "tags": [
@@ -6802,6 +6860,17 @@
               "null"
             ]
           },
+          "fix_draft": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentFixDraft",
+                "description": "The newest draft that proposes a fix for this deployment; `null` when none. Only in the detail."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -6965,6 +7034,23 @@
             "type": "string"
           },
           "params": {}
+        }
+      },
+      "DeploymentFixDraft": {
+        "type": "object",
+        "required": [
+          "id",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`"
+          }
         }
       },
       "DeploymentMerge": {
@@ -7333,6 +7419,19 @@
             "type": "string"
           }
         }
+      },
+      "DraftFixBody": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 1000 characters, added to the idea as the operator's own text."
+          }
+        },
+        "additionalProperties": false
       },
       "EmptyBody": {
         "type": "object",
@@ -8968,6 +9067,17 @@
                     "null"
                   ]
                 },
+                "fix_draft": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DeploymentFixDraft",
+                      "description": "The newest draft that proposes a fix for this deployment; `null` when none. Only in the detail."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "id": {
                   "type": "string",
                   "format": "uuid"
@@ -9831,6 +9941,14 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "deployment_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The failed deployment the draft proposes a fix for; `null` for every other draft."
                 },
                 "failure": {
                   "oneOf": [
@@ -12561,6 +12679,14 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "deployment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The failed deployment the draft proposes a fix for; `null` for every other draft."
           },
           "failure": {
             "oneOf": [

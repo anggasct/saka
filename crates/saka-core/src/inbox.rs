@@ -9,8 +9,8 @@ use crate::model::{Blocker, DecisionRequest, Draft, PermissionRequest, Spec, Tas
 use crate::task::{auto_merge_enabled, merge_ready};
 use crate::vocab::{
     BlockerCode, DecisionState, DeploymentState, InboxActionKind, InboxKind, InboxState,
-    InboxSubject, IssueIntakeState, PermissionState, SpecState, Stage, StagePhase, WorkItemOrigin,
-    WorkItemState,
+    InboxSubject, IssueIntakeState, OnFailure, PermissionState, SpecState, Stage, StagePhase,
+    WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -288,12 +288,18 @@ fn for_deployment(deployment: &Deployment, gated: bool) -> Vec<InboxDraft> {
             "sha": deployment.sha,
             "on_failure": deployment.on_failure,
         }),
-        action: InboxAction {
-            kind: InboxActionKind::Redeploy,
-            params: json!({
-                "project_id": deployment.project_id,
-                "environment": deployment.environment,
-            }),
+        action: match deployment.on_failure {
+            OnFailure::Fix => InboxAction {
+                kind: InboxActionKind::DraftFix,
+                params: json!({ "deployment_id": deployment.id }),
+            },
+            OnFailure::Revert => InboxAction {
+                kind: InboxActionKind::Redeploy,
+                params: json!({
+                    "project_id": deployment.project_id,
+                    "environment": deployment.environment,
+                }),
+            },
         },
     }]
 }
@@ -347,6 +353,8 @@ impl From<crate::vocab::BlockerAction> for InboxActionKind {
             B::SetUserToken => InboxActionKind::SetUserToken,
             B::EditSpec => InboxActionKind::EditSpec,
             B::UpdateBranch => InboxActionKind::UpdateBranch,
+            B::Revert => InboxActionKind::Revert,
+            B::DraftFix => InboxActionKind::DraftFix,
         }
     }
 }

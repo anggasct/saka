@@ -89,6 +89,7 @@ impl World {
             target_kind: TargetKind::New,
             kind: WorkKind::Feature,
             context_paths: vec![],
+            deployment_id: None,
         });
         let d = draft::evolve(None, &event, T0).unwrap();
         World {

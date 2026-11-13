@@ -994,6 +994,7 @@ pub struct SpecDraft {
     pub target_kind: TargetKind,
     pub kind: WorkKind,
     pub context_paths: Vec<String>,
+    pub deployment_id: Option<crate::ids::DeploymentId>,
     pub state: SpecDraftState,
     pub attempt: u32,
     pub current_attempt_id: Option<SpecDraftAttemptId>,

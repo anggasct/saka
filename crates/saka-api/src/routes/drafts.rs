@@ -103,6 +103,7 @@ pub async fn create_spec_draft(
                 target_kind,
                 kind,
                 context_paths: req.context_paths,
+                deployment_id: None,
             };
             engine
                 .create_spec_draft(project, new, &cause, Some(&action))

@@ -169,6 +169,10 @@ pub enum Rejection {
     EnvironmentNotFound,
     #[error("the environment already has a deployment waiting")]
     DeploymentQueued { deployment_id: String },
+    #[error("the deployment did not fail")]
+    DeploymentNotFailed,
+    #[error("the deployment already has a fix draft in progress")]
+    FixDraftInProgress { spec_draft_id: String },
     #[error("the deployment is running its deploy action")]
     DeploymentRunning,
     #[error("the deployment already finished")]
@@ -312,6 +316,8 @@ impl Rejection {
             Rejection::RevertNotAllowed { .. } => "revert_not_allowed",
             Rejection::EnvironmentNotFound => "environment_not_found",
             Rejection::DeploymentQueued { .. } => "deployment_queued",
+            Rejection::DeploymentNotFailed => "deployment_not_failed",
+            Rejection::FixDraftInProgress { .. } => "fix_draft_in_progress",
             Rejection::DeploymentRunning => "deployment_running",
             Rejection::DeploymentFinished => "deployment_finished",
             Rejection::RevertInProgress { .. } => "revert_in_progress",
@@ -393,6 +399,9 @@ impl Rejection {
             }
             Rejection::DeploymentQueued { deployment_id } => {
                 json!({ "deployment_id": deployment_id })
+            }
+            Rejection::FixDraftInProgress { spec_draft_id } => {
+                json!({ "spec_draft_id": spec_draft_id })
             }
             Rejection::BlockerNotOpen { blocker_id } => json!({ "blocker_id": blocker_id }),
             Rejection::BlockerActionChanged {

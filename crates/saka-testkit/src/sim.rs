@@ -710,6 +710,7 @@ impl Sim {
                 target_kind,
                 kind: saka_core::vocab::WorkKind::Feature,
                 context_paths: context_paths.iter().map(|p| (*p).to_string()).collect(),
+                deployment_id: None,
             },
             &cause,
             None,

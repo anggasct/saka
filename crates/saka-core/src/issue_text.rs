@@ -12,9 +12,9 @@ pub const MAX_QUICK_DESCRIPTION_CHARS: usize = 4000;
 pub const MAX_IDEA_CHARS: usize = 8000;
 pub const MAX_COMMENT_CHARS: usize = 1000;
 pub const MAX_REASON_CHARS: usize = 500;
-const FENCE_MIN: usize = 3;
+pub(crate) const FENCE_MIN: usize = 3;
 
-fn single_line(text: &str) -> String {
+pub(crate) fn single_line(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
@@ -80,7 +80,7 @@ pub fn clean_body(raw: &str, redactor: &Redactor) -> String {
     cleaned
 }
 
-fn truncated(text: &str, max_chars: usize) -> String {
+pub(crate) fn truncated(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
@@ -102,7 +102,7 @@ pub fn quick_description(url: &str, author: &str, body: &str) -> String {
     truncated(&out, MAX_QUICK_DESCRIPTION_CHARS)
 }
 
-fn fence_for(content: &str) -> String {
+pub(crate) fn fence_for(content: &str) -> String {
     let longest = content
         .split(|c| c != '`')
         .map(str::len)

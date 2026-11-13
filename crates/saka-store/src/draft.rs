@@ -39,6 +39,7 @@ fn spec_draft(row: &Row<'_>) -> Result<SpecDraft> {
         target_kind: vocab(row, "target_kind")?,
         kind: vocab(row, "kind")?,
         context_paths: json(row, "context_paths")?,
+        deployment_id: opt_uuid(row, "deployment_id")?.map(saka_core::ids::DeploymentId),
         state: vocab(row, "state")?,
         attempt: u32_col(row, "attempt")?,
         current_attempt_id: opt_uuid(row, "current_attempt_id")?.map(SpecDraftAttemptId),
@@ -445,4 +446,19 @@ pub fn active_count(conn: &Connection) -> Result<i64> {
         [],
         |row| row.get(0),
     )?)
+}
+
+pub fn fix_draft_of(
+    conn: &Connection,
+    deployment: saka_core::ids::DeploymentId,
+) -> Result<Option<(SpecDraftId, saka_core::vocab::SpecDraftState)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, state FROM spec_draft WHERE deployment_id = ?1
+         ORDER BY (state NOT IN ('succeeded','cancelled')) DESC, created_at DESC, id DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query([deployment.to_string()])?;
+    match rows.next()? {
+        Some(row) => Ok(Some((SpecDraftId(uuid(row, "id")?), vocab(row, "state")?))),
+        None => Ok(None),
+    }
 }

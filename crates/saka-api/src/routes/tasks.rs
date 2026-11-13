@@ -278,14 +278,18 @@ pub(super) async fn task_action(
                     )),
                 },
                 TaskAction::Primary => match blocker {
-                    Some(blocker_id) => engine.resolve_blocker_with(
-                        item,
-                        blocker_id,
-                        expected,
-                        reason.as_deref().unwrap_or_default(),
-                        &cause,
-                        Some(&action),
-                    ),
+                    Some(blocker_id) => {
+                        engine
+                            .primary_action_with(
+                                item,
+                                blocker_id,
+                                expected,
+                                reason.as_deref().unwrap_or_default(),
+                                &cause,
+                                Some(&action),
+                            )
+                            .await
+                    }
                     None => Err(EngineError::Rejected(
                         saka_core::rejection::Rejection::NotFound,
                     )),

@@ -1568,6 +1568,8 @@ pub struct SpecDraft {
     /// `feature | bugfix | refactor | chore | security_patch`: the kind of work the spec describes; the architect writes its template.
     pub kind: String,
     pub context_paths: Vec<String>,
+    /// The failed deployment the draft proposes a fix for; `null` for every other draft.
+    pub deployment_id: Option<Uuid>,
     /// `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`
     pub state: String,
     /// The latest attempt; `null` before the first admission.
@@ -1846,6 +1848,7 @@ impl SpecDraft {
             target_kind: d.target_kind.as_str().to_string(),
             kind: d.kind.as_str().to_string(),
             context_paths: d.context_paths.clone(),
+            deployment_id: d.deployment_id.map(|id| id.0),
             state: d.state.as_str().to_string(),
             attempt: v
                 .draft
@@ -2969,6 +2972,14 @@ pub struct RequiredReason {
     pub reason: String,
 }
 
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DraftFixBody {
+    /// Up to 1000 characters, added to the idea as the operator's own text.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AcceptUnverifiedBody {
@@ -4086,6 +4097,13 @@ impl From<&saka_core::deploy::CheckRecord> for DeploymentCheck {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentFixDraft {
+    pub id: Uuid,
+    /// `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`
+    pub state: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DeploymentMerge {
     pub change_request_id: Uuid,
     pub number: u64,
@@ -4129,6 +4147,9 @@ pub struct Deployment {
     /// The tasks the deployment holds. Only in the detail.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tasks: Option<Vec<DeploymentTask>>,
+    /// The newest draft that proposes a fix for this deployment; `null` when none. Only in the detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_draft: Option<DeploymentFixDraft>,
     pub actor: Option<String>,
     pub reason: Option<String>,
     pub queued_at: String,
@@ -4162,6 +4183,7 @@ impl From<&saka_engine::DeploymentRow> for Deployment {
             checks: None,
             merges: None,
             tasks: None,
+            fix_draft: None,
             actor: d.actor.clone(),
             reason: d.reason.clone(),
             queued_at: time(d.queued_at),
@@ -4198,6 +4220,10 @@ impl From<&saka_engine::DeploymentDetail> for Deployment {
                     })
                     .collect(),
             ),
+            fix_draft: detail.fix_draft.map(|(id, state)| DeploymentFixDraft {
+                id: id.0,
+                state: state.as_str().into(),
+            }),
             ..Deployment::from(&detail.row)
         }
     }
