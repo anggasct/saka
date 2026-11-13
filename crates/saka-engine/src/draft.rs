@@ -969,6 +969,7 @@ impl Engine {
             }
             K::EnvTeardown => self.draft_teardown(&d, field(p, "environment_id")?).await,
             K::EnvInspectWorktree
+            | K::EnvRevert
             | K::EnvPrepareReview
             | K::ScmPostReview
             | K::ScmPushBranch

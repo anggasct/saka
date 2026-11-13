@@ -140,6 +140,9 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FilePushRejected { .. }
         | R::RetryLimitReached { .. }
         | R::BlockerNotOpen { .. }
+        | R::RevertNotAllowed { .. }
+        | R::RevertInProgress { .. }
+        | R::AlreadyReverted { .. }
         | R::InboxItemNotDismissible { .. }
         | R::InboxItemClosed { .. }
         | R::IntakeActive { .. }

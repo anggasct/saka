@@ -12,7 +12,7 @@ use crate::task::{
 use crate::time::Timestamp;
 use crate::vocab::{
     BlockerCode, ChangeRole, ChangeState, DecisionState, EnvironmentState, GateOutcome, GateSource,
-    PermissionState, Stage, StagePhase, WorkItemState,
+    PermissionState, Stage, StagePhase, StageRunState, WorkItemOrigin, WorkItemState,
 };
 
 const TEARDOWN_RETRY_INTERVAL_MS: i64 = 3_600_000;
@@ -263,6 +263,23 @@ pub fn phase_jobs(task: &Task, cfg: &LoopConfig, now: Timestamp) -> Vec<Job> {
                 ));
             }
             _ => {}
+        }
+        return jobs;
+    }
+
+    if item.state == WorkItemState::Admitted
+        && item.origin == WorkItemOrigin::Revert
+        && run.is_some_and(|r| {
+            r.entry_phase == StagePhase::Reverting && r.state == StageRunState::Pending
+        })
+    {
+        if let (Some(run_id), Some(owner)) = (run_id, task.run_owner()) {
+            jobs.push(Job::new(
+                JobKind::EnvRevert,
+                run_id,
+                json!({ "owner": owner, "repo_id": item.repo_id, "branch": item.branch }),
+                now,
+            ));
         }
         return jobs;
     }

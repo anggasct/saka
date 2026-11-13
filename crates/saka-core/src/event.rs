@@ -541,6 +541,31 @@ pub enum Event {
         reason: String,
         stage: Stage,
     },
+    #[serde(rename = "delivery.work_item.revert_requested")]
+    WorkItemRevertRequested {
+        work_item_id: WorkItemId,
+        revert_id: WorkItemId,
+        reason: String,
+    },
+    #[serde(rename = "delivery.work_item.revert_created")]
+    WorkItemRevertCreated {
+        work_item_id: WorkItemId,
+        project_id: ProjectId,
+        repo_id: RepoId,
+        revert_of: WorkItemId,
+        revert_of_key: String,
+        task_key: String,
+        work: String,
+        branch: String,
+        priority: i64,
+        reason: String,
+    },
+    #[serde(rename = "delivery.work_item.reverted")]
+    WorkItemReverted {
+        work_item_id: WorkItemId,
+        revert_id: WorkItemId,
+        merge_commit_sha: String,
+    },
     #[serde(rename = "delivery.work_item.done")]
     WorkItemDone {
         work_item_id: WorkItemId,
@@ -1182,6 +1207,9 @@ impl Event {
             | E::WorkItemTakenOver { work_item_id, .. }
             | E::WorkItemReturned { work_item_id, .. }
             | E::WorkItemDone { work_item_id, .. }
+            | E::WorkItemRevertRequested { work_item_id, .. }
+            | E::WorkItemRevertCreated { work_item_id, .. }
+            | E::WorkItemReverted { work_item_id, .. }
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }

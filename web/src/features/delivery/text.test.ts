@@ -387,6 +387,15 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ["regression_not_reproduced", { attempts: 1, last_outcome: "error" }],
   ["regression_not_reproduced", {}],
   [
+    "revert_conflict",
+    { reason: "conflict", paths: ["src/a.rs", "src/b.rs"], count: 3 },
+  ],
+  ["revert_conflict", { reason: "conflict", paths: ["src/a.rs"], count: 1 }],
+  ["revert_conflict", { reason: "not_in_base", base_branch: "main" }],
+  ["revert_conflict", { reason: "commits_unknown" }],
+  ["revert_conflict", { reason: "empty" }],
+  ["revert_conflict", {}],
+  [
     "ci_red",
     {
       source: "saka",
@@ -686,6 +695,7 @@ const LABELS: Record<string, string[]> = {
   stage: ["dev", "review", "fix", "merge", "sync"],
   phase: [
     "preparing_environment",
+    "reverting",
     "running_session",
     "pushing",
     "opening_change",
@@ -774,6 +784,9 @@ const ERRORS = [
   "precondition_required",
   "merge_not_ready",
   "retry_limit_reached",
+  "revert_not_allowed",
+  "revert_in_progress",
+  "already_reverted",
   "entry_point_disabled",
   "review_already_requested",
   "fix_not_available",

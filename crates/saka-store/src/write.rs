@@ -710,8 +710,8 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     let i = &t.item;
     tx.execute(
         "INSERT INTO work_item (id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key, work,
-           repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at, kind)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+           repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at, kind, revert_of, revert_reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
          ON CONFLICT (id) DO UPDATE SET spec_revision_id = excluded.spec_revision_id, kind = excluded.kind,
            step_index = excluded.step_index, work = excluded.work, repo_id = excluded.repo_id, state = excluded.state, stage = excluded.stage,
            stage_phase = excluded.stage_phase, priority = excluded.priority, version = excluded.version,
@@ -740,6 +740,8 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
             i.created_at.0,
             i.updated_at.0,
             i.kind.map(|k| k.as_str()),
+            t.revert.as_ref().map(|r| r.of.to_string()),
+            t.revert.as_ref().map(|r| r.reason.as_str()),
         ],
     )?;
     if let Some(x) = &t.external {

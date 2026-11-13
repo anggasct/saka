@@ -403,7 +403,9 @@ impl Decider<'_> {
         change: Option<ObservedChange>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Vec<Event>, Rejection> {
+        let reverting = self.item().origin == WorkItemOrigin::Revert;
         let stage = stage.unwrap_or(match self.task.stage_run.as_ref().map(|r| r.stage) {
+            _ if reverting && self.task.change_request.is_some() => Stage::Merge,
             Some(stage @ (Stage::Dev | Stage::Merge)) => stage,
             Some(Stage::Review) => Stage::Merge,
             _ => Stage::Dev,
@@ -414,10 +416,16 @@ impl Decider<'_> {
             reason,
         };
         let (true, Some(entry)) = (
-            RETURN_STAGES.contains(&stage),
+            RETURN_STAGES.contains(&stage)
+                && !(reverting && matches!(stage, Stage::Review | Stage::Fix)),
             return_entry(stage, env_ready),
         ) else {
             return Err(invalid("stage_unsupported"));
+        };
+        let entry = if reverting && stage == Stage::Dev {
+            StagePhase::OpeningChange
+        } else {
+            entry
         };
         if matches!(stage, Stage::Review | Stage::Fix) && !self.task.workflow.has_stage(stage) {
             return Err(invalid("stage_not_in_workflow"));
@@ -485,6 +493,18 @@ impl Decider<'_> {
 }
 
 pub fn retry_target(task: &Task, code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
+    let target = retry_place(task, code, params)?;
+    Some(match target {
+        (Stage::Dev, StagePhase::PreparingEnvironment | StagePhase::RunningSession)
+            if task.item.origin == WorkItemOrigin::Revert =>
+        {
+            (Stage::Dev, StagePhase::Reverting)
+        }
+        other => other,
+    })
+}
+
+fn retry_place(task: &Task, code: BlockerCode, params: &Value) -> Option<(Stage, StagePhase)> {
     let run_stage = task.stage_run.as_ref().map(|r| r.stage);
     let fixes = task.item.origin == WorkItemOrigin::SpecStep && task.workflow.has_stage(Stage::Fix);
     if run_stage == Some(Stage::Fix) {
@@ -569,6 +589,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         B::CiRed => (Stage::Dev, StagePhase::RunningSession),
         B::PushRejected => (Stage::Dev, StagePhase::Pushing),
         B::BranchMoved => (Stage::Dev, StagePhase::RunningSession),
+        B::RevertConflict => (Stage::Dev, StagePhase::Reverting),
         B::MergeConflict
             if matches!(
                 params.get("reason").and_then(Value::as_str),
@@ -584,6 +605,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
             let phase: StagePhase = params.get("phase").and_then(Value::as_str)?.parse().ok()?;
             let stage = match phase {
                 StagePhase::PreparingEnvironment
+                | StagePhase::Reverting
                 | StagePhase::RunningSession
                 | StagePhase::Pushing
                 | StagePhase::OpeningChange => Stage::Dev,

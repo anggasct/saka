@@ -665,6 +665,20 @@ impl RegressionCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskLink {
+    pub id: WorkItemId,
+    pub key: String,
+    pub state: WorkItemState,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Revert {
+    pub of: WorkItemId,
+    pub of_key: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub item: WorkItem,
     pub stage_run: Option<StageRun>,
@@ -688,6 +702,9 @@ pub struct Task {
     pub added_rules: Vec<PermissionRule>,
     pub hook_gates: Vec<HookGate>,
     pub reviews: Vec<Review>,
+    pub revert: Option<Revert>,
+    #[serde(skip)]
+    pub reverted_by: Option<TaskLink>,
     #[serde(skip)]
     pub workflow: Workflow,
     #[serde(skip)]
@@ -758,13 +775,15 @@ impl Task {
             added_rules: Vec::new(),
             hook_gates: Vec::new(),
             reviews: Vec::new(),
+            revert: None,
+            reverted_by: None,
             workflow: Workflow::default(),
             policy: RepoPolicy::default(),
         }
     }
 
     pub fn has_review_stage(&self) -> bool {
-        self.workflow.has_stage(Stage::Review)
+        self.item.origin != WorkItemOrigin::Revert && self.workflow.has_stage(Stage::Review)
     }
 
     pub fn approved_at(&self, head_sha: &str) -> bool {

@@ -40,10 +40,14 @@ pub fn merge_allowed(task: &Task, head_sha: &str) -> bool {
 }
 
 pub fn auto_merge_enabled(task: &Task, ceilings: &Ceilings) -> bool {
-    task.item.origin == WorkItemOrigin::SpecStep
+    let reviewed = match task.item.origin {
+        WorkItemOrigin::SpecStep => task.has_review_stage(),
+        WorkItemOrigin::Revert => true,
+        WorkItemOrigin::ExternalChange => false,
+    };
+    reviewed
         && task.autonomy(ceilings) == Autonomy::Autonomous
         && task.workflow.stage_trigger(Stage::Merge) == Some(Trigger::Auto)
-        && task.has_review_stage()
 }
 
 pub fn update_merge(task: &Task) -> bool {
@@ -61,7 +65,7 @@ pub fn auto_merge(task: &Task, ceilings: &Ceilings) -> bool {
 
 pub fn gate_policy(task: &Task) -> GatePolicy {
     let policy = GatePolicy::from_recipe(task.environment.as_ref().and_then(|e| e.recipe.as_ref()));
-    if task.external.is_some() {
+    if task.external.is_some() || task.item.origin == WorkItemOrigin::Revert {
         policy.without_saka()
     } else {
         policy
@@ -121,6 +125,9 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
     }
     if external::awaiting_request(task) {
         actions.push("review");
+    }
+    if crate::revert::eligible(task) && task.reverted_by.is_none() {
+        actions.push("revert");
     }
     if external::fix_available(task) {
         actions.push("fix");

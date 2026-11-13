@@ -26,6 +26,7 @@ pub mod recipe;
 mod reconciler;
 mod register;
 mod reload;
+mod revert;
 pub mod review_packet;
 mod review_run;
 mod runner;
@@ -315,6 +316,8 @@ impl Engine {
         let project = Some(task.item.project_id);
         let rounds_before = task.fix_rounds_used();
         let after = self.apply(&mut batch, task, &events, project, cause, now)?;
+        let origin_after = self.finish_revert(&mut batch, &after, &events, project, cause, now)?;
+        let revert_outcome = after.revert.as_ref().and_then(|_| revert_outcome(&events));
         for e in &extra.events {
             self.push_event(&mut batch, e, project, cause, now);
         }
@@ -372,7 +375,12 @@ impl Engine {
         if !events.is_empty() {
             batch.tasks.push(after);
         }
+        batch.tasks.extend(origin_after);
         self.commit(&batch)?;
+        if let Some(outcome) = revert_outcome {
+            self.counters.revert(outcome);
+            tracing::info!(work_item_id = %id, outcome, "delivery.revert.ended");
+        }
         for e in &events {
             match e {
                 Event::ReviewRecorded {
@@ -616,6 +624,18 @@ impl Engine {
             }
         }
     }
+}
+
+fn revert_outcome(events: &[Event]) -> Option<&'static str> {
+    events.iter().find_map(|e| match e {
+        Event::WorkItemDone { .. } => Some("merged"),
+        Event::WorkItemCancelled { .. } => Some("cancelled"),
+        Event::WorkItemBlocked {
+            code: saka_core::vocab::BlockerCode::RevertConflict,
+            ..
+        } => Some("conflict"),
+        _ => None,
+    })
 }
 
 pub(crate) fn log_runtime(e: &Event, actor: &str) {

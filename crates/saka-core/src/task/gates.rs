@@ -9,7 +9,7 @@ use crate::gate::{self, Check, GatePolicy};
 use crate::ids::GateResultId;
 use crate::session::SessionInput;
 use crate::vocab::{
-    BlockerCode, ExternalCause, GateOutcome, GateSource, Stage, StagePhase, Trigger,
+    BlockerCode, ExternalCause, GateOutcome, GateSource, Stage, StagePhase, Trigger, WorkItemOrigin,
 };
 
 impl Decider<'_> {
@@ -227,7 +227,9 @@ impl Decider<'_> {
         let run = self.task.stage_run.as_ref()?;
         let merging = self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
             || self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
-        if self.task.external.is_none() || !merging {
+        let provider_gated =
+            self.task.external.is_some() || self.item().origin == WorkItemOrigin::Revert;
+        if !provider_gated || !merging {
             return None;
         }
         let known = self.task.gate_for(GateSource::Scm, head_sha);

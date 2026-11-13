@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
+use saka_core::authorship::GitIdentity;
 use saka_core::ids::EnvironmentId;
 use saka_core::policy::RequestPath;
 use saka_core::secret::SecretVar;
@@ -182,6 +183,28 @@ pub enum Rebase {
     Unclean,
 }
 
+pub const REVERT_PATHS_MAX: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevertRequest {
+    pub base_sha: String,
+    pub merge_commit: String,
+    pub head_sha: Option<String>,
+    pub change_number: u64,
+    pub message: String,
+    pub author: GitIdentity,
+    pub committer: GitIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reverted {
+    Committed { head_sha: String },
+    NotInBase,
+    CommitsUnknown,
+    Conflict { paths: Vec<String>, count: usize },
+    Empty,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseProbe {
     pub base_sha: String,
@@ -281,6 +304,8 @@ pub trait Environments: Send + Sync {
     async fn rebase(&self, env: &EnvRef, base_branch: &str, head_sha: &str) -> PortResult<Rebase>;
 
     async fn reset_branch(&self, env: &EnvRef, to_sha: &str) -> PortResult<()>;
+
+    async fn revert(&self, env: &EnvRef, request: &RevertRequest) -> PortResult<Reverted>;
 
     async fn teardown(&self, env: &EnvRef) -> PortResult<()>;
 

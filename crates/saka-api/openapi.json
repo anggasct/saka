@@ -4964,6 +4964,73 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/actions/revert": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "revert",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "W/\"<version>\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items/{work_item_id}/actions/review": {
       "post": {
         "tags": [
@@ -9005,7 +9072,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "Subset of `merge`, `retry`, `cancel`, `review`."
+                  "description": "Subset of `merge`, `retry`, `cancel`, `review`, `revert`."
                 },
                 "blocker": {
                   "oneOf": [
@@ -9110,7 +9177,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "`feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request."
+                  "description": "`feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request and for a revert."
                 },
                 "merge_auto": {
                   "type": [
@@ -9131,7 +9198,8 @@
                   ]
                 },
                 "origin": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "`spec_step | external_change | revert`"
                 },
                 "pending_permission_count": {
                   "type": "integer",
@@ -9167,6 +9235,28 @@
                     "null"
                   ],
                   "description": "Name of the binding of `repo_id` in the project now; `null` once a reload removed it."
+                },
+                "revert_of": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkItemRef",
+                      "description": "The task this one reverts; `null` unless `origin` is `revert`."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reverted_by": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RevertedBy",
+                      "description": "The revert task of this one that is still live or done; `null` when none was requested and when the last one was cancelled."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "review": {
                   "oneOf": [
@@ -10469,6 +10559,27 @@
           }
         },
         "additionalProperties": false
+      },
+      "RevertedBy": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The work item states: `queued | admitted | in_stage | blocked | taken_over | done`."
+          }
+        }
       },
       "ReviewBody": {
         "type": "object",
@@ -12637,7 +12748,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Subset of `merge`, `retry`, `cancel`, `review`."
+            "description": "Subset of `merge`, `retry`, `cancel`, `review`, `revert`."
           },
           "blocker": {
             "oneOf": [
@@ -12742,7 +12853,7 @@
               "string",
               "null"
             ],
-            "description": "`feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request."
+            "description": "`feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request and for a revert."
           },
           "merge_auto": {
             "type": [
@@ -12763,7 +12874,8 @@
             ]
           },
           "origin": {
-            "type": "string"
+            "type": "string",
+            "description": "`spec_step | external_change | revert`"
           },
           "pending_permission_count": {
             "type": "integer",
@@ -12799,6 +12911,28 @@
               "null"
             ],
             "description": "Name of the binding of `repo_id` in the project now; `null` once a reload removed it."
+          },
+          "revert_of": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkItemRef",
+                "description": "The task this one reverts; `null` unless `origin` is `revert`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reverted_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevertedBy",
+                "description": "The revert task of this one that is still live or done; `null` when none was requested and when the last one was cancelled."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "review": {
             "oneOf": [
@@ -13004,6 +13138,22 @@
               "$ref": "#/components/schemas/Toolchain"
             },
             "description": "Toolchains on `PATH`; empty when the repo declares no versions."
+          }
+        }
+      },
+      "WorkItemRef": {
+        "type": "object",
+        "required": [
+          "id",
+          "key"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
           }
         }
       },

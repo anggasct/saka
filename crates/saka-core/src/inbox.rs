@@ -119,20 +119,23 @@ fn for_task(task: &Task, ceilings: &Ceilings) -> Vec<InboxDraft> {
             },
         });
     }
-    if task.item.origin == WorkItemOrigin::SpecStep {
-        if task.item.state == WorkItemState::AwaitingStart {
-            out.push(step_item(
-                task,
-                InboxSubject::StepStart,
-                InboxActionKind::StartStep,
-            ));
-        }
-        if task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
-            && !auto_merge_enabled(task, ceilings)
-            && merge_ready(task)
-        {
-            out.push(step_item(task, InboxSubject::Merge, InboxActionKind::Merge));
-        }
+    if task.item.origin == WorkItemOrigin::SpecStep
+        && task.item.state == WorkItemState::AwaitingStart
+    {
+        out.push(step_item(
+            task,
+            InboxSubject::StepStart,
+            InboxActionKind::StartStep,
+        ));
+    }
+    if matches!(
+        task.item.origin,
+        WorkItemOrigin::SpecStep | WorkItemOrigin::Revert
+    ) && task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+        && !auto_merge_enabled(task, ceilings)
+        && merge_ready(task)
+    {
+        out.push(step_item(task, InboxSubject::Merge, InboxActionKind::Merge));
     }
     out
 }

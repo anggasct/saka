@@ -907,8 +907,9 @@ impl WorkItemEnvironment {
 pub struct WorkItem {
     pub id: Uuid,
     pub project_id: Uuid,
+    /// `spec_step | external_change | revert`
     pub origin: String,
-    /// `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request.
+    /// `feature | bugfix | refactor | chore | security_patch`, from the pinned revision; `null` for a task made from an outside pull request and for a revert.
     pub kind: Option<String>,
     pub spec_id: Option<Uuid>,
     pub spec_revision_id: Option<Uuid>,
@@ -942,6 +943,10 @@ pub struct WorkItem {
     pub docs_change_request: Option<DocsChangeRequest>,
     /// What is known about a pull request opened outside Saka; `null` for a task made from a spec step.
     pub external: Option<ExternalChange>,
+    /// The task this one reverts; `null` unless `origin` is `revert`.
+    pub revert_of: Option<WorkItemRef>,
+    /// The revert task of this one that is still live or done; `null` when none was requested and when the last one was cancelled.
+    pub reverted_by: Option<RevertedBy>,
     /// The newest reviewer verdict of the task; `null` before any review ran.
     pub review: Option<ReviewSummary>,
     /// The latest fix round of the task; `null` before a round ran and when the workflow has no `fix` stage.
@@ -953,7 +958,7 @@ pub struct WorkItem {
     pub blocker: Option<Blocker>,
     pub session: Option<SessionBrief>,
     pub pending_permission_count: u32,
-    /// Subset of `merge`, `retry`, `cancel`, `review`.
+    /// Subset of `merge`, `retry`, `cancel`, `review`, `revert`.
     pub available_actions: Vec<String>,
     /// Use and limits of the running stage run; `null` when no stage run with a session runs.
     pub budget: Option<WorkItemBudget>,
@@ -964,6 +969,20 @@ pub struct WorkItem {
     pub updated_at: String,
     pub admitted_at: Option<String>,
     pub done_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkItemRef {
+    pub id: Uuid,
+    pub key: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RevertedBy {
+    pub id: Uuid,
+    pub key: String,
+    /// The work item states: `queued | admitted | in_stage | blocked | taken_over | done`.
+    pub state: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1397,6 +1416,15 @@ impl WorkItem {
                 skipped: c.skipped_at.is_some(),
             }),
             external: t.external.as_ref().map(ExternalChange::from),
+            revert_of: t.revert.as_ref().map(|r| WorkItemRef {
+                id: r.of.0,
+                key: r.of_key.clone(),
+            }),
+            reverted_by: t.reverted_by.as_ref().map(|r| RevertedBy {
+                id: r.id.0,
+                key: r.key.clone(),
+                state: r.state.as_str().to_string(),
+            }),
             review: latest_review(t).map(|r| ReviewSummary::of(r, t)),
             fix: FixProgress::of(t),
             regression: RegressionEvidence::of(t),

@@ -82,7 +82,7 @@ vocab!(IssueTrigger default Label { Label => "label", Auto => "auto" });
 vocab!(RegressionOutcome { Reproduced => "reproduced", NotReproduced => "not_reproduced", InvalidPaths => "invalid_paths", Error => "error" });
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });
 vocab!(WorkflowPreset { FullLoop => "full_loop", ReviewOnly => "review_only", BuildOnly => "build_only", Custom => "custom" });
-vocab!(WorkItemOrigin { SpecStep => "spec_step", ExternalChange => "external_change" });
+vocab!(WorkItemOrigin { SpecStep => "spec_step", ExternalChange => "external_change", Revert => "revert" });
 vocab!(DocsMode { ReadOnly => "read_only", Writable => "writable" });
 vocab!(ExternalCause { Auto => "auto", Comment => "comment", Label => "label", Operator => "operator" });
 vocab!(WorkItemState {
@@ -104,6 +104,7 @@ vocab!(Stage { Dev => "dev", Review => "review", Fix => "fix", Merge => "merge",
 vocab!(
     StagePhase {
         PreparingEnvironment => "preparing_environment",
+        Reverting => "reverting",
         RunningSession => "running_session",
         Pushing => "pushing",
         OpeningChange => "opening_change",
@@ -170,6 +171,7 @@ vocab!(
         DecisionExpired => "decision_expired",
         ChangeBehindBase => "change_behind_base",
         RegressionNotReproduced => "regression_not_reproduced",
+        RevertConflict => "revert_conflict",
     }
 );
 vocab!(BlockerAction {
@@ -297,7 +299,7 @@ vocab!(UserTokenCause { Missing => "missing", Expired => "expired", Rejected => 
 vocab!(UserTokenState { Active => "active", Invalid => "invalid" });
 vocab!(ResumeTrigger { CredentialRenewed => "credential renewed", AuthorshipModeChanged => "authorship mode changed" });
 vocab!(ContextOrigin { Link => "link", Always => "always" });
-vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto", TakenOver => "taken_over" });
+vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto", TakenOver => "taken_over", Reverted => "reverted" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });
 vocab!(SessionState {
     Starting => "starting",

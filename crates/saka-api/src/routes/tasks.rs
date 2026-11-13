@@ -97,6 +97,7 @@ pub(super) enum TaskAction {
     Primary,
     Takeover,
     Return,
+    Revert,
 }
 
 #[allow(clippy::too_many_arguments, reason = "the request parts of one action")]
@@ -126,6 +127,17 @@ pub(super) async fn task_action(
                 .parse::<u64>()
                 .ok();
             (Some(version), req.reason)
+        }
+        TaskAction::Revert => {
+            let tag = tri!(if_match(&headers));
+            let req: dto::RequiredReason = tri!(body(&raw));
+            let version = tag
+                .strip_prefix("W/")
+                .unwrap_or(&tag)
+                .trim_matches('"')
+                .parse::<u64>()
+                .ok();
+            (Some(version), Some(req.reason))
         }
         TaskAction::Retry | TaskAction::Cancel | TaskAction::Takeover => {
             let req: dto::RequiredReason = tri!(body(&raw));
@@ -173,6 +185,7 @@ pub(super) async fn task_action(
         TaskAction::Primary => "work_item.primary_action",
         TaskAction::Takeover => "work_item.takeover",
         TaskAction::Return => "work_item.return",
+        TaskAction::Revert => "work_item.revert",
     };
     let m = Mutation {
         name,
@@ -200,6 +213,18 @@ pub(super) async fn task_action(
                     Some(v) => {
                         engine.request_merge_with(item, v, reason.as_deref(), &cause, Some(&action))
                     }
+                    None => Err(EngineError::Rejected(
+                        saka_core::rejection::Rejection::VersionStale,
+                    )),
+                },
+                TaskAction::Revert => match version.flatten() {
+                    Some(v) => engine.revert_with(
+                        item,
+                        v,
+                        reason.as_deref().unwrap_or_default(),
+                        &cause,
+                        Some(&action),
+                    ),
                     None => Err(EngineError::Rejected(
                         saka_core::rejection::Rejection::VersionStale,
                     )),
@@ -285,6 +310,23 @@ pub async fn merge(
     raw: Bytes,
 ) -> Response {
     task_action(s, id, method, uri, headers, raw, TaskAction::Merge).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/revert", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters"), ("If-Match" = String, Header, description = "W/\"<version>\"")),
+    request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn revert(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::Revert).await
 }
 
 #[utoipa::path(

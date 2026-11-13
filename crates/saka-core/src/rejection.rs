@@ -163,6 +163,12 @@ pub enum Rejection {
         stage: &'static str,
         reason: &'static str,
     },
+    #[error("the task cannot be reverted: {reason}")]
+    RevertNotAllowed { reason: &'static str },
+    #[error("the task already has a revert in progress")]
+    RevertInProgress { work_item_id: String },
+    #[error("the task was already reverted")]
+    AlreadyReverted { work_item_id: String },
     #[error("blocker is not open")]
     BlockerNotOpen { blocker_id: String },
     #[error("the primary action is not the one that was shown")]
@@ -295,6 +301,9 @@ impl Rejection {
             Rejection::StageNotInWorkflow { .. } => "stage_not_in_workflow",
             Rejection::StageNotTakeable { .. } => "stage_not_takeable",
             Rejection::ReturnTargetInvalid { .. } => "return_target_invalid",
+            Rejection::RevertNotAllowed { .. } => "revert_not_allowed",
+            Rejection::RevertInProgress { .. } => "revert_in_progress",
+            Rejection::AlreadyReverted { .. } => "already_reverted",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
             Rejection::BlockerActionChanged { .. } => "blocker_action_changed",
             Rejection::ActionNeedsInput { .. } => "action_needs_input",
@@ -365,6 +374,11 @@ impl Rejection {
             Rejection::DraftBaseMoved { paths } => json!({ "paths": paths }),
             Rejection::FileNotFound { path } => json!({ "path": path }),
             Rejection::FileStale { blob, commit } => json!({ "blob": blob, "commit": commit }),
+            Rejection::RevertNotAllowed { reason } => json!({ "reason": reason }),
+            Rejection::RevertInProgress { work_item_id }
+            | Rejection::AlreadyReverted { work_item_id } => {
+                json!({ "work_item_id": work_item_id })
+            }
             Rejection::BlockerNotOpen { blocker_id } => json!({ "blocker_id": blocker_id }),
             Rejection::BlockerActionChanged {
                 blocker_id,

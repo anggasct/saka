@@ -33,6 +33,7 @@ macro_rules! job_kinds {
 
 job_kinds! {
     EnvPrepare => "env.prepare", 3;
+    EnvRevert => "env.revert", 3;
     EnvInspectWorktree => "env.inspect_worktree", 3;
     SessionStart => "session.start", 3;
     SessionSendTurn => "session.send_turn", 5;
@@ -81,6 +82,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
     let scm = |phase: StagePhase| Some((BlockerCode::ScmUnavailable, json!({ "phase": phase })));
     match kind {
         JobKind::EnvPrepare
+        | JobKind::EnvRevert
         | JobKind::EnvInspectWorktree
         | JobKind::EnvPrepareReview
         | JobKind::EnvResetBranch => Some((BlockerCode::EnvSetupFailed, json!({}))),
@@ -187,6 +189,7 @@ pub fn spec_draft_of(payload: &Value) -> Option<SpecDraftId> {
 fn key_prefix(kind: JobKind) -> &'static str {
     match kind {
         JobKind::EnvPrepare => "env.prepare",
+        JobKind::EnvRevert => "env.revert",
         JobKind::EnvInspectWorktree => "env.inspect",
         JobKind::SessionStart => "session.start",
         JobKind::SessionSendTurn => "session.turn",

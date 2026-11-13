@@ -51,7 +51,7 @@ pub fn designated(code: BlockerCode) -> BlockerAction {
         | B::HookFailed
         | B::RegressionNotReproduced => A::Retry,
         B::ChangeClosed => A::Cancel,
-        B::BranchMoved => A::Takeover,
+        B::BranchMoved | B::RevertConflict => A::Takeover,
         B::SecretMissing | B::SecretUnreadable => A::SetSecret,
         B::UserLinkRequired => A::LinkAccount,
         B::UserTokenInvalid => A::SetUserToken,
@@ -64,6 +64,12 @@ pub fn primary_action(task: &Task) -> Option<PrimaryAction> {
     let blocker = task.open_blocker()?;
     let kind = match designated(blocker.code) {
         BlockerAction::UpdateBranch if !updatable(&blocker.params) => BlockerAction::Retry,
+        BlockerAction::Takeover
+            if blocker.code == BlockerCode::RevertConflict
+                && blocker.params.get("reason").and_then(Value::as_str) == Some("empty") =>
+        {
+            BlockerAction::Cancel
+        }
         kind => kind,
     };
     let kind = match kind {
