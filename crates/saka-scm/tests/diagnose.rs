@@ -236,6 +236,7 @@ fn an_installation_without_the_issues_permission_fails_the_repo_access_check() {
         json!({ "missing": [{ "permission": "issues", "required": "write", "granted": null }] })
     );
     let with = granted(&[
+        ("actions", "write"),
         ("contents", "write"),
         ("issues", "write"),
         ("pull_requests", "write"),
@@ -251,6 +252,38 @@ fn an_installation_without_the_issues_permission_fails_the_repo_access_check() {
         &with,
     );
     assert_eq!(finding.code, "app_installed");
+}
+
+#[test]
+fn an_installation_without_the_actions_permission_only_warns() {
+    let installation = Installation {
+        installed: true,
+        installation_id: Some(42),
+        permissions: [
+            ("contents", "write"),
+            ("issues", "write"),
+            ("pull_requests", "write"),
+            ("checks", "read"),
+            ("statuses", "write"),
+            ("metadata", "read"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+    };
+    let finding = saka_core::diagnostics::installation(
+        &app_requirements(),
+        "acme/app",
+        "https://github.example",
+        "saka-dev",
+        &installation,
+    );
+    assert_eq!(finding.status.as_str(), "warn");
+    assert_eq!(finding.code, "app_permission_recommended");
+    assert_eq!(
+        finding.params,
+        json!({ "missing": [{ "permission": "actions", "required": "write", "granted": null }] })
+    );
 }
 
 #[test]

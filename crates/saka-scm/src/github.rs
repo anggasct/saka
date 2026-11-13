@@ -21,8 +21,8 @@ use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, EnqueueOutcome, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest,
     OpenedChange, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
-    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
-    UpdateOutcome, WebhookDelivery, WebhookSignature, check_comment_body, check_sha,
+    RepoInfo, RepoRef, Repos, RerunOutcome, ReviewPost, Scm, ScmCapabilities, StatusReport,
+    TokenRefresh, UpdateOutcome, WebhookDelivery, WebhookSignature, check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -143,6 +143,56 @@ impl GitHub {
         let mut checks = ci::from_check_runs(&runs);
         checks.extend(ci::from_statuses(&statuses));
         Ok(checks)
+    }
+
+    async fn rerun_failed(&self, full_name: &str, head: &str) -> PortResult<RerunOutcome> {
+        let (owner, name) = split_repo(full_name)?;
+        let mut runs_url = self
+            .app
+            .url(&["repos", owner, name, "commits", head, "check-runs"])?;
+        runs_url.query_pairs_mut().append_pair("per_page", "100");
+        let runs = self
+            .app
+            .pages(full_name, runs_url, Some("check_runs"))
+            .await?;
+        let mut status_url = self
+            .app
+            .url(&["repos", owner, name, "commits", head, "status"])?;
+        status_url.query_pairs_mut().append_pair("per_page", "100");
+        let statuses = self
+            .app
+            .pages(full_name, status_url, Some("statuses"))
+            .await?;
+        let plan = ci::rerun_plan(&runs, &statuses);
+        let mut outcome = RerunOutcome {
+            rerun: Vec::new(),
+            unsupported: plan.unsupported,
+        };
+        for (run_id, names) in plan.runs {
+            let id = run_id.to_string();
+            let reply = self
+                .repo_call(
+                    full_name,
+                    Method::POST,
+                    &["actions", "runs", &id, "rerun-failed-jobs"],
+                    None,
+                )
+                .await?;
+            match reply.status {
+                s if s.is_success() => outcome.rerun.extend(names),
+                StatusCode::CONFLICT | StatusCode::UNPROCESSABLE_ENTITY => {
+                    outcome.unsupported.extend(names);
+                }
+                StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
+                    return Err(PortError::permanent(
+                        "scm_rerun_refused",
+                        json!({ "status": reply.status.as_u16() }),
+                    ));
+                }
+                _ => return Err(self.app.unexpected("rerun_failed_checks", &reply)),
+            }
+        }
+        Ok(outcome)
     }
 }
 
@@ -333,6 +383,15 @@ impl Scm for GitHub {
         sha: &str,
     ) -> PortResult<Vec<saka_core::gate::Check>> {
         self.checks(&repo.full_name, sha).await
+    }
+
+    async fn rerun_failed_checks(
+        &self,
+        repo: &RepoRef,
+        head_sha: &str,
+    ) -> PortResult<RerunOutcome> {
+        check_sha(head_sha, "sha")?;
+        self.rerun_failed(&repo.full_name, head_sha).await
     }
 
     async fn list_open_changes(

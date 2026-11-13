@@ -353,7 +353,7 @@ mod tests {
   "redirect_url": "http://127.0.0.1:41873/callback",
   "hook_attributes": { "url": "https://saka.example.com/hooks/github", "active": true },
   "default_events": ["check_run", "check_suite", "issue_comment", "issues", "pull_request", "status"],
-  "default_permissions": { "checks": "read", "contents": "write", "issues": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
+  "default_permissions": { "actions": "write", "checks": "read", "contents": "write", "issues": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
   "request_oauth_on_install": false,
   "setup_on_update": false
 }"#;
@@ -381,7 +381,7 @@ mod tests {
             serde_json::to_string(&built).unwrap(),
             concat!(
                 r#"{"default_events":["check_run","check_suite","issue_comment","issues","pull_request","status"],"#,
-                r#""default_permissions":{"checks":"read","contents":"write","issues":"write","metadata":"read","pull_requests":"write","statuses":"write"},"#,
+                r#""default_permissions":{"actions":"write","checks":"read","contents":"write","issues":"write","metadata":"read","pull_requests":"write","statuses":"write"},"#,
                 r#""description":"Saka delivery loop (integration github)","#,
                 r#""hook_attributes":{"active":true,"url":"https://saka.example.com/hooks/github"},"#,
                 r#""name":"saka-3f9a1c","public":false,"redirect_url":"http://127.0.0.1:41873/callback","#,

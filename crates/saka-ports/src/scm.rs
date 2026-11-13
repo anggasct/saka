@@ -209,6 +209,12 @@ pub enum EnqueueOutcome {
     },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RerunOutcome {
+    pub rerun: Vec<String>,
+    pub unsupported: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateOutcome {
     Accepted,
@@ -243,6 +249,9 @@ pub trait Scm: Send + Sync {
     async fn change_request(&self, repo: &RepoRef, number: u64) -> PortResult<ChangeSnapshot>;
 
     async fn commit_checks(&self, repo: &RepoRef, sha: &str) -> PortResult<Vec<Check>>;
+
+    async fn rerun_failed_checks(&self, repo: &RepoRef, head_sha: &str)
+    -> PortResult<RerunOutcome>;
 
     async fn list_open_changes(&self, repo: &RepoRef, max: usize)
     -> PortResult<Vec<ChangeSummary>>;

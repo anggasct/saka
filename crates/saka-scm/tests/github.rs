@@ -342,3 +342,49 @@ async fn a_comment_is_posted_to_the_issue_thread_and_a_refusal_is_permanent() {
     let err = w.gh.post_comment(&w.repo, 3, &long).await.unwrap_err();
     assert_eq!(err.code, "git_argument_invalid");
 }
+
+#[tokio::test]
+async fn a_run_that_cannot_be_rerun_is_reported_and_the_other_runs_still_are() {
+    let w = World::new().await;
+    w.mount_tokens().await;
+    let action = |id: u64, name: &str, run: u64| {
+        json!({
+            "id": id, "name": name, "status": "completed", "conclusion": "failure",
+            "app": { "slug": "github-actions" },
+            "details_url": format!("https://github.com/acme/app/actions/runs/{run}/job/{id}"),
+        })
+    };
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/acme/app/commits/{HEAD}/check-runs")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total_count": 2,
+            "check_runs": [action(1, "unit", 700), action(2, "lint", 701)],
+        })))
+        .mount(&w.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/acme/app/commits/{HEAD}/status")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "state": "failure", "statuses": [] })),
+        )
+        .mount(&w.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/actions/runs/700/rerun-failed-jobs"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+        .expect(1)
+        .mount(&w.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/actions/runs/701/rerun-failed-jobs"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "message": "Cannot rerun a workflow that is already running",
+        })))
+        .expect(1)
+        .mount(&w.server)
+        .await;
+
+    let outcome = w.gh.rerun_failed_checks(&w.repo, HEAD).await.unwrap();
+    assert_eq!(outcome.rerun, ["unit"]);
+    assert_eq!(outcome.unsupported, ["lint"]);
+}

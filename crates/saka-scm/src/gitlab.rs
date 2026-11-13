@@ -18,8 +18,9 @@ use saka_ports::{
     ChangeCredential, ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, DeviceCode,
     DevicePoll, EnqueueOutcome, IdentityLookup, MergeOutcome, MergeRequest, OpenChangeRequest,
     OpenedChange, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
-    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, StatusState,
-    TokenRefresh, UpdateOutcome, WebhookDelivery, WebhookSignature, check_comment_body,
+    RepoInfo, RepoRef, Repos, RerunOutcome, ReviewPost, Scm, ScmCapabilities, StatusReport,
+    StatusState, TokenRefresh, UpdateOutcome, WebhookDelivery, WebhookSignature,
+    check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -134,7 +135,7 @@ impl GitLab {
         }
     }
 
-    async fn checks(&self, full_name: &str, sha: &str) -> PortResult<Vec<Check>> {
+    async fn latest_pipeline(&self, full_name: &str, sha: &str) -> PortResult<Option<u64>> {
         let mut url = self.client.project_url(full_name, &["pipelines"])?;
         url.query_pairs_mut()
             .append_pair("sha", sha)
@@ -145,8 +146,20 @@ impl GitLab {
         if !reply.status.is_success() {
             return Err(self.client.unexpected("pipelines", &reply));
         }
-        let pipeline = reply.body.as_array().and_then(|p| p.first());
-        let jobs = match pipeline.and_then(|p| p["id"].as_u64()) {
+        Ok(reply
+            .body
+            .as_array()
+            .and_then(|p| p.first())
+            .and_then(|p| p["id"].as_u64()))
+    }
+
+    async fn pipeline_checks(
+        &self,
+        full_name: &str,
+        pipeline: Option<u64>,
+        sha: &str,
+    ) -> PortResult<(Vec<Check>, Vec<Check>)> {
+        let jobs = match pipeline {
             Some(id) => {
                 let id = id.to_string();
                 let url = self
@@ -160,9 +173,53 @@ impl GitLab {
             .client
             .project_url(full_name, &["repository", "commits", sha, "statuses"])?;
         let statuses = self.client.pages(full_name, url).await?;
-        let mut checks = ci::from_statuses(&statuses, &jobs);
+        let statuses = ci::from_statuses(&statuses, &jobs);
+        Ok((jobs, statuses))
+    }
+
+    async fn checks(&self, full_name: &str, sha: &str) -> PortResult<Vec<Check>> {
+        let pipeline = self.latest_pipeline(full_name, sha).await?;
+        let (jobs, statuses) = self.pipeline_checks(full_name, pipeline, sha).await?;
+        let mut checks = statuses;
         checks.splice(0..0, jobs);
         Ok(checks)
+    }
+
+    async fn rerun_failed(&self, full_name: &str, sha: &str) -> PortResult<RerunOutcome> {
+        let pipeline = self.latest_pipeline(full_name, sha).await?;
+        let (jobs, statuses) = self.pipeline_checks(full_name, pipeline, sha).await?;
+        let names = |checks: Vec<Check>| -> Vec<String> {
+            checks
+                .into_iter()
+                .filter(Check::is_failure)
+                .map(|c| c.name)
+                .collect()
+        };
+        let mut outcome = RerunOutcome {
+            rerun: Vec::new(),
+            unsupported: names(statuses),
+        };
+        let failed = names(jobs);
+        let (Some(id), false) = (pipeline, failed.is_empty()) else {
+            return Ok(outcome);
+        };
+        let id = id.to_string();
+        let reply = self
+            .project_call(full_name, Method::POST, &["pipelines", &id, "retry"], None)
+            .await?;
+        match reply.status {
+            s if s.is_success() => {
+                outcome.rerun = failed;
+                Ok(outcome)
+            }
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => {
+                Err(PortError::permanent(
+                    "scm_rerun_refused",
+                    json!({ "status": reply.status.as_u16() }),
+                ))
+            }
+            _ => Err(self.client.unexpected("rerun_failed_checks", &reply)),
+        }
     }
 
     async fn existing_merge_request(
@@ -370,6 +427,15 @@ impl Scm for GitLab {
 
     async fn commit_checks(&self, repo: &RepoRef, sha: &str) -> PortResult<Vec<Check>> {
         self.checks(&repo.full_name, sha).await
+    }
+
+    async fn rerun_failed_checks(
+        &self,
+        repo: &RepoRef,
+        head_sha: &str,
+    ) -> PortResult<RerunOutcome> {
+        check_sha(head_sha, "sha")?;
+        self.rerun_failed(&repo.full_name, head_sha).await
     }
 
     async fn list_open_changes(

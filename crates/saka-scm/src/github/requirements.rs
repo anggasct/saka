@@ -12,7 +12,7 @@ pub const REQUIRED_PERMISSIONS: &[(&str, &str)] = &[
     ("metadata", "read"),
 ];
 
-pub const RECOMMENDED_PERMISSIONS: &[(&str, &str)] = &[("statuses", "write")];
+pub const RECOMMENDED_PERMISSIONS: &[(&str, &str)] = &[("statuses", "write"), ("actions", "write")];
 
 pub const REQUIRED_EVENTS: &[&str] = &[
     "pull_request",
@@ -96,6 +96,7 @@ mod tests {
     #[test]
     fn manifest_permissions_take_the_highest_level_of_required_and_recommended() {
         let expected: BTreeMap<&str, &str> = [
+            ("actions", "write"),
             ("checks", "read"),
             ("contents", "write"),
             ("issues", "write"),
@@ -126,6 +127,7 @@ mod tests {
     #[test]
     fn a_lower_level_is_missing_with_what_was_granted() {
         let have = granted(&[
+            ("actions", "write"),
             ("checks", "read"),
             ("contents", "write"),
             ("issues", "write"),
@@ -146,6 +148,7 @@ mod tests {
     #[test]
     fn an_absent_permission_is_missing_with_nothing_granted() {
         let have = granted(&[
+            ("actions", "write"),
             ("checks", "read"),
             ("contents", "write"),
             ("issues", "write"),
@@ -165,6 +168,7 @@ mod tests {
     #[test]
     fn admin_covers_write_and_read() {
         let have = granted(&[
+            ("actions", "admin"),
             ("checks", "admin"),
             ("contents", "admin"),
             ("issues", "admin"),

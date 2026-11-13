@@ -267,7 +267,7 @@ fn created(pem: &str) -> Value {
         "client_secret": CLIENT_SECRET,
         "webhook_secret": WEBHOOK_SECRET,
         "pem": pem,
-        "permissions": { "checks": "read", "contents": "write", "issues": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
+        "permissions": { "actions": "write", "checks": "read", "contents": "write", "issues": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
         "events": ["check_run", "check_suite", "issue_comment", "issues", "pull_request", "status"],
     })
 }
