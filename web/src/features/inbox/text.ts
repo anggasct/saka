@@ -5,11 +5,30 @@ import type { BadgeTone } from "@/ui/badge";
 import type { InboxItem } from "./queries";
 
 export function kindTone(kind: string): BadgeTone {
-  return kind === "blocker" || kind === "spec_unclear" ? "danger" : "attention";
+  return kind === "blocker" || kind === "spec_unclear" || kind === "intake"
+    ? "danger"
+    : "attention";
+}
+
+export function issueOf(
+  params: Record<string, unknown>,
+): { url: string; number: number; title: string } | null {
+  const issue = record(params.issue);
+  const url = text(issue.url);
+  const number = Number(issue.number);
+  return url === "" || !Number.isInteger(number)
+    ? null
+    : { url, number, title: text(issue.title) };
 }
 
 export function heading(t: T, item: InboxItem): string {
   const { task_key, spec_title, spec_slug, draft_path } = item.title;
+  if (item.subject === "intake") {
+    const issue = issueOf(record(item.params));
+    return issue === null
+      ? t("inbox.item.intake")
+      : t("issues.inboxTitle", { number: issue.number, title: issue.title });
+  }
   if (task_key != null) {
     return task_key;
   }
@@ -34,6 +53,8 @@ export function sentence(t: T, item: InboxItem, relative: Relative): string {
       return t("inbox.item.merge");
     case "decision":
       return text(params.question) || t("inbox.item.decision");
+    case "intake":
+      return t("inbox.item.intake", { code: text(params.code) });
     default:
       return t("inbox.item.decision");
   }

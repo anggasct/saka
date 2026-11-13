@@ -757,6 +757,12 @@ const LABELS: Record<string, string[]> = {
 };
 
 const ERRORS = [
+  "issue_not_found",
+  "intake_active",
+  "intake_already_approved",
+  "intake_closed",
+  "intake_not_failed",
+  "intake_retries_exhausted",
   "network_error",
   "internal",
   "not_ready",

@@ -66,7 +66,15 @@ describe("startEventStream", () => {
       stream_type: "spec_draft",
     });
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
-      [["spec-drafts"], ["specs"], ["inbox"]],
+      [["spec-drafts"], ["specs"], ["inbox"], ["issue-intakes"]],
+    );
+    invalidate.mockClear();
+    fake.emit("intake.issue.state_changed.v1", {
+      seq: 7,
+      stream_type: "issue_intake",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["issue-intakes"], ["specs"], ["spec-drafts"], ["inbox"]],
     );
     invalidate.mockClear();
     fake.emit("runtime.permission.requested.v1", {

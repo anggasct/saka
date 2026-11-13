@@ -81,6 +81,50 @@ export const approvalItem = inboxItem({
   dismissible: true,
 });
 
+export const INTAKE_ID = "0193f0c4-1b2a-7c3d-9e8f-001122338801";
+
+const ISSUE = {
+  url: "https://github.com/acme/tasks/issues/41",
+  number: 41,
+  title: "Crash on start",
+  repo: "acme/tasks",
+};
+
+export const issueApprovalItem = inboxItem({
+  ...approvalItem,
+  params: { revision: REVISION_ID, issue: ISSUE },
+});
+
+const INTAKE_PARAMS = {
+  issue: ISSUE,
+  code: "draft_failed",
+  failure: {},
+  lane: "draft",
+  kind: "feature",
+};
+
+export const intakeItem = inboxItem({
+  kind: "intake",
+  subject: "intake",
+  work_item_id: null,
+  title: {
+    task_key: null,
+    stage: null,
+    spec_slug: null,
+    spec_title: null,
+    spec_path: null,
+    draft_path: null,
+  },
+  params: { ...INTAKE_PARAMS, retries: 1, can_retry: true },
+  action: { kind: "retry_intake", params: { intake_id: INTAKE_ID } },
+});
+
+export const exhaustedIntakeItem = inboxItem({
+  ...intakeItem,
+  params: { ...INTAKE_PARAMS, retries: 3, can_retry: false },
+  action: { kind: "dismiss_intake", params: { intake_id: INTAKE_ID } },
+});
+
 export const startItem = inboxItem({
   kind: "approval",
   subject: "step_start",

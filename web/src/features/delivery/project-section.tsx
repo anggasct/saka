@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
+import { IssueGroup } from "@/features/issues/issue-group";
 import { QuickDialog } from "@/features/quick/quick-dialog";
 import { useT } from "@/i18n/use-t";
 import { Card } from "@/ui/card";
@@ -65,11 +66,14 @@ export function ProjectSection({
             />
           ))}
           <ExternalGroup projectId={project.id} tasks={outside} />
-          {specs.length === 0 && outside.length === 0 && (
-            <p className="border-t border-border p-4 text-sm text-muted-foreground">
-              {t("delivery.noSpecs")}
-            </p>
-          )}
+          <IssueGroup project={project} />
+          {specs.length === 0 &&
+            outside.length === 0 &&
+            project.workflow.issue == null && (
+              <p className="border-t border-border p-4 text-sm text-muted-foreground">
+                {t("delivery.noSpecs")}
+              </p>
+            )}
         </>
       )}
     </Card>

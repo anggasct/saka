@@ -17,8 +17,8 @@ export function DeliveryPage() {
   const loading = projects.isPending || specs.some((s) => s.isPending);
   const failed = projects.error ?? specs.find((s) => s.error)?.error ?? null;
   const anySpec = specs.some((s) => (s.data ?? []).length > 0);
-  const takesOutsideChanges = (projects.data ?? []).some(
-    (p) => p.workflow.change_request != null,
+  const takesOtherEntries = (projects.data ?? []).some(
+    (p) => p.workflow.change_request != null || p.workflow.issue != null,
   );
 
   const retry = () => {
@@ -48,7 +48,7 @@ export function DeliveryPage() {
           <Skeleton className="h-24" />
           <Skeleton className="h-24" />
         </div>
-      ) : !anySpec && !takesOutsideChanges ? (
+      ) : !anySpec && !takesOtherEntries ? (
         <Card className="space-y-3 p-4">
           <h2 className="font-semibold">{t("delivery.empty.title")}</h2>
           <p className="text-sm text-muted-foreground">
