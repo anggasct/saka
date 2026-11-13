@@ -10,6 +10,7 @@ pub mod intake;
 pub mod regressions;
 pub mod scm;
 pub mod secret;
+pub mod signal;
 pub mod supervisor;
 pub mod toolchain;
 
@@ -60,6 +61,12 @@ pub use scm::{
     WebhookTarget, check_comment_body, check_sha, clip_text, unique_paths,
 };
 pub use secret::{Sealed, SecretStore};
+pub use signal::{
+    BODY_DEDUP_WINDOW_SECS, DecodedDelivery, IncidentSignal, MAX_DELIVERY_ID_CHARS,
+    MAX_FINGERPRINT_CHARS, MAX_LABEL_KEY_CHARS, MAX_LABEL_VALUE_CHARS, MAX_LABELS,
+    MAX_SIGNALS_PER_DELIVERY, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS, MAX_URL_BYTES, SignalDecoder,
+    SignalRequest, SignalSeverity, SignalStatus, TIMESTAMP_WINDOW_SECS,
+};
 pub use supervisor::{
     COMMAND_OUTPUT_MAX, CommandOutcome, CommandUnit, RunnerUnit, Supervisor, UnitLimits,
 };

@@ -5058,6 +5058,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "saka-intake"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "jiff",
+ "saka-core",
+ "saka-ports",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "subtle",
+]
+
+[[package]]
 name = "saka-mcp"
 version = "0.1.0"
 dependencies = [
