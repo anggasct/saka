@@ -14,6 +14,7 @@ import {
   mergeTask,
   requestFix,
   requestReview,
+  redoTask,
   retryTask,
   returnTask,
   revertTask,
@@ -157,6 +158,36 @@ export function RevertDialog({
         </dl>
       )}
     </ActionDialog>
+  );
+}
+
+const NOTE_MAX = 2000;
+
+export function RedoDialog({
+  task,
+  named = false,
+}: {
+  task: WorkItem;
+  named?: boolean;
+}) {
+  const t = useT();
+  const after = useAfterAction();
+  return (
+    <ActionDialog
+      trigger={
+        named
+          ? t("task.redo.triggerStep", { step: task.step_id ?? task.task_key })
+          : t("task.redo.trigger")
+      }
+      title={t("task.redo.title", { step: task.step_id ?? task.task_key })}
+      description={t("task.redo.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      note={{ label: t("task.redo.note"), max: NOTE_MAX }}
+      submit={t("task.redo.submit")}
+      onSubmit={(reason, key, note) =>
+        after(() => redoTask(task.id, task.version, reason ?? "", note, key))
+      }
+    />
   );
 }
 
@@ -436,6 +467,7 @@ export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
       {actions.includes("return") && <ReturnDialog task={task} />}
       {actions.includes("takeover") && <TakeoverDialog task={task} />}
       {actions.includes("revert") && <RevertDialog task={task} />}
+      {actions.includes("redo") && <RedoDialog task={task} />}
       {actions.includes("accept_unverified") && (
         <AcceptUnverifiedDialog task={task} />
       )}

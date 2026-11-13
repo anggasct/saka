@@ -2,6 +2,7 @@ import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
 
 import type { SpecItem, WorkItem } from "./queries";
+import { SpecPausedBanner } from "./spec-paused-banner";
 import { TaskRow } from "./task-row";
 import { label } from "./text";
 
@@ -16,7 +17,9 @@ export function SpecGroup({
 }) {
   const t = useT();
   const ordered = [...tasks].sort(
-    (a, b) => (a.step_index ?? 0) - (b.step_index ?? 0),
+    (a, b) =>
+      (a.step_index ?? 0) - (b.step_index ?? 0) ||
+      a.created_at.localeCompare(b.created_at),
   );
   const headingId = `spec-${spec.id}`;
   return (
@@ -29,6 +32,7 @@ export function SpecGroup({
           {label(t, "spec.state", spec.state)}
         </Badge>
       </header>
+      <SpecPausedBanner spec={spec} tasks={ordered} />
       {ordered.length === 0 ? (
         <p className="p-4 text-sm text-muted-foreground">
           {t("delivery.noTasks")}

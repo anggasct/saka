@@ -229,6 +229,40 @@ export async function revertTask(
   );
 }
 
+export async function redoTask(
+  workItemId: string,
+  version: number,
+  reason: string,
+  note: string | null,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/redo", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: { ...headers(idempotencyKey), "If-Match": `W/"${version}"` },
+      },
+      body: { reason, note },
+    }),
+  );
+}
+
+export async function withdrawSpec(
+  specId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/specs/{spec_id}/withdraw", {
+      params: {
+        path: { spec_id: specId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
+}
+
 export async function retryTask(
   workItemId: string,
   reason: string,

@@ -67,6 +67,31 @@ export function TaskRow({
             </Link>
           </p>
         )}
+        {task.redo_of && (
+          <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <Badge>{t("redo.badge")}</Badge>
+            <span>{t("redo.redoes")}</span>
+            <Link
+              to="/delivery/tasks/$workItemId"
+              params={{ workItemId: task.redo_of.id }}
+              className="inline-flex min-h-11 items-center break-all text-primary underline underline-offset-4"
+            >
+              {task.redo_of.key}
+            </Link>
+          </p>
+        )}
+        {task.redone_by && (
+          <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <Badge tone="attention">{t("redo.redone")}</Badge>
+            <Link
+              to="/delivery/tasks/$workItemId"
+              params={{ workItemId: task.redone_by.id }}
+              className="inline-flex min-h-11 items-center break-all text-primary underline underline-offset-4"
+            >
+              {task.redone_by.key}
+            </Link>
+          </p>
+        )}
         {first !== undefined && (
           <p className="text-sm break-words text-muted-foreground">
             {waitingText(t, first, format.relative, format.percent)}

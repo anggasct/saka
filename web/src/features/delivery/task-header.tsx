@@ -134,6 +134,37 @@ export function TaskHeader({
             </dd>
           </>
         )}
+        {task.redo_of && (
+          <>
+            <dt className="font-medium">{t("redo.of")}</dt>
+            <dd className="break-all">
+              <Link
+                to="/delivery/tasks/$workItemId"
+                params={{ workItemId: task.redo_of.id }}
+                className="inline-flex min-h-11 items-center text-primary underline underline-offset-4"
+              >
+                {task.redo_of.key}
+              </Link>
+            </dd>
+          </>
+        )}
+        {task.redone_by && (
+          <>
+            <dt className="font-medium">{t("redo.by")}</dt>
+            <dd className="flex flex-wrap items-center gap-2 break-all">
+              <Link
+                to="/delivery/tasks/$workItemId"
+                params={{ workItemId: task.redone_by.id }}
+                className="inline-flex min-h-11 items-center text-primary underline underline-offset-4"
+              >
+                {task.redone_by.key}
+              </Link>
+              <Badge tone={stateTone(task.redone_by.state)}>
+                {label(t, "task.state", task.redone_by.state)}
+              </Badge>
+            </dd>
+          </>
+        )}
         {spec !== undefined && (
           <>
             <dt className="font-medium">{t("task.spec")}</dt>

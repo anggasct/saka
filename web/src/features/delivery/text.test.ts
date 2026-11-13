@@ -831,6 +831,7 @@ const ERRORS = [
   "already_reverted",
   "redo_revision_changed",
   "already_redone",
+  "spec_has_active_tasks",
   "entry_point_disabled",
   "review_already_requested",
   "fix_not_available",
