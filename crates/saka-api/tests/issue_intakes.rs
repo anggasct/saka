@@ -297,3 +297,324 @@ fn an_unknown_or_malformed_intake_is_not_found() {
         assert_eq!(r.body["code"], "not_found");
     }
 }
+
+impl Api {
+    fn post(&self, path: &str, key: &str, body: &Value) -> Reply {
+        self.sim.block_on(async {
+            let response = self
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("host", "127.0.0.1:7420")
+                        .header("content-type", "application/json")
+                        .header("idempotency-key", key)
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            Reply {
+                status,
+                body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            }
+        })
+    }
+
+    fn list_url(&self) -> String {
+        format!("/api/v1/projects/{}/issue-intakes", self.project)
+    }
+}
+
+fn problem(r: &Reply, status: StatusCode, code: &str) {
+    assert_eq!(r.status, status, "{}", r.body);
+    assert_eq!(r.body["code"], code, "{}", r.body);
+}
+
+const BUGFIX: &str = "[workflow.issue]\n\n[workflow.issue.bugfix]\ndone_when = [\"cargo test\"]\nregression = [\"cargo test bug\"]\n";
+
+#[test]
+fn an_operator_puts_an_issue_in_and_a_replay_returns_the_same_intake() {
+    let api = Api::new(BUGFIX);
+    api.sim.world.open_issue(
+        SHOP_REPO,
+        saka_testkit::IssueSpec::new("Crash on start", "alice").labels(&["bug"]),
+    );
+    let created = api.post(&api.list_url(), "k-1", &json!({ "number": 1 }));
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let b = &created.body;
+    assert_eq!(
+        (b["state"].as_str(), b["cause"].as_str()),
+        (Some("accepted"), Some("operator"))
+    );
+    assert_eq!(
+        (b["lane"].as_str(), b["kind"].as_str()),
+        (Some("bugfix"), Some("bugfix"))
+    );
+    assert_eq!(b["issue"]["number"], 1);
+    assert_eq!(b["repo"]["name"], "shop");
+    assert!(!b["actor"].as_str().unwrap().is_empty());
+    let replay = api.post(&api.list_url(), "k-1", &json!({ "number": 1 }));
+    assert_eq!(replay.status, StatusCode::CREATED);
+    assert_eq!(replay.body["id"], created.body["id"]);
+    let listed = api.get(&api.list_url());
+    assert_eq!(listed.body["items"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn putting_an_issue_in_checks_the_issue_the_repo_and_the_workflow() {
+    let api = Api::new(BUGFIX);
+    api.sim.world.open_issue(
+        SHOP_REPO,
+        saka_testkit::IssueSpec::new("A pull request", "alice"),
+    );
+    api.sim.world.mark_issue_as_change_request(SHOP_REPO, 1);
+    let closed = api
+        .sim
+        .world
+        .open_issue(SHOP_REPO, saka_testkit::IssueSpec::new("Closed", "alice"));
+    api.sim.world.close_issue(SHOP_REPO, closed, "alice");
+
+    let missing = api.post(&api.list_url(), "k-1", &json!({ "number": 99 }));
+    problem(&missing, StatusCode::NOT_FOUND, "issue_not_found");
+    let pr = api.post(&api.list_url(), "k-2", &json!({ "number": 1 }));
+    problem(&pr, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(pr.body["params"]["errors"][0]["field"], "number");
+    assert_eq!(pr.body["params"]["errors"][0]["code"], "is_change_request");
+    let done = api.post(&api.list_url(), "k-3", &json!({ "number": closed }));
+    problem(&done, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let repo = api.post(
+        &api.list_url(),
+        "k-4",
+        &json!({ "number": 2, "repo": "nope" }),
+    );
+    problem(&repo, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(repo.body["params"]["errors"][0]["field"], "repo");
+    let zero = api.post(&api.list_url(), "k-5", &json!({ "number": 0 }));
+    problem(&zero, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    let extra = api.post(
+        &api.list_url(),
+        "k-6",
+        &json!({ "number": 2, "labels": [] }),
+    );
+    problem(
+        &extra,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+
+    let plain = Api::new("");
+    plain
+        .sim
+        .world
+        .open_issue(SHOP_REPO, saka_testkit::IssueSpec::new("Crash", "alice"));
+    let off = plain.post(&plain.list_url(), "k-1", &json!({ "number": 1 }));
+    problem(&off, StatusCode::CONFLICT, "entry_point_disabled");
+    assert_eq!(off.body["params"]["entry"], "issue");
+}
+
+#[test]
+fn an_issue_with_a_live_intake_cannot_be_put_in_twice() {
+    let api = Api::new(BUGFIX);
+    api.sim
+        .world
+        .open_issue(SHOP_REPO, saka_testkit::IssueSpec::new("Crash", "alice"));
+    let first = api.post(&api.list_url(), "k-1", &json!({ "number": 1 }));
+    let again = api.post(&api.list_url(), "k-2", &json!({ "number": 1 }));
+    problem(&again, StatusCode::CONFLICT, "intake_active");
+    assert_eq!(again.body["params"]["intake_id"], first.body["id"]);
+}
+
+#[test]
+fn dismissing_before_approval_withdraws_the_spec_and_after_approval_is_refused() {
+    let mut api = Api::new(BUGFIX);
+    api.sim.world.open_issue(
+        SHOP_REPO,
+        saka_testkit::IssueSpec::new("Crash on start", "alice").labels(&["bug"]),
+    );
+    let first = api.post(&api.list_url(), "k-1", &json!({ "number": 1 }));
+    let id = first.body["id"].as_str().unwrap().to_string();
+    assert!(api.sim.run_until(8_000, |s| {
+        s.engine()
+            .issue_intakes(
+                s.project_id,
+                &[],
+                &saka_engine::Page {
+                    after: None,
+                    limit: 10,
+                },
+            )
+            .unwrap()
+            .items
+            .iter()
+            .any(|i| i.intake.state.as_str() == "awaiting_approval")
+    }));
+    let spec_id = api.get(&format!("/api/v1/issue-intakes/{id}")).body["spec"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let dismissed = api.post(
+        &format!("/api/v1/issue-intakes/{id}/actions/dismiss"),
+        "k-2",
+        &json!({ "reason": "duplicate of #7" }),
+    );
+    assert_eq!(dismissed.status, StatusCode::OK, "{}", dismissed.body);
+    assert_eq!(dismissed.body["state"], "dismissed");
+    assert_eq!(dismissed.body["spec"]["state"], "withdrawn");
+    let spec = api.get(&format!("/api/v1/specs/{spec_id}"));
+    assert_eq!(spec.body["state"], "withdrawn");
+    assert!(api.sim.run_until(8_000, |s| {
+        s.world
+            .issue_comments()
+            .iter()
+            .any(|c| c.body.contains("not planned): duplicate of #7"))
+    }));
+
+    let twice = api.post(
+        &format!("/api/v1/issue-intakes/{id}/actions/dismiss"),
+        "k-3",
+        &json!({}),
+    );
+    problem(&twice, StatusCode::CONFLICT, "intake_closed");
+
+    api.sim.world.open_issue(
+        SHOP_REPO,
+        saka_testkit::IssueSpec::new("Second", "alice").labels(&["bug"]),
+    );
+    let second = api.post(&api.list_url(), "k-4", &json!({ "number": 2 }));
+    let id2 = second.body["id"].as_str().unwrap().to_string();
+    assert!(api.sim.run_until(8_000, |s| {
+        s.engine()
+            .issue_intake(
+                id2.parse::<uuid::Uuid>()
+                    .map(saka_core::ids::IssueIntakeId)
+                    .unwrap(),
+            )
+            .unwrap()
+            .intake
+            .state
+            .as_str()
+            == "awaiting_approval"
+    }));
+    let detail = api.get(&format!("/api/v1/issue-intakes/{id2}"));
+    let spec2: saka_core::ids::SpecId = detail.body["spec"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .map(saka_core::ids::SpecId)
+        .unwrap();
+    let revision = api.sim.engine().spec(spec2).unwrap().unwrap().revision.id;
+    api.sim.approve_spec(spec2, revision).unwrap();
+    assert!(api.sim.run_until(8_000, |s| {
+        s.engine()
+            .issue_intake(
+                id2.parse::<uuid::Uuid>()
+                    .map(saka_core::ids::IssueIntakeId)
+                    .unwrap(),
+            )
+            .unwrap()
+            .intake
+            .is_approved()
+    }));
+    let late = api.post(
+        &format!("/api/v1/issue-intakes/{id2}/actions/dismiss"),
+        "k-5",
+        &json!({}),
+    );
+    problem(&late, StatusCode::CONFLICT, "intake_already_approved");
+    let long = api.post(
+        &format!("/api/v1/issue-intakes/{id}/actions/dismiss"),
+        "k-6",
+        &json!({ "reason": "x".repeat(501) }),
+    );
+    problem(&long, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+}
+
+#[test]
+fn retrying_a_failed_intake_starts_over_and_the_fourth_retry_is_refused() {
+    let mut api = Api::new(BUGFIX);
+    api.sim.world.open_issue(
+        SHOP_REPO,
+        saka_testkit::IssueSpec::new("Crash on start", "alice").labels(&["bug"]),
+    );
+    let created = api.post(&api.list_url(), "k-1", &json!({ "number": 1 }));
+    let id = created.body["id"].as_str().unwrap().to_string();
+    let intake_id = saka_core::ids::IssueIntakeId(id.parse().unwrap());
+    let not_failed = api.post(
+        &format!("/api/v1/issue-intakes/{id}/actions/retry"),
+        "k-2",
+        &json!({}),
+    );
+    problem(&not_failed, StatusCode::CONFLICT, "intake_not_failed");
+
+    for attempt in 1_u32..=3 {
+        assert!(api.sim.run_until(8_000, |s| {
+            s.engine()
+                .issue_intake(intake_id)
+                .unwrap()
+                .intake
+                .state
+                .as_str()
+                == "awaiting_approval"
+        }));
+        let current = api.sim.engine().issue_intake(intake_id).unwrap().intake;
+        let failing = issue_intake::decide(
+            Some(&current),
+            Input::Fail {
+                code: "draft_failed".into(),
+                params: json!({}),
+            },
+            &mut Ctx {
+                now: api.sim.engine().now(),
+                ids: &mut Seq(9_000 + u128::from(attempt)),
+            },
+        )
+        .unwrap();
+        let failed =
+            issue_intake::evolve_all(Some(current), &failing, api.sim.engine().now()).unwrap();
+        api.sim.store_issue_intake(&failed);
+        let retried = api.post(
+            &format!("/api/v1/issue-intakes/{id}/actions/retry"),
+            &format!("retry-{attempt}"),
+            &json!({}),
+        );
+        assert_eq!(retried.status, StatusCode::ACCEPTED, "{}", retried.body);
+        assert_eq!(retried.body["retries"], attempt);
+        assert_eq!(retried.body["state"], "accepted");
+    }
+    assert!(api.sim.run_until(8_000, |s| {
+        s.engine()
+            .issue_intake(intake_id)
+            .unwrap()
+            .intake
+            .state
+            .as_str()
+            == "awaiting_approval"
+    }));
+    let current = api.sim.engine().issue_intake(intake_id).unwrap().intake;
+    let failing = issue_intake::decide(
+        Some(&current),
+        Input::Fail {
+            code: "draft_failed".into(),
+            params: json!({}),
+        },
+        &mut Ctx {
+            now: api.sim.engine().now(),
+            ids: &mut Seq(9_999),
+        },
+    )
+    .unwrap();
+    let failed = issue_intake::evolve_all(Some(current), &failing, api.sim.engine().now()).unwrap();
+    api.sim.store_issue_intake(&failed);
+    let exhausted = api.post(
+        &format!("/api/v1/issue-intakes/{id}/actions/retry"),
+        "retry-4",
+        &json!({}),
+    );
+    problem(&exhausted, StatusCode::CONFLICT, "intake_retries_exhausted");
+}

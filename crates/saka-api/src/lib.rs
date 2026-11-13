@@ -45,6 +45,7 @@ pub use state::{ApiConfig, AppState};
         routes::drafts::retry_spec_draft, routes::drafts::cancel_spec_draft, routes::drafts::message_spec_draft,
         routes::drafts::commit_spec_draft, routes::drafts::discard_spec_draft,
         routes::issue_intakes::list_issue_intakes, routes::issue_intakes::get_issue_intake,
+        routes::issue_intakes::create_issue_intake, routes::issue_intakes::dismiss_issue_intake, routes::issue_intakes::retry_issue_intake,
         routes::operations::list_project_hooks, routes::operations::list_hook_runs, routes::operations::get_hook_run, routes::inbox::list_inbox, routes::inbox::inbox_summary, routes::dismiss_inbox_item, routes::operations::rerun_hook,
         auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
         auth_routes::register_start, auth_routes::register_finish, auth_routes::login_start, auth_routes::login_finish, auth_routes::logout, auth_routes::revoke_credential,
@@ -261,7 +262,16 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/projects/{project_id}/issue-intakes",
-            get(routes::issue_intakes::list_issue_intakes),
+            get(routes::issue_intakes::list_issue_intakes)
+                .post(routes::issue_intakes::create_issue_intake),
+        )
+        .route(
+            "/api/v1/issue-intakes/{intake_id}/actions/dismiss",
+            post(routes::issue_intakes::dismiss_issue_intake),
+        )
+        .route(
+            "/api/v1/issue-intakes/{intake_id}/actions/retry",
+            post(routes::issue_intakes::retry_issue_intake),
         )
         .route(
             "/api/v1/issue-intakes/{intake_id}",

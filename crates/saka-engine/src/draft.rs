@@ -982,6 +982,9 @@ impl Engine {
             | K::ScmWebhookPrune
             | K::WorkspaceReloadConfig
             | K::ScmScanChanges
+            | K::ScmScanIssues
+            | K::IntakeIssueRender
+            | K::ScmIssueComment
             | K::ScmUserLinkPoll
             | K::ScmUserLinkRefresh
             | K::GateVerify
@@ -1582,11 +1585,20 @@ impl Engine {
                     other => internal(other),
                 })?;
         }
+        let from_issue = self
+            .store
+            .read(|c| saka_store::issue_intake::issue_intake_of_draft(c, d.draft.id))
+            .map_err(|e| internal(e.into()))?
+            .is_some();
         let file = SpecFile {
             path: &path,
             source_commit: &commit,
             bytes: &bytes,
-            origin: SpecOrigin::Architect,
+            origin: if from_issue {
+                SpecOrigin::Intake
+            } else {
+                SpecOrigin::Architect
+            },
         };
         let registered = self.register_at(&project, &repo, file, &cause, None).await;
         let problem = match registered {

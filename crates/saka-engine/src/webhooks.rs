@@ -104,12 +104,18 @@ impl Engine {
             );
             self.push_job(&mut batch, job, Some(c.project_id), &cause);
         }
-        let scans = match &repo {
+        let mut scans = match &repo {
             Some(r) if delivery.targets.contains(&WebhookTarget::Intake) => {
                 self.schedule_scans(&mut batch, r.id, row_id, &cause)?
             }
             _ => 0,
         };
+        if let Some(r) = repo
+            .as_ref()
+            .filter(|_| delivery.targets.contains(&WebhookTarget::IssueIntake))
+        {
+            scans += self.schedule_issue_scans(&mut batch, r.id, row_id, &cause)?;
+        }
         let refreshed = u32::try_from(hit.len())
             .unwrap_or(u32::MAX)
             .saturating_add(scans);

@@ -29,6 +29,7 @@ fn request(kind: WorkKind, approve: bool) -> QuickRequest {
         spec: input(kind),
         path: None,
         approve,
+        origin: saka_core::vocab::SpecOrigin::Quick,
     }
 }
 

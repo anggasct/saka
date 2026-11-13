@@ -4281,3 +4281,25 @@ pub struct IssueIntakeQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateIssueIntakeBody {
+    /// The issue number in the repo (GitHub issue number, GitLab issue iid). A pull request number is refused.
+    pub number: u64,
+    /// The repo binding name in `saka.toml`; required when the project has more than one repo.
+    #[serde(default)]
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DismissIssueIntakeBody {
+    /// At most 500 characters; posted on the issue with the "not planned" comment.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetryIssueIntakeBody {}

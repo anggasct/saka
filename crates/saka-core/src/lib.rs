@@ -13,6 +13,7 @@ pub mod identity;
 pub mod ids;
 pub mod inbox;
 pub mod issue_intake;
+pub mod issue_text;
 pub mod job;
 pub mod model;
 pub mod paths;

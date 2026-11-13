@@ -16,6 +16,7 @@ mod identity;
 mod inbox;
 mod intake;
 mod issue_intake;
+mod issue_scan;
 mod metrics;
 pub mod packet;
 mod permission_check;
@@ -114,6 +115,7 @@ pub struct EngineConfig {
     pub hooks: Vec<saka_core::hook::Hook>,
     pub auth_enabled: bool,
     pub workflow_policy: saka_core::workflow::WorkflowPolicy,
+    pub public_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +145,7 @@ pub struct Ports {
     pub entropy: Arc<dyn saka_ports::Entropy>,
     pub env: Arc<dyn Environments>,
     pub scm: Arc<dyn Scm>,
+    pub intake: Arc<dyn saka_ports::IntakeSource>,
     pub agents: Arc<dyn Agents>,
     pub docs: Arc<dyn DocSource>,
     pub toolchains: Arc<dyn Toolchains>,

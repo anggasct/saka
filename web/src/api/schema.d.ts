@@ -388,6 +388,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/issue-intakes/{intake_id}/actions/dismiss": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["dismiss_issue_intake"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/issue-intakes/{intake_id}/actions/retry": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["retry_issue_intake"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/meta": {
     parameters: {
       query?: never;
@@ -621,7 +653,7 @@ export interface paths {
     };
     get: operations["list_issue_intakes"];
     put?: never;
-    post?: never;
+    post: operations["create_issue_intake"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1593,6 +1625,15 @@ export interface components {
       /** @description Path relative to the workspace repo root. */
       path: string;
     };
+    CreateIssueIntakeBody: {
+      /**
+       * Format: int64
+       * @description The issue number in the repo (GitHub issue number, GitLab issue iid). A pull request number is refused.
+       */
+      number: number;
+      /** @description The repo binding name in `saka.toml`; required when the project has more than one repo. */
+      repo?: string | null;
+    };
     CreateSpecDraftBody: {
       /** @description Up to 16 distinct docs in the project folder the architect reads first. */
       context_paths?: string[];
@@ -1701,6 +1742,10 @@ export interface components {
       skip: number;
       /** Format: int32 */
       warn: number;
+    };
+    DismissIssueIntakeBody: {
+      /** @description At most 500 characters; posted on the issue with the "not planned" comment. */
+      reason?: string | null;
     };
     DocsChangeRequest: {
       base_branch: string;
@@ -2927,6 +2972,7 @@ export interface components {
     RequiredReason: {
       reason: string;
     };
+    RetryIssueIntakeBody: Record<string, never>;
     RetrySpecDraftBody: {
       /** @description 1 to 4000 characters, sent to the architect in the packet of the new attempt. */
       note?: string | null;
@@ -4561,6 +4607,78 @@ export interface operations {
       };
     };
   };
+  dismiss_issue_intake: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        intake_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DismissIssueIntakeBody"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IssueIntake"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  retry_issue_intake: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        intake_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RetryIssueIntakeBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IssueIntake"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   meta: {
     parameters: {
       query?: never;
@@ -5266,6 +5384,50 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Page_IssueIntake"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  create_issue_intake: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateIssueIntakeBody"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IssueIntake"];
+        };
+      };
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
       "4XX": {

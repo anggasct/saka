@@ -3,9 +3,9 @@ use saka_core::time::Timestamp;
 
 use crate::{PortResult, RepoRef};
 
-pub const MAX_ISSUE_BODY_BYTES: usize = 16 * 1024;
+pub const MAX_ISSUE_BODY_BYTES: usize = saka_core::issue_text::MAX_BODY_BYTES;
 pub const MAX_ISSUES: usize = 100;
-pub const TRUNCATION_MARKER: &str = "[truncated]";
+pub const TRUNCATION_MARKER: &str = saka_core::issue_text::TRUNCATION_MARKER;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueRef {
@@ -28,6 +28,7 @@ pub struct IssueSummary {
     pub state: IssueState,
     pub labels: Vec<String>,
     pub confidential: bool,
+    pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
 

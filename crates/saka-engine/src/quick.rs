@@ -21,6 +21,7 @@ pub struct QuickRequest {
     pub spec: QuickSpec,
     pub path: Option<String>,
     pub approve: bool,
+    pub origin: SpecOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,7 +168,7 @@ impl Engine {
             path: &path,
             source_commit: &written.commit,
             bytes: &written.bytes,
-            origin: SpecOrigin::Quick,
+            origin: request.origin,
         };
         let (registered, _) = self.register_at(&project, &repo, file, cause, None).await?;
         if !request.approve {

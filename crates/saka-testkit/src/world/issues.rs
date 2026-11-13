@@ -54,7 +54,9 @@ pub(super) struct StoredIssue {
     number: u64,
     spec: IssueSpec,
     state: IssueState,
+    created_at: Timestamp,
     updated_at: Timestamp,
+    change_request: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +151,7 @@ impl StoredIssue {
             state: self.state,
             labels: self.spec.labels.clone(),
             confidential: self.spec.confidential,
+            created_at: self.created_at,
             updated_at: self.updated_at,
         }
     }
@@ -164,7 +167,9 @@ impl FakeWorld {
             number,
             spec,
             state: IssueState::Open,
+            created_at: now,
             updated_at: now,
+            change_request: false,
         });
         number
     }
@@ -209,6 +214,12 @@ impl FakeWorld {
         }
         s.issues
             .signal(repo, number, now, actor, IssueSignalKind::Reopened);
+    }
+
+    pub fn mark_issue_as_change_request(&self, repo: &str, number: u64) {
+        if let Some(issue) = self.state().issues.issue_mut(repo, number) {
+            issue.change_request = true;
+        }
     }
 
     pub fn delete_issue(&self, repo: &str, number: u64) {
@@ -297,6 +308,12 @@ impl IntakeSource for FakeWorld {
             .ok_or_else(|| {
                 PortError::permanent("issue_not_found", json!({ "number": issue.number }))
             })?;
+        if stored.change_request {
+            return Err(PortError::permanent(
+                "issue_is_change_request",
+                json!({ "number": issue.number }),
+            ));
+        }
         Ok(Issue {
             summary: stored.summary(),
             body: clip_issue_body(&stored.spec.body),

@@ -144,7 +144,7 @@ impl GitHubHarness {
         json!({
             "number": listed.number, "title": listed.title, "state": if listed.closed { "closed" } else { "open" },
             "html_url": format!("https://github.example/acme/app/issues/{}", listed.number),
-            "updated_at": rfc3339(listed.updated), "user": { "login": listed.author },
+            "created_at": rfc3339(listed.updated - 1000), "updated_at": rfc3339(listed.updated), "user": { "login": listed.author },
             "labels": listed.labels.iter().map(|l| json!({ "name": l })).collect::<Vec<_>>(),
         })
     }
@@ -343,7 +343,7 @@ impl GitLabHarness {
         json!({
             "iid": listed.number, "title": listed.title, "state": if listed.closed { "closed" } else { "opened" },
             "web_url": format!("https://gitlab.example/acme/app/-/issues/{}", listed.number),
-            "updated_at": rfc3339(listed.updated), "author": { "username": listed.author },
+            "created_at": rfc3339(listed.updated - 1000), "updated_at": rfc3339(listed.updated), "author": { "username": listed.author },
             "labels": listed.labels, "confidential": listed.confidential,
         })
     }
@@ -582,6 +582,7 @@ async fn issues_are_listed_without_change_requests(h: &dyn IssueHarness) {
         ("Issue 1", "alice", ["bug".to_string()].as_slice())
     );
     assert_eq!(first.updated_at, Timestamp(T1));
+    assert_eq!(first.created_at, Timestamp(T1 - 1000));
     assert!(first.url.ends_with("/issues/1") || first.url.ends_with("/-/issues/1"));
 }
 

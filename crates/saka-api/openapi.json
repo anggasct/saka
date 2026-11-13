@@ -1112,6 +1112,122 @@
         }
       }
     },
+    "/api/v1/issue-intakes/{intake_id}/actions/dismiss": {
+      "post": {
+        "tags": [
+          "issue-intakes"
+        ],
+        "operationId": "dismiss_issue_intake",
+        "parameters": [
+          {
+            "name": "intake_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissIssueIntakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueIntake"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/issue-intakes/{intake_id}/actions/retry": {
+      "post": {
+        "tags": [
+          "issue-intakes"
+        ],
+        "operationId": "retry_issue_intake",
+        "parameters": [
+          {
+            "name": "intake_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryIssueIntakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueIntake"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "tags": [
@@ -2218,6 +2334,71 @@
             }
           },
           "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "issue-intakes"
+        ],
+        "operationId": "create_issue_intake",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIssueIntakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueIntake"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5798,6 +5979,28 @@
           }
         }
       },
+      "CreateIssueIntakeBody": {
+        "type": "object",
+        "required": [
+          "number"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The issue number in the repo (GitHub issue number, GitLab issue iid). A pull request number is refused.",
+            "minimum": 0
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The repo binding name in `saka.toml`; required when the project has more than one repo."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateSpecDraftBody": {
         "type": "object",
         "required": [
@@ -6174,6 +6377,19 @@
             "minimum": 0
           }
         }
+      },
+      "DismissIssueIntakeBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 500 characters; posted on the issue with the \"not planned\" comment."
+          }
+        },
+        "additionalProperties": false
       },
       "DocsChangeRequest": {
         "type": "object",
@@ -10208,6 +10424,10 @@
             "type": "string"
           }
         },
+        "additionalProperties": false
+      },
+      "RetryIssueIntakeBody": {
+        "type": "object",
         "additionalProperties": false
       },
       "RetrySpecDraftBody": {

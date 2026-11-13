@@ -229,6 +229,7 @@ impl World {
                 entropy: Arc::new(saka_testkit::FakeEntropy::default()),
                 env: Arc::new(repos),
                 scm: world.clone(),
+                intake: world.clone(),
                 agents: world.clone(),
                 docs: world.clone(),
                 toolchains: Arc::new(toolchains),
@@ -261,6 +262,7 @@ impl World {
                 hooks: Vec::new(),
                 auth_enabled: false,
                 workflow_policy: saka_core::workflow::WorkflowPolicy::default(),
+                public_url: None,
             },
         );
         let cause = engine.cause("human:operator:local");

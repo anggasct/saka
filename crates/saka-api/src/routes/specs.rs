@@ -147,6 +147,7 @@ fn quick_request(req: dto::QuickSpecBody) -> Result<QuickRequest, ApiError> {
         },
         path: req.path,
         approve: req.approve,
+        origin: saka_core::vocab::SpecOrigin::Quick,
     })
 }
 

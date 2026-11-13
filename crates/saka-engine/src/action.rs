@@ -24,6 +24,7 @@ pub enum Produced<'a> {
     Task(&'a Task),
     Taken(&'a Task, bool),
     Draft(&'a Draft),
+    IssueIntake(&'a crate::issue_intake::IssueIntakeView),
     Permission(&'a PermissionView),
     Decision(&'a DecisionView),
     Session(&'a Session),

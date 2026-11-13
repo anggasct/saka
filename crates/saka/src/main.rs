@@ -115,6 +115,9 @@ enum Command {
     #[command(about = "Spec drafts the architect writes from an idea")]
     #[command(subcommand)]
     Draft(DraftCmd),
+    #[command(about = "Issues from GitHub or GitLab that become specs")]
+    #[command(subcommand)]
+    Issue(IssueCmd),
     #[command(about = "Permission requests from agent sessions")]
     #[command(subcommand)]
     Permission(PermissionCmd),
@@ -663,6 +666,37 @@ enum TaskCmd {
 }
 
 #[derive(Subcommand)]
+enum IssueCmd {
+    #[command(about = "Lists the issue intakes of a project")]
+    List {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "One or more states, comma-separated", long)]
+        state: Option<String>,
+    },
+    #[command(about = "Takes an issue in as a spec, as an operator")]
+    Intake {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "The issue number")]
+        number: u64,
+        #[arg(
+            help = "Name of the repo binding (needed when the project has more than one repo)",
+            long
+        )]
+        repo: Option<String>,
+    },
+    #[command(about = "Turns an intake down before its spec is approved")]
+    Dismiss {
+        id: String,
+        #[arg(help = "Posted on the issue (at most 500 characters)", long)]
+        reason: Option<String>,
+    },
+    #[command(about = "Runs a failed intake again (at most three times)")]
+    Retry { id: String },
+}
+
+#[derive(Subcommand)]
 enum DraftCmd {
     #[command(about = "Lists the project's spec drafts")]
     List {
@@ -1099,6 +1133,23 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                 wait,
             };
             current_thread()?.block_on(client.spec_draft(&new))
+        }
+        Command::Issue(cmd) => {
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            current_thread()?.block_on(async {
+                match cmd {
+                    IssueCmd::List { project, state } => {
+                        client.issue_list(&project, state.as_deref()).await
+                    }
+                    IssueCmd::Intake {
+                        project,
+                        number,
+                        repo,
+                    } => client.issue_intake(&project, number, repo.as_deref()).await,
+                    IssueCmd::Dismiss { id, reason } => client.issue_dismiss(&id, reason).await,
+                    IssueCmd::Retry { id } => client.issue_retry(&id).await,
+                }
+            })
         }
         Command::Draft(cmd) => {
             let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
