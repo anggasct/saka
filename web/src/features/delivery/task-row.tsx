@@ -50,6 +50,22 @@ export function TaskRow({
         {place !== null && (
           <p className="text-sm text-muted-foreground">{place}</p>
         )}
+        {task.reverted_by && (
+          <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <Badge tone="attention">
+              {task.reverted_by.state === "done"
+                ? t("revert.reverted")
+                : t("revert.reverting")}
+            </Badge>
+            <Link
+              to="/delivery/tasks/$workItemId"
+              params={{ workItemId: task.reverted_by.id }}
+              className="inline-flex min-h-11 items-center break-all text-primary underline underline-offset-4"
+            >
+              {task.reverted_by.key}
+            </Link>
+          </p>
+        )}
         {first !== undefined && (
           <p className="text-sm break-words text-muted-foreground">
             {waitingText(t, first, format.relative, format.percent)}

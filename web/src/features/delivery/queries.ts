@@ -212,6 +212,23 @@ export async function mergeTask(
   );
 }
 
+export async function revertTask(
+  workItemId: string,
+  version: number,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/revert", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: { ...headers(idempotencyKey), "If-Match": `W/"${version}"` },
+      },
+      body: { reason },
+    }),
+  );
+}
+
 export async function retryTask(
   workItemId: string,
   reason: string,

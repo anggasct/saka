@@ -39,7 +39,7 @@ export function TaskHeader({
       </Link>
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-semibold break-all">
-          {task.external
+          {task.external || task.origin === "revert"
             ? task.task_key
             : t("task.step", { step: task.step_id ?? task.task_key })}
         </h1>
@@ -47,6 +47,7 @@ export function TaskHeader({
           {label(t, "task.state", task.state)}
         </Badge>
         <ExternalBadges task={task} />
+        {task.origin === "revert" && <Badge>{t("revert.badge")}</Badge>}
         {task.pending_permission_count > 0 &&
           (firstPermission === undefined ? (
             <Badge tone="attention">{waiting}</Badge>
@@ -100,6 +101,37 @@ export function TaskHeader({
           <>
             <dt className="font-medium">{t("external.author")}</dt>
             <dd className="break-words">{task.external.author}</dd>
+          </>
+        )}
+        {task.revert_of && (
+          <>
+            <dt className="font-medium">{t("revert.of")}</dt>
+            <dd className="break-all">
+              <Link
+                to="/delivery/tasks/$workItemId"
+                params={{ workItemId: task.revert_of.id }}
+                className="inline-flex min-h-11 items-center text-primary underline underline-offset-4"
+              >
+                {task.revert_of.key}
+              </Link>
+            </dd>
+          </>
+        )}
+        {task.reverted_by && (
+          <>
+            <dt className="font-medium">{t("revert.by")}</dt>
+            <dd className="flex flex-wrap items-center gap-2 break-all">
+              <Link
+                to="/delivery/tasks/$workItemId"
+                params={{ workItemId: task.reverted_by.id }}
+                className="inline-flex min-h-11 items-center text-primary underline underline-offset-4"
+              >
+                {task.reverted_by.key}
+              </Link>
+              <Badge tone={stateTone(task.reverted_by.state)}>
+                {label(t, "task.state", task.reverted_by.state)}
+              </Badge>
+            </dd>
           </>
         )}
         {spec !== undefined && (

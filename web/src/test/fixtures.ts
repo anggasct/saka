@@ -175,6 +175,32 @@ export const outsideTask = task(4, {
   available_actions: ["cancel", "review"],
 });
 
+export const REVERT_ID = "0193f0c4-1b2a-7c3d-9e8f-0011223344a1";
+
+export const revertTask = task(1, {
+  id: REVERT_ID,
+  origin: "revert",
+  spec_id: null,
+  spec_revision_id: null,
+  step_id: null,
+  step_index: null,
+  task_key: "tasks-done/s1-R1",
+  work: 'Revert "Work of step 1"',
+  branch: "saka/revert/tasks-done/s1-r1",
+  state: "blocked",
+  stage: "dev",
+  revert_of: { id: task(1, {}).id, key: "tasks-done/s1" },
+  blocker: {
+    id: "0193f0c4-1b2a-7c3d-9e8f-0011223344a2",
+    code: "revert_conflict",
+    params: { reason: "conflict", paths: ["src/a.rs"], count: 1 },
+    opened_at: "2026-10-31T10:05:00.000Z",
+    stage: "dev",
+    primary_action: { kind: "takeover", params: {} },
+  },
+  available_actions: ["takeover", "cancel"],
+});
+
 export const supersededTask = task(3, {
   state: "superseded",
   available_actions: [],

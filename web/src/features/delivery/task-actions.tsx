@@ -15,6 +15,7 @@ import {
   requestReview,
   retryTask,
   returnTask,
+  revertTask,
   runPrimaryAction,
   startTask,
   takeoverTask,
@@ -99,6 +100,40 @@ function MergeDialog({ task }: { task: WorkItem }) {
           </div>
         ))}
       </dl>
+    </ActionDialog>
+  );
+}
+
+function RevertDialog({ task }: { task: WorkItem }) {
+  const t = useT();
+  const after = useAfterAction();
+  const change = task.change_request;
+  return (
+    <ActionDialog
+      trigger={t("task.revert.trigger")}
+      triggerVariant="outline"
+      title={t("task.revert.title")}
+      description={t("task.revert.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      submit={t("task.revert.submit")}
+      onSubmit={(reason, key) =>
+        after(() => revertTask(task.id, task.version, reason ?? "", key))
+      }
+    >
+      {change && (
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+          <dt className="font-medium">{t("task.change.title")}</dt>
+          <dd>{t("task.change", { number: change.number })}</dd>
+          {change.merge_commit_sha && (
+            <>
+              <dt className="font-medium">{t("task.revert.commit")}</dt>
+              <dd>
+                <code>{sha(change.merge_commit_sha)}</code>
+              </dd>
+            </>
+          )}
+        </dl>
+      )}
     </ActionDialog>
   );
 }
@@ -247,14 +282,16 @@ function ReturnDialog({ task }: { task: WorkItem | WorkItemDetail }) {
   const stageId = useId();
   const runs = "stage_runs" in task ? task.stage_runs : [];
   const left = runs.at(-1)?.stage;
+  const reverting = task.origin === "revert";
   const canMerge =
     task.change_request !== null && task.change_request !== undefined;
+  const canReview = canMerge && !reverting;
   const canFix =
-    canMerge &&
+    canReview &&
     task.review?.outcome === "changes_requested" &&
     task.review.current;
   const [stage, setStage] = useState(
-    canMerge && left === "merge" ? "merge" : "dev",
+    canMerge && (reverting || left === "merge") ? "merge" : "dev",
   );
   return (
     <ActionDialog
@@ -280,8 +317,10 @@ function ReturnDialog({ task }: { task: WorkItem | WorkItemDetail }) {
           }}
           className="block min-h-11 w-full rounded-md border border-border bg-background px-2 text-sm"
         >
-          <option value="dev">{label(t, "stage", "dev")}</option>
-          {canMerge && (
+          {(!reverting || !canMerge) && (
+            <option value="dev">{label(t, "stage", "dev")}</option>
+          )}
+          {canReview && (
             <option value="review">{label(t, "stage", "review")}</option>
           )}
           {canFix && <option value="fix">{label(t, "stage", "fix")}</option>}
@@ -363,6 +402,7 @@ export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
       {actions.includes("retry") && <RetryDialog task={task} />}
       {actions.includes("return") && <ReturnDialog task={task} />}
       {actions.includes("takeover") && <TakeoverDialog task={task} />}
+      {actions.includes("revert") && <RevertDialog task={task} />}
       {actions.includes("cancel") && <CancelDialog task={task} />}
     </div>
   );
