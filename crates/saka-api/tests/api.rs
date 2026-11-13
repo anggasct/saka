@@ -1066,6 +1066,7 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
             "preset": "build_only",
             "spec": true,
             "change_request": null,
+            "issue": null,
             "stages": [{ "stage": "dev", "trigger": "auto" }],
             "fix_rounds": 2,
             "kinds": {},

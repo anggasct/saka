@@ -141,6 +141,10 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::BlockerNotOpen { .. }
         | R::InboxItemNotDismissible { .. }
         | R::InboxItemClosed { .. }
+        | R::IntakeAlreadyApproved
+        | R::IntakeClosed { .. }
+        | R::IntakeNotFailed
+        | R::IntakeRetriesExhausted
         | R::BlockerActionChanged { .. }
         | R::SpecDraftTargetTaken { .. }
         | R::DeviceFlowUnconfigured { .. }

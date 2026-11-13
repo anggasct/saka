@@ -17,7 +17,7 @@ use saka_core::session::{SessionConfig, SessionInput};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
     DraftFailureCode, DraftLocale, DraftMode, LintOutcome, PrimaryAction, SessionState,
-    SpecDraftState, TargetKind,
+    SpecDraftState, TargetKind, WorkKind,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -87,6 +87,7 @@ impl World {
             locale: DraftLocale::En,
             mode,
             target_kind: TargetKind::New,
+            kind: WorkKind::Feature,
             context_paths: vec![],
         });
         let d = draft::evolve(None, &event, T0).unwrap();

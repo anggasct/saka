@@ -532,6 +532,7 @@ pub struct TokenRequirements {
     pub required_access: u8,
     pub recommended_access: u8,
     pub hook_events: &'static [&'static str],
+    pub issue_hook_events: &'static [&'static str],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1059,8 +1060,19 @@ pub fn repo_webhook(
     web_url: &str,
     hooks: &RepoHooks,
     last_received_at: Option<Timestamp>,
+    with_issues: bool,
 ) -> Vec<Finding> {
     let path = hook_path(integration_id);
+    let required: Vec<&str> = requirements
+        .hook_events
+        .iter()
+        .chain(if with_issues {
+            requirements.issue_hook_events
+        } else {
+            &[]
+        })
+        .copied()
+        .collect();
     let last = last_received_at.map(Timestamp::to_rfc3339);
     let listed = match hooks {
         RepoHooks::Listed(listed) => listed,
@@ -1078,7 +1090,7 @@ pub fn repo_webhook(
             json!({
                 "url": repo_hooks_url(web_url, repo),
                 "path": path,
-                "events": requirements.hook_events,
+                "events": required,
             }),
         )
     };
@@ -1101,8 +1113,7 @@ pub fn repo_webhook(
         )];
     }
     let mut warns = Vec::new();
-    let missing: Vec<&str> = requirements
-        .hook_events
+    let missing: Vec<&str> = required
         .iter()
         .copied()
         .filter(|e| !hook.events.iter().any(|have| have == e))
@@ -2626,6 +2637,7 @@ mod tests {
             "pipeline_events",
             "job_events",
         ],
+        issue_hook_events: &["issues_events"],
     };
 
     fn token(expires_in_ms: Option<i64>) -> TokenStatus {
@@ -2839,7 +2851,15 @@ mod tests {
         use DiagnosticStatus::{Fail, Pass, Warn};
         let last = Some(NOW.plus_ms(-1000));
         let judge = |hooks: RepoHooks| {
-            repo_webhook(&TOKEN_RULES, "gitlab", "acme/app", GITLAB_WEB, &hooks, last)
+            repo_webhook(
+                &TOKEN_RULES,
+                "gitlab",
+                "acme/app",
+                GITLAB_WEB,
+                &hooks,
+                last,
+                false,
+            )
         };
         let configure = Some((
             "configure_repo_webhook",
@@ -2938,5 +2958,39 @@ mod tests {
                 None,
             )]
         );
+    }
+
+    #[test]
+    fn a_repo_with_issue_intake_also_needs_the_issue_events() {
+        use DiagnosticStatus::{Pass, Warn};
+        let judge = |hook: RepoHook, with_issues: bool| {
+            repo_webhook(
+                &TOKEN_RULES,
+                "gitlab",
+                "acme/app",
+                GITLAB_WEB,
+                &RepoHooks::Listed(vec![hook]),
+                None,
+                with_issues,
+            )
+        };
+        let plain = saka_hook_for("gitlab");
+        assert_eq!(judge(plain.clone(), false)[0].status, Pass);
+        let warned = judge(plain.clone(), true);
+        assert_eq!(
+            (warned[0].status, warned[0].code.as_str()),
+            (Warn, "repo_webhook_events_missing")
+        );
+        assert_eq!(warned[0].params["missing"], json!(["issues_events"]));
+        let with_issues = RepoHook {
+            events: plain
+                .events
+                .iter()
+                .cloned()
+                .chain(["issues_events".to_string()])
+                .collect(),
+            ..plain
+        };
+        assert_eq!(judge(with_issues, true)[0].status, Pass);
     }
 }

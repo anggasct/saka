@@ -194,6 +194,14 @@ pub enum Rejection {
     LastCredential,
     #[error("the device cannot be revoked")]
     DeviceNotRevocable,
+    #[error("the intake is already approved")]
+    IntakeAlreadyApproved,
+    #[error("the intake is already finished")]
+    IntakeClosed { state: &'static str },
+    #[error("the intake has not failed")]
+    IntakeNotFailed,
+    #[error("the intake has no retries left")]
+    IntakeRetriesExhausted,
     #[error("invalid {field}: {code}")]
     Invalid {
         field: &'static str,
@@ -254,6 +262,10 @@ impl Rejection {
             Rejection::InboxItemNotFound => "inbox_item_not_found",
             Rejection::InboxItemNotDismissible { .. } => "inbox_item_not_dismissible",
             Rejection::InboxItemClosed { .. } => "inbox_item_closed",
+            Rejection::IntakeAlreadyApproved => "intake_already_approved",
+            Rejection::IntakeClosed { .. } => "intake_closed",
+            Rejection::IntakeNotFailed => "intake_not_failed",
+            Rejection::IntakeRetriesExhausted => "intake_retries_exhausted",
             Rejection::DeviceFlowUnconfigured { .. } => "device_flow_unconfigured",
             Rejection::UserAuthorshipUnsupported { .. } => "user_authorship_unsupported",
             Rejection::UserLinkInUse { .. } => "user_link_in_use",
@@ -354,6 +366,7 @@ impl Rejection {
             Rejection::ActionNeedsInput { action } => json!({ "action": action }),
             Rejection::InboxItemNotDismissible { subject } => json!({ "subject": subject }),
             Rejection::InboxItemClosed { state } => json!({ "state": state }),
+            Rejection::IntakeClosed { state } => json!({ "state": state }),
             Rejection::HookNotConfigured { hook } => json!({ "hook": hook }),
             Rejection::HookRunGated { work_item_id } => json!({ "work_item_id": work_item_id }),
             Rejection::RuleDuplicate { rule_id } => json!({ "rule_id": rule_id }),

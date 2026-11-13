@@ -1011,3 +1011,21 @@ fn the_target_kind_is_checked_and_a_revision_needs_an_existing_file() {
     assert_eq!(twice.status, StatusCode::CONFLICT);
     assert_eq!(twice.body["params"]["reason"], "draft_active");
 }
+
+#[test]
+fn the_kind_of_work_is_checked_defaults_to_feature_and_shows_in_the_draft() {
+    let mut api = Api::new();
+    let bad = api.create(json!({ "idea": IDEA, "path": PATH, "kind": "epic" }));
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(bad.error(), ("kind".into(), "invalid".into()));
+    let plain = api.create(json!({ "idea": IDEA, "path": PATH }));
+    assert_eq!(plain.body["kind"], "feature");
+    let chore = api.create(json!({ "idea": IDEA, "path": "docs/specs/chore.md", "kind": "chore" }));
+    assert_eq!(chore.status, StatusCode::CREATED, "{}", chore.body);
+    assert_eq!(chore.body["kind"], "chore");
+    let read = api.get(&format!(
+        "/api/v1/spec-drafts/{}",
+        chore.body["id"].as_str().unwrap()
+    ));
+    assert_eq!(read.body["kind"], "chore");
+}

@@ -819,6 +819,7 @@
   "projectConfigIssue.kind_review_not_allowed": "Hanya operator yang boleh mengizinkan chore melewati review.",
   "projectConfigIssue.kind_stage_required": "Stage development tidak boleh dimatikan.",
   "projectConfigIssue.kind_test_paths_invalid": "Pola path test tidak valid.",
+  "projectConfigIssue.kind_invalid": "Itu bukan jenis pekerjaan: pakai feature, bugfix, refactor, chore, atau security_patch.",
   "projectConfigIssue.unknown": "Masalah {code}.",
   "error.secret_name_invalid": "Nama ini tidak boleh dipakai. Gunakan huruf kapital, angka, dan garis bawah, dan bukan nama yang dipakai Saka sendiri.",
   "error.secret_too_short": "Nilai minimal 8 byte.",

@@ -699,6 +699,12 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::SpecWithdrawn { .. }
         | E::SpecShipped { .. }
         | E::JobExhausted { .. }
+        | E::IssueIntakeAccepted { .. }
+        | E::IssueIntakeLinked { .. }
+        | E::IssueIntakeStateChanged { .. }
+        | E::IssueIntakeFailed { .. }
+        | E::IssueIntakeRetried { .. }
+        | E::IssueIntakeDismissed { .. }
         | E::SpecDraftRequested { .. }
         | E::SpecDraftAttemptStarted { .. }
         | E::SpecDraftPacketRendered { .. }

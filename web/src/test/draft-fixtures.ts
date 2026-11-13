@@ -95,6 +95,7 @@ export function draft(extra: Partial<SpecDraft> = {}): SpecDraft {
     locale: "en",
     mode: "draft",
     target_kind: "new",
+    kind: "feature",
     context_paths: ["docs/architecture.md"],
     state: "drafting",
     attempt,

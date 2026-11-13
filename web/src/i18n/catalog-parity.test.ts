@@ -47,6 +47,7 @@ const CONFIG_ISSUES = [
   "path_scope_invalid",
   "path_scope_empty",
   "base_branch_not_found",
+  "kind_invalid",
   "unknown",
 ];
 const FAILURES = [

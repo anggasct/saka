@@ -819,6 +819,7 @@
   "projectConfigIssue.kind_review_not_allowed": "Only the operator can allow a chore to skip review.",
   "projectConfigIssue.kind_stage_required": "The development stage cannot be turned off.",
   "projectConfigIssue.kind_test_paths_invalid": "A test path pattern is invalid.",
+  "projectConfigIssue.kind_invalid": "That is not a kind of work: use feature, bugfix, refactor, chore, or security_patch.",
   "projectConfigIssue.unknown": "Problem {code}.",
   "error.secret_name_invalid": "This name is not allowed. Use capital letters, digits and underscores, and not a name Saka sets itself.",
   "error.secret_too_short": "The value must be at least 8 bytes.",

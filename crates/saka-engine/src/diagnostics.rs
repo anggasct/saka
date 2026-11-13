@@ -489,6 +489,13 @@ impl Engine {
             Ok(hooks) => hooks,
             Err(e) => return vec![token_finding(&requirements, &integration.web_url, &e)],
         };
+        let with_issues = match self
+            .store
+            .read(|c| list::projects_bound_to(c, &[repo.id], ProjectId(uuid::Uuid::nil())))
+        {
+            Ok(projects) => projects.iter().any(|p| p.workflow.issue.is_some()),
+            Err(e) => return store_failed(&e),
+        };
         match self
             .store
             .read(|c| read::last_repo_webhook_received_at(c, id, repo.id))
@@ -500,6 +507,7 @@ impl Engine {
                 &integration.web_url,
                 &hooks,
                 last,
+                with_issues,
             ),
             Err(e) => store_failed(&e),
         }

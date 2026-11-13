@@ -15,6 +15,7 @@ mod hooks_run;
 mod identity;
 mod inbox;
 mod intake;
+mod issue_intake;
 mod metrics;
 pub mod packet;
 mod permission_check;
@@ -75,6 +76,7 @@ pub use draft::{
 };
 pub use hooks::HookReport;
 pub use identity::{DeviceIssued, PairingIssued, Principal, Registered, SessionIssued, digest};
+pub use issue_intake::{IssueDraftView, IssueIntakeView, IssueRepoView, IssueSpecView};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use permission_check::{PREVIEW_SCAN, PreviewChange, PreviewView};
 pub use quick::{QuickRequest, QuickView};

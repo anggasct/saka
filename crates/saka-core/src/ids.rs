@@ -55,4 +55,5 @@ id_type!(
     PairingId,
     LoginSessionId,
     RegressionCheckId,
+    IssueIntakeId,
 );

@@ -136,3 +136,65 @@ fn the_full_loop_merges_as_before_and_offers_the_action() {
     assert!(sim.run_to_shipped(STEPS));
     assert_eq!(sim.world.merge_calls().len(), 2);
 }
+
+const ISSUE_ENTRY: &str = "[workflow.issue]\ntrigger_label = \"run-saka\"\nmax_open = 3\n";
+
+#[test]
+fn an_issue_entry_is_registered_follows_reloads_and_leaves_with_its_section() {
+    let sim = Sim::multi_repo(SimConfig::default(), &layout(ISSUE_ENTRY));
+    let entry = sim.project().project.workflow.issue.unwrap();
+    assert_eq!(
+        (entry.trigger_label.as_str(), entry.max_open),
+        ("run-saka", 3)
+    );
+    assert_eq!(
+        sim.events_of("workspace.project.registered")[0].payload["workflow"]["issue"]["max_open"],
+        3
+    );
+
+    sim.world.put_doc(
+        "docs/saka.toml",
+        with_workflow("[workflow.issue]\nmax_open = 9\n").as_bytes(),
+    );
+    assert_eq!(sim.reload().unwrap().outcome, ReloadOutcome::Changed);
+    assert_eq!(sim.project().project.workflow.issue.unwrap().max_open, 9);
+
+    sim.world
+        .put_doc("docs/saka.toml", with_workflow("").as_bytes());
+    assert_eq!(sim.reload().unwrap().outcome, ReloadOutcome::Changed);
+    assert!(sim.project().project.workflow.issue.is_none());
+}
+
+#[test]
+fn a_bad_issue_entry_is_rejected_by_code_and_the_old_workflow_stays() {
+    let sim = Sim::multi_repo(SimConfig::default(), &layout(ISSUE_ENTRY));
+    for (workflow, code, field) in [
+        (
+            "[workflow]\npreset = \"review_only\"\n\n[workflow.issue]\n",
+            "workflow_entry_not_allowed",
+            "workflow.issue",
+        ),
+        (
+            "[workflow.issue]\nkind_labels = { bug = \"hotfix\" }\n",
+            "kind_invalid",
+            "workflow.issue.kind_labels.bug",
+        ),
+        (
+            "[workflow.issue]\nreviewers = 2\n",
+            "field_unknown",
+            "workflow.issue.reviewers",
+        ),
+    ] {
+        sim.world
+            .put_doc("docs/saka.toml", with_workflow(workflow).as_bytes());
+        let Err(EngineError::Rejected(Rejection::ProjectConfigInvalid { issues })) = sim.reload()
+        else {
+            panic!("{code} was applied");
+        };
+        assert_eq!(
+            (issues[0]["code"].clone(), issues[0]["field"].clone()),
+            (json!(code), json!(field))
+        );
+        assert_eq!(sim.project().project.workflow.issue.unwrap().max_open, 3);
+    }
+}

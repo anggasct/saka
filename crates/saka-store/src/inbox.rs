@@ -227,6 +227,7 @@ fn live_items(tx: &Transaction<'_>, scope: Scope) -> Result<Vec<Live>> {
     let (clause, bind) = match scope {
         Scope::WorkItem(id) => ("work_item_id = ?1", id.to_string()),
         Scope::Spec(id) => ("subject = 'spec' AND spec_id = ?1", id.to_string()),
+        Scope::Intake(id) => ("subject = 'intake' AND source_id = ?1", id.to_string()),
         Scope::Draft(id) => (
             "work_item_id IS NULL AND (
                (subject = 'permission'

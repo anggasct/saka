@@ -3115,6 +3115,7 @@ pub const FAKE_TOKEN_REQUIREMENTS: saka_core::diagnostics::TokenRequirements =
             "pipeline_events",
             "job_events",
         ],
+        issue_hook_events: &["issues_events"],
     };
 
 pub const FAKE_APP_REQUIREMENTS: saka_core::diagnostics::AppRequirements =
