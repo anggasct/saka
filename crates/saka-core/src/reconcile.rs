@@ -172,7 +172,7 @@ pub fn reconcile(
             ) && matches!(
                 t.item.state,
                 WorkItemState::Admitted | WorkItemState::InStage
-            )
+            ) && t.item.stage != Some(Stage::Sync)
         })
         .count();
     let reviewing = tasks.iter().filter(|t| holds_review_slot(t)).count();
