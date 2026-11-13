@@ -242,6 +242,7 @@ mod tests {
             "dash x",
             "env a",
             "/usr/bin/env a",
+            "xargs",
             "xargs rm",
             "ls | xargs rm",
             "sudo a",
@@ -350,7 +351,13 @@ mod tests {
 
         #[test]
         fn joining_safe_parts_gives_the_same_parts_back(
-            parts in prop::collection::vec("x[a-z]{0,4}( -[a-z]| '[a-z ;|&]{0,4}')?", 1..5),
+            parts in prop::collection::vec(
+                "x[a-z]{0,4}( -[a-z]| '[a-z ;|&]{0,4}')?"
+                    .prop_filter("a blocked word is not a safe part", |part| {
+                        !WORD_BLOCKLIST.contains(&first_word(part))
+                    }),
+                1..5,
+            ),
             sep in prop::sample::select(vec![" && ", " || ", " ; ", " | ", "\n", ";"]),
         ) {
             prop_assert_eq!(split(&parts.join(sep)), Some(parts));
