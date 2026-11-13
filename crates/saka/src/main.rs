@@ -750,6 +750,16 @@ enum TaskCmd {
         #[arg(long)]
         reason: String,
     },
+    #[command(
+        name = "rerun-checks",
+        about = "Runs the failed CI jobs of the task's pull request again, at the same head",
+        after_help = "Exit codes: 0 re-run requested, 4 the task is not blocked on a failed check that can be run again."
+    )]
+    RerunChecks {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
     Cancel {
         id: String,
         #[arg(long)]
@@ -1473,6 +1483,9 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     }
                     TaskCmd::Retry { id, reason } => {
                         client.task_action(&id, "retry", &reason).await
+                    }
+                    TaskCmd::RerunChecks { id, reason } => {
+                        client.task_action(&id, "rerun-checks", &reason).await
                     }
                     TaskCmd::Cancel { id, reason } => {
                         client.task_action(&id, "cancel", &reason).await

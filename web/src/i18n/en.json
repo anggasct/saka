@@ -105,6 +105,7 @@
   "blocker.action.set_user_token": "Store a token",
   "blocker.action.edit_spec": "Edit the spec",
   "blocker.action.update_branch": "Update the branch",
+  "blocker.action.rerun_checks": "Re-run the failed checks",
   "blocker.action.revert": "Revert the change",
   "blocker.action.draft_fix": "Draft a fix",
   "blocker.unknown": "Stopped ({code}).",

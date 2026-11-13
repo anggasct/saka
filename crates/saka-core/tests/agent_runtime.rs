@@ -54,6 +54,7 @@ fn cfg_with(dev: Budget) -> task::LoopConfig {
     task::LoopConfig {
         max_followup_turns: 1,
         ci_appear_timeout_ms: 600_000,
+        max_ci_reruns: 3,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,

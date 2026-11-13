@@ -49,6 +49,7 @@ pub use recovery::{retry_entry, retry_target};
 pub struct LoopConfig {
     pub max_followup_turns: u32,
     pub ci_appear_timeout_ms: i64,
+    pub max_ci_reruns: u32,
     pub poll_interval_ms: i64,
     pub merge_method: MergeMethod,
     pub delete_branch_after_merge: bool,
@@ -63,6 +64,7 @@ pub struct LoopConfig {
     pub autonomy: Ceilings,
 }
 
+pub const CI_RERUN_SETTLE_MS: i64 = 60_000;
 pub const AUTO_RETRY_PREFIX: &str = "auto retry: ";
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
 pub const AUTO_RETRY_DELAYS_MS: [i64; 2] = [60_000, 300_000];
@@ -260,6 +262,15 @@ pub enum TaskInput {
     EnvironmentTornDown {
         teardown_failures: Vec<Value>,
     },
+    RerunChecks {
+        reason: String,
+    },
+    CiRerunSettled {
+        head_sha: String,
+        number: u32,
+        rerun: Vec<String>,
+        unsupported: Vec<String>,
+    },
     Retry {
         reason: String,
     },
@@ -390,6 +401,8 @@ pub fn decide(
             | TaskInput::ReviewPosted { .. }
             | TaskInput::Tick
             | TaskInput::Retry { .. }
+            | TaskInput::RerunChecks { .. }
+            | TaskInput::CiRerunSettled { .. }
             | TaskInput::AcceptUnverified { .. }
             | TaskInput::AutoRetry
             | TaskInput::Resume { .. }
@@ -622,6 +635,13 @@ pub fn decide(
         }
         I::EnvironmentTornDown { teardown_failures } => d.environment_torn_down(teardown_failures),
         I::Retry { reason } => return d.retry(reason, ctx),
+        I::RerunChecks { reason } => return d.rerun_checks(reason, ctx),
+        I::CiRerunSettled {
+            head_sha,
+            number,
+            rerun,
+            unsupported,
+        } => d.ci_rerun_settled(head_sha, number, rerun, unsupported, ctx),
         I::AcceptUnverified { blocker_id, reason } => {
             return d.accept_unverified(blocker_id, reason, ctx);
         }

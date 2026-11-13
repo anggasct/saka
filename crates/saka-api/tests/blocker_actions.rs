@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use saka_core::blocker::{DEPLOY_RECOVERY, designated};
+use saka_core::blocker::{DEPLOY_RECOVERY, FROM_BLOCKER_STATE, designated};
 use saka_core::vocab::{BlockerAction, BlockerCode};
 
 fn catalog(locale: &str) -> BTreeMap<String, String> {
@@ -60,7 +60,8 @@ fn every_action_kind_is_the_primary_action_of_some_code() {
     for kind in BlockerAction::ALL {
         assert!(
             BlockerCode::ALL.iter().any(|c| designated(*c) == *kind)
-                || DEPLOY_RECOVERY.contains(kind),
+                || DEPLOY_RECOVERY.contains(kind)
+                || FROM_BLOCKER_STATE.contains(kind),
             "no code uses {kind}"
         );
     }

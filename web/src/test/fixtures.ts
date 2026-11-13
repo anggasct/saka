@@ -32,6 +32,7 @@ export const project: ProjectItem = {
       { stage: "merge", trigger: "manual" },
     ],
     fix_rounds: 2,
+    ci_reruns: 1,
     kinds: {},
   },
   allow_unreviewed_chore: false,

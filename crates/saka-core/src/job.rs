@@ -73,6 +73,7 @@ job_kinds! {
     ScmPostReview => "scm.post_review", 3;
     ScmIntegrate => "scm.integrate", 5;
     ScmUpdateBranch => "scm.update_branch", 5;
+    ScmRerunChecks => "scm.rerun_checks", 5;
     ScmPostComment => "scm.post_comment", 3;
     ScmScanIssues => "scm.scan_issues", 3;
     IntakeIssueRender => "intake.issue_render", 3;
@@ -145,6 +146,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmIssueComment
         | JobKind::ScmIssueClose
         | JobKind::IncidentDraft
+        | JobKind::ScmRerunChecks
         | JobKind::ScmPostComment => None,
     }
 }
@@ -235,6 +237,7 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmPostReview => "scm.post_review",
         JobKind::ScmIntegrate => "scm.integrate",
         JobKind::ScmUpdateBranch => "scm.update_branch",
+        JobKind::ScmRerunChecks => "scm.rerun_checks",
         JobKind::ScmPostComment => "scm.comment",
         JobKind::ScmScanIssues => "scm.scan_issues",
         JobKind::IntakeIssueRender => "intake.issue_render",

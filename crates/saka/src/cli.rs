@@ -1285,6 +1285,33 @@ impl Client {
                 )
                 .trim_end()
                 .to_string();
+                let rerun = &b["change_request"]["ci_rerun"];
+                if let Some(count) = rerun["count"].as_u64() {
+                    out.push_str(&format!(
+                        "\nci re-runs {count} {}",
+                        if rerun["pending"].as_bool() == Some(true) {
+                            "running"
+                        } else {
+                            "done"
+                        }
+                    ));
+                }
+                for gate in b["gates"].as_array().into_iter().flatten() {
+                    let flaky = &gate["passed_after_rerun"];
+                    if let Some(reruns) = flaky["reruns"].as_u64() {
+                        let names: Vec<&str> = flaky["checks"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|n| n.as_str())
+                            .collect();
+                        out.push_str(&format!(
+                            "\n{} gate passed after {reruns} re-run(s): {}",
+                            text(&gate["source"]),
+                            names.join(", ")
+                        ));
+                    }
+                }
                 if let Some(key) = b["revert_of"]["key"].as_str() {
                     out.push_str(&format!("\nreverts {key}"));
                 }

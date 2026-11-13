@@ -831,6 +831,7 @@ fn gate(row: &Row<'_>) -> Result<GateResult> {
         head_sha: row.get("head_sha")?,
         outcome: vocab(row, "outcome")?,
         checks: json(row, "checks")?,
+        passed_after_rerun: opt_json(row, "passed_after_rerun")?,
         observed_at: ts(row, "observed_at")?,
     })
 }
@@ -899,6 +900,7 @@ fn change_request(row: &Row<'_>) -> Result<ChangeRequest> {
         base_branch: row.get("base_branch")?,
         head_sha: row.get("head_sha")?,
         update_head_sha: row.get("update_head_sha")?,
+        ci_rerun: opt_json(row, "ci_rerun")?,
         state: vocab(row, "state")?,
         merge_commit_sha: row.get("merge_commit_sha")?,
         merged_at: opt_ts(row, "merged_at")?,

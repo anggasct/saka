@@ -48,6 +48,8 @@ pub enum Rejection {
     DecisionOnePerSession,
     #[error("the run asked its last question")]
     DecisionLimitReached,
+    #[error("the failed checks cannot be re-run: {reason}")]
+    CiRerunUnavailable { reason: &'static str },
     #[error("the regression check is not available: {reason}")]
     RegressionNotAvailable { reason: &'static str },
     #[error("the run used its last regression check")]
@@ -264,6 +266,7 @@ impl Rejection {
             Rejection::DecisionAnswerInvalid => "decision_answer_invalid",
             Rejection::DecisionOnePerSession => "decision_one_per_session",
             Rejection::DecisionLimitReached => "decision_limit_reached",
+            Rejection::CiRerunUnavailable { .. } => "ci_rerun_unavailable",
             Rejection::RegressionNotAvailable { .. } => "regression_not_available",
             Rejection::RegressionLimitReached => "regression_limit_reached",
             Rejection::DraftNotWaiting => "draft_not_waiting",
@@ -452,6 +455,7 @@ impl Rejection {
             Rejection::UserTokenRepoInaccessible { repos } => json!({ "repos": repos }),
             Rejection::ReviewAlreadyRequested { head_sha } => json!({ "head_sha": head_sha }),
             Rejection::FixNotAvailable { reason }
+            | Rejection::CiRerunUnavailable { reason }
             | Rejection::RegressionNotAvailable { reason } => {
                 json!({ "reason": reason })
             }

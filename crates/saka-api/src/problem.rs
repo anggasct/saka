@@ -123,6 +123,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::DecisionAlreadyAnswered
         | R::DecisionOnePerSession
         | R::DecisionLimitReached
+        | R::CiRerunUnavailable { .. }
         | R::RegressionNotAvailable { .. }
         | R::RegressionLimitReached
         | R::DraftNotWaiting

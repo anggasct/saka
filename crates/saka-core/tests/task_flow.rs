@@ -60,6 +60,7 @@ fn cfg() -> LoopConfig {
         account: "claude:default".into(),
         autonomy: saka_core::autonomy::Ceilings::default(),
         ci_appear_timeout_ms: 600_000,
+        max_ci_reruns: 0,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
@@ -74,6 +75,7 @@ struct World {
     tasks: Vec<Task>,
     deps: Vec<WorkItemDependency>,
     jobs: Vec<Job>,
+    reruns: (u32, u32),
 }
 
 fn bindings(repo: RepoId) -> &'static [ProjectRepo] {
@@ -139,6 +141,7 @@ impl World {
             tasks: vec![],
             deps: vec![],
             jobs: vec![],
+            reruns: (0, 0),
         }
     }
 
@@ -190,8 +193,23 @@ impl World {
             self.spec = spec::evolve(Some(self.spec.clone()), e, self.now).unwrap();
             if let Some(mut t) = task::evolve(None, e, self.now) {
                 t.workflow = Workflow::of(WorkflowPreset::BuildOnly);
+                t.workflow.ci_reruns = self.reruns.1;
                 self.tasks.push(t);
             }
+        }
+    }
+
+    fn with_reruns(operator_max: u32, workflow: u32) -> World {
+        World {
+            reruns: (operator_max, workflow),
+            ..World::new()
+        }
+    }
+
+    fn config(&self) -> LoopConfig {
+        LoopConfig {
+            max_ci_reruns: self.reruns.0,
+            ..cfg()
         }
     }
 
@@ -208,15 +226,16 @@ impl World {
             .iter()
             .position(|t| t.item.step_index == Some(step))
             .unwrap();
+        let config = self.config();
         let mut ctx = Ctx {
             now: self.now,
             ids: &mut self.ids,
         };
-        let events = task::decide(&self.tasks[i], input, &cfg(), &mut ctx)?;
+        let events = task::decide(&self.tasks[i], input, &config, &mut ctx)?;
         let mut t = self.tasks[i].clone();
         for e in &events {
             t = task::evolve(Some(t), e, self.now).unwrap();
-            self.jobs.extend(react(&t, e, &cfg(), self.now));
+            self.jobs.extend(react(&t, e, &config, self.now));
         }
         t.retired_runs.clear();
         self.tasks[i] = t;
@@ -242,7 +261,7 @@ impl World {
                 spec_dependencies: vec![],
                 ..Snapshot::default()
             },
-            &cfg(),
+            &self.config(),
             2,
             self.now,
         )
@@ -2768,4 +2787,227 @@ fn a_provider_merge_in_one_call_finishes_the_change_and_a_refusal_blocks() {
     let blocker = w.task(1).open_blocker().unwrap().clone();
     assert_eq!(blocker.params["reason"], json!("head_changed"));
     assert!(task::auto_retryable(blocker.code, &blocker.params));
+}
+
+fn failing_test() -> TaskInput {
+    observed(
+        'b',
+        vec![
+            check("lint", Some(CheckConclusion::Success)),
+            check("test", Some(CheckConclusion::Failure)),
+        ],
+    )
+}
+
+fn settled(rerun: &[&str], unsupported: &[&str]) -> TaskInput {
+    TaskInput::CiRerunSettled {
+        head_sha: sha('b'),
+        number: 1,
+        rerun: rerun.iter().map(|n| (*n).to_string()).collect(),
+        unsupported: unsupported.iter().map(|n| (*n).to_string()).collect(),
+    }
+}
+
+#[test]
+fn a_failed_check_is_re_run_before_ci_red_and_the_task_keeps_waiting() {
+    let mut w = World::with_reruns(3, 1);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    let events = w.decide(1, failing_test());
+    assert!(
+        matches!(events.last(), Some(Event::CiRerunRequested { number: 1, manual: false, checks, .. }) if checks == &["test"])
+    );
+    assert_eq!(w.take_jobs(), vec![JobKind::ScmRerunChecks]);
+    let t = w.task(1);
+    assert_eq!(t.item.state, WorkItemState::InStage);
+    assert!(t.is_at(Stage::Merge, StagePhase::AwaitingCi));
+    let state = t.ci_rerun_at(&sha('b')).unwrap();
+    assert!((state.count, state.pending) == (1, true));
+
+    assert!(
+        w.decide(1, failing_test()).is_empty(),
+        "the old failure does not use another re-run while the first one runs"
+    );
+    assert!(w.take_jobs().is_empty());
+}
+
+#[test]
+fn a_re_run_that_goes_green_is_recorded_as_passed_after_rerun() {
+    let mut w = World::with_reruns(3, 1);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, failing_test());
+    w.decide(1, settled(&["test"], &[]));
+    assert!(!w.task(1).ci_rerun_at(&sha('b')).unwrap().pending);
+    let events = w.decide(
+        1,
+        observed(
+            'b',
+            vec![
+                check("lint", Some(CheckConclusion::Success)),
+                check("test", Some(CheckConclusion::Success)),
+            ],
+        ),
+    );
+    let recorded = events.iter().find_map(|e| match e {
+        Event::GateObserved {
+            passed_after_rerun, ..
+        } => passed_after_rerun.clone(),
+        _ => None,
+    });
+    assert_eq!(
+        recorded,
+        Some(saka_core::model::PassedAfterRerun {
+            reruns: 1,
+            checks: vec!["test".into()]
+        })
+    );
+    assert_ne!(w.task(1).item.state, WorkItemState::Blocked);
+    assert_eq!(
+        w.task(1).gates[0]
+            .passed_after_rerun
+            .as_ref()
+            .map(|p| p.reruns),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_failure_after_the_re_run_waits_out_the_settle_window_then_blocks_with_retry_first() {
+    let mut w = World::with_reruns(3, 1);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, failing_test());
+    w.decide(1, settled(&["test"], &[]));
+    assert!(w.decide(1, failing_test()).is_empty());
+
+    w.now = w.now.plus_ms(task::CI_RERUN_SETTLE_MS + 1);
+    w.decide(1, failing_test());
+    let t = w.task(1);
+    assert_eq!(t.item.state, WorkItemState::Blocked);
+    let blocker = t.open_blocker().unwrap();
+    assert_eq!(blocker.code, BlockerCode::CiRed);
+    assert_eq!(blocker.params["reruns"], json!(1));
+    assert_eq!(blocker.params["rerunnable"], json!(true));
+    assert_eq!(
+        saka_core::blocker::primary_action(t).unwrap().kind,
+        BlockerAction::Retry,
+        "the automatic re-runs are used up, so the failure is treated as real"
+    );
+    assert!(task::available_actions(t).contains(&"rerun_checks"));
+}
+
+#[test]
+fn a_re_run_that_reruns_nothing_blocks_at_once_and_rerun_checks_is_not_offered() {
+    let mut w = World::with_reruns(3, 1);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, failing_test());
+    let events = w.decide(1, settled(&[], &["test"]));
+    assert!(matches!(events[0], Event::CiRerunSettled { .. }));
+    let t = w.task(1);
+    assert_eq!(t.item.state, WorkItemState::Blocked);
+    let blocker = t.open_blocker().unwrap();
+    assert_eq!(blocker.params["rerunnable"], json!(false));
+    assert_eq!(blocker.params["rerun_unsupported"], json!(true));
+    assert_eq!(
+        saka_core::blocker::primary_action(t).unwrap().kind,
+        BlockerAction::Retry
+    );
+    assert!(!task::available_actions(t).contains(&"rerun_checks"));
+    assert_eq!(
+        w.try_decide(
+            1,
+            TaskInput::RerunChecks {
+                reason: "again".into()
+            }
+        ),
+        Err(Rejection::CiRerunUnavailable {
+            reason: "not_rerunnable"
+        })
+    );
+}
+
+#[test]
+fn with_automatic_re_runs_off_ci_red_offers_rerun_checks_first_and_it_resumes_at_the_same_head() {
+    let mut w = World::with_reruns(3, 0);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    let events = w.decide(1, failing_test());
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::CiRerunRequested { .. }))
+    );
+    let t = w.task(1);
+    let blocker = t.open_blocker().unwrap();
+    assert_eq!(blocker.params["reruns"], json!(0));
+    assert_eq!(
+        saka_core::blocker::primary_action(t).unwrap().kind,
+        BlockerAction::RerunChecks
+    );
+    assert!(task::available_actions(t).contains(&"rerun_checks"));
+    assert!(task::available_actions(t).contains(&"retry"));
+    let blocker_id = blocker.id;
+
+    let events = w.decide(
+        1,
+        TaskInput::ResolveBlocker {
+            blocker_id,
+            expected: Some(BlockerAction::RerunChecks),
+            reason: "looks flaky".into(),
+        },
+    );
+    assert!(matches!(events[0], Event::BlockerResolved { .. }));
+    assert!(
+        matches!(events.last(), Some(Event::CiRerunRequested { number: 1, manual: true, head_sha, .. }) if *head_sha == sha('b'))
+    );
+    assert!(w.take_jobs().contains(&JobKind::ScmRerunChecks));
+    let t = w.task(1);
+    assert!(t.is_at(Stage::Merge, StagePhase::AwaitingCi));
+    assert!(t.ci_rerun_at(&sha('b')).unwrap().pending);
+}
+
+#[test]
+fn the_operator_limit_caps_manual_re_runs_per_head() {
+    let mut w = World::with_reruns(1, 0);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, failing_test());
+    w.decide(
+        1,
+        TaskInput::RerunChecks {
+            reason: "once".into(),
+        },
+    );
+    w.decide(1, settled(&["test"], &[]));
+    w.now = w.now.plus_ms(task::CI_RERUN_SETTLE_MS + 1);
+    w.decide(1, failing_test());
+    let t = w.task(1);
+    assert_eq!(t.open_blocker().unwrap().params["rerunnable"], json!(false));
+    assert!(!task::available_actions(t).contains(&"rerun_checks"));
+}
+
+#[test]
+fn an_exhausted_rerun_job_is_treated_as_nothing_re_run() {
+    let mut w = World::with_reruns(3, 1);
+    w.approve();
+    w.run_to_awaiting_ci(1);
+    w.decide(1, failing_test());
+    w.decide(
+        1,
+        TaskInput::JobExhausted {
+            kind: JobKind::ScmRerunChecks,
+            error: Coded {
+                code: "scm_unavailable".into(),
+                params: json!({}),
+            },
+        },
+    );
+    let t = w.task(1);
+    assert_eq!(t.item.state, WorkItemState::Blocked);
+    assert_eq!(
+        t.open_blocker().unwrap().params["rerun_unsupported"],
+        json!(true)
+    );
 }

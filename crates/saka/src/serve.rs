@@ -715,6 +715,7 @@ fn loop_config(cfg: &Config) -> LoopConfig {
         rate_limit_pause: cfg.agent.rate_limit_pause,
         account: format!("{}:{}", cfg.agent.cli, cfg.account_name()),
         autonomy: cfg.autonomy_ceilings(),
+        max_ci_reruns: cfg.scheduler.max_ci_reruns,
         ci_appear_timeout_ms: first.map_or(600, |s| {
             i64::try_from(s.ci_appear_timeout_secs).unwrap_or(600)
         }) * 1000,

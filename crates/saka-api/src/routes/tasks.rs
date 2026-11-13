@@ -93,6 +93,7 @@ pub(super) enum TaskAction {
     Start,
     Merge,
     Retry,
+    RerunChecks,
     Cancel,
     Primary,
     Takeover,
@@ -154,7 +155,7 @@ pub(super) async fn task_action(
             note = req.note;
             (Some(version), Some(req.reason))
         }
-        TaskAction::Retry | TaskAction::Cancel | TaskAction::Takeover => {
+        TaskAction::Retry | TaskAction::RerunChecks | TaskAction::Cancel | TaskAction::Takeover => {
             let req: dto::RequiredReason = tri!(body(&raw));
             (None, Some(req.reason))
         }
@@ -201,6 +202,7 @@ pub(super) async fn task_action(
         TaskAction::Start => "work_item.start",
         TaskAction::Merge => "work_item.merge",
         TaskAction::Retry => "work_item.retry",
+        TaskAction::RerunChecks => "work_item.rerun_checks",
         TaskAction::Cancel => "work_item.cancel",
         TaskAction::Primary => "work_item.primary_action",
         TaskAction::Takeover => "work_item.takeover",
@@ -265,6 +267,12 @@ pub(super) async fn task_action(
                     )),
                 },
                 TaskAction::Retry => engine.retry_with(
+                    item,
+                    reason.as_deref().unwrap_or_default(),
+                    &cause,
+                    Some(&action),
+                ),
+                TaskAction::RerunChecks => engine.rerun_checks_with(
                     item,
                     reason.as_deref().unwrap_or_default(),
                     &cause,
@@ -437,6 +445,22 @@ pub async fn retry(
     raw: Bytes,
 ) -> Response {
     task_action(s, id, method, uri, headers, raw, TaskAction::Retry).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/rerun-checks", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")), request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn rerun_checks(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::RerunChecks).await
 }
 
 #[utoipa::path(

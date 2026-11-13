@@ -126,7 +126,7 @@ fn the_migration_adds_issue_intake_and_keeps_old_rows() {
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![41, 42, 43, 44, 45, 46, 47, 48]
+        vec![41, 42, 43, 44, 45, 46, 47, 48, 49]
     );
     drop(store);
 

@@ -390,6 +390,7 @@ impl Decider<'_> {
                 head_sha: head_sha.clone(),
                 outcome,
                 checks: checks.clone(),
+                passed_after_rerun: self.passed_after_rerun(&head_sha, outcome),
             });
         }
         events.extend(self.settle_gate(

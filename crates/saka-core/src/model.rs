@@ -427,7 +427,24 @@ pub struct GateResult {
     pub head_sha: String,
     pub outcome: GateOutcome,
     pub checks: Vec<Check>,
+    pub passed_after_rerun: Option<PassedAfterRerun>,
     pub observed_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PassedAfterRerun {
+    pub reruns: u32,
+    pub checks: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CiRerun {
+    pub head_sha: String,
+    pub count: u32,
+    pub checks: Vec<String>,
+    pub pending: bool,
+    pub rerunnable: bool,
+    pub settled_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -454,6 +471,7 @@ pub struct ChangeRequest {
     pub base_branch: String,
     pub head_sha: String,
     pub update_head_sha: Option<String>,
+    pub ci_rerun: Option<CiRerun>,
     pub state: ChangeState,
     pub merge_commit_sha: Option<String>,
     pub merged_at: Option<Timestamp>,
@@ -876,6 +894,13 @@ impl Task {
 
     pub fn live_session(&self) -> Option<&Session> {
         self.session.as_ref().filter(|s| s.state.is_live())
+    }
+
+    pub fn ci_rerun_at(&self, head_sha: &str) -> Option<&CiRerun> {
+        self.change_request
+            .as_ref()
+            .and_then(|cr| cr.ci_rerun.as_ref())
+            .filter(|r| r.head_sha == head_sha)
     }
 
     pub fn gate_for(&self, source: GateSource, head_sha: &str) -> Option<&GateResult> {

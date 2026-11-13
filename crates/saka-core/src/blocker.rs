@@ -19,11 +19,13 @@ impl BlockerAction {
                 | BlockerAction::Cancel
                 | BlockerAction::Takeover
                 | BlockerAction::UpdateBranch
+                | BlockerAction::RerunChecks
         )
     }
 }
 
 pub const DEPLOY_RECOVERY: [BlockerAction; 2] = [BlockerAction::Revert, BlockerAction::DraftFix];
+pub const FROM_BLOCKER_STATE: [BlockerAction; 1] = [BlockerAction::RerunChecks];
 
 pub fn designated(code: BlockerCode) -> BlockerAction {
     use BlockerAction as A;
@@ -83,6 +85,14 @@ pub fn primary_action(task: &Task) -> Option<PrimaryAction> {
         kind => kind,
     };
     let kind = match kind {
+        BlockerAction::Retry
+            if blocker.code == BlockerCode::CiRed && rerun_first(task, &blocker.params) =>
+        {
+            BlockerAction::RerunChecks
+        }
+        kind => kind,
+    };
+    let kind = match kind {
         BlockerAction::Retry if !can_retry(task) => BlockerAction::Cancel,
         kind => kind,
     };
@@ -105,6 +115,16 @@ fn deploy_recovery(task: &Task, params: &Value) -> Option<BlockerAction> {
         "fix" => Some(BlockerAction::DraftFix),
         _ => None,
     }
+}
+
+pub fn rerunnable(params: &Value) -> bool {
+    params.get("source").and_then(Value::as_str) == Some("scm")
+        && params.get("rerunnable").and_then(Value::as_bool) == Some(true)
+}
+
+fn rerun_first(task: &Task, params: &Value) -> bool {
+    let used = params.get("reruns").and_then(Value::as_u64).unwrap_or(0);
+    rerunnable(params) && used < u64::from(task.workflow.ci_reruns.max(1))
 }
 
 fn updatable(params: &Value) -> bool {

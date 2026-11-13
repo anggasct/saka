@@ -39,6 +39,7 @@ fn cfg() -> LoopConfig {
     LoopConfig {
         max_followup_turns: 1,
         ci_appear_timeout_ms: 600_000,
+        max_ci_reruns: 3,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
@@ -79,6 +80,7 @@ fn gate(source: GateSource, head: &str, run: u128) -> GateResult {
         head_sha: head.into(),
         outcome: GateOutcome::Passed,
         checks: Vec::new(),
+        passed_after_rerun: None,
         observed_at: NOW,
     }
 }
@@ -142,6 +144,7 @@ fn task_at_merge(workflow: Workflow) -> Task {
         base_branch: "main".into(),
         head_sha: HEAD.into(),
         update_head_sha: None,
+        ci_rerun: None,
         state: ChangeState::Open,
         merge_commit_sha: None,
         merged_at: None,

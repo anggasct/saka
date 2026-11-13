@@ -703,6 +703,26 @@ impl Engine {
         )
     }
 
+    pub fn rerun_checks_with(
+        &self,
+        id: WorkItemId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let reason = reason(why)?;
+        self.decide(
+            id,
+            Some(TaskInput::RerunChecks { reason }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+
     pub fn cancel(&self, id: WorkItemId, why: &str, cause: &Cause) -> Result<Vec<Event>> {
         self.cancel_with(id, why, cause, None)
     }

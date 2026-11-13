@@ -391,6 +391,7 @@ impl From<crate::vocab::BlockerAction> for InboxActionKind {
             B::SetUserToken => InboxActionKind::SetUserToken,
             B::EditSpec => InboxActionKind::EditSpec,
             B::UpdateBranch => InboxActionKind::UpdateBranch,
+            B::RerunChecks => InboxActionKind::RerunChecks,
             B::Revert => InboxActionKind::Revert,
             B::DraftFix => InboxActionKind::DraftFix,
         }

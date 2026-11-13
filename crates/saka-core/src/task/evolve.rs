@@ -1,8 +1,8 @@
 use super::queries::count_retry;
 use crate::event::Event;
 use crate::model::{
-    Blocker, ChangeRequest, Coded, DeployGate, ExternalChange, GateResult, Redo, RegressionCheck,
-    Revert, Review, ReviewPosted, StageRun, Task, Usage, WorkItem,
+    Blocker, ChangeRequest, CiRerun, Coded, DeployGate, ExternalChange, GateResult, Redo,
+    RegressionCheck, Revert, Review, ReviewPosted, StageRun, Task, Usage, WorkItem,
 };
 use crate::session;
 use crate::time::Timestamp;
@@ -203,6 +203,7 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             base_branch: base_branch.clone(),
             head_sha: head_sha.clone(),
             update_head_sha: None,
+            ci_rerun: None,
             state: ChangeState::Open,
             merge_commit_sha: None,
             merged_at: None,
@@ -464,6 +465,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
             head_sha,
             outcome,
             checks,
+            passed_after_rerun,
             ..
         } => {
             t.gates.retain(|g| g.source != *source);
@@ -477,9 +479,43 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                     head_sha: head_sha.clone(),
                     outcome: *outcome,
                     checks: checks.clone(),
+                    passed_after_rerun: passed_after_rerun.clone(),
                     observed_at: now,
                 },
             );
+        }
+        E::CiRerunRequested {
+            head_sha,
+            number,
+            checks,
+            ..
+        } => {
+            if let Some(cr) = t.change_of(ChangeRole::Code) {
+                cr.ci_rerun = Some(CiRerun {
+                    head_sha: head_sha.clone(),
+                    count: *number,
+                    checks: checks.clone(),
+                    pending: true,
+                    rerunnable: true,
+                    settled_at: None,
+                });
+            }
+        }
+        E::CiRerunSettled {
+            head_sha,
+            number,
+            rerun,
+            ..
+        } => {
+            if let Some(state) = t
+                .change_of(ChangeRole::Code)
+                .and_then(|cr| cr.ci_rerun.as_mut())
+                .filter(|r| r.head_sha == *head_sha && r.count == *number)
+            {
+                state.pending = false;
+                state.rerunnable = !rerun.is_empty();
+                state.settled_at = Some(now);
+            }
         }
         E::GateStarted {
             stage_run_id,
@@ -499,6 +535,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                     head_sha: head_sha.clone(),
                     outcome: GateOutcome::Pending,
                     checks: Vec::new(),
+                    passed_after_rerun: None,
                     observed_at: now,
                 },
             );
@@ -738,6 +775,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 base_branch: base_branch.clone(),
                 head_sha: head_sha.clone(),
                 update_head_sha: None,
+                ci_rerun: None,
                 state: ChangeState::Open,
                 merge_commit_sha: None,
                 merged_at: None,

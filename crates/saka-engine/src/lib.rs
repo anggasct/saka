@@ -422,6 +422,48 @@ impl Engine {
                     self.counters.fix_round(cause);
                     tracing::info!(%work_item_id, round = round.number, cause, "fix.round");
                 }
+                Event::CiRerunRequested {
+                    work_item_id,
+                    head_sha,
+                    number,
+                    manual,
+                    ..
+                } => {
+                    tracing::info!(%work_item_id, head_sha, number, manual, "delivery.gate.rerun_requested");
+                }
+                Event::CiRerunSettled {
+                    work_item_id,
+                    head_sha,
+                    number,
+                    rerun,
+                    unsupported,
+                    ..
+                } => {
+                    if rerun.is_empty() {
+                        self.counters.ci_rerun("unsupported");
+                    }
+                    tracing::info!(%work_item_id, head_sha, number, rerun = rerun.len(), unsupported = unsupported.len(), "delivery.gate.rerun_settled");
+                }
+                Event::GateObserved {
+                    work_item_id,
+                    passed_after_rerun: Some(rerun),
+                    ..
+                } => {
+                    self.counters.ci_rerun("passed");
+                    tracing::info!(%work_item_id, reruns = rerun.reruns, "delivery.gate.passed_after_rerun");
+                }
+                Event::WorkItemBlocked {
+                    work_item_id,
+                    code: saka_core::vocab::BlockerCode::CiRed,
+                    params,
+                    ..
+                } if params.get("source").and_then(|s| s.as_str()) == Some("scm")
+                    && params.get("reruns").and_then(|n| n.as_u64()).unwrap_or(0) > 0
+                    && params.get("rerun_unsupported").is_none() =>
+                {
+                    self.counters.ci_rerun("failed");
+                    tracing::info!(%work_item_id, "delivery.gate.failed_after_rerun");
+                }
                 Event::WorkItemBlocked {
                     work_item_id,
                     code: saka_core::vocab::BlockerCode::ReviewRoundsExhausted,

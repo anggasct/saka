@@ -1,15 +1,17 @@
 use serde_json::{Value, json};
 
 use super::queries::gate_policy;
-use super::{Decider, Verdict};
+use super::{CI_RERUN_SETTLE_MS, Decider, Verdict};
 use crate::Ctx;
 use crate::event::Event;
 use crate::external;
 use crate::gate::{self, Check, GatePolicy};
 use crate::ids::GateResultId;
+use crate::model::PassedAfterRerun;
 use crate::session::SessionInput;
 use crate::vocab::{
-    BlockerCode, ExternalCause, GateOutcome, GateSource, Stage, StagePhase, Trigger, WorkItemOrigin,
+    BlockerCode, CheckKind, ExternalCause, GateOutcome, GateSource, Stage, StagePhase, Trigger,
+    WorkItemOrigin,
 };
 
 impl Decider<'_> {
@@ -205,7 +207,7 @@ impl Decider<'_> {
             events.extend(self.vacuous_gate(head_sha, scm, ctx));
         }
         events.extend(match verdict {
-            Verdict::Failed(params) => self.block(BlockerCode::CiRed, params, ctx),
+            Verdict::Failed(params) => self.ci_failed(head_sha, params, scm, ctx),
             Verdict::Passed if self.needs_review(head_sha) => self.request_review(head_sha, ctx),
             Verdict::Passed if self.task.is_queued() && !head_changed => {
                 self.queued_merge(head_sha, true)
@@ -220,6 +222,122 @@ impl Decider<'_> {
             Verdict::Pending => vec![],
         });
         events
+    }
+
+    fn ci_failed(
+        &self,
+        head_sha: &str,
+        mut params: Value,
+        scm: Option<(GateOutcome, &[Check])>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let at_merge = self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+            || self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge);
+        if params.get("source").and_then(Value::as_str) != Some("scm") || !at_merge {
+            return self.block(BlockerCode::CiRed, params, ctx);
+        }
+        let state = self.task.ci_rerun_at(head_sha);
+        if state.is_some_and(|s| {
+            s.pending
+                || s.settled_at
+                    .is_some_and(|at| s.rerunnable && self.now.since(at) < CI_RERUN_SETTLE_MS)
+        }) {
+            return vec![];
+        }
+        let used = state.map_or(0, |s| s.count);
+        let seen: Vec<Check> = scm.map_or_else(
+            || {
+                self.task
+                    .gate_for(GateSource::Scm, head_sha)
+                    .map(|g| g.checks.clone())
+                    .unwrap_or_default()
+            },
+            |(_, checks)| checks.to_vec(),
+        );
+        let failing: Vec<Check> = self
+            .gate_policy()
+            .scm_checks(&seen)
+            .into_iter()
+            .filter(Check::is_failure)
+            .collect();
+        let rerunnable = state.is_none_or(|s| s.rerunnable)
+            && used < self.cfg.max_ci_reruns
+            && failing.iter().any(|c| c.kind == CheckKind::CheckRun);
+        let automatic = used < self.task.workflow.ci_reruns.min(self.cfg.max_ci_reruns);
+        if rerunnable
+            && automatic
+            && self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+            && let Some(run) = &self.task.stage_run
+        {
+            return vec![Event::CiRerunRequested {
+                work_item_id: self.item().id,
+                stage_run_id: run.id,
+                head_sha: head_sha.to_string(),
+                number: used + 1,
+                checks: failing.into_iter().map(|c| c.name).collect(),
+                manual: false,
+            }];
+        }
+        params["reruns"] = json!(used);
+        params["rerunnable"] = json!(rerunnable);
+        self.block(BlockerCode::CiRed, params, ctx)
+    }
+
+    pub(super) fn ci_rerun_settled(
+        &self,
+        head_sha: String,
+        number: u32,
+        rerun: Vec<String>,
+        unsupported: Vec<String>,
+        ctx: &mut Ctx<'_>,
+    ) -> Vec<Event> {
+        let Some(run) = &self.task.stage_run else {
+            return vec![];
+        };
+        if !self
+            .task
+            .ci_rerun_at(&head_sha)
+            .is_some_and(|s| s.pending && s.count == number)
+        {
+            return vec![];
+        }
+        let nothing = rerun.is_empty();
+        let mut events = vec![Event::CiRerunSettled {
+            work_item_id: self.item().id,
+            stage_run_id: run.id,
+            head_sha: head_sha.clone(),
+            number,
+            rerun,
+            unsupported,
+        }];
+        if nothing
+            && self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+            && self.gate_head() == Some(head_sha.as_str())
+            && let Verdict::Failed(mut params) = self.verdict(&head_sha, None, None, true)
+        {
+            params["reruns"] = json!(number);
+            params["rerunnable"] = json!(false);
+            params["rerun_unsupported"] = json!(true);
+            events.extend(self.block(BlockerCode::CiRed, params, ctx));
+        }
+        events
+    }
+
+    pub(super) fn passed_after_rerun(
+        &self,
+        head_sha: &str,
+        outcome: GateOutcome,
+    ) -> Option<PassedAfterRerun> {
+        if outcome != GateOutcome::Passed {
+            return None;
+        }
+        self.task
+            .ci_rerun_at(head_sha)
+            .filter(|r| r.count > 0 && !r.pending)
+            .map(|r| PassedAfterRerun {
+                reruns: r.count,
+                checks: r.checks.clone(),
+            })
     }
 
     fn vacuous_gate(
@@ -252,6 +370,7 @@ impl Decider<'_> {
                 head_sha: head_sha.to_string(),
                 outcome: GateOutcome::Passed,
                 checks,
+                passed_after_rerun: None,
             },
         )
     }
@@ -362,6 +481,7 @@ impl Decider<'_> {
                 head_sha: head_sha.clone(),
                 outcome,
                 checks: checks.clone(),
+                passed_after_rerun: None,
             });
         }
         events.extend(self.settle_gate(&head_sha, false, Some((outcome, &checks)), None, ctx));
@@ -412,6 +532,7 @@ impl Decider<'_> {
             head_sha: head_sha.clone(),
             outcome,
             checks: checks.clone(),
+            passed_after_rerun: None,
         }];
         if self.gate_head() == Some(head_sha.as_str()) {
             events.extend(self.settle_gate(

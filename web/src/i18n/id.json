@@ -105,6 +105,7 @@
   "blocker.action.set_user_token": "Simpan token",
   "blocker.action.edit_spec": "Sunting spec",
   "blocker.action.update_branch": "Update branch",
+  "blocker.action.rerun_checks": "Jalankan ulang check yang gagal",
   "blocker.action.revert": "Revert perubahan",
   "blocker.action.draft_fix": "Susun perbaikan",
   "blocker.unknown": "Terhenti ({code}).",

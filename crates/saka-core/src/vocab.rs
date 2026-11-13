@@ -184,6 +184,7 @@ vocab!(BlockerAction {
     SetUserToken => "set_user_token",
     EditSpec => "edit_spec",
     UpdateBranch => "update_branch",
+    RerunChecks => "rerun_checks",
     Revert => "revert",
     DraftFix => "draft_fix",
 });
@@ -218,6 +219,7 @@ vocab!(InboxActionKind {
     SetUserToken => "set_user_token",
     EditSpec => "edit_spec",
     UpdateBranch => "update_branch",
+    RerunChecks => "rerun_checks",
     AnswerPermission => "answer_permission",
     ApproveSpec => "approve_spec",
     StartStep => "start_step",

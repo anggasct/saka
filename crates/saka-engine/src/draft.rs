@@ -993,6 +993,7 @@ impl Engine {
             | K::ScmMerge
             | K::ScmIntegrate
             | K::ScmUpdateBranch
+            | K::ScmRerunChecks
             | K::ScmPostComment
             | K::EnvVerifyMerged
             | K::ScmWebhookPrune

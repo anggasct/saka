@@ -106,6 +106,17 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
     if can_retry(task) {
         actions.push("retry");
     }
+    if task.item.state == WorkItemState::Blocked
+        && task
+            .open_blocker()
+            .is_some_and(|b| b.code == BlockerCode::CiRed && crate::blocker::rerunnable(&b.params))
+        && task
+            .change_request
+            .as_ref()
+            .is_some_and(|cr| cr.state == ChangeState::Open)
+    {
+        actions.push("rerun_checks");
+    }
     if matches!(
         task.item.state,
         WorkItemState::Queued

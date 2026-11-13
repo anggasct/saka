@@ -50,6 +50,7 @@ fn task() -> Task {
         base_branch: "release/1".into(),
         head_sha: SHA.into(),
         update_head_sha: None,
+        ci_rerun: None,
         state: ChangeState::Open,
         merge_commit_sha: None,
         merged_at: None,

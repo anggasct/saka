@@ -1069,6 +1069,7 @@ fn a_build_only_project_shows_its_workflow_and_offers_and_accepts_no_merge() {
             "issue": null,
             "stages": [{ "stage": "dev", "trigger": "auto" }],
             "fix_rounds": 2,
+            "ci_reruns": 1,
             "kinds": {},
         })
     );
@@ -5859,6 +5860,119 @@ fn a_blocked_task_shows_its_primary_action_and_the_primary_action_retries_it() {
         })
         .unwrap();
     assert_eq!(runs, 1);
+}
+
+fn rerun_api(ci_reruns: u32, rerun: saka_testkit::RerunScript) -> Api {
+    let mut cfg = SimConfig {
+        ci: CiScript::Fail(vec!["test".into()]),
+        ..SimConfig::default()
+    };
+    cfg.operator.retry = vec![];
+    cfg.operator.merge = false;
+    cfg.workflow.ci_reruns = ci_reruns;
+    let api = Api::new(cfg);
+    api.sim.world.set_rerun(rerun);
+    let (spec, revision) = (api.sim.spec_id, api.sim.revision_id);
+    api.sim.approve_spec(spec, revision).unwrap();
+    api
+}
+
+#[test]
+fn a_red_check_that_can_be_run_again_offers_rerun_checks_first_and_the_action_waits_at_the_same_head()
+ {
+    let mut api = rerun_api(0, saka_testkit::RerunScript::Passes);
+    let id = api.sim.task(1).item.id.0;
+    assert!(api.sim.run_until(STEPS, blocked));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(
+        detail.body["blocker"]["primary_action"],
+        json!({ "kind": "rerun_checks", "params": {} })
+    );
+    assert_eq!(detail.body["blocker"]["params"]["rerunnable"], true);
+    let actions = detail.body["available_actions"].as_array().unwrap();
+    assert!(actions.contains(&json!("rerun_checks")) && actions.contains(&json!("retry")));
+    let head = detail.body["change_request"]["head_sha"].clone();
+
+    let r = api.post(
+        &format!("/api/v1/work-items/{id}/actions/rerun-checks"),
+        &[],
+        json!({ "reason": "unrelated flaky test" }),
+    );
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["state"], "in_stage");
+    assert_eq!(r.body["stage_phase"], "awaiting_ci");
+    assert_eq!(r.body["change_request"]["head_sha"], head);
+    assert_eq!(r.body["change_request"]["ci_rerun"]["pending"], true);
+    assert_eq!(r.body["change_request"]["ci_rerun"]["count"], 1);
+    assert_eq!(r.body["blocker"], Value::Null);
+
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).is_at(
+            saka_core::vocab::Stage::Merge,
+            saka_core::vocab::StagePhase::AwaitingMerge,
+        )
+    }));
+    let done = api.get(&format!("/api/v1/work-items/{id}"));
+    let scm = &done.body["gates"][0];
+    assert_eq!(scm["source"], "scm");
+    assert_eq!(
+        scm["passed_after_rerun"],
+        json!({ "reruns": 1, "checks": ["test"] })
+    );
+    assert_eq!(done.body["change_request"]["ci_rerun"]["pending"], false);
+}
+
+#[test]
+fn the_primary_action_endpoint_runs_rerun_checks_and_a_stale_kind_is_refused() {
+    let mut api = rerun_api(0, saka_testkit::RerunScript::Passes);
+    let id = api.sim.task(1).item.id.0;
+    assert!(api.sim.run_until(STEPS, blocked));
+    let blocker = api.get(&format!("/api/v1/work-items/{id}")).body["blocker"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let path = format!("/api/v1/work-items/{id}/actions/primary");
+    let stale = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": blocker, "action": "retry", "reason": "x" }),
+    );
+    problem(&stale, StatusCode::CONFLICT, "blocker_action_changed");
+    let r = api.post(
+        &path,
+        &[],
+        json!({ "blocker_id": blocker, "action": "rerun_checks", "reason": "flaky" }),
+    );
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    assert_eq!(r.body["stage_phase"], "awaiting_ci");
+    assert_eq!(r.body["change_request"]["ci_rerun"]["pending"], true);
+}
+
+#[test]
+fn rerun_checks_is_refused_when_the_provider_cannot_run_the_checks_again_or_nothing_is_red() {
+    let mut api = rerun_api(1, saka_testkit::RerunScript::Unsupported);
+    let id = api.sim.task(1).item.id.0;
+    let path = format!("/api/v1/work-items/{id}/actions/rerun-checks");
+    let early = api.post(&path, &[], json!({ "reason": "too early" }));
+    problem(&early, StatusCode::CONFLICT, "invalid_state");
+
+    assert!(api.sim.run_until(STEPS, blocked));
+    let detail = api.get(&format!("/api/v1/work-items/{id}"));
+    assert_eq!(detail.body["blocker"]["primary_action"]["kind"], "retry");
+    assert!(
+        !detail.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("rerun_checks"))
+    );
+    let seq = api.last_seq();
+    let refused = api.post(&path, &[], json!({ "reason": "try" }));
+    problem(&refused, StatusCode::CONFLICT, "ci_rerun_unavailable");
+    assert_eq!(
+        refused.body["params"],
+        json!({ "reason": "not_rerunnable" })
+    );
+    assert_eq!(api.last_seq(), seq);
 }
 
 #[test]
