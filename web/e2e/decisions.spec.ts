@@ -120,6 +120,7 @@ const task = {
   priority: 0,
   change_request: null,
   gates: [],
+  deploy_gates: [],
   waiting_on: [],
   blocker: null,
   session: null,

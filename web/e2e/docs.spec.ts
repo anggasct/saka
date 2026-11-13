@@ -82,6 +82,7 @@ function task(step: number, extra: object) {
     waiting_on: [],
     change_request: null,
     gates: [],
+    deploy_gates: [],
     blocker: null,
     session: null,
     pending_permission_count: 0,

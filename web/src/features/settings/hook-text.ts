@@ -78,6 +78,11 @@ export function hookDetails(t: T, hook: Hook): Detail[] {
       value: hook.branches.join(", "),
     },
     {
+      key: "environments",
+      name: t("settings.hooks.detail.environments"),
+      value: hook.environments.join(", "),
+    },
+    {
       key: "codes",
       name: t("settings.hooks.detail.codes"),
       value: hook.codes.join(", "),

@@ -1,15 +1,17 @@
 import { Link } from "@tanstack/react-router";
 
+import { DraftFixDialog } from "@/features/deployments/actions";
 import { useT } from "@/i18n/use-t";
 
 import type { WorkItem } from "./queries";
 import {
   CancelDialog,
   RetryDialog,
+  RevertDialog,
   TakeoverDialog,
   UpdateBranchDialog,
 } from "./task-actions";
-import { label } from "./text";
+import { label, record, text } from "./text";
 
 const LINK =
   "inline-flex min-h-11 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground";
@@ -34,6 +36,17 @@ export function PrimaryAction({
       return <TakeoverDialog task={task} primary />;
     case "update_branch":
       return <UpdateBranchDialog task={task} />;
+    case "revert":
+      return <RevertDialog task={task} primary />;
+    case "draft_fix":
+      return (
+        <DraftFixDialog
+          deploymentId={text(
+            record(task.blocker?.primary_action.params).deployment_id,
+          )}
+          primary
+        />
+      );
     case "edit_spec":
       return specPath === undefined ? null : (
         <Link

@@ -179,3 +179,69 @@ export const decisionItem = inboxItem({
     params: { decision_request_id: DECISION_ID },
   },
 });
+
+export const FAILED_DEPLOYMENT_ID = "0193f0c4-1b2a-7c3d-9e8f-0011223344f1";
+
+const NO_TASK_TITLE = {
+  task_key: null,
+  stage: null,
+  spec_slug: null,
+  spec_title: null,
+  spec_path: null,
+  draft_path: null,
+};
+
+export const deploymentItem = inboxItem({
+  kind: "deployment",
+  subject: "deployment",
+  work_item_id: null,
+  spec_id: null,
+  title: NO_TASK_TITLE,
+  params: {
+    environment: "staging",
+    deployment_id: FAILED_DEPLOYMENT_ID,
+    phase: "deploy",
+    code: "deploy_webhook_unavailable",
+    sha: "feedface".padEnd(40, "0"),
+    on_failure: "revert",
+  },
+  action: {
+    kind: "redeploy",
+    params: { project_id: PROJECT_ID, environment: "staging" },
+  },
+});
+
+export const deploymentFixItem = inboxItem({
+  ...deploymentItem,
+  params: {
+    ...(deploymentItem.params as Record<string, unknown>),
+    environment: "production",
+    phase: "verify",
+    code: "verify_failed",
+  },
+  action: {
+    kind: "draft_fix",
+    params: { deployment_id: FAILED_DEPLOYMENT_ID },
+  },
+});
+
+const UNVERIFIED_PARAMS = {
+  code: "deploy_unverified",
+  environment: "staging",
+  deployment_id: FAILED_DEPLOYMENT_ID,
+  phase: "verify",
+  on_failure: "fix",
+};
+
+export const unverifiedFixItem = inboxItem({
+  params: UNVERIFIED_PARAMS,
+  action: {
+    kind: "draft_fix",
+    params: { blocker_id: BLOCKER_ID, deployment_id: FAILED_DEPLOYMENT_ID },
+  },
+});
+
+export const unverifiedRevertItem = inboxItem({
+  params: { ...UNVERIFIED_PARAMS, on_failure: "revert" },
+  action: { kind: "revert", params: { blocker_id: BLOCKER_ID } },
+});

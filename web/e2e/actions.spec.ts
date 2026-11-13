@@ -77,6 +77,7 @@ function task(step: number, extra: Record<string, unknown>) {
       merge_commit_sha: null,
       merged_at: null,
     },
+    deploy_gates: [],
     gates: [
       {
         source: "scm",
@@ -114,6 +115,7 @@ const blocked = task(2, {
   stage_phase: null,
   change_request: null,
   gates: [],
+  deploy_gates: [],
   session: null,
   blocker: {
     id: "b",

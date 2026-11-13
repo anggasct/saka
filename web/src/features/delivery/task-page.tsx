@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 
 import { ApiError } from "@/api/client";
 import { useT } from "@/i18n/use-t";
+import { DeploySection } from "@/features/deployments/deploy-section";
 import { Card } from "@/ui/card";
 import { Skeleton } from "@/ui/skeleton";
 
@@ -108,6 +109,7 @@ export function TaskPage({ workItemId }: { workItemId: string }) {
       <ReviewSection task={item} />
       <FixSection task={item} />
       <RegressionSection task={item} />
+      <DeploySection task={item} />
       <StageRunsSection task={item} spec={spec.data} tasks={tasks} />
       <EnvironmentSection task={item} />
       <WorkPacketSection workItemId={item.id} />

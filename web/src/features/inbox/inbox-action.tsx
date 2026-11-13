@@ -5,6 +5,7 @@ import { useState } from "react";
 import { newIdempotencyKey } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
 import { ActionDialog } from "@/features/delivery/action-dialog";
+import { DraftFixDialog, RedeployDialog } from "@/features/deployments/actions";
 import { codeOf } from "@/features/delivery/page-error";
 import {
   answerPermission,
@@ -48,6 +49,7 @@ const ROOTS = [
   QUERY_ROOTS.sessions,
   QUERY_ROOTS.issueIntakes,
   QUERY_ROOTS.specDrafts,
+  QUERY_ROOTS.deployments,
 ];
 
 function useAfterAction() {
@@ -130,7 +132,7 @@ function Permission({ item }: { item: InboxItem }) {
   );
 }
 
-type BlockerKind = "retry" | "cancel" | "takeover" | "update_branch";
+type BlockerKind = "retry" | "cancel" | "takeover" | "update_branch" | "revert";
 
 function blockerCopy(t: T, kind: BlockerKind) {
   switch (kind) {
@@ -162,6 +164,13 @@ function blockerCopy(t: T, kind: BlockerKind) {
         description: t("task.update_branch.description"),
         submit: t("task.update_branch.submit"),
       };
+    case "revert":
+      return {
+        trigger: t("task.revert.trigger"),
+        title: t("task.revert.title"),
+        description: t("task.revert.description"),
+        submit: t("task.revert.submit"),
+      };
   }
 }
 
@@ -182,6 +191,17 @@ function Blocker({ item, kind }: { item: InboxItem; kind: BlockerKind }) {
       onSubmit={(reason, key) =>
         after(() => runPrimaryAction(workItemId, blockerId, reason ?? "", key))
       }
+    />
+  );
+}
+
+function Redeploy({ item }: { item: InboxItem }) {
+  const params = record(item.action.params);
+  return (
+    <RedeployDialog
+      projectId={text(params.project_id) || item.project_id}
+      environment={text(params.environment)}
+      primary
     />
   );
 }
@@ -316,7 +336,17 @@ export function Primary({ item }: { item: InboxItem }) {
     case "cancel":
     case "takeover":
     case "update_branch":
+    case "revert":
       return <Blocker item={item} kind={kind} />;
+    case "redeploy":
+      return <Redeploy item={item} />;
+    case "draft_fix":
+      return (
+        <DraftFixDialog
+          deploymentId={text(record(item.action.params).deployment_id)}
+          primary
+        />
+      );
     case "edit_spec":
       return item.title.spec_path == null ? null : (
         <Link
@@ -348,6 +378,7 @@ export function Primary({ item }: { item: InboxItem }) {
 export function Secondary({ item }: { item: InboxItem }) {
   const t = useT();
   const after = useAfterAction();
+  const deploymentId = text(record(item.params).deployment_id);
   return (
     <>
       {item.work_item_id != null && (
@@ -357,6 +388,16 @@ export function Secondary({ item }: { item: InboxItem }) {
           className={QUIET_LINK}
         >
           {t("inbox.open.task")}
+        </Link>
+      )}
+      {deploymentId !== "" && (
+        <Link
+          to="/deployments/$projectId"
+          params={{ projectId: item.project_id }}
+          search={{ deployment: deploymentId }}
+          className={QUIET_LINK}
+        >
+          {t("inbox.open.deployment")}
         </Link>
       )}
       {item.work_item_id == null && item.title.spec_path != null && (

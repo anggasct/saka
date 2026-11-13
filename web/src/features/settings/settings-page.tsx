@@ -10,6 +10,7 @@ import { Skeleton } from "@/ui/skeleton";
 import { AuthorshipSection } from "./authorship-section";
 import { ConfigSection } from "./config-section";
 import { DiagnosticsSection } from "./diagnostics-section";
+import { EnvironmentsSection } from "./environments-section";
 import { HooksSection } from "./hooks-section";
 import { PermissionsSection } from "./permissions-section";
 import { ReposSection } from "./repos-section";
@@ -31,6 +32,7 @@ export function SettingsPage({ projectId }: { projectId: string }) {
           <ReposSection project={project.data} />
           <ConfigSection project={project.data} />
           <WorkflowSection project={project.data} />
+          <EnvironmentsSection projectId={project.data.id} />
           <HooksSection
             projectId={project.data.id}
             skipped={project.data.hooks_skipped}

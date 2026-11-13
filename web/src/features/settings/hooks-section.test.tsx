@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { AUTHORSHIP, botAuthorship, LINK } from "@/test/authorship-fixtures";
 import { DIAGNOSTICS, report } from "@/test/diagnostics-fixtures";
+import { ENVIRONMENTS } from "@/test/deploy-fixtures";
 import { fakeApi, page } from "@/test/fake-api";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID } from "@/test/fixtures";
@@ -35,6 +36,7 @@ function routes(extra: Routes = {}): Routes {
     [AUTHORSHIP]: { body: botAuthorship },
     [LINK]: problemBody(404, "user_link_not_found"),
     [DIAGNOSTICS]: { body: report },
+    [ENVIRONMENTS]: { body: { items: [] } },
     [HOOKS]: { body: { items: [deploy, announce] } },
     [HOOK_RUNS]: {
       body: page([hookRun(), failedRun, pendingRun, gateRun]),

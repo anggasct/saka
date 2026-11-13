@@ -93,6 +93,22 @@ describe("startEventStream", () => {
       [["hook-runs"]],
     );
     invalidate.mockClear();
+    fake.emit("deploy.deployment.failed.v1", {
+      seq: 9,
+      stream_type: "deployment",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["deployments"], ["work-items"], ["inbox"]],
+    );
+    invalidate.mockClear();
+    fake.emit("delivery.deploy_gate.changed.v1", {
+      seq: 9,
+      stream_type: "work_item",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["work-items"], ["specs"], ["inbox"]],
+    );
+    invalidate.mockClear();
     fake.emit("delivery.inbox_item.dismissed.v1", {
       seq: 9,
       stream_type: "inbox_item",

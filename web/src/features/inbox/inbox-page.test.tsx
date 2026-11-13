@@ -12,7 +12,10 @@ import {
   BLOCKER_ID,
   DECISION_ID,
   decisionItem,
+  deploymentFixItem,
+  deploymentItem,
   exhaustedIntakeItem,
+  FAILED_DEPLOYMENT_ID,
   INTAKE_ID,
   intakeItem,
   issueApprovalItem,
@@ -26,6 +29,8 @@ import {
   summary,
   TASK_ID,
   unclearItem,
+  unverifiedFixItem,
+  unverifiedRevertItem,
 } from "@/test/inbox-fixtures";
 import { PROJECT_ID, SPEC_ID } from "@/test/fixtures";
 import { renderApp, renderWithProviders } from "@/test/render";
@@ -223,6 +228,126 @@ describe("inbox page", () => {
     await waitFor(() => {
       expect(posts(requests).map((r) => r.body)).toEqual([
         { blocker_id: BLOCKER_ID, reason: "runner is back" },
+      ]);
+    });
+  });
+
+  it("shows a failed deployment that holds no task, and redeploys its environment", async () => {
+    const { requests } = fakeApi(
+      routes(() => [deploymentItem], {
+        [`/api/v1/projects/${PROJECT_ID}/environments/staging/actions/deploy`]:
+          { status: 202, body: {} },
+      }),
+    );
+    renderApp("/");
+    const item = await card("staging");
+    expect(within(item).getByText("Deployment")).toBeInTheDocument();
+    expect(
+      within(item).getByText(
+        "The deployment to staging failed at the deploy step: The deploy webhook could not be reached. No task waits for it.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(item).getByRole("link", { name: "Open deployment" }),
+    ).toHaveAttribute(
+      "href",
+      `/deployments/${PROJECT_ID}?deployment=${FAILED_DEPLOYMENT_ID}`,
+    );
+    await userEvent.click(
+      within(item).getByRole("button", { name: "Redeploy" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(
+      within(dialog).getByRole("textbox"),
+      "webhook is back",
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Redeploy" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests)).toHaveLength(1);
+    });
+    const [sent] = posts(requests);
+    expect(sent?.body).toEqual({ reason: "webhook is back" });
+    expect(sent?.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("drafts a fix of a failed deployment, with its failure in the sentence", async () => {
+    const { requests } = fakeApi(
+      routes(() => [deploymentFixItem], {
+        [`/api/v1/deployments/${FAILED_DEPLOYMENT_ID}/actions/draft-fix`]: {
+          status: 202,
+          body: {},
+        },
+      }),
+    );
+    renderApp("/");
+    const item = await card("production");
+    expect(
+      within(item).getByText(
+        "The deployment to production failed at the verification: A verification command failed. No task waits for it.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(item).getByRole("button", { name: "Draft a fix" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByRole("textbox"), "see the logs");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Draft the fix" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests)).toHaveLength(1);
+    });
+    expect(posts(requests)[0]?.body).toEqual({ note: "see the logs" });
+  });
+
+  it("drafts a fix from the unverified-deployment blocker of a task", async () => {
+    const { requests } = fakeApi(
+      routes(() => [unverifiedFixItem], {
+        [`/api/v1/deployments/${FAILED_DEPLOYMENT_ID}/actions/draft-fix`]: {
+          status: 202,
+          body: {},
+        },
+      }),
+    );
+    renderApp("/");
+    const item = await card("tasks-done/s1");
+    expect(
+      within(item).getByText(
+        /The deployment to staging failed at the verification/,
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(item).getByRole("button", { name: "Draft a fix" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Draft the fix" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests)).toHaveLength(1);
+    });
+    expect(posts(requests)[0]?.body).toEqual({ note: null });
+  });
+
+  it("reverts from the unverified-deployment blocker of a task", async () => {
+    const { requests } = fakeApi(
+      routes(() => [unverifiedRevertItem], {
+        [`/api/v1/work-items/${TASK_ID}/actions/primary`]: { body: {} },
+      }),
+    );
+    renderApp("/");
+    const item = await card("tasks-done/s1");
+    await userEvent.click(within(item).getByRole("button", { name: "Revert" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByRole("textbox"), "staging is red");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Revert the task" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests).map((r) => r.body)).toEqual([
+        { blocker_id: BLOCKER_ID, reason: "staging is red" },
       ]);
     });
   });

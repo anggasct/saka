@@ -27,6 +27,7 @@ const task = {
   waiting_on: [],
   change_request: null,
   gates: [],
+  deploy_gates: [],
   blocker: null,
   session: { id: SESSION_ID, cli: "claude", state: "running", started_at: AT },
   pending_permission_count: 0,

@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
+import { GateBadges } from "@/features/deployments/deploy-section";
 import { useT } from "@/i18n/use-t";
 import { Badge } from "@/ui/badge";
 
@@ -92,6 +93,7 @@ export function TaskRow({
             </code>
           </p>
         )}
+        <GateBadges task={task} />
         {holds > 0 && (
           <p className="text-sm font-medium">
             {t("task.holds", { count: holds })}

@@ -127,6 +127,7 @@ const hook = {
   repos: ["app"],
   branches: ["main"],
   codes: [],
+  environments: [],
   timeout_secs: 300,
   target: {
     command: "./scripts/deploy.sh staging",
@@ -211,6 +212,8 @@ async function mockApi(page: Page, server: Server) {
       });
     } else if (path === `/api/v1/projects/${PROJECT_ID}/hooks`) {
       await route.fulfill({ json: { items: [hook] } });
+    } else if (path === `/api/v1/projects/${PROJECT_ID}/environments`) {
+      await route.fulfill({ json: { items: [] } });
     } else if (path === "/api/v1/hook-runs") {
       await route.fulfill({
         json: {
