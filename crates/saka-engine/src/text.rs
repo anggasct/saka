@@ -154,6 +154,7 @@ impl Engine {
             },
             context,
             environment,
+            previous_attempt: self.redo_attempt_text(task)?,
             retry,
         }))
     }

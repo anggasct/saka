@@ -733,6 +733,17 @@ enum TaskCmd {
         #[arg(help = "Why the change is pulled back (1 to 500 characters)", long)]
         reason: String,
     },
+    #[command(
+        about = "Redoes a cancelled or reverted step as a new task in the same spec",
+        after_help = "Prints the key of the new task. Exit codes: 0 redo task created, 4 refused (not cancelled, already redone, the spec is not approved, or the step changed)."
+    )]
+    Redo {
+        id: String,
+        #[arg(help = "Why the step is redone (1 to 500 characters)", long)]
+        reason: String,
+        #[arg(help = "Up to 2000 characters shown to the agent", long)]
+        note: Option<String>,
+    },
     #[command(about = "Tries the stopped stage again")]
     Retry {
         id: String,
@@ -1457,6 +1468,9 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                     TaskCmd::Start { id } => client.task_start(&id).await,
                     TaskCmd::Show { id } => client.task_show(&id).await,
                     TaskCmd::Revert { id, reason } => client.task_revert(&id, &reason).await,
+                    TaskCmd::Redo { id, reason, note } => {
+                        client.task_redo(&id, &reason, note.as_deref()).await
+                    }
                     TaskCmd::Retry { id, reason } => {
                         client.task_action(&id, "retry", &reason).await
                     }

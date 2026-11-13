@@ -80,12 +80,14 @@ pub fn plan_revision(
     parser_version: u32,
 ) -> RevisionPlan {
     let task_of = |step_id: &str| {
-        let mut mine = tasks
+        let mine: Vec<&WorkItem> = tasks
             .iter()
-            .filter(|t| t.step_id.as_deref() == Some(step_id));
-        let first = mine.next();
-        mine.find(|t| t.state != WorkItemState::Superseded)
-            .or(first)
+            .filter(|t| t.step_id.as_deref() == Some(step_id))
+            .collect();
+        mine.iter()
+            .copied()
+            .find(|t| t.state != WorkItemState::Superseded)
+            .or_else(|| mine.iter().copied().max_by_key(|t| (t.created_at, t.id)))
     };
     let step = |action, task: Option<&WorkItem>, id: &str| PlanStep {
         step_id: id.to_string(),

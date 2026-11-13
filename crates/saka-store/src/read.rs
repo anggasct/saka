@@ -9,9 +9,10 @@ use saka_core::ids::{
 };
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionAnswer, DecisionRequest, Environment,
-    ExternalChange, GateResult, PermissionRequest, PermissionRule, Project, ProjectRepo,
+    ExternalChange, GateResult, PermissionRequest, PermissionRule, Project, ProjectRepo, Redo,
     RegressionCheck, Repo, Revert, Review, ReviewPosted, RevisionView, RunOwner, Session, Spec,
-    SpecDependency, SpecLink, StageRun, StepPlan, Task, TaskLink, WorkItem, WorkItemDependency,
+    SpecDependency, SpecLink, SpecStanding, StageRun, StepPlan, Task, TaskLink, WorkItem,
+    WorkItemDependency,
 };
 use saka_core::time::Timestamp;
 use saka_core::vocab::{ChangeRole, SessionState, Stage, StagePhase, Trigger, WorkKind};
@@ -339,6 +340,75 @@ pub fn load_tasks(
     )? {
         if let Some(t) = tasks.get_mut(&id) {
             t.revert = Some(revert);
+        }
+    }
+    for (id, redo) in rows_of(
+        conn,
+        "SELECT w.id, w.redo_of, w.redo_reason, w.redo_note, o.task_key AS of_key FROM work_item w
+           JOIN work_item o ON o.id = w.redo_of",
+        "w.id",
+        selection,
+        "w.id",
+        b,
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "id")?),
+                Redo {
+                    of: WorkItemId(uuid(row, "redo_of")?),
+                    of_key: row.get("of_key")?,
+                    reason: row.get("redo_reason")?,
+                    note: row.get("redo_note")?,
+                },
+            ))
+        },
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.redo = Some(redo);
+        }
+    }
+    for (id, link) in rows_of(
+        conn,
+        "SELECT o.id, w.id AS redo_id, w.task_key, w.state FROM work_item o
+           JOIN work_item w ON w.redo_of = o.id",
+        "o.id",
+        selection,
+        "w.created_at DESC, w.id",
+        b,
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "id")?),
+                TaskLink {
+                    id: WorkItemId(uuid(row, "redo_id")?),
+                    key: row.get("task_key")?,
+                    state: vocab(row, "state")?,
+                },
+            ))
+        },
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.redone_by.get_or_insert(link);
+        }
+    }
+    for (id, standing) in rows_of(
+        conn,
+        "SELECT w.id, s.state, s.approved_revision_id FROM work_item w JOIN spec s ON s.id = w.spec_id",
+        "w.id",
+        selection,
+        "w.id",
+        b,
+        |row| {
+            Ok((
+                WorkItemId(uuid(row, "id")?),
+                SpecStanding {
+                    state: vocab(row, "state")?,
+                    approved_revision_id: opt_uuid(row, "approved_revision_id")?
+                        .map(SpecRevisionId),
+                },
+            ))
+        },
+    )? {
+        if let Some(t) = tasks.get_mut(&id) {
+            t.spec_standing = Some(standing);
         }
     }
     for (id, link) in rows_of(

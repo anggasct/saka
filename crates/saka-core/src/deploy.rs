@@ -393,14 +393,19 @@ pub fn fix_idea(facts: &FixFacts<'_>, note: Option<&str>) -> String {
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
         head.push_str(&format!("operator note: {}\n", single_line(note)));
     }
-    let blocks: Vec<&FixFailure> = facts
-        .failures
+    let room = MAX_IDEA_CHARS.saturating_sub(head.chars().count());
+    let mut out = head;
+    out.push_str(&untrusted_blocks(facts.failures, room));
+    out.chars().take(MAX_IDEA_CHARS).collect()
+}
+
+pub fn untrusted_blocks(failures: &[FixFailure], room: usize) -> String {
+    let blocks: Vec<&FixFailure> = failures
         .iter()
         .filter(|f| !f.output_tail.trim().is_empty())
         .collect();
-    let room = MAX_IDEA_CHARS.saturating_sub(head.chars().count());
     let each = room / blocks.len().max(1);
-    let mut out = head;
+    let mut out = String::new();
     for failure in blocks {
         let label = failure
             .command
@@ -427,7 +432,7 @@ pub fn fix_idea(facts: &FixFacts<'_>, note: Option<&str>) -> String {
         let fence = fence_for(&content);
         out.push_str(&format!("\n{fence}untrusted-output\n{content}\n{fence}\n"));
     }
-    out.chars().take(MAX_IDEA_CHARS).collect()
+    out
 }
 
 fn phase_label(phase: DeployPhase) -> String {

@@ -1,8 +1,8 @@
 use super::queries::count_retry;
 use crate::event::Event;
 use crate::model::{
-    Blocker, ChangeRequest, Coded, DeployGate, ExternalChange, GateResult, RegressionCheck, Revert,
-    Review, ReviewPosted, StageRun, Task, Usage, WorkItem,
+    Blocker, ChangeRequest, Coded, DeployGate, ExternalChange, GateResult, Redo, RegressionCheck,
+    Revert, Review, ReviewPosted, StageRun, Task, Usage, WorkItem,
 };
 use crate::session;
 use crate::time::Timestamp;
@@ -94,6 +94,57 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             of: *revert_of,
             of_key: revert_of_key.clone(),
             reason: reason.clone(),
+        });
+        return Some(t);
+    }
+    if let Event::WorkItemRedoCreated {
+        work_item_id,
+        project_id,
+        spec_id,
+        spec_revision_id,
+        step_id,
+        step_index,
+        repo_id,
+        kind,
+        priority,
+        redo_of,
+        redo_of_key,
+        task_key,
+        work,
+        branch,
+        reason,
+        note,
+    } = event
+    {
+        let mut t = Task::new(WorkItem {
+            id: *work_item_id,
+            project_id: *project_id,
+            origin: WorkItemOrigin::SpecStep,
+            kind: Some(*kind),
+            spec_id: Some(*spec_id),
+            spec_revision_id: Some(*spec_revision_id),
+            step_id: Some(step_id.clone()),
+            step_index: Some(*step_index),
+            task_key: task_key.clone(),
+            work: work.clone(),
+            repo_id: *repo_id,
+            branch: branch.clone(),
+            state: WorkItemState::Queued,
+            stage: None,
+            stage_phase: None,
+            priority: *priority,
+            version: 1,
+            admitted_at: None,
+            done_at: None,
+            start_approved_at: None,
+            created_at: now,
+            updated_at: now,
+        });
+        t.redo = Some(Redo {
+            of: *redo_of,
+            of_key: redo_of_key.clone(),
+            reason: reason.clone(),
+            note: note.clone(),
         });
         return Some(t);
     }
@@ -754,6 +805,8 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         E::WorkItemCreated { .. }
         | E::WorkItemRevertCreated { .. }
         | E::WorkItemRevertRequested { .. }
+        | E::WorkItemRedoCreated { .. }
+        | E::WorkItemRedoRequested { .. }
         | E::WorkItemReverted { .. }
         | E::ExternalChangeAccepted { .. }
         | E::RepoRegistered { .. }

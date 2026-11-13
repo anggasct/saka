@@ -64,6 +64,7 @@ pub struct PacketInput {
     pub spec: PacketSpec,
     pub context: Vec<(ContextRef, Vec<u8>)>,
     pub environment: EnvironmentFacts,
+    pub previous_attempt: Option<String>,
     pub retry: Option<String>,
 }
 
@@ -278,6 +279,9 @@ pub fn render(input: &PacketInput) -> Packet {
         listed(&toolchains),
         listed(&secrets)
     );
+    if let Some(previous) = &input.previous_attempt {
+        let _ = writeln!(text, "{previous}");
+    }
     if let Some(retry) = &input.retry {
         let _ = write!(text, "{retry}\n\n");
     }
@@ -631,6 +635,7 @@ mod tests {
             },
             context: Vec::new(),
             environment: EnvironmentFacts::default(),
+            previous_attempt: None,
             retry: None,
         }
     }

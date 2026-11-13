@@ -5592,6 +5592,73 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/actions/redo": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "redo",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "W/\"<version>\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedoBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items/{work_item_id}/actions/retry": {
       "post": {
         "tags": [
@@ -11394,6 +11461,28 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "redo_of": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkItemRef",
+                      "description": "The cancelled or reverted attempt this task redoes; `null` unless this task came from a redo."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "redone_by": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RevertedBy",
+                      "description": "The redo that replaced this task; `null` until the operator redoes it."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "regression": {
                   "oneOf": [
                     {
@@ -12544,6 +12633,26 @@
             "type": "string"
           }
         }
+      },
+      "RedoBody": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 2000 characters, shown to the agent in the work packet of the new task."
+          },
+          "reason": {
+            "type": "string",
+            "description": "1 to 500 characters."
+          }
+        },
+        "additionalProperties": false
       },
       "RegressionCommand": {
         "type": "object",
@@ -15093,6 +15202,28 @@
           "project_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "redo_of": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkItemRef",
+                "description": "The cancelled or reverted attempt this task redoes; `null` unless this task came from a redo."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redone_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevertedBy",
+                "description": "The redo that replaced this task; `null` until the operator redoes it."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "regression": {
             "oneOf": [

@@ -98,6 +98,7 @@ pub(super) enum TaskAction {
     Takeover,
     Return,
     Revert,
+    Redo,
     AcceptUnverified,
 }
 
@@ -117,6 +118,7 @@ pub(super) async fn task_action(
     let mut blocker = None;
     let mut expected = None;
     let mut return_stage = None;
+    let mut note = None;
     let (version, reason) = match which {
         TaskAction::Merge | TaskAction::Start => {
             let tag = tri!(if_match(&headers));
@@ -138,6 +140,18 @@ pub(super) async fn task_action(
                 .trim_matches('"')
                 .parse::<u64>()
                 .ok();
+            (Some(version), Some(req.reason))
+        }
+        TaskAction::Redo => {
+            let tag = tri!(if_match(&headers));
+            let req: dto::RedoBody = tri!(body(&raw));
+            let version = tag
+                .strip_prefix("W/")
+                .unwrap_or(&tag)
+                .trim_matches('"')
+                .parse::<u64>()
+                .ok();
+            note = req.note;
             (Some(version), Some(req.reason))
         }
         TaskAction::Retry | TaskAction::Cancel | TaskAction::Takeover => {
@@ -192,6 +206,7 @@ pub(super) async fn task_action(
         TaskAction::Takeover => "work_item.takeover",
         TaskAction::Return => "work_item.return",
         TaskAction::Revert => "work_item.revert",
+        TaskAction::Redo => "work_item.redo",
         TaskAction::AcceptUnverified => "work_item.accept_unverified",
     };
     let m = Mutation {
@@ -229,6 +244,19 @@ pub(super) async fn task_action(
                         item,
                         v,
                         reason.as_deref().unwrap_or_default(),
+                        &cause,
+                        Some(&action),
+                    ),
+                    None => Err(EngineError::Rejected(
+                        saka_core::rejection::Rejection::VersionStale,
+                    )),
+                },
+                TaskAction::Redo => match version.flatten() {
+                    Some(v) => engine.redo_with(
+                        item,
+                        v,
+                        reason.as_deref().unwrap_or_default(),
+                        note.as_deref(),
                         &cause,
                         Some(&action),
                     ),
@@ -350,6 +378,23 @@ pub async fn revert(
     raw: Bytes,
 ) -> Response {
     task_action(s, id, method, uri, headers, raw, TaskAction::Revert).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/redo", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters"), ("If-Match" = String, Header, description = "W/\"<version>\"")),
+    request_body = dto::RedoBody,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn redo(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(s, id, method, uri, headers, raw, TaskAction::Redo).await
 }
 
 #[utoipa::path(

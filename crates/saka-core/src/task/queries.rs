@@ -129,6 +129,9 @@ pub fn available_actions(task: &Task) -> Vec<&'static str> {
     if crate::revert::eligible(task) && task.reverted_by.is_none() {
         actions.push("revert");
     }
+    if crate::redo::eligible(task) {
+        actions.push("redo");
+    }
     if crate::revert::held_by_deploy(task) {
         actions.push("accept_unverified");
     }

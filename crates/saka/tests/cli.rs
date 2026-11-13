@@ -3597,3 +3597,61 @@ fn a_merged_task_is_reverted_from_the_cli_and_both_tasks_show_the_link() {
     let raw = saka(&server, &["--json", "task", "show", &id]);
     assert_eq!(json(&raw)["reverted_by"]["key"], format!("{key}-R1"));
 }
+
+#[test]
+fn a_cancelled_step_is_redone_from_the_cli_and_both_tasks_show_the_link() {
+    let mut sim = Sim::new(SimConfig::default());
+    sim.approve();
+    let origin = sim.task(1);
+    let id = origin.item.id.to_string();
+    let key = origin.item.task_key.clone();
+    let engine = sim.engine();
+    engine
+        .cancel_with(
+            origin.item.id,
+            "not now",
+            &engine.cause("human:operator:local"),
+            None,
+        )
+        .unwrap();
+    let server = serve(&sim);
+
+    let refused = saka(&server, &["task", "redo", &id, "--reason", ""]);
+    assert_eq!(code(&refused), 1, "422 validation_failed");
+    let redone = saka(
+        &server,
+        &[
+            "task", "redo", &id, "--reason", "again", "--note", "careful",
+        ],
+    );
+    assert_eq!(
+        code(&redone),
+        0,
+        "{}",
+        String::from_utf8_lossy(&redone.stderr)
+    );
+    assert_eq!(stdout(&redone).trim(), format!("redo {key}.2"));
+    let twice = saka(&server, &["task", "redo", &id, "--reason", "twice"]);
+    assert_eq!(code(&twice), 4, "409 already_redone");
+    assert!(String::from_utf8_lossy(&twice.stderr).contains("already_redone"));
+
+    let shown = saka(&server, &["task", "show", &id]);
+    assert!(
+        stdout(&shown).contains(&format!("redone by {key}.2 queued")),
+        "{}",
+        stdout(&shown)
+    );
+    let redo = sim
+        .all_tasks()
+        .into_iter()
+        .find(|t| t.item.task_key == format!("{key}.2"))
+        .unwrap();
+    let shown = saka(&server, &["task", "show", &redo.item.id.to_string()]);
+    assert!(
+        stdout(&shown).contains(&format!("redoes {key}")),
+        "{}",
+        stdout(&shown)
+    );
+    let raw = saka(&server, &["--json", "task", "show", &id]);
+    assert_eq!(json(&raw)["redone_by"]["key"], format!("{key}.2"));
+}

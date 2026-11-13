@@ -120,7 +120,7 @@ fn the_permission_rule_migration_keeps_old_rules_as_exact_allows_and_opens_the_n
     assert_eq!(
         store.migration().applied,
         vec![
-            32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47
+            32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48
         ]
     );
     drop(store);

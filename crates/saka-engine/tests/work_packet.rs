@@ -66,6 +66,7 @@ fn full() -> PacketInput {
             ],
             session_secrets: vec!["TEST_API_KEY".into()],
         },
+        previous_attempt: None,
         retry: None,
     }
 }

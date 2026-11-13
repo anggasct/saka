@@ -26,6 +26,7 @@ pub mod queue;
 pub mod react;
 pub mod reconcile;
 pub mod redact;
+pub mod redo;
 pub mod regression;
 pub mod rejection;
 pub mod resume;

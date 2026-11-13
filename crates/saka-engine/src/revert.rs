@@ -12,9 +12,9 @@ use crate::action::{Action, Produced};
 use crate::text::{change_title, task_marker};
 use crate::{Cause, Engine, EngineError, Result};
 
-const REASON_MAX: usize = 500;
+pub(crate) const REASON_MAX: usize = 500;
 
-fn revert_reason(value: &str) -> Result<String> {
+pub(crate) fn operator_text(value: &str, field: &'static str, max: usize) -> Result<String> {
     let flat: String = value
         .chars()
         .map(|c| {
@@ -28,9 +28,9 @@ fn revert_reason(value: &str) -> Result<String> {
         .collect();
     let trimmed = flat.trim();
     let len = trimmed.chars().count();
-    if len == 0 || len > REASON_MAX {
+    if len == 0 || len > max {
         return Err(EngineError::Invalid {
-            field: "reason",
+            field,
             code: "length".into(),
         });
     }
@@ -67,7 +67,7 @@ impl Engine {
         cause: &Cause,
         action: Option<&Action<'_>>,
     ) -> Result<(Vec<Event>, Task)> {
-        let reason = revert_reason(why)?;
+        let reason = operator_text(why, "reason", REASON_MAX)?;
         let _guard = self.locked()?;
         let now = self.now();
         let origin = self.load_task(id)?;

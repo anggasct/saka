@@ -947,6 +947,10 @@ pub struct WorkItem {
     pub revert_of: Option<WorkItemRef>,
     /// The revert task of this one that is still live or done; `null` when none was requested and when the last one was cancelled.
     pub reverted_by: Option<RevertedBy>,
+    /// The cancelled or reverted attempt this task redoes; `null` unless this task came from a redo.
+    pub redo_of: Option<WorkItemRef>,
+    /// The redo that replaced this task; `null` until the operator redoes it.
+    pub redone_by: Option<RevertedBy>,
     /// One gate per gated environment the task's merge was deployed to; empty when none.
     pub deploy_gates: Vec<DeployGate>,
     /// The newest reviewer verdict of the task; `null` before any review ran.
@@ -1423,6 +1427,15 @@ impl WorkItem {
                 key: r.of_key.clone(),
             }),
             reverted_by: t.reverted_by.as_ref().map(|r| RevertedBy {
+                id: r.id.0,
+                key: r.key.clone(),
+                state: r.state.as_str().to_string(),
+            }),
+            redo_of: t.redo.as_ref().map(|r| WorkItemRef {
+                id: r.of.0,
+                key: r.of_key.clone(),
+            }),
+            redone_by: t.redone_by.as_ref().map(|r| RevertedBy {
                 id: r.id.0,
                 key: r.key.clone(),
                 state: r.state.as_str().to_string(),
@@ -2973,6 +2986,15 @@ pub struct OptionalReason {
 #[serde(deny_unknown_fields)]
 pub struct RequiredReason {
     pub reason: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RedoBody {
+    /// 1 to 500 characters.
+    pub reason: String,
+    /// Up to 2000 characters, shown to the agent in the work packet of the new task.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
