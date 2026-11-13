@@ -327,6 +327,63 @@ describe("TaskPage", () => {
     expect(within(env).getByText("41000 (no limit)")).toBeInTheDocument();
   });
 
+  it("names the flake a gate passed after, and says while the failed checks are re-run", async () => {
+    const flaky = detail(
+      task(1, {
+        state: "in_stage",
+        stage: "merge",
+        stage_phase: "awaiting_merge",
+        change_request: change,
+        gates: [
+          {
+            source: "scm",
+            required: true,
+            head_sha: HEAD,
+            outcome: "passed",
+            checks: [],
+            passed_after_rerun: { reruns: 1, checks: ["test", "lint"] },
+            observed_at: "2026-10-31T10:04:00.000Z",
+          },
+        ],
+      }),
+    );
+    fakeApi(routes(flaky));
+    renderWithProviders(<TaskPage workItemId={flaky.id} />);
+    const gates = await screen.findByRole("region", { name: "Gates" });
+    expect(
+      within(gates).getByText(
+        "Passed after 1 re-run of the failed checks: test, lint. The earlier failure was a flake.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows that a re-run of the failed checks is under way", async () => {
+    const waiting = detail(
+      task(1, {
+        state: "in_stage",
+        stage: "merge",
+        stage_phase: "awaiting_ci",
+        change_request: {
+          ...change,
+          ci_rerun: {
+            count: 1,
+            checks: ["test"],
+            pending: true,
+            rerunnable: true,
+          },
+        },
+      }),
+    );
+    fakeApi(routes(waiting));
+    renderWithProviders(<TaskPage workItemId={waiting.id} />);
+    const gates = await screen.findByRole("region", { name: "Gates" });
+    expect(
+      within(gates).getByText(
+        "Re-running the failed check (test); the task waits at this head.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("titles the gates with the merge commit while it is verified", async () => {
     const verifying = detail(
       task(1, {

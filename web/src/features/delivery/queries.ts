@@ -279,6 +279,22 @@ export async function retryTask(
   );
 }
 
+export async function rerunChecks(
+  workItemId: string,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  unwrap(
+    await api.POST("/api/v1/work-items/{work_item_id}/actions/rerun-checks", {
+      params: {
+        path: { work_item_id: workItemId },
+        header: headers(idempotencyKey),
+      },
+      body: { reason },
+    }),
+  );
+}
+
 export async function runPrimaryAction(
   workItemId: string,
   blockerId: string,

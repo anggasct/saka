@@ -29,12 +29,21 @@ export function verifyingHead(task: WorkItem): string | null {
 export function GatesSection({ task }: { task: WorkItem }) {
   const t = useT();
   const target = verifyingHead(task);
+  const rerun = task.change_request?.ci_rerun;
   const title =
     target === null
       ? t("task.gates.title")
       : t("task.gates.verifying", { sha: sha(target) });
   return (
     <Section title={title}>
+      {rerun?.pending && (
+        <p className="mb-3 text-sm" role="status">
+          {t("task.gates.rerunning", {
+            count: rerun.checks.length,
+            checks: rerun.checks.join(", "),
+          })}
+        </p>
+      )}
       {task.gates.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("task.gates.none")}</p>
       ) : (
@@ -58,6 +67,15 @@ export function GatesSection({ task }: { task: WorkItem }) {
                 <span>{t("task.gates.at", { sha: sha(gate.head_sha) })}</span>
                 <When iso={gate.observed_at} />
               </p>
+              {gate.passed_after_rerun && (
+                <p className="text-sm">
+                  {t("task.gates.passedAfterRerun", {
+                    reruns: gate.passed_after_rerun.reruns,
+                    count: gate.passed_after_rerun.checks.length,
+                    checks: gate.passed_after_rerun.checks.join(", "),
+                  })}
+                </p>
+              )}
               {gate.checks.length > 0 && (
                 <ul className="space-y-1 text-sm">
                   {gate.checks.map((check) => (
