@@ -28,7 +28,7 @@ const CLOSE_LIMIT: Duration = Duration::from_secs(3 * 60);
 const GITHUB_POLL: Duration = Duration::from_secs(5);
 const FAILED_COMMENT: &str = "end-to-end run failed, see serve log";
 
-enum Wait<T> {
+pub(super) enum Wait<T> {
     Ready(T),
     Waiting(String),
 }
@@ -44,9 +44,17 @@ fn wait<T>(
     what: &str,
     default: Duration,
     pause: Duration,
+    step: impl FnMut() -> Result<Wait<T>>,
+) -> Result<T> {
+    wait_within(what, limit(default), pause, step)
+}
+
+pub(super) fn wait_within<T>(
+    what: &str,
+    allowed: Duration,
+    pause: Duration,
     mut step: impl FnMut() -> Result<Wait<T>>,
 ) -> Result<T> {
-    let allowed = limit(default);
     let started = Instant::now();
     loop {
         let last = match step()? {
