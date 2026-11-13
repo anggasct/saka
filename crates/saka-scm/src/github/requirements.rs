@@ -5,6 +5,7 @@ use serde::Serialize;
 
 pub const REQUIRED_PERMISSIONS: &[(&str, &str)] = &[
     ("contents", "write"),
+    ("issues", "write"),
     ("pull_requests", "write"),
     ("checks", "read"),
     ("statuses", "read"),
@@ -15,6 +16,7 @@ pub const RECOMMENDED_PERMISSIONS: &[(&str, &str)] = &[("statuses", "write")];
 
 pub const REQUIRED_EVENTS: &[&str] = &[
     "pull_request",
+    "issues",
     "issue_comment",
     "check_run",
     "check_suite",
@@ -96,6 +98,7 @@ mod tests {
         let expected: BTreeMap<&str, &str> = [
             ("checks", "read"),
             ("contents", "write"),
+            ("issues", "write"),
             ("metadata", "read"),
             ("pull_requests", "write"),
             ("statuses", "write"),
@@ -113,6 +116,7 @@ mod tests {
                 "check_run",
                 "check_suite",
                 "issue_comment",
+                "issues",
                 "pull_request",
                 "status"
             ]
@@ -124,6 +128,7 @@ mod tests {
         let have = granted(&[
             ("checks", "read"),
             ("contents", "write"),
+            ("issues", "write"),
             ("metadata", "read"),
             ("pull_requests", "read"),
             ("statuses", "write"),
@@ -143,6 +148,7 @@ mod tests {
         let have = granted(&[
             ("checks", "read"),
             ("contents", "write"),
+            ("issues", "write"),
             ("metadata", "read"),
             ("pull_requests", "write"),
         ]);
@@ -161,6 +167,7 @@ mod tests {
         let have = granted(&[
             ("checks", "admin"),
             ("contents", "admin"),
+            ("issues", "admin"),
             ("metadata", "admin"),
             ("pull_requests", "admin"),
             ("statuses", "admin"),
@@ -180,7 +187,7 @@ mod tests {
         let have = vec!["pull_request".to_string(), "check_run".to_string()];
         assert_eq!(
             missing_events(&have, &manifest_events()),
-            ["check_suite", "issue_comment", "status"]
+            ["check_suite", "issue_comment", "issues", "status"]
         );
     }
 }

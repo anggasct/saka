@@ -267,8 +267,8 @@ fn created(pem: &str) -> Value {
         "client_secret": CLIENT_SECRET,
         "webhook_secret": WEBHOOK_SECRET,
         "pem": pem,
-        "permissions": { "checks": "read", "contents": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
-        "events": ["check_run", "check_suite", "issue_comment", "pull_request", "status"],
+        "permissions": { "checks": "read", "contents": "write", "issues": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
+        "events": ["check_run", "check_suite", "issue_comment", "issues", "pull_request", "status"],
     })
 }
 
@@ -840,7 +840,7 @@ async fn narrower_grants_and_a_missing_webhook_secret_are_warnings() {
         json!([
             { "code": "app_grants_differ", "params": {
                 "missing_permissions": [{ "permission": "statuses", "requested": "write", "granted": "read" }],
-                "missing_events": ["status"] } },
+                "missing_events": ["issues", "status"] } },
             { "code": "app_webhook_secret_missing", "params": {} },
         ])
     );

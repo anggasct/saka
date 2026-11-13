@@ -6,6 +6,7 @@ pub mod docs;
 pub mod env;
 pub mod git;
 pub mod hook;
+pub mod intake;
 pub mod regressions;
 pub mod scm;
 pub mod secret;
@@ -41,6 +42,10 @@ pub use git::{
 pub use hook::{
     HostCommand, HostCommands, HostOutcome, Notification, Notifier, WebhookPost, WebhookReceipt,
     Webhooks,
+};
+pub use intake::{
+    IntakeCapabilities, IntakeSource, Issue, IssueListing, IssueRef, IssueSignal, IssueSignalKind,
+    IssueState, IssueSummary, MAX_ISSUE_BODY_BYTES, MAX_ISSUES, TRUNCATION_MARKER, clip_issue_body,
 };
 pub use regressions::{RegressionRefusal, Regressions, Requested};
 pub use scm::{

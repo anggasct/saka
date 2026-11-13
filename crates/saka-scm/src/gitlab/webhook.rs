@@ -82,8 +82,17 @@ fn targets(kind: &str, payload: &Value) -> Vec<WebhookTarget> {
             found.extend(head(&attrs["last_commit"]["id"]));
             found.insert(WebhookTarget::Intake);
         }
-        "note" if payload["object_attributes"]["noteable_type"] == "MergeRequest" => {
-            found.insert(WebhookTarget::Intake);
+        "note" => match payload["object_attributes"]["noteable_type"].as_str() {
+            Some("MergeRequest") => {
+                found.insert(WebhookTarget::Intake);
+            }
+            Some("Issue") => {
+                found.insert(WebhookTarget::IssueIntake);
+            }
+            _ => {}
+        },
+        "issue" => {
+            found.insert(WebhookTarget::IssueIntake);
         }
         "pipeline" => {
             found.extend(head(&payload["object_attributes"]["sha"]));
@@ -207,8 +216,12 @@ mod tests {
         let on_issue = parsed(&json!({
             "object_kind": "note", "object_attributes": { "noteable_type": "Issue" },
         }));
-        assert!(on_issue.targets.is_empty());
-        for kind in ["push", "note", "issue"] {
+        assert_eq!(on_issue.targets, vec![WebhookTarget::IssueIntake]);
+        let issue = parsed(&json!({
+            "object_kind": "issue", "object_attributes": { "iid": 6, "action": "close" },
+        }));
+        assert_eq!(issue.targets, vec![WebhookTarget::IssueIntake]);
+        for kind in ["push", "note"] {
             assert!(parsed(&json!({ "object_kind": kind })).targets.is_empty());
         }
     }

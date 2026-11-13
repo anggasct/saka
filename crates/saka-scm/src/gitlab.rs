@@ -2,6 +2,7 @@ mod ci;
 mod client;
 mod diagnose;
 mod intake;
+mod issues;
 mod webhook;
 
 use std::sync::Arc;

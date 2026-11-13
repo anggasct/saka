@@ -54,8 +54,8 @@ fn created(pem: &str) -> Value {
         "client_secret": CLIENT_SECRET,
         "webhook_secret": WEBHOOK_SECRET,
         "pem": pem,
-        "permissions": { "checks": "read", "contents": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
-        "events": ["check_run", "check_suite", "pull_request", "status"],
+        "permissions": { "checks": "read", "contents": "write", "issues": "write", "metadata": "read", "pull_requests": "write", "statuses": "write" },
+        "events": ["check_run", "check_suite", "issue_comment", "issues", "pull_request", "status"],
     })
 }
 
@@ -97,6 +97,7 @@ async fn a_created_app_is_read_with_every_field() {
     let permissions: BTreeMap<String, String> = [
         ("checks", "read"),
         ("contents", "write"),
+        ("issues", "write"),
         ("metadata", "read"),
         ("pull_requests", "write"),
         ("statuses", "write"),
@@ -107,7 +108,14 @@ async fn a_created_app_is_read_with_every_field() {
     assert_eq!(app.permissions, permissions);
     assert_eq!(
         app.events,
-        ["check_run", "check_suite", "pull_request", "status"]
+        [
+            "check_run",
+            "check_suite",
+            "issue_comment",
+            "issues",
+            "pull_request",
+            "status"
+        ]
     );
 }
 

@@ -83,7 +83,7 @@ impl Engine {
                 delivery.targets.iter().any(|t| match t {
                     WebhookTarget::Change { number } => *number == c.number,
                     WebhookTarget::Head { sha } => sha.eq_ignore_ascii_case(&c.head_sha),
-                    WebhookTarget::Intake => false,
+                    WebhookTarget::Intake | WebhookTarget::IssueIntake => false,
                 })
             })
             .collect();

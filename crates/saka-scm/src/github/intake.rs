@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::GitHub;
 use super::app::{inaccessible, parse_time, split_repo};
 
-fn incomplete(detail: &'static str) -> PortError {
+pub(super) fn incomplete(detail: &'static str) -> PortError {
     PortError::retryable("scm_unavailable", json!({ "detail": detail }))
 }
 
@@ -18,7 +18,7 @@ fn clipped(value: &Value) -> String {
     clip_text(value.as_str().unwrap_or_default())
 }
 
-fn text(value: &Value) -> String {
+pub(super) fn text(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
 }
 

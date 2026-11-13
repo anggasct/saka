@@ -8,6 +8,7 @@ use sha2::Sha256;
 const SIGNATURE_PREFIX: &str = "sha256=";
 const MAX_DELIVERY_ID: usize = 64;
 const MAX_EVENT: usize = 64;
+const ISSUE_ACTIONS: [&str; 5] = ["opened", "labeled", "closed", "reopened", "edited"];
 
 fn header<'h>(headers: &'h [(String, String)], name: &str) -> Option<&'h str> {
     headers
@@ -92,8 +93,15 @@ fn targets(event: &str, payload: &Value) -> Vec<WebhookTarget> {
             }
             found.insert(WebhookTarget::Intake);
         }
-        "issue_comment" if !payload["issue"]["pull_request"].is_null() => {
-            found.insert(WebhookTarget::Intake);
+        "issue_comment" => {
+            found.insert(if payload["issue"]["pull_request"].is_null() {
+                WebhookTarget::IssueIntake
+            } else {
+                WebhookTarget::Intake
+            });
+        }
+        "issues" if ISSUE_ACTIONS.contains(&payload["action"].as_str().unwrap_or_default()) => {
+            found.insert(WebhookTarget::IssueIntake);
         }
         "check_run" | "check_suite" => {
             let object = &payload[event];
@@ -212,10 +220,19 @@ mod tests {
             "issue_comment",
             &json!({ "action": "created", "issue": { "number": 6 }, "repository": repo }),
         );
-        assert!(
-            on_issue.targets.is_empty(),
-            "a comment on a plain issue is no signal"
+        assert_eq!(on_issue.targets, vec![WebhookTarget::IssueIntake]);
+        for action in ["opened", "labeled", "closed", "reopened", "edited"] {
+            let issue = parsed(
+                "issues",
+                &json!({ "action": action, "issue": { "number": 6 }, "repository": repo }),
+            );
+            assert_eq!(issue.targets, vec![WebhookTarget::IssueIntake], "{action}");
+        }
+        let assigned = parsed(
+            "issues",
+            &json!({ "action": "assigned", "issue": { "number": 6 }, "repository": repo }),
         );
+        assert!(assigned.targets.is_empty());
         for event in ["ping", "push", "issues"] {
             assert!(
                 parsed(event, &json!({ "zen": "x", "repository": repo }))

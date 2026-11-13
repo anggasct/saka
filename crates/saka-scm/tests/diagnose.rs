@@ -198,3 +198,87 @@ async fn other_provider_failures_are_scm_unavailable_with_the_status() {
         ("scm_unavailable", &json!({ "status": 403 }))
     );
 }
+
+fn app_requirements() -> saka_core::diagnostics::AppRequirements {
+    match saka_scm::github::requirements::APP {
+        saka_core::diagnostics::ScmDiagnostics::App(requirements) => requirements,
+        saka_core::diagnostics::ScmDiagnostics::Token(_) => panic!("GitHub declares an app"),
+    }
+}
+
+#[test]
+fn an_installation_without_the_issues_permission_fails_the_repo_access_check() {
+    let granted = |pairs: &[(&str, &str)]| Installation {
+        installed: true,
+        installation_id: Some(42),
+        permissions: pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    };
+    let without = granted(&[
+        ("contents", "write"),
+        ("pull_requests", "write"),
+        ("checks", "read"),
+        ("statuses", "write"),
+        ("metadata", "read"),
+    ]);
+    let finding = saka_core::diagnostics::installation(
+        &app_requirements(),
+        "acme/app",
+        "https://github.example",
+        "saka-dev",
+        &without,
+    );
+    assert_eq!(finding.code, "app_permissions_missing");
+    assert_eq!(
+        finding.params,
+        json!({ "missing": [{ "permission": "issues", "required": "write", "granted": null }] })
+    );
+    let with = granted(&[
+        ("contents", "write"),
+        ("issues", "write"),
+        ("pull_requests", "write"),
+        ("checks", "read"),
+        ("statuses", "write"),
+        ("metadata", "read"),
+    ]);
+    let finding = saka_core::diagnostics::installation(
+        &app_requirements(),
+        "acme/app",
+        "https://github.example",
+        "saka-dev",
+        &with,
+    );
+    assert_eq!(finding.code, "app_installed");
+}
+
+#[test]
+fn an_app_without_the_issues_event_is_a_webhook_warning() {
+    let hook = saka_core::diagnostics::WebhookStatus {
+        url_set: true,
+        content_type: Some("json".into()),
+        secret_set: true,
+        deliveries: Vec::new(),
+    };
+    let app = |events: &[&str]| saka_core::diagnostics::AppStatus {
+        app_id: APP_ID,
+        slug: "saka-dev".into(),
+        events: events.iter().map(|e| (*e).to_string()).collect(),
+    };
+    let findings = saka_core::diagnostics::webhook(
+        &app_requirements(),
+        "github",
+        &app(&[
+            "pull_request",
+            "issue_comment",
+            "check_run",
+            "check_suite",
+            "status",
+        ]),
+        &hook,
+        None,
+    );
+    assert_eq!(findings[0].code, "app_events_missing");
+    assert_eq!(findings[0].params, json!({ "missing": ["issues"] }));
+}
