@@ -1,0 +1,21 @@
+[package]
+name = "saka-intake"
+description = "Decoders for incoming incident signals: Alertmanager, Sentry and a generic sender."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hmac.workspace = true
+jiff.workspace = true
+saka-core = { path = "../saka-core" }
+saka-ports = { path = "../saka-ports" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true

@@ -1,0 +1,20 @@
+{
+  "action": "triggered",
+  "installation": { "uuid": "3ab2c9e1-7d44-4b3a-9a3c-0c1f6a6f4e10" },
+  "data": {
+    "event": {
+      "event_id": "9d1f0b7c8a2e4e5f8c3b6a1d2e4f5a6b",
+      "issue_id": "4510233781",
+      "title": "TypeError: Cannot read properties of undefined (reading 'total')",
+      "culprit": "app/checkout/summary in renderTotals",
+      "level": "fatal",
+      "platform": "javascript",
+      "environment": "production",
+      "datetime": "2026-11-13T10:01:30.000000Z",
+      "web_url": "https://sentry.example.com/organizations/acme/issues/4510233781/events/9d1f0b7c8a2e4e5f8c3b6a1d2e4f5a6b/",
+      "issue_url": "https://sentry.example.com/api/0/issues/4510233781/"
+    },
+    "triggered_rule": "Checkout errors in production"
+  },
+  "actor": { "type": "application", "id": "sentry", "name": "Sentry" }
+}

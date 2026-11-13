@@ -1,0 +1,19 @@
+{
+  "action": "created",
+  "installation": { "uuid": "3ab2c9e1-7d44-4b3a-9a3c-0c1f6a6f4e10" },
+  "data": {
+    "issue": {
+      "id": "4510233781",
+      "shortId": "CHECKOUT-2K",
+      "title": "TypeError: Cannot read properties of undefined (reading 'total')",
+      "culprit": "app/checkout/summary in renderTotals",
+      "level": "error",
+      "status": "unresolved",
+      "firstSeen": "2026-11-13T09:58:12.000000Z",
+      "lastSeen": "2026-11-13T09:58:12.000000Z",
+      "permalink": "https://sentry.example.com/organizations/acme/issues/4510233781/",
+      "project": { "id": "7", "name": "Checkout", "slug": "checkout" }
+    }
+  },
+  "actor": { "type": "application", "id": "sentry", "name": "Sentry" }
+}

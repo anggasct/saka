@@ -1,0 +1,11 @@
+{
+  "fingerprint": "queue-depth-orders",
+  "status": "firing",
+  "severity": "high",
+  "title": "Orders queue depth above 10k",
+  "summary": "Consumers are lagging behind producers for 15 minutes.",
+  "environment": "prod",
+  "url": "https://dashboards.example.com/queues/orders",
+  "started_at": "2026-11-13T09:45:00Z",
+  "labels": { "queue": "orders", "team": "platform" }
+}
