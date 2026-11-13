@@ -6711,9 +6711,7 @@ fn a_cancelled_step_is_redone_through_the_action_and_both_tasks_link_to_each_oth
     assert_eq!(again.body["params"]["work_item_id"], made.body["id"]);
 }
 
-#[test]
-fn a_step_of_a_withdrawn_spec_or_one_whose_revision_moved_cannot_be_redone() {
-    let mut api = Api::new(SimConfig::default());
+fn cancelled_first_step(api: &mut Api) -> (saka_core::model::Task, saka_core::ids::SpecId) {
     let first = api.sim.register(
         saka_testkit::APPROVAL_PATH,
         &approval_spec(
@@ -6734,6 +6732,40 @@ fn a_step_of_a_withdrawn_spec_or_one_whose_revision_moved_cannot_be_redone() {
     engine
         .cancel_with(origin.item.id, "not now", &cause, None)
         .unwrap();
+    (origin, first.spec_id)
+}
+
+#[test]
+fn a_step_of_a_withdrawn_spec_cannot_be_redone() {
+    let mut api = Api::new(SimConfig::default());
+    let (origin, spec_id) = cancelled_first_step(&mut api);
+    let cause = api.sim.engine().cause("human:operator:local");
+    api.sim
+        .engine()
+        .withdraw_spec(spec_id, "dropped", &cause)
+        .unwrap();
+
+    let path = format!("/api/v1/work-items/{}", origin.item.id.0);
+    let detail = api.get(&path);
+    assert!(
+        !detail.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("redo"))
+    );
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+    let withdrawn = api.post(
+        &format!("{path}/actions/redo"),
+        &[("if-match", &etag)],
+        json!({ "reason": "again" }),
+    );
+    problem(&withdrawn, StatusCode::CONFLICT, "invalid_state");
+}
+
+#[test]
+fn a_step_is_redone_after_the_spec_was_approved_again_with_another_step_changed() {
+    let mut api = Api::new(SimConfig::default());
+    let (origin, _) = cancelled_first_step(&mut api);
     let changed = api.sim.register(
         saka_testkit::APPROVAL_PATH,
         &approval_spec(
@@ -6750,22 +6782,18 @@ fn a_step_of_a_withdrawn_spec_or_one_whose_revision_moved_cannot_be_redone() {
         .unwrap();
 
     let path = format!("/api/v1/work-items/{}", origin.item.id.0);
-    let redo = format!("{path}/actions/redo");
     let detail = api.get(&path);
     assert!(
-        !detail.body["available_actions"]
+        detail.body["available_actions"]
             .as_array()
             .unwrap()
             .contains(&json!("redo"))
     );
     let etag = detail.headers["etag"].to_str().unwrap().to_string();
-    let moved = api.post(&redo, &[("if-match", &etag)], json!({ "reason": "again" }));
-    problem(&moved, StatusCode::CONFLICT, "redo_revision_changed");
-
-    api.sim
-        .engine()
-        .withdraw_spec(changed.spec_id, "dropped", &cause)
-        .unwrap();
-    let withdrawn = api.post(&redo, &[("if-match", &etag)], json!({ "reason": "again" }));
-    problem(&withdrawn, StatusCode::CONFLICT, "invalid_state");
+    let redone = api.post(
+        &format!("{path}/actions/redo"),
+        &[("if-match", &etag)],
+        json!({ "reason": "again" }),
+    );
+    assert_eq!(redone.status, StatusCode::ACCEPTED, "{}", redone.body);
 }

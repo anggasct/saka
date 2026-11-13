@@ -745,6 +745,11 @@ fn a_redo_links_both_tasks_and_hands_the_waiting_step_to_the_new_one() {
         work_item_id: first.item.id,
         reason: "operator".into(),
     };
+    let view = w
+        .store
+        .read(|c| read::revision_view(c, w.spec.latest_revision_id))
+        .unwrap()
+        .unwrap();
     let mut origin = task::evolve(Some(first.clone()), &cancelled, w.now).unwrap();
     origin.spec_standing = Some(saka_core::model::SpecStanding {
         state: SpecState::Approved,
@@ -754,7 +759,15 @@ fn a_redo_links_both_tasks_and_hands_the_waiting_step_to_the_new_one() {
         now: w.now,
         ids: &mut w.ids,
     };
-    let events = saka_core::redo::request(&origin, "again".into(), None, &mut ctx).unwrap();
+    let items: Vec<_> = tasks.iter().map(|t| t.item.clone()).collect();
+    let current = saka_core::redo::Current {
+        revision: &view,
+        repos: &w.project.repos,
+        tasks: &items,
+    };
+    let requested =
+        saka_core::redo::request(&origin, "again".into(), None, Some(&current), &mut ctx).unwrap();
+    let events = requested.events;
     let mut batch = Batch::new(w.now);
     let mut redo_id = None;
     let mut after = origin.clone();

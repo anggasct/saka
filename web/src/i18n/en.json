@@ -135,7 +135,7 @@
   "error.revert_not_allowed": "A revert task cannot be reverted; start the work again from a spec.",
   "error.revert_in_progress": "This task already has a revert in progress.",
   "error.already_reverted": "This task was already reverted.",
-  "error.redo_revision_changed": "This step changed after the task was created. Approve the spec again, then redo it.",
+  "error.redo_step_removed": "This step is no longer in the approved revision of the spec.",
   "error.already_redone": "This task was already redone.",
   "error.blocker_not_open": "This blocker is no longer open; the task has moved on.",
   "error.blocker_action_changed": "This action changed since it was shown; open the task to see the current one.",

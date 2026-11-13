@@ -5,7 +5,7 @@ use crate::deploy::{FixFailure, untrusted_blocks};
 use crate::event::Event;
 use crate::ids::WorkItemId;
 use crate::issue_text::single_line;
-use crate::model::Task;
+use crate::model::{ProjectRepo, RevisionView, Task, WorkItem, step_repo};
 use crate::rejection::Rejection;
 use crate::vocab::{SpecState, SupersedeReason, WorkItemOrigin, WorkItemState};
 
@@ -15,10 +15,20 @@ pub fn eligible(task: &Task) -> bool {
     task.item.origin == WorkItemOrigin::SpecStep
         && task.item.state == WorkItemState::Cancelled
         && task.redone_by.is_none()
-        && task.spec_standing.is_some_and(|spec| {
-            spec.state == SpecState::Approved
-                && spec.approved_revision_id == task.item.spec_revision_id
-        })
+        && task
+            .spec_standing
+            .is_some_and(|spec| spec.state == SpecState::Approved)
+}
+
+pub struct Current<'a> {
+    pub revision: &'a RevisionView,
+    pub repos: &'a [ProjectRepo],
+    pub tasks: &'a [WorkItem],
+}
+
+pub struct Requested {
+    pub events: Vec<Event>,
+    pub depends_on: Vec<WorkItemId>,
 }
 
 struct Attempt {
@@ -55,8 +65,9 @@ pub fn request(
     origin: &Task,
     reason: String,
     note: Option<String>,
+    current: Option<&Current<'_>>,
     ctx: &mut Ctx<'_>,
-) -> Result<Vec<Event>, Rejection> {
+) -> Result<Requested, Rejection> {
     let item = &origin.item;
     let invalid = || Rejection::InvalidState {
         state: item.state.as_str().to_string(),
@@ -73,22 +84,37 @@ pub fn request(
     if item.state != WorkItemState::Cancelled || standing.state != SpecState::Approved {
         return Err(invalid());
     }
-    if standing.approved_revision_id != item.spec_revision_id {
-        return Err(Rejection::RedoRevisionChanged);
-    }
-    let (Some(spec_id), Some(revision_id), Some(step_id), Some(step_index), Some(kind)) = (
-        item.spec_id,
-        item.spec_revision_id,
-        item.step_id.clone(),
-        item.step_index,
-        item.kind,
-    ) else {
+    let (Some(spec_id), Some(step_id), Some(kind), Some(current)) =
+        (item.spec_id, item.step_id.clone(), item.kind, current)
+    else {
         return Err(invalid());
     };
+    let step = current
+        .revision
+        .steps
+        .iter()
+        .find(|s| s.id == step_id)
+        .ok_or_else(|| Rejection::RedoStepRemoved {
+            step_id: step_id.clone(),
+        })?;
+    let repo_id = step_repo(current.repos, step.repo.as_deref()).ok_or_else(invalid)?;
+    let revision_id = current.revision.id;
+    let depends_on = step
+        .after
+        .iter()
+        .filter_map(|after| {
+            current.tasks.iter().find(|t| {
+                t.spec_id == Some(spec_id)
+                    && t.step_id.as_deref() == Some(after.as_str())
+                    && t.state != WorkItemState::Superseded
+            })
+        })
+        .map(|t| t.id)
+        .collect();
     let attempt = attempt_of(origin);
     let next = attempt.number + 1;
     let redo_id = WorkItemId::new(ctx.ids);
-    Ok(vec![
+    let events = vec![
         Event::WorkItemRedoRequested {
             work_item_id: item.id,
             redo_id,
@@ -105,19 +131,20 @@ pub fn request(
             spec_id,
             spec_revision_id: revision_id,
             step_id,
-            step_index,
-            repo_id: item.repo_id,
+            step_index: step.index,
+            repo_id,
             kind,
             priority: item.priority,
             redo_of: item.id,
             redo_of_key: item.task_key.clone(),
             task_key: format!("{}.{next}", attempt.base_key),
-            work: item.work.clone(),
+            work: step.work.clone(),
             branch: format!("{}-{next}", attempt.base_branch),
             reason,
             note,
         },
-    ])
+    ];
+    Ok(Requested { events, depends_on })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
