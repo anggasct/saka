@@ -18,6 +18,7 @@ import { Route as DeploymentsProjectIdRouteImport } from './routes/deployments.$
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as DocsProjectIdRouteImport } from './routes/docs.$projectId'
 import { Route as InboxItemIdRouteImport } from './routes/inbox.$itemId'
+import { Route as IncidentsProjectIdRouteImport } from './routes/incidents.$projectId'
 import { Route as SessionsIndexRouteImport } from './routes/sessions.index'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 import { Route as SettingsIndexRouteImport } from './routes/settings.index'
@@ -72,6 +73,11 @@ const InboxItemIdRoute = InboxItemIdRouteImport.update({
   path: '/inbox/$itemId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const IncidentsProjectIdRoute = IncidentsProjectIdRouteImport.update({
+  id: '/incidents/$projectId',
+  path: '/incidents/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SessionsIndexRoute = SessionsIndexRouteImport.update({
   id: '/sessions/',
   path: '/sessions/',
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/deployments/$projectId': typeof DeploymentsProjectIdRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
+  '/incidents/$projectId': typeof IncidentsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/settings/devices': typeof SettingsDevicesRoute
@@ -142,6 +149,7 @@ export interface FileRoutesByTo {
   '/deployments/$projectId': typeof DeploymentsProjectIdRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
+  '/incidents/$projectId': typeof IncidentsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/settings/devices': typeof SettingsDevicesRoute
@@ -162,6 +170,7 @@ export interface FileRoutesById {
   '/deployments/$projectId': typeof DeploymentsProjectIdRoute
   '/docs/$projectId': typeof DocsProjectIdRoute
   '/inbox/$itemId': typeof InboxItemIdRoute
+  '/incidents/$projectId': typeof IncidentsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/settings/$projectId': typeof SettingsProjectIdRoute
   '/settings/devices': typeof SettingsDevicesRoute
@@ -183,6 +192,7 @@ export interface FileRouteTypes {
     | '/deployments/$projectId'
     | '/docs/$projectId'
     | '/inbox/$itemId'
+    | '/incidents/$projectId'
     | '/sessions/$sessionId'
     | '/settings/$projectId'
     | '/settings/devices'
@@ -202,6 +212,7 @@ export interface FileRouteTypes {
     | '/deployments/$projectId'
     | '/docs/$projectId'
     | '/inbox/$itemId'
+    | '/incidents/$projectId'
     | '/sessions/$sessionId'
     | '/settings/$projectId'
     | '/settings/devices'
@@ -221,6 +232,7 @@ export interface FileRouteTypes {
     | '/deployments/$projectId'
     | '/docs/$projectId'
     | '/inbox/$itemId'
+    | '/incidents/$projectId'
     | '/sessions/$sessionId'
     | '/settings/$projectId'
     | '/settings/devices'
@@ -241,6 +253,7 @@ export interface RootRouteChildren {
   DeploymentsProjectIdRoute: typeof DeploymentsProjectIdRoute
   DocsProjectIdRoute: typeof DocsProjectIdRoute
   InboxItemIdRoute: typeof InboxItemIdRoute
+  IncidentsProjectIdRoute: typeof IncidentsProjectIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
   SettingsProjectIdRoute: typeof SettingsProjectIdRoute
   SettingsDevicesRoute: typeof SettingsDevicesRoute
@@ -318,6 +331,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InboxItemIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/incidents/$projectId': {
+      id: '/incidents/$projectId'
+      path: '/incidents/$projectId'
+      fullPath: '/incidents/$projectId'
+      preLoaderRoute: typeof IncidentsProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sessions/': {
       id: '/sessions/'
       path: '/sessions'
@@ -385,6 +405,7 @@ const rootRouteChildren: RootRouteChildren = {
   DeploymentsProjectIdRoute: DeploymentsProjectIdRoute,
   DocsProjectIdRoute: DocsProjectIdRoute,
   InboxItemIdRoute: InboxItemIdRoute,
+  IncidentsProjectIdRoute: IncidentsProjectIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,
   SettingsProjectIdRoute: SettingsProjectIdRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,

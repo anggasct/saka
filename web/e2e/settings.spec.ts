@@ -214,6 +214,8 @@ async function mockApi(page: Page, server: Server) {
       await route.fulfill({ json: { items: [hook] } });
     } else if (path === `/api/v1/projects/${PROJECT_ID}/environments`) {
       await route.fulfill({ json: { items: [] } });
+    } else if (path === `/api/v1/projects/${PROJECT_ID}/incident-sources`) {
+      await route.fulfill({ json: { items: [] } });
     } else if (path === "/api/v1/hook-runs") {
       await route.fulfill({
         json: {

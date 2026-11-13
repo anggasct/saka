@@ -783,6 +783,11 @@ const LABELS: Record<string, string[]> = {
   "permission.state": ["pending", "allowed", "denied", "expired"],
   "packet.kind": ["spec", "context"],
   "packet.origin": ["link", "always"],
+  "incident.severity": ["critical", "high", "medium", "low", "info"],
+  "incident.state": ["open", "handling", "resolved", "dismissed"],
+  "incident.resolution": ["fixed", "reverted", "signal_resolved"],
+  "incident.signalStatus": ["firing", "resolved"],
+  "incident.sourceKind": ["alertmanager", "sentry", "generic"],
   "blocker.action": [
     "retry",
     "cancel",
@@ -794,6 +799,9 @@ const LABELS: Record<string, string[]> = {
 };
 
 const ERRORS = [
+  "incident_handling",
+  "incident_closed",
+  "incident_suspect_unknown",
   "deployment_queued",
   "deployment_running",
   "deployment_finished",

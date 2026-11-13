@@ -9,6 +9,7 @@ import {
   OTHER_DEPLOYMENT_ID,
 } from "@/test/deploy-fixtures";
 import { fakeApi, page } from "@/test/fake-api";
+import { INCIDENT_SOURCES } from "@/test/incident-fixtures";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID } from "@/test/fixtures";
 import { announce, HOOK_RUNS, HOOKS } from "@/test/hooks-fixtures";
@@ -33,6 +34,7 @@ function routes(extra: Routes = {}): Routes {
     [HOOKS]: { body: { items: [{ ...announce, environments: ["staging"] }] } },
     [HOOK_RUNS]: { body: page([]) },
     [ENVIRONMENTS]: { body: { items: [] } },
+    [INCIDENT_SOURCES]: { body: { items: [] } },
     ...extra,
   };
 }

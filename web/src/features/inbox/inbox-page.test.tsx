@@ -15,6 +15,8 @@ import {
   deploymentFixItem,
   deploymentItem,
   exhaustedIntakeItem,
+  INBOX_INCIDENT_ID,
+  incidentItem,
   FAILED_DEPLOYMENT_ID,
   INTAKE_ID,
   intakeItem,
@@ -23,6 +25,7 @@ import {
   permissionItem,
   REQUEST_ID,
   REVISION_ID,
+  reopenedIncidentItem,
   retryItem,
   secretItem,
   startItem,
@@ -350,6 +353,58 @@ describe("inbox page", () => {
         { blocker_id: BLOCKER_ID, reason: "staging is red" },
       ]);
     });
+  });
+
+  it("shows an incident as plain text, links to it, and drafts a fix", async () => {
+    const { requests } = fakeApi(
+      routes(() => [incidentItem], {
+        [`/api/v1/incidents/${INBOX_INCIDENT_ID}/actions/draft-fix`]: {
+          status: 202,
+          body: {},
+        },
+      }),
+    );
+    renderApp("/");
+    const item = await card("prod-alerts");
+    expect(within(item).getByText("Incident")).toBeInTheDocument();
+    const sentence = within(item).getByText(
+      "high incident in staging: <b>Checkout</b> error rate above 5% (3×)",
+    );
+    expect(sentence.querySelector("b")).toBeNull();
+    expect(
+      within(item).getByRole("link", { name: "Open incident" }),
+    ).toHaveAttribute(
+      "href",
+      `/incidents/${PROJECT_ID}?incident=${INBOX_INCIDENT_ID}`,
+    );
+    await userEvent.click(
+      within(item).getByRole("button", { name: "Draft a fix" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(
+      within(dialog).getByRole("textbox"),
+      "look at checkout",
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Draft the fix" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests)).toHaveLength(1);
+    });
+    const [sent] = posts(requests);
+    expect(sent?.body).toEqual({ note: "look at checkout" });
+    expect(sent?.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("says why a reopened incident is open again", async () => {
+    fakeApi(routes(() => [reopenedIncidentItem]));
+    renderApp("/");
+    const item = await card("prod-alerts");
+    expect(
+      within(item).getByText(
+        /\(3×\) The fix draft failed, so the incident is open again\./,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("approves the revision it showed, and starts and merges at the shown version", async () => {

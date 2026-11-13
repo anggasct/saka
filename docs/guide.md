@@ -306,6 +306,91 @@ With `gate = true` (the default) a task whose merge the environment matches stay
 
 See the evidence in Delivery: the task shows each gate, the Deployments page of the project lists deployments and shows each phase with its commands, durations and output tail, and Settings shows the environments from the config. `saka deploy list <project>`, `saka deploy show <id>`, `saka deploy redeploy <project> <environment> --reason "<why>"` and `saka deploy cancel <id> --reason "<why>"` do the same from the terminal; the API is under `/api/v1/projects/{id}/environments`, `/api/v1/projects/{id}/deployments` and `/api/v1/deployments/{id}`. Hooks `deployed` and `deploy_failed` fire when a deployment ends and take an `environments = [...]` filter; they cannot be gates. `saka_deployments_total{environment,outcome}` and `saka_deploy_checks_total{phase,state}` count what happened. Not in this version: promotion between environments, deploys triggered by tags, and a human approval before a deploy (use `gate = false` and deploy by hand).
 
+## Incidents
+
+An incident is an alert from your monitoring tool that Saka has turned into a work item: one incident per alert fingerprint, linked to the deployment that was running when it fired, with the tasks and merged changes that deployment shipped as suspects. Saka does not page anyone or run an on-call schedule. It takes the signal, shows you what changed, and offers the same three ways out every time: draft a fix, revert a suspect task, or dismiss the signal.
+
+Sources live only in the operator config (`config.toml`); `saka.toml` and `.saka/` cannot define one. Each source belongs to one project, has its own name and secret, and needs the `[hooks]` listener, which also serves the incident endpoint at `POST /hooks/incident/<name>`. Set `[notify] public_url` so Settings shows the full URL to give the tool; without it Settings shows the path only. `saka serve` refuses to start when a secret file is missing, empty, or readable by anyone but you, and `saka doctor` reports the same problems.
+
+```toml
+[hooks]
+listen = "127.0.0.1:7421"          # behind a reverse proxy; see the security notes below
+
+[[incident.source]]
+name = "prod-alerts"               # ^[a-z0-9-]{1,32}$, unique; the last part of the URL
+project = "tasks"                  # a project name, or its id
+kind = "alertmanager"              # alertmanager | sentry | generic
+secret_file = "~/.config/saka/prod-alerts.secret"   # chmod 600
+environment_label = "env"          # alertmanager only: the label that names the environment (default "environment")
+severity_label = "severity"        # alertmanager only: the label that carries the severity (default "severity")
+environments = { prod = "production" }   # optional: a value from the tool -> an environment name in saka.toml
+action = "inbox"                   # inbox (default) | draft: draft a fix on its own
+max_open = 50                      # 1..=500: open or handled incidents per source
+repo = "app"                       # the repo a draft targets; required when the project binds more than one
+
+[[incident.source]]
+name = "web-errors"
+project = "tasks"
+kind = "sentry"
+secret_file = "~/.config/saka/web-errors.secret"
+action = "draft"
+min_severity = "high"              # with action = "draft": critical | high | medium | low | info (default high)
+repo = "app"
+```
+
+An instance has at most 16 sources. `environment_label`, `severity_label` and `min_severity` are refused on a source where they would do nothing. Create a secret with `umask 077 && openssl rand -hex 32 > ~/.config/saka/prod-alerts.secret`; a trailing newline is ignored.
+
+**Alertmanager.** Point a receiver at the URL and send the secret as a bearer token. `send_resolved: true` matters: the resolved notification is what closes the incident when the alert clears. Saka reads the version 4 payload and makes one signal per alert; the title is the `summary` annotation (or the `alertname` label), the summary is the `description` annotation, and the severity comes from the `severity_label` label (`critical` or `page` is critical, `high` or `error` is high, `warning` or `medium` is medium, `low` is low, anything else is info, no label is medium).
+
+```yaml
+receivers:
+  - name: saka
+    webhook_configs:
+      - url: https://saka.example.com/hooks/incident/prod-alerts
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/saka-prod-alerts.secret   # the same content as secret_file
+```
+
+**Sentry.** In Settings, Developer Settings, create an internal integration. Set its webhook URL to `https://saka.example.com/hooks/incident/web-errors`, turn on the Issue webhook and the Alert Rule Action (the event alert webhook), and save. Sentry shows the integration's client secret: write it to the secret file (`umask 077 && printf '%s' '<client secret>' > ~/.config/saka/web-errors.secret`). Saka checks `Sentry-Hook-Signature`, an HMAC-SHA256 of the body made with that client secret. An issue that is created or unresolved fires, an issue that is resolved clears, and an event alert fires with the environment of the event; every other resource is accepted and ignored. For event alerts, add the integration as an action of an alert rule. The Sentry issue id is the fingerprint and the severity comes from the level (`fatal` is critical, `error` is high, `warning` is medium, the rest is info).
+
+**Generic sender.** For any other tool, sign the request yourself. The body is JSON with exactly these fields, and any other field is refused: `fingerprint` (1 to 200 characters), `status` (`firing` or `resolved`), `severity` (`critical`, `high`, `medium`, `low` or `info`), `title` (one line, up to 200 characters), and optionally `summary` (up to 4 KiB), `environment`, `url`, `started_at` (RFC 3339) and `labels` (up to 32 pairs, keys up to 64 and values up to 256 characters). `X-Saka-Timestamp` is the Unix time in seconds, `X-Saka-Delivery` is an id of your choice (letters, digits, dots, dashes and underscores) that Saka handles once, and `X-Saka-Signature-256` is `sha256=` followed by the hex HMAC-SHA256 of `<timestamp>.<body>` made with the secret.
+
+```sh
+body='{"fingerprint":"checkout-5xx","status":"firing","severity":"high","title":"Checkout error rate above 5%","environment":"staging","labels":{"service":"checkout"}}'
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$(cat ~/.config/saka/ci-alerts.secret)" -hex | sed 's/^.* //')
+curl -fsS -X POST https://saka.example.com/hooks/incident/ci-alerts \
+  -H 'Content-Type: application/json' \
+  -H "X-Saka-Timestamp: $ts" \
+  -H "X-Saka-Delivery: $(uuidgen)" \
+  -H "X-Saka-Signature-256: sha256=$sig" \
+  --data-binary "$body"
+```
+
+The timestamp must be within 300 seconds of the server clock, so keep both ends on NTP. Send the body byte for byte as you signed it. The answer is `202` with `outcome` `accepted`, `duplicate` (a delivery id Saka already handled) or `ignored` (valid, but nothing to act on), and the counts `signals`, `opened`, `updated`, `limited` and `truncated`.
+
+At most one incident is open or being handled per source and fingerprint. A signal that fires again adds to `occurrences`, refreshes `last_seen` and raises the severity when the new one is higher; the severity never goes down while the incident is open. A source that already has `max_open` incidents opens no new one, counts the signal as `limited`, and keeps updating the ones it has. A delivery carries at most 500 alerts; the rest are counted as `truncated`. An incident of severity `info` is recorded but opens no Inbox item, unless the source has `action = "draft"` with `min_severity = "info"`. When the environment named by the signal is known, the incident links to the last succeeded deployment of that environment that finished before the alert started (or before Saka received it, when the alert has no start time). The suspects are the tasks that deployment held and the changes it merged, including pull requests made outside Saka, which are linked but cannot be reverted from here. The link is fixed when the incident opens: it is the evidence of the moment, and a later deployment does not change it.
+
+An open incident shows in Delivery under Incidents (the project's Incidents page, `saka incident list <project>` and `saka incident show <id>`), in the Inbox with the sentence "high incident in staging: Checkout error rate above 5% (3×)", and in your chat when an `inbox_item_opened` hook is set. From there:
+
+- **Draft a fix** (`saka incident draft-fix <id> --note "<text>"`, or automatically for a source with `action = "draft"` and a severity at or above `min_severity`) asks the architect for a bugfix spec. It gets the facts Saka knows (source, severity, environment, first and last seen, occurrences, the deployment and its sha range, the suspects with their pull request links, your note) and the text of the alert only inside a fenced data block. The spec waits for your approval like any other, so nothing is built from an alert alone.
+- **Revert** (`saka incident revert <id> <task> --reason "<why>"`) reverts a suspect task as in Reverting a merged task. It is offered for each suspect that Saka ran.
+- **Dismiss** (`saka incident dismiss <id> --reason "<why>"`) closes an open incident without a recovery. A firing signal for a dismissed fingerprint is counted but opens nothing until that tool sends a resolved signal.
+
+Only one recovery runs per incident, and the incident is `handling` while it runs. It closes as `resolved` when the fix spec ships (`fixed`), when the revert task is done (`reverted`), or when the tool sends a resolved signal for an incident nobody is handling (`signal_resolved`). If the draft fails or is cancelled, the fix spec is withdrawn, or the revert is cancelled, the incident is open again and its Inbox item says why. An alert that fires again after the incident resolved opens a new incident.
+
+The incident endpoint is public, so treat it as hostile input:
+
+- Run the `[hooks]` listener behind a reverse proxy that terminates TLS and forwards only `/hooks/` to it; the control API stays on loopback and is never served there.
+- A request is checked before anything is read or stored: a wrong secret, a bad signature or a stale timestamp gets `401`, a body over 1 MiB gets `413`, and more than 120 deliveries a minute for one source gets `429` with `Retry-After`. A refused request writes nothing.
+- The secret file holds the only credential: keep it at mode 0600, one secret per source, and rotate it by replacing the file and the tool's setting together, then restarting `saka serve`.
+- The title, summary and labels of an alert are untrusted text. Saka redacts secrets in them, cuts them to size, shows them in the web app as plain text, and gives them to the architect only inside a data block that its instructions never follow.
+
+`saka_incident_deliveries_total{source,outcome}` and `saka_incident_signals_total{source,outcome}` count what each source sent. The API is under `/api/v1/projects/{id}/incident-sources`, `/api/v1/projects/{id}/incidents` and `/api/v1/incidents/{id}`. Not in this version: escalation, on-call schedules, status pages, and merging the same fault reported by two sources.
+
 ## Development
 
 | Path | Contents |

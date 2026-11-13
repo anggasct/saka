@@ -6,6 +6,7 @@ import { newIdempotencyKey } from "@/api/client";
 import { QUERY_ROOTS } from "@/api/events";
 import { ActionDialog } from "@/features/delivery/action-dialog";
 import { DraftFixDialog, RedeployDialog } from "@/features/deployments/actions";
+import { IncidentDraftFixDialog } from "@/features/incidents/actions";
 import { codeOf } from "@/features/delivery/page-error";
 import {
   answerPermission,
@@ -341,7 +342,12 @@ export function Primary({ item }: { item: InboxItem }) {
     case "redeploy":
       return <Redeploy item={item} />;
     case "draft_fix":
-      return (
+      return item.subject === "incident" ? (
+        <IncidentDraftFixDialog
+          incidentId={text(record(item.action.params).incident_id)}
+          primary
+        />
+      ) : (
         <DraftFixDialog
           deploymentId={text(record(item.action.params).deployment_id)}
           primary
@@ -379,6 +385,10 @@ export function Secondary({ item }: { item: InboxItem }) {
   const t = useT();
   const after = useAfterAction();
   const deploymentId = text(record(item.params).deployment_id);
+  const incidentId =
+    item.subject === "incident"
+      ? text(record(item.action.params).incident_id)
+      : "";
   return (
     <>
       {item.work_item_id != null && (
@@ -388,6 +398,16 @@ export function Secondary({ item }: { item: InboxItem }) {
           className={QUIET_LINK}
         >
           {t("inbox.open.task")}
+        </Link>
+      )}
+      {incidentId !== "" && (
+        <Link
+          to="/incidents/$projectId"
+          params={{ projectId: item.project_id }}
+          search={{ incident: incidentId }}
+          className={QUIET_LINK}
+        >
+          {t("inbox.open.incident")}
         </Link>
       )}
       {deploymentId !== "" && (
