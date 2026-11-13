@@ -25,7 +25,7 @@ pub fn saka_toml(repo: &str, run_id: &str) -> String {
 
 // The pull request needs an author other than the GitHub App: the provider refuses a verdict
 // from the account that opened the pull request.
-fn author_token() -> Result<String> {
+pub(super) fn author_token() -> Result<String> {
     let token = match std::env::var("SAKA_E2E_AUTHOR_TOKEN_FILE") {
         Ok(file) if !file.is_empty() => {
             std::fs::read_to_string(&file).with_context(|| format!("read {file}"))?

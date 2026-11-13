@@ -31,6 +31,18 @@ pub struct PullState {
     pub head_sha: String,
 }
 
+pub struct IssueView {
+    pub open: bool,
+    pub state_reason: String,
+    pub closed_by: String,
+    pub closed_by_bot: bool,
+}
+
+pub struct IssueComment {
+    pub body: String,
+    pub bot: bool,
+}
+
 pub struct Review {
     pub commit_id: String,
     pub state: String,
@@ -118,9 +130,13 @@ impl GitHub {
         path: &str,
         body: Option<Value>,
     ) -> Result<(StatusCode, Value)> {
-        // A dropped connection fails a whole 30-minute run, so reads retry; writes do not,
-        // because a write may have landed before the connection dropped.
-        let attempts = if method == Method::GET { 3 } else { 1 };
+        // A dropped connection fails a whole 30-minute run, so reads and deletes retry (a repeated
+        // delete is harmless); other writes do not, because they may have landed before the drop.
+        let attempts = if method == Method::GET || method == Method::DELETE {
+            3
+        } else {
+            1
+        };
         self.runtime.block_on(async {
             let mut attempt = 1;
             loop {
@@ -187,6 +203,143 @@ impl GitHub {
             Some(json!({ "message": message, "content": encoded, "branch": branch })),
         )
         .map(|_| ())
+    }
+
+    pub fn file(&self, branch: &str, path: &str) -> Result<(String, String)> {
+        let file = self.send(
+            Method::GET,
+            &format!("/repos/{}/contents/{path}?ref={branch}", self.repo),
+            None,
+        )?;
+        let encoded: String = file["content"]
+            .as_str()
+            .with_context(|| format!("no content for {path}"))?
+            .split_whitespace()
+            .collect();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .with_context(|| format!("decode {path}"))?;
+        let sha = file["sha"]
+            .as_str()
+            .with_context(|| format!("no blob sha for {path}"))?;
+        Ok((
+            String::from_utf8(bytes).context("the file is not UTF-8")?,
+            sha.to_string(),
+        ))
+    }
+
+    pub fn update_file(
+        &self,
+        branch: &str,
+        path: &str,
+        content: &str,
+        message: &str,
+        blob: &str,
+    ) -> Result<()> {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(content);
+        self.send(
+            Method::PUT,
+            &format!("/repos/{}/contents/{path}", self.repo),
+            Some(json!({ "message": message, "content": encoded, "branch": branch, "sha": blob })),
+        )
+        .map(|_| ())
+    }
+
+    pub fn create_label(&self, name: &str, color: &str, description: &str) -> Result<()> {
+        self.send(
+            Method::POST,
+            &format!("/repos/{}/labels", self.repo),
+            Some(json!({ "name": name, "color": color, "description": description })),
+        )
+        .map(|_| ())
+    }
+
+    pub fn delete_label(&self, name: &str) -> Result<()> {
+        let (status, value) = self.raw(
+            &self.token,
+            Method::DELETE,
+            &format!("/repos/{}/labels/{name}", self.repo),
+            None,
+        )?;
+        match status {
+            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(()),
+            _ => bail!("delete label {name}: {status} {value}"),
+        }
+    }
+
+    pub fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<u64> {
+        let issue = self.send(
+            Method::POST,
+            &format!("/repos/{}/issues", self.repo),
+            Some(json!({ "title": title, "body": body, "labels": labels })),
+        )?;
+        issue["number"]
+            .as_u64()
+            .context("no issue number in the reply")
+    }
+
+    pub fn issue(&self, number: u64) -> Result<IssueView> {
+        let issue = self.send(
+            Method::GET,
+            &format!("/repos/{}/issues/{number}", self.repo),
+            None,
+        )?;
+        Ok(IssueView {
+            open: issue["state"] == "open",
+            state_reason: issue["state_reason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            closed_by: issue["closed_by"]["login"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            closed_by_bot: issue["closed_by"]["type"] == "Bot",
+        })
+    }
+
+    pub fn issue_comments(&self, number: u64) -> Result<Vec<IssueComment>> {
+        let list = self.send(
+            Method::GET,
+            &format!("/repos/{}/issues/{number}/comments?per_page=100", self.repo),
+            None,
+        )?;
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| IssueComment {
+                body: c["body"].as_str().unwrap_or_default().to_string(),
+                bot: c["user"]["type"] == "Bot",
+            })
+            .collect())
+    }
+
+    pub fn comment_on_issue(&self, number: u64, body: &str) -> Result<()> {
+        self.send(
+            Method::POST,
+            &format!("/repos/{}/issues/{number}/comments", self.repo),
+            Some(json!({ "body": body })),
+        )
+        .map(|_| ())
+    }
+
+    pub fn close_issue_not_planned(&self, number: u64) -> Result<()> {
+        self.send(
+            Method::PATCH,
+            &format!("/repos/{}/issues/{number}", self.repo),
+            Some(json!({ "state": "closed", "state_reason": "not_planned" })),
+        )
+        .map(|_| ())
+    }
+
+    pub fn pull_body(&self, number: u64) -> Result<String> {
+        let pull = self.send(
+            Method::GET,
+            &format!("/repos/{}/pulls/{number}", self.repo),
+            None,
+        )?;
+        Ok(pull["body"].as_str().unwrap_or_default().to_string())
     }
 
     pub fn branch_sha(&self, branch: &str) -> Result<String> {

@@ -1,5 +1,6 @@
 mod gate;
 mod github;
+mod issue;
 mod outside;
 
 use std::cell::RefCell;
@@ -813,6 +814,7 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
     verify(github, &run.base)?;
     gate::check(&api, &cli, github, &spec_id)?;
     outside::review_only(&api, &cli, run)?;
+    issue::bugfix_from_issue(&api, &cli, github, run, &project_id)?;
     draft(&api, &cli, github, &project_id, run)?;
     conversation(&api, &cli, github, &project_id, run)
 }
@@ -1032,6 +1034,7 @@ pub fn run() -> Result<()> {
         &review_config,
         "docs: add a review-only project",
     )?;
+    issue::prepare_base(&github, &base, &issue::label_name(&run_id))?;
     println!("  base branch {base} with {spec_path}");
 
     let run = Run {
