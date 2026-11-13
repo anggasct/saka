@@ -43,6 +43,8 @@ export const EVENT_KINDS = [
   "delivery.work_item.revert_created",
   "delivery.work_item.revert_requested",
   "delivery.work_item.reverted",
+  "delivery.work_item.redo_requested",
+  "delivery.work_item.redo_created",
   "delivery.external_change.accepted",
   "delivery.stage_run.created",
   "delivery.stage_run.cancelled",
