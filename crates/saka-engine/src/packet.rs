@@ -299,7 +299,8 @@ pub fn render(input: &PacketInput) -> Packet {
     text.push_str(
         "- Commit all your changes with a Conventional Commits message before you finish.\n\
          - Do not push. Saka pushes the branch and opens the pull request.\n\
-         - If the spec and the docs leave open a choice that only the operator can make (a data store, a public interface, a dependency, anything costly to undo), call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The operator's answer arrives as your next message. Never ask what the spec, the docs, or the code already answer. One question waits at a time, and a step may ask five at most.\n",
+         - If the spec and the docs leave open a choice that only the operator can make (a data store, a public interface, a dependency, anything costly to undo), call the `request_decision` tool (`mcp__saka__request_decision`) with two or three options and your recommendation first, then end your turn. The operator's answer arrives as your next message. Never ask what the spec, the docs, or the code already answer. One question waits at a time, and a step may ask five at most.\n\
+         - When you finish, end your final message with a `## Summary` section: what you changed, why, and the evidence (the commands you ran and what they printed). Saka puts it in the pull request description for the reviewer, so write it for someone who has not seen your session, and put no secrets in it.\n",
     );
     let sha256 = content_hash(text.as_bytes());
     Packet {
@@ -668,6 +669,15 @@ mod tests {
         ));
         assert_eq!(packet.documents.len(), 1);
         assert_eq!(packet.sha256, content_hash(packet.text.as_bytes()));
+    }
+
+    #[test]
+    fn the_rules_ask_for_a_summary_section_at_the_end_of_the_work() {
+        let text = render(&input()).text;
+        let rules = text.find("Rules:").unwrap();
+        assert!(text[rules..].contains(
+            "- When you finish, end your final message with a `## Summary` section: what you changed, why, and the evidence"
+        ));
     }
 
     #[test]

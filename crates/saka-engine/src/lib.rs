@@ -37,6 +37,7 @@ pub mod review_packet;
 mod review_run;
 mod runner;
 mod secrets;
+mod summary;
 mod text;
 mod timeline;
 pub mod toolchain;

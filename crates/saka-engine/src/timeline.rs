@@ -5,6 +5,8 @@ use saka_core::time::Timestamp;
 use saka_ports::{RunnerEvent, RunnerEventKind};
 use serde_json::{Value, json};
 
+use crate::summary;
+
 pub(crate) const ACTIVITY_SUMMARY_MAX: usize = 500;
 
 pub(crate) fn cut(text: &str) -> String {
@@ -63,12 +65,17 @@ pub(crate) fn activity(
             turn,
             status,
             result_summary,
+            result_text,
             ..
-        } => (
-            "result",
-            result_summary.clone().unwrap_or_default(),
-            json!({ "turn": turn, "status": status }),
-        ),
+        } => {
+            let mut data = json!({ "turn": turn, "status": status });
+            if owner.stage_run_id().is_some()
+                && let Some(summary) = result_text.as_deref().and_then(summary::extract)
+            {
+                data["agent_summary"] = Value::String(summary);
+            }
+            ("result", result_summary.clone().unwrap_or_default(), data)
+        }
         RunnerEventKind::Steer { turn, text, .. } => {
             ("steer", text.clone(), json!({ "turn": turn }))
         }

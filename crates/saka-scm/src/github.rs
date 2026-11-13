@@ -451,6 +451,34 @@ impl Scm for GitHub {
         }
     }
 
+    async fn update_change_request(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        body: &str,
+    ) -> PortResult<()> {
+        check_comment_body(body)?;
+        let n = number.to_string();
+        let reply = self
+            .repo_call(
+                &repo.full_name,
+                Method::PATCH,
+                &["pulls", &n],
+                Some(&json!({ "body": body })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(()),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY => {
+                Err(PortError::permanent(
+                    "change_update_refused",
+                    json!({ "status": reply.status.as_u16() }),
+                ))
+            }
+            _ => Err(self.app.unexpected("update_change_request", &reply)),
+        }
+    }
+
     async fn update_branch(
         &self,
         repo: &RepoRef,

@@ -13,7 +13,7 @@ use saka_ports::{
 use serde_json::json;
 
 use super::{DOCS_TITLE_MAX, Effect, Execution, OpenedBy, internal};
-use crate::{Engine, text};
+use crate::{Engine, summary, text};
 
 impl Engine {
     pub(super) async fn push_docs(&self, task: &Task, local_sha: String) -> Execution {
@@ -144,6 +144,9 @@ impl Engine {
                 expected_remote_sha: task.change_request.as_ref().map(|c| c.head_sha.clone()),
             })
             .await?;
+        if matches!(outcome, PushOutcome::Pushed { .. }) {
+            self.refresh_summary(task).await;
+        }
         Ok(Effect::Fact(match outcome {
             PushOutcome::Pushed { sha } => TaskInput::BranchPushed {
                 target: saka_core::vocab::ChangeRole::Code,
@@ -155,6 +158,41 @@ impl Engine {
                 local_sha,
             },
         }))
+    }
+
+    async fn refresh_summary(&self, task: &Task) {
+        let Some(change) = task
+            .change_request
+            .as_ref()
+            .filter(|c| c.state == ChangeState::Open)
+            .filter(|_| task.external.is_none() && task.revert.is_none())
+        else {
+            return;
+        };
+        let refreshed = async {
+            let repo = self.repo_ref(task)?;
+            let block = self.summary_block(task).map_err(internal)?;
+            let current = self.ports.scm.change_summary(&repo, change.number).await?;
+            let Some(body) = summary::replace_block(&current.body, &block) else {
+                return Ok(());
+            };
+            if body == current.body {
+                return Ok(());
+            }
+            self.ports
+                .scm
+                .update_change_request(&repo, change.number, &body)
+                .await
+        }
+        .await;
+        if let Err(e) = refreshed {
+            tracing::warn!(
+                work_item_id = %task.item.id,
+                number = change.number,
+                code = %e.code,
+                "delivery.change_summary.update_failed"
+            );
+        }
     }
 
     pub(super) async fn open_change(&self, task: &Task) -> Execution {
@@ -202,7 +240,7 @@ impl Engine {
             return Ok(Effect::Skipped);
         }
         let (project, _) = self.bound(task)?;
-        let (code_title, _) = self.change_text(task).map_err(internal)?;
+        let code_title = text::change_title(&task.item.work);
         let title: String = format!("docs: {code_title}")
             .chars()
             .take(DOCS_TITLE_MAX)
