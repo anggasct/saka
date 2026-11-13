@@ -74,6 +74,7 @@ fn attempt(row: &Row<'_>) -> Result<SpecDraftAttempt> {
         resumed_lost: resumed != 0,
         rounds: u32_col(row, "rounds")?,
         packet_sha256: row.get("packet_sha256")?,
+        code_commits: json(row, "code_commits")?,
         failure: opt_json(row, "failure")?,
         started_at: ts(row, "started_at")?,
         ended_at: opt_ts(row, "ended_at")?,

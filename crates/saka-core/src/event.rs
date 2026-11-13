@@ -271,6 +271,8 @@ pub enum Event {
         base_sha: String,
         packet_sha256: String,
         documents: Vec<DraftDocument>,
+        #[serde(default)]
+        code_commits: BTreeMap<String, String>,
     },
     #[serde(rename = "spec.draft.linted")]
     SpecDraftLinted {

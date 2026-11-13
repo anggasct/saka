@@ -40,6 +40,8 @@ fn input() -> ArchitectInput {
             "docs/arch.md".into(),
             "docs/prd.md".into(),
         ],
+        code: vec![],
+        code_skipped: vec![],
         previous: Some(PreviousAttempt {
             attempt: 1,
             code: "lint_rounds_exhausted".into(),

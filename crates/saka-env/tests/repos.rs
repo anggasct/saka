@@ -16,9 +16,9 @@ use saka_core::secret::{SecretText, SecretVar};
 use saka_core::vocab::SecretPurpose;
 use saka_env::{DirectSupervisor, Git, GitRepos, RecipeRunner, ReposConfig};
 use saka_ports::{
-    BaseProbe, Blob, Checkout, DocsRequest, EnvRef, Environments, ExtraDir, GitAccess, GitRemote,
-    PortResult, PrepareRequest, PreparedDocs, PushOutcome, PushRequest, Rebase, RecipeCommand,
-    RecipePhase, RepoRef, Repos, UnitLimits, WorktreeFile,
+    BaseProbe, Blob, Checkout, CodeCheckout, CodeRequest, DocsRequest, EnvRef, Environments,
+    ExtraDir, GitAccess, GitRemote, PortResult, PrepareRequest, PreparedDocs, PushOutcome,
+    PushRequest, Rebase, RecipeCommand, RecipePhase, RepoRef, Repos, UnitLimits, WorktreeFile,
 };
 use uuid::Uuid;
 
@@ -725,6 +725,7 @@ fn a_relative_path_resolves_from_the_session_cwd_and_stays_relative_to_the_workt
         path: p.into(),
         inside_worktree: true,
         through_symlink: false,
+        in_reference: false,
     };
     assert_eq!(r("docs", "specs/a.md"), inside("docs/specs/a.md"));
     assert_eq!(r("docs", "./specs/../a.md"), inside("docs/a.md"));
@@ -755,6 +756,7 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
         path: p.into(),
         inside_worktree: true,
         through_symlink: false,
+        in_reference: false,
     };
     assert_eq!(r("src/main.go"), inside("src/main.go"));
     assert_eq!(
@@ -764,6 +766,7 @@ fn paths_resolve_against_the_worktree_through_symlinks() {
     assert_eq!(r("./src/../README.md"), inside("README.md"));
     let linked = |p: &str| saka_core::policy::RequestPath {
         through_symlink: true,
+        in_reference: false,
         ..inside(p)
     };
     assert_eq!(r("in/lib.go"), linked("src/lib.go"));
@@ -1176,6 +1179,185 @@ async fn the_docs_checkout_holds_only_the_project_folder_at_the_pinned_commit_an
     assert!(Path::new(&env.worktree_path).join(".git").exists());
     w.repos.teardown(&env).await.unwrap();
     assert!(!root.exists());
+}
+
+fn code_request(w: &World, n: u128, name: &str) -> CodeRequest {
+    CodeRequest {
+        environment_id: EnvironmentId(Uuid::from_u128(n)),
+        repo: w.repo.clone(),
+        name: name.into(),
+        base_branch: "main".into(),
+    }
+}
+
+fn ready(outcome: CodeCheckout) -> saka_ports::PreparedCode {
+    match outcome {
+        CodeCheckout::Ready(prepared) => prepared,
+        other @ CodeCheckout::TooLarge { .. } => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_code_checkout_is_a_read_only_detached_worktree_at_the_base_tip_and_teardown_removes_it()
+{
+    let w = World::new();
+    std::fs::create_dir_all(w.other.join("src")).unwrap();
+    let tip = commit(&w.other, "src/lib.rs", "pub fn a() {}\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    let request = code_request(&w, 1, "app");
+    let code = ready(w.repos.prepare_code(&request).await.unwrap());
+    let dir = PathBuf::from(&code.path);
+    let root = dir.parent().unwrap().parent().unwrap().to_path_buf();
+    assert_eq!(dir, root.join("code/app"));
+    assert_eq!(
+        saka_ports::code_path(&root.to_string_lossy(), "app"),
+        code.path
+    );
+    assert_eq!(code.base_sha, tip);
+    assert_eq!((code.files, code.bytes > 0), (2, true));
+    assert_eq!(git(&dir, &["rev-parse", "HEAD"]), tip);
+    assert_eq!(git(&dir, &["branch", "--show-current"]), "");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/lib.rs")).unwrap(),
+        "pub fn a() {}\n"
+    );
+    for file in ["src/lib.rs", "README.md"] {
+        assert_eq!(mode(&dir.join(file)), 0o444, "{file}");
+    }
+    for d in [&dir, &dir.join("src")] {
+        assert_eq!(mode(d), 0o555, "{}", d.display());
+    }
+    assert!(std::fs::write(dir.join("src/lib.rs"), "x").is_err());
+    assert!(std::fs::write(dir.join("src/new.rs"), "x").is_err());
+
+    commit(&w.other, "src/lib.rs", "pub fn b() {}\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    std::fs::write(&w.log, "").unwrap();
+    let again = ready(w.repos.prepare_code(&request).await.unwrap());
+    assert_eq!(again, code, "a finished checkout stays at its commit");
+    assert!(!w.log().contains("worktree add"), "{}", w.log());
+
+    let next = ready(
+        w.repos
+            .prepare_code(&code_request(&w, 2, "app"))
+            .await
+            .unwrap(),
+    );
+    assert_ne!(next.base_sha, tip, "another environment sees the new tip");
+
+    std::fs::remove_file(root.join("code/app.sha")).unwrap();
+    let rebuilt = ready(w.repos.prepare_code(&request).await.unwrap());
+    assert_eq!(rebuilt.base_sha, next.base_sha);
+    assert_eq!(mode(&dir), 0o555);
+
+    let bare = w.repos.mirror_path(w.repo.repo_id);
+    w.repos
+        .teardown_code(request.environment_id, &w.repo, "app")
+        .await
+        .unwrap();
+    assert!(!dir.exists());
+    assert!(!root.join("code/app.sha").exists());
+    assert!(
+        !git(&bare, &["worktree", "list"]).contains(&code.path),
+        "{}",
+        git(&bare, &["worktree", "list"])
+    );
+    w.repos
+        .teardown_code(request.environment_id, &w.repo, "app")
+        .await
+        .unwrap();
+    w.repos
+        .teardown_code(EnvironmentId(Uuid::from_u128(9)), &w.repo, "never")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_code_checkout_over_the_limit_is_reported_and_leaves_nothing_behind() {
+    let w = World::new();
+    let many = w.other.join("many");
+    std::fs::create_dir_all(&many).unwrap();
+    for i in 0..=saka_ports::CODE_MAX_FILES {
+        std::fs::write(many.join(format!("{i}.txt")), "").unwrap();
+    }
+    let big = commit(&w.other, "README.md", "big\n");
+    git(&w.other, &["push", "-q", "origin", "main"]);
+    let request = code_request(&w, 1, "app");
+    let outcome = w.repos.prepare_code(&request).await.unwrap();
+    assert_eq!(
+        outcome,
+        CodeCheckout::TooLarge {
+            base_sha: big,
+            files: saka_ports::CODE_MAX_FILES + 2,
+            bytes: 4,
+        }
+    );
+    let env_dir = w
+        ._dir
+        .path()
+        .join("data/envs")
+        .join(request.environment_id.to_string());
+    assert!(!env_dir.join("code/app").exists());
+    assert!(!env_dir.join("code/app.sha").exists());
+}
+
+#[tokio::test]
+async fn a_code_checkout_refuses_a_missing_base_branch_and_unsafe_names() {
+    let w = World::new();
+    let mut request = code_request(&w, 1, "app");
+    request.base_branch = "gone".into();
+    let missing = w.repos.prepare_code(&request).await.unwrap_err();
+    assert_eq!(missing.code, "base_branch_missing");
+    assert!(!missing.retryable);
+    for bad in ["", "../x", "a/b", "-x", ".hidden", "a b"] {
+        let refused = w
+            .repos
+            .prepare_code(&code_request(&w, 1, bad))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "git_argument_invalid", "{bad:?}");
+        let refused = w
+            .repos
+            .teardown_code(EnvironmentId(Uuid::from_u128(1)), &w.repo, bad)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "git_argument_invalid", "{bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_read_only_extra_dir_is_a_reference_to_read_and_never_inside_the_worktree() {
+    let w = World::new();
+    let env = w.prepare(1).await;
+    let code = ready(
+        w.repos
+            .prepare_code(&code_request(&w, 2, "app"))
+            .await
+            .unwrap(),
+    );
+    let mut with_code = env.clone();
+    with_code.extra_dirs = vec![ExtraDir {
+        path: code.path.clone(),
+        writable: false,
+    }];
+    let file = format!("{}/README.md", code.path);
+    let resolved = w.repos.resolve_path(&with_code, "", &file);
+    assert!(!resolved.inside_worktree);
+    assert!(resolved.in_reference);
+    assert_eq!(resolved.path, "README.md");
+    let elsewhere = w.repos.resolve_path(&with_code, "", "/etc/passwd");
+    assert!(!elsewhere.inside_worktree && !elsewhere.in_reference);
+    let beside = w
+        .repos
+        .resolve_path(&with_code, "", &format!("{}/../x", code.path));
+    assert!(!beside.in_reference);
+    let own = w.repos.resolve_path(&with_code, "", "README.md");
+    assert!(own.inside_worktree && !own.in_reference);
+    let bare = w.repos.resolve_path(&env, "", &file);
+    assert!(!bare.in_reference);
+    with_code.extra_dirs[0].writable = true;
+    let writable = w.repos.resolve_path(&with_code, "", &file);
+    assert!(writable.inside_worktree && !writable.in_reference);
 }
 
 #[tokio::test]

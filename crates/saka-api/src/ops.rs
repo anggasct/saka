@@ -456,6 +456,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_intake_changes_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_architect_code_checkouts_total",
+        "counter",
+        "Code repo checkouts prepared for architect drafts, by outcome.",
+    );
+    for (outcome, n) in &m.architect_code_checkouts {
+        t.sample(
+            "saka_architect_code_checkouts_total",
+            &[("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
         "saka_review_requests_total",
         "counter",
         "Review requests created, by what asked for them.",

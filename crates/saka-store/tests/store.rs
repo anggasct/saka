@@ -1320,10 +1320,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
             25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-            47, 48, 49
+            47, 48, 49, 50
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(49));
+    assert_eq!(w.store.schema_version().unwrap(), Some(50));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1881,6 +1881,7 @@ fn a_draft_attempt_and_its_packet_round_trip_and_one_live_draft_holds_a_path() {
             base_sha: sha('b'),
             packet_sha256: "c".repeat(64),
             documents: vec![],
+            code_commits: std::collections::BTreeMap::new(),
         },
     ] {
         d = draft::evolve(Some(d), &e, w.now).unwrap();

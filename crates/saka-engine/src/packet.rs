@@ -325,6 +325,22 @@ pub struct PreviousAttempt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeEntry {
+    pub binding: String,
+    pub path: String,
+    pub full_name: String,
+    pub sha: String,
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeSkip {
+    pub binding: String,
+    pub full_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchitectInput {
     pub project_name: String,
     pub project_path: String,
@@ -339,6 +355,8 @@ pub struct ArchitectInput {
     pub always: Vec<(String, Vec<u8>)>,
     pub unreadable: Vec<String>,
     pub index: Vec<String>,
+    pub code: Vec<CodeEntry>,
+    pub code_skipped: Vec<CodeSkip>,
     pub previous: Option<PreviousAttempt>,
     pub note: Option<String>,
 }
@@ -557,6 +575,27 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
         );
     }
     text.push('\n');
+    if !input.code.is_empty() || !input.code_skipped.is_empty() {
+        text.push_str("Project code, read-only:\n");
+        for entry in &input.code {
+            let _ = writeln!(
+                text,
+                "- Code (read-only): {} ({} at {}, base {})",
+                entry.path,
+                entry.full_name,
+                entry.sha.get(..12).unwrap_or(&entry.sha),
+                entry.branch
+            );
+        }
+        for skip in &input.code_skipped {
+            let _ = writeln!(
+                text,
+                "- Code not checked out: {} ({}), code_checkout_skipped: {}",
+                skip.binding, skip.full_name, skip.reason
+            );
+        }
+        text.push('\n');
+    }
     if let Some(previous) = &input.previous {
         let _ = write!(
             text,
@@ -595,10 +634,16 @@ pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     } else {
         "- Do not commit. When the file is complete, end your turn. Saka checks it and tells you what to fix.\n"
     };
+    let code_rule = if input.code.is_empty() {
+        ""
+    } else {
+        "- Read the code checkouts listed above too. For the current behavior, quote file:line from them and name the commit you read.\n"
+    };
     let _ = write!(
         text,
         "Rules:\n\
          - Read any file in this repository that helps. You cannot run commands or use the web.\n\
+         {code_rule}\
          {writing}\
          - Follow document 2 exactly and start from document 1.\n\
          - For each material technical decision the docs do not settle, add a question under \"## Decisions\" with two or three options, the recommended option first and marked \"(recommended)\". Leave every option unchecked; the operator answers.\n\

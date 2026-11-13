@@ -243,6 +243,7 @@ impl Engine {
                     "",
                     &tool,
                     &input,
+                    Vec::new(),
                 );
                 if task
                     .stage_run
@@ -269,6 +270,7 @@ impl Engine {
                     &cwd,
                     &tool,
                     &input,
+                    self.code_extra_dirs(d),
                 );
                 match d.draft.mode {
                     DraftMode::Draft => {
@@ -299,6 +301,7 @@ impl Engine {
         cwd: &str,
         tool: &str,
         input: &Value,
+        reference: Vec<saka_ports::ExtraDir>,
     ) -> ToolRequest {
         let command = (tool == "Bash")
             .then(|| {
@@ -331,6 +334,7 @@ impl Engine {
                                 path: d.path.clone(),
                                 writable: d.mode == saka_core::vocab::DocsMode::Writable,
                             })
+                            .chain(reference)
                             .collect(),
                     },
                     cwd,
@@ -341,6 +345,7 @@ impl Engine {
                 path: raw.to_string(),
                 inside_worktree: false,
                 through_symlink: false,
+                in_reference: false,
             }),
             (None, _, _) => None,
         };

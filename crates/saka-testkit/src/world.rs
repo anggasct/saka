@@ -20,19 +20,19 @@ use saka_core::vocab::{ChangeState, CheckConclusion, CheckKind, CheckStatus, Mer
 use saka_core::vocab::{HostTool, Tool};
 use saka_core::vocab::{ReviewOutcome, SecretPurpose};
 use saka_ports::{
-    Agents, BaseProbe, Blob, ChangeCredential, ChangeDiff, ChangeOpening, ChangeSignal,
-    ChangeSnapshot, ChangeSummary, ChangedPaths, Checkout, Clock, CommandOutcome, CommandUnit,
-    DeviceCode, DevicePoll, DocBlob, DocCommit, DocEntry, DocExpect, DocFile, DocFileCommitted,
-    DocFilesCommit, DocFilesWrite, DocOpened, DocSource, DocStale, DocTree, DocWrite, DocsRequest,
-    EnqueueOutcome, EnvRef, Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link,
-    MergeOutcome, MergeRequest, OpenChangeRequest, OpenedChange, PortError, PortResult,
-    PostedReview, PrepareRequest, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest,
-    Reattached, Rebase, RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess,
-    RepoInfo, RepoRef, RerunOutcome, RevertRequest, Reverted, ReviewPost, RunnerEvent,
-    RunnerEventKind, RunnerUnit, Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch,
-    SessionRef, StatusReport, Supervisor, TokenRefresh, Toolchains, UpdateOutcome, WebhookDelivery,
-    WebhookSignature, WebhookTarget, WorktreeChange, WorktreeFile, WorktreeState,
-    check_comment_body, check_sha,
+    Agents, BaseProbe, Blob, CODE_MAX_BYTES, CODE_MAX_FILES, ChangeCredential, ChangeDiff,
+    ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, ChangedPaths, Checkout, Clock,
+    CodeCheckout, CodeRequest, CommandOutcome, CommandUnit, DeviceCode, DevicePoll, DocBlob,
+    DocCommit, DocEntry, DocExpect, DocFile, DocFileCommitted, DocFilesCommit, DocFilesWrite,
+    DocOpened, DocSource, DocStale, DocTree, DocWrite, DocsRequest, EnqueueOutcome, EnvRef,
+    Environments, IdentityLookup, LaunchProfile, LaunchedSession, Link, MergeOutcome, MergeRequest,
+    OpenChangeRequest, OpenedChange, PortError, PortResult, PostedReview, PrepareRequest,
+    PreparedCode, PreparedDocs, PreparedEnvironment, PushOutcome, PushRequest, Reattached, Rebase,
+    RecipeCommand, RecipeCommandOutcome, Release, ReleaseIndex, RepoAccess, RepoInfo, RepoRef,
+    RerunOutcome, RevertRequest, Reverted, ReviewPost, RunnerEvent, RunnerEventKind, RunnerUnit,
+    Scm, ScmCapabilities, Sealed, SecretStore, SessionLaunch, SessionRef, StatusReport, Supervisor,
+    TokenRefresh, Toolchains, UpdateOutcome, WebhookDelivery, WebhookSignature, WebhookTarget,
+    WorktreeChange, WorktreeFile, WorktreeState, check_comment_body, check_sha,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -344,6 +344,8 @@ struct State {
     scope_checks: Vec<ScopeCheck>,
     scm_calls: Vec<ScmCall>,
     docs_checkouts: BTreeMap<EnvironmentId, DocsCheckoutState>,
+    code_checkouts: BTreeMap<(EnvironmentId, String), CodeCheckoutState>,
+    code_sizes: BTreeMap<String, (u64, u64)>,
     docs_refusal: Option<PortError>,
     docs_turns: VecDeque<DocsTurn>,
     merge_scripts: HashMap<u64, VecDeque<String>>,
@@ -394,6 +396,15 @@ pub struct DocsCheckoutState {
     pub branch: Option<String>,
     pub head: String,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeCheckoutState {
+    pub repo: String,
+    pub base_branch: String,
+    pub base_sha: String,
+    pub path: String,
+    pub torn_down: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -525,6 +536,8 @@ impl FakeWorld {
                 scope_checks: Vec::new(),
                 scm_calls: Vec::new(),
                 docs_checkouts: BTreeMap::new(),
+                code_checkouts: BTreeMap::new(),
+                code_sizes: BTreeMap::new(),
                 rebased: BTreeMap::new(),
                 native_queue: false,
                 native_hold: false,
@@ -672,6 +685,20 @@ impl FakeWorld {
 
     pub fn docs_checkouts(&self) -> BTreeMap<EnvironmentId, DocsCheckoutState> {
         self.state().docs_checkouts.clone()
+    }
+
+    pub fn code_checkouts(&self) -> BTreeMap<(EnvironmentId, String), CodeCheckoutState> {
+        self.state().code_checkouts.clone()
+    }
+
+    pub fn script_ask(&self, ask: Option<(String, Value)>) {
+        self.state().script.ask = ask;
+    }
+
+    pub fn script_code_size(&self, repo: &str, files: u64, bytes: u64) {
+        self.state()
+            .code_sizes
+            .insert(repo.to_string(), (files, bytes));
     }
 
     pub fn script_docs(&self, turns: Vec<DocsTurn>) {
@@ -1733,6 +1760,75 @@ impl Environments for FakeWorld {
         Ok(())
     }
 
+    async fn prepare_code(&self, request: &CodeRequest) -> PortResult<CodeCheckout> {
+        let mut s = self.state();
+        let key = (request.environment_id, request.name.clone());
+        let path = format!("/sim/envs/{}/code/{}", request.environment_id, request.name);
+        if let Some(c) = s.code_checkouts.get(&key).filter(|c| !c.torn_down) {
+            return Ok(CodeCheckout::Ready(PreparedCode {
+                path,
+                base_sha: c.base_sha.clone(),
+                files: 1,
+                bytes: 1,
+            }));
+        }
+        let base = s
+            .refs(&request.repo.full_name)
+            .get(&request.base_branch)
+            .cloned()
+            .ok_or_else(|| PortError::permanent("base_branch_missing", json!({})))?;
+        let (files, bytes) = s
+            .code_sizes
+            .get(&request.repo.full_name)
+            .copied()
+            .unwrap_or((1, 1));
+        if files > CODE_MAX_FILES || bytes > CODE_MAX_BYTES {
+            return Ok(CodeCheckout::TooLarge {
+                base_sha: base,
+                files,
+                bytes,
+            });
+        }
+        s.code_checkouts.insert(
+            key,
+            CodeCheckoutState {
+                repo: request.repo.full_name.clone(),
+                base_branch: request.base_branch.clone(),
+                base_sha: base.clone(),
+                path: path.clone(),
+                torn_down: false,
+            },
+        );
+        Ok(CodeCheckout::Ready(PreparedCode {
+            path,
+            base_sha: base,
+            files,
+            bytes,
+        }))
+    }
+
+    async fn teardown_code(
+        &self,
+        environment_id: EnvironmentId,
+        _repo: &RepoRef,
+        name: &str,
+    ) -> PortResult<()> {
+        let mut s = self.state();
+        if s.refuse_teardowns {
+            return Err(PortError::retryable(
+                "env_io_failed",
+                json!({ "op": "remove_code", "error": "Permission denied (os error 13)" }),
+            ));
+        }
+        if let Some(c) = s
+            .code_checkouts
+            .get_mut(&(environment_id, name.to_string()))
+        {
+            c.torn_down = true;
+        }
+        Ok(())
+    }
+
     async fn inspect_docs(
         &self,
         environment_id: EnvironmentId,
@@ -2227,10 +2323,16 @@ impl Environments for FakeWorld {
         let relative = if let Some(rest) = raw.strip_prefix(&format!("{root}/")) {
             rest.to_string()
         } else if raw.starts_with('/') {
+            let reference = env.extra_dirs.iter().find_map(|d| {
+                (!d.writable)
+                    .then(|| raw.strip_prefix(&format!("{}/", d.path)))
+                    .flatten()
+            });
             return RequestPath {
-                path: raw.to_string(),
+                path: reference.unwrap_or(raw).to_string(),
                 inside_worktree: false,
                 through_symlink: false,
+                in_reference: reference.is_some(),
             };
         } else if cwd.is_empty() {
             raw.to_string()
@@ -2247,6 +2349,7 @@ impl Environments for FakeWorld {
                             path: raw.to_string(),
                             inside_worktree: false,
                             through_symlink: false,
+                            in_reference: false,
                         };
                     }
                 }
@@ -2267,6 +2370,7 @@ impl Environments for FakeWorld {
             path,
             inside_worktree: true,
             through_symlink,
+            in_reference: false,
         }
     }
 }

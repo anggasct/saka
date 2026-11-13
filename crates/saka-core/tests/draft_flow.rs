@@ -155,6 +155,7 @@ impl World {
                 text: "<documents>".into(),
                 sha256: "b".repeat(64),
                 documents: vec![],
+                code_commits: std::collections::BTreeMap::new(),
             },
         })
     }
@@ -703,6 +704,7 @@ fn input(w: &mut World, op: &Op) -> Option<DraftInput> {
                     text: "p".into(),
                     sha256: "b".repeat(64),
                     documents: vec![],
+                    code_commits: std::collections::BTreeMap::new(),
                 },
             }
         }

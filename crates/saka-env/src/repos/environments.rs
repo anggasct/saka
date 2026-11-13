@@ -7,10 +7,11 @@ use saka_core::policy::RequestPath;
 use saka_core::redact::Redactor;
 use saka_core::vocab::SecretPurpose;
 use saka_ports::{
-    BaseProbe, BestEffort, ChangeDiff, ChangedPaths, Checkout, CommandUnit, DOCS_MAX_BYTES,
-    DOCS_MAX_FILES, DocsRequest, EntryKind, EnvRef, Environments, PortError, PortResult,
-    PrepareRequest, PreparedDocs, PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome,
-    RepoRef, RevertRequest, Reverted, TreeEntry, WorktreeChange, WorktreeFile, WorktreeState,
+    BaseProbe, BestEffort, CODE_DIR, CODE_MAX_BYTES, CODE_MAX_FILES, ChangeDiff, ChangedPaths,
+    Checkout, CodeCheckout, CodeRequest, CommandUnit, DOCS_MAX_BYTES, DOCS_MAX_FILES, DocsRequest,
+    EntryKind, EnvRef, Environments, PortError, PortResult, PrepareRequest, PreparedCode,
+    PreparedDocs, PreparedEnvironment, Rebase, RecipeCommand, RecipeCommandOutcome, RepoRef,
+    RevertRequest, Reverted, TreeEntry, WorktreeChange, WorktreeFile, WorktreeState,
 };
 use serde_json::json;
 
@@ -18,8 +19,8 @@ use super::paths::{read_file_in, resolve_in, write_file_in};
 use super::{
     BASE_FILE, DOCS_DIR, DOCS_FILE, GIT_NOT_AN_ANCESTOR, GIT_UNKNOWN_COMMIT, GitRepos,
     LITERAL_PATHS, REBASE_COMMITTER_EMAIL, REBASE_COMMITTER_NAME, RECIPE_MAX_BYTES, RECIPE_PATH,
-    REPO_FILE_MAX_BYTES, arg, io, is_sha, make_dirs_writable, project_path_arg, recipe_env,
-    set_tree_modes, sha_arg, tree_entries, write_log,
+    REPO_FILE_MAX_BYTES, arg, code_name_arg, io, is_sha, make_dirs_writable, project_path_arg,
+    recipe_env, set_tree_modes, sha_arg, tree_entries, write_log,
 };
 use crate::git::{Extra, GitOutput, failed};
 
@@ -58,6 +59,65 @@ impl GitRepos {
             .filter_map(|line| line.split_once(' '))
             .map(|(id, commit)| (id.to_string(), commit.to_string()))
             .collect())
+    }
+}
+
+impl GitRepos {
+    fn code_dir(&self, environment_id: EnvironmentId, name: &str) -> PathBuf {
+        self.env_root(environment_id).join(CODE_DIR).join(name)
+    }
+
+    fn code_marker(&self, environment_id: EnvironmentId, name: &str) -> PathBuf {
+        self.env_root(environment_id)
+            .join(CODE_DIR)
+            .join(format!("{name}.sha"))
+    }
+
+    async fn blob_totals(
+        &self,
+        bare: &Path,
+        commit: &str,
+        scope: Option<&str>,
+    ) -> PortResult<(u64, u64)> {
+        let mut list = vec!["ls-tree", "-r", "-l", "-z", commit];
+        if let Some(scope) = scope {
+            list.extend(["--", scope]);
+        }
+        let listed = self
+            .cfg
+            .git
+            .local_with(
+                bare,
+                &list,
+                Extra {
+                    env: &LITERAL_PATHS,
+                    input: None,
+                },
+            )
+            .await?;
+        if !listed.ok() {
+            return Err(failed("ls_tree", &listed));
+        }
+        Ok(tree_entries(&listed)?
+            .iter()
+            .filter(|e| e.kind == EntryKind::Blob)
+            .fold((0u64, 0u64), |(n, b), e| (n + 1, b + e.bytes.unwrap_or(0))))
+    }
+
+    async fn remove_code(&self, bare: &Path, dir: &Path, marker: &Path) -> PortResult<()> {
+        if dir.exists() && self.inside_envs(dir) {
+            set_tree_modes(dir, |m| m | 0o200, |m| m | 0o700)
+                .map_err(|e| io("make_writable", &e))?;
+        }
+        if bare.join("HEAD").is_file() {
+            self.remove_worktree(bare, dir).await?;
+        } else if dir.exists() && self.inside_envs(dir) {
+            std::fs::remove_dir_all(dir).map_err(|e| io("remove_code", &e))?;
+        }
+        match std::fs::remove_file(marker) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io("remove_code", &e)),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -186,29 +246,8 @@ impl Environments for GitRepos {
                 ));
             }
         }
-        let mut list = vec!["ls-tree", "-r", "-l", "-z", request.commit.as_str()];
-        if request.project_path != "." {
-            list.extend(["--", request.project_path.as_str()]);
-        }
-        let listed = self
-            .cfg
-            .git
-            .local_with(
-                &bare,
-                &list,
-                Extra {
-                    env: &LITERAL_PATHS,
-                    input: None,
-                },
-            )
-            .await?;
-        if !listed.ok() {
-            return Err(failed("ls_tree", &listed));
-        }
-        let (files, bytes) = tree_entries(&listed)?
-            .iter()
-            .filter(|e| e.kind == EntryKind::Blob)
-            .fold((0u64, 0u64), |(n, b), e| (n + 1, b + e.bytes.unwrap_or(0)));
+        let scope = (request.project_path != ".").then_some(request.project_path.as_str());
+        let (files, bytes) = self.blob_totals(&bare, &request.commit, scope).await?;
         if files > DOCS_MAX_FILES || bytes > DOCS_MAX_BYTES {
             return Err(PortError::permanent(
                 "docs_checkout_too_large",
@@ -301,7 +340,6 @@ impl Environments for GitRepos {
                     .map_err(|e| io("make_read_only", &e))?;
             }
         }
-        // Written last: a checkout without it is unfinished and is made again.
         let tmp = root.join(format!("{DOCS_FILE}.tmp"));
         std::fs::write(&tmp, format!("{}\n", request.commit)).map_err(|e| io("write_docs", &e))?;
         std::fs::rename(&tmp, &marker).map_err(|e| io("write_docs", &e))?;
@@ -340,6 +378,84 @@ impl Environments for GitRepos {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io("remove_docs", &e)),
             _ => Ok(()),
         }
+    }
+
+    async fn prepare_code(&self, request: &CodeRequest) -> PortResult<CodeCheckout> {
+        code_name_arg(&request.name)?;
+        arg(&request.base_branch, "base_branch")?;
+        let lock = self.lock(request.repo.repo_id);
+        let _guard = lock.lock().await;
+        let dir = self.code_dir(request.environment_id, &request.name);
+        let marker = self.code_marker(request.environment_id, &request.name);
+        let bare = self.mirror_path(request.repo.repo_id);
+        let kept = std::fs::read_to_string(&marker)
+            .ok()
+            .map(|done| done.trim().to_string())
+            .filter(|sha| is_sha(sha) && dir.join(".git").exists());
+        let base = match &kept {
+            Some(sha) => sha.clone(),
+            None => {
+                self.fetch_locked(&request.repo).await?;
+                self.tip_locked(&request.repo, &request.base_branch)
+                    .await?
+                    .ok_or_else(|| {
+                        PortError::permanent(
+                            "base_branch_missing",
+                            json!({ "base_branch": request.base_branch }),
+                        )
+                    })?
+            }
+        };
+        let (files, bytes) = self.blob_totals(&bare, &base, None).await?;
+        if files > CODE_MAX_FILES || bytes > CODE_MAX_BYTES {
+            return Ok(CodeCheckout::TooLarge {
+                base_sha: base,
+                files,
+                bytes,
+            });
+        }
+        let ready = CodeCheckout::Ready(PreparedCode {
+            path: dir.to_string_lossy().into_owned(),
+            base_sha: base.clone(),
+            files,
+            bytes,
+        });
+        if kept.is_some() {
+            return Ok(ready);
+        }
+        self.remove_code(&bare, &dir, &marker).await?;
+        if let Some(parent) = dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io("create_env_root", &e))?;
+        }
+        let wt = dir.to_string_lossy();
+        self.git_ok(
+            &bare,
+            &["worktree", "add", "--quiet", "--detach", &wt, &base],
+            "worktree_add",
+        )
+        .await?;
+        set_tree_modes(&dir, |_| 0o444, |_| 0o555).map_err(|e| io("make_read_only", &e))?;
+        let tmp = marker.with_extension("tmp");
+        std::fs::write(&tmp, format!("{base}\n")).map_err(|e| io("write_code", &e))?;
+        std::fs::rename(&tmp, &marker).map_err(|e| io("write_code", &e))?;
+        Ok(ready)
+    }
+
+    async fn teardown_code(
+        &self,
+        environment_id: EnvironmentId,
+        repo: &RepoRef,
+        name: &str,
+    ) -> PortResult<()> {
+        code_name_arg(name)?;
+        let lock = self.lock(repo.repo_id);
+        let _guard = lock.lock().await;
+        self.remove_code(
+            &self.mirror_path(repo.repo_id),
+            &self.code_dir(environment_id, name),
+            &self.code_marker(environment_id, name),
+        )
+        .await
     }
 
     async fn inspect_docs(
@@ -1129,11 +1245,21 @@ impl Environments for GitRepos {
         if resolved.inside_worktree {
             return resolved;
         }
-        env.extra_dirs
-            .iter()
-            .filter(|d| d.writable)
-            .map(|d| resolve_in(Path::new(&d.path), cwd, raw))
-            .find(|r| r.inside_worktree)
+        let within = |writable: bool| {
+            env.extra_dirs
+                .iter()
+                .filter(|d| d.writable == writable)
+                .map(|d| resolve_in(Path::new(&d.path), cwd, raw))
+                .find(|r| r.inside_worktree)
+        };
+        within(true)
+            .or_else(|| {
+                within(false).map(|r| RequestPath {
+                    inside_worktree: false,
+                    in_reference: true,
+                    ..r
+                })
+            })
             .unwrap_or(resolved)
     }
 }
