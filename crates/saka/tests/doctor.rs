@@ -106,8 +106,26 @@ impl Host {
         self.command(args).output().unwrap()
     }
 
+    fn calls_text(&self) -> String {
+        let path = self.path("bin/calls");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => panic!("reading {}: {e}", path.display()),
+        }
+    }
+
+    fn bin_listing(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.path("bin"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     fn calls(&self) -> Vec<(String, BTreeMap<String, String>)> {
-        let text = std::fs::read_to_string(self.path("bin/calls")).unwrap_or_default();
+        let text = self.calls_text();
         let mut calls = Vec::new();
         let mut argv = String::new();
         let mut env = BTreeMap::new();
@@ -463,7 +481,12 @@ fn doctor_runs_the_local_checks_read_only_when_the_server_is_down() {
     assert!(
         host.calls()
             .iter()
-            .any(|(argv, _)| argv == "auth status --json")
+            .any(|(argv, _)| argv == "auth status --json"),
+        "no `auth status --json` call recorded\nbin: {:?}\ncalls:\n{}\nstdout:\n{}\nstderr:\n{}",
+        host.bin_listing(),
+        host.calls_text(),
+        String::from_utf8_lossy(&o.stdout),
+        stderr(&o),
     );
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: i64 = conn
