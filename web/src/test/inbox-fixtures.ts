@@ -245,3 +245,33 @@ export const unverifiedRevertItem = inboxItem({
   params: { ...UNVERIFIED_PARAMS, on_failure: "revert" },
   action: { kind: "revert", params: { blocker_id: BLOCKER_ID } },
 });
+
+export const INBOX_INCIDENT_ID = "0193f0c4-1b2a-7c3d-9e8f-0011223344f2";
+
+export const incidentItem = inboxItem({
+  kind: "incident",
+  subject: "incident",
+  work_item_id: null,
+  spec_id: null,
+  title: NO_TASK_TITLE,
+  params: {
+    source: "prod-alerts",
+    severity: "high",
+    title: "<b>Checkout</b> error rate above 5%",
+    environment: "staging",
+    occurrences: 3,
+    deployment_id: FAILED_DEPLOYMENT_ID,
+  },
+  action: {
+    kind: "draft_fix",
+    params: { incident_id: INBOX_INCIDENT_ID },
+  },
+});
+
+export const reopenedIncidentItem = inboxItem({
+  ...incidentItem,
+  params: {
+    ...(incidentItem.params as Record<string, unknown>),
+    failure: { code: "draft_failed" },
+  },
+});

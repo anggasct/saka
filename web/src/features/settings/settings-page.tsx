@@ -12,6 +12,7 @@ import { ConfigSection } from "./config-section";
 import { DiagnosticsSection } from "./diagnostics-section";
 import { EnvironmentsSection } from "./environments-section";
 import { HooksSection } from "./hooks-section";
+import { IncidentSourcesSection } from "./incident-sources-section";
 import { PermissionsSection } from "./permissions-section";
 import { ReposSection } from "./repos-section";
 import { SecretsSection } from "./secrets-section";
@@ -33,6 +34,7 @@ export function SettingsPage({ projectId }: { projectId: string }) {
           <ConfigSection project={project.data} />
           <WorkflowSection project={project.data} />
           <EnvironmentsSection projectId={project.data.id} />
+          <IncidentSourcesSection projectId={project.data.id} />
           <HooksSection
             projectId={project.data.id}
             skipped={project.data.hooks_skipped}

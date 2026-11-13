@@ -109,6 +109,14 @@ describe("startEventStream", () => {
       [["work-items"], ["specs"], ["inbox"]],
     );
     invalidate.mockClear();
+    fake.emit("incident.incident.state_changed.v1", {
+      seq: 9,
+      stream_type: "incident",
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      [["incidents"], ["inbox"]],
+    );
+    invalidate.mockClear();
     fake.emit("delivery.inbox_item.dismissed.v1", {
       seq: 9,
       stream_type: "inbox_item",

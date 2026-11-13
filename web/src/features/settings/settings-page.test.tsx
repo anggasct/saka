@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { AUTHORSHIP, botAuthorship, LINK } from "@/test/authorship-fixtures";
 import { fakeApi, page } from "@/test/fake-api";
+import { INCIDENT_SOURCES } from "@/test/incident-fixtures";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID, spec } from "@/test/fixtures";
 import { REQUESTS, RULES } from "@/test/permission-fixtures";
@@ -32,6 +33,7 @@ function routes(extra: Routes = {}): Routes {
     [PROJECT]: { body: project },
     [SECRETS]: { body: { items: [] } },
     [ENVIRONMENTS]: { body: { items: [] } },
+    [INCIDENT_SOURCES]: { body: { items: [] } },
     [HOOKS]: { body: { items: [] } },
     [HOOK_RUNS]: { body: page([]) },
     [RULES]: { body: { items: [], operator_rules: [] } },

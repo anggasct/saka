@@ -1,5 +1,5 @@
 import type { Relative, T } from "@/features/delivery/text";
-import { blockerText, record, text } from "@/features/delivery/text";
+import { blockerText, number, record, text } from "@/features/delivery/text";
 import { deployErrorText } from "@/features/deployments/text";
 import type { BadgeTone } from "@/ui/badge";
 
@@ -9,7 +9,8 @@ export function kindTone(kind: string): BadgeTone {
   return kind === "blocker" ||
     kind === "spec_unclear" ||
     kind === "intake" ||
-    kind === "deployment"
+    kind === "deployment" ||
+    kind === "incident"
     ? "danger"
     : "attention";
 }
@@ -35,6 +36,9 @@ export function heading(t: T, item: InboxItem): string {
   }
   if (item.subject === "deployment") {
     return text(record(item.params).environment);
+  }
+  if (item.subject === "incident") {
+    return text(record(item.params).source);
   }
   if (task_key != null) {
     return task_key;
@@ -67,6 +71,14 @@ export function sentence(t: T, item: InboxItem, relative: Relative): string {
         environment: text(params.environment),
         phase: text(params.phase) || "other",
         reason: deployErrorText(t, { code: text(params.code), params }),
+      });
+    case "incident":
+      return t("inbox.item.incident", {
+        severity: text(params.severity),
+        environment: text(params.environment) || "-",
+        title: text(params.title),
+        occurrences: number(params.occurrences),
+        failure: text(record(params.failure).code) || "none",
       });
     default:
       return t("inbox.item.decision");

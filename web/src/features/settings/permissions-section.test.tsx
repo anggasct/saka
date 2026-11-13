@@ -6,6 +6,7 @@ import { AUTHORSHIP, botAuthorship, LINK } from "@/test/authorship-fixtures";
 import { DIAGNOSTICS, report } from "@/test/diagnostics-fixtures";
 import { ENVIRONMENTS } from "@/test/deploy-fixtures";
 import { fakeApi, page } from "@/test/fake-api";
+import { INCIDENT_SOURCES } from "@/test/incident-fixtures";
 import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID } from "@/test/fixtures";
 import { HOOKS, HOOK_RUNS } from "@/test/hooks-fixtures";
@@ -37,6 +38,7 @@ function routes(extra: Routes = {}): Routes {
     [LINK]: problemBody(404, "user_link_not_found"),
     [DIAGNOSTICS]: { body: report },
     [ENVIRONMENTS]: { body: { items: [] } },
+    [INCIDENT_SOURCES]: { body: { items: [] } },
     [HOOKS]: { body: { items: [] } },
     [HOOK_RUNS]: { body: page([]) },
     [RULES]: {

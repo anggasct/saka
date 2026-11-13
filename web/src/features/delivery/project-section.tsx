@@ -53,6 +53,13 @@ export function ProjectSection({
         >
           {t("project.deployments")}
         </Link>
+        <Link
+          to="/incidents/$projectId"
+          params={{ projectId: project.id }}
+          className="ml-4 inline-flex min-h-11 items-center text-sm font-medium text-primary underline underline-offset-4"
+        >
+          {t("project.incidents")}
+        </Link>
         <div className="mt-2">
           <QuickDialog project={project} />
         </div>
