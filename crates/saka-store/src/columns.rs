@@ -9,7 +9,7 @@ macro_rules! spec_draft_columns {
         spec_draft_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "path", "slug", "idea", "locale", "mode", "context_paths", "state", "attempt", "current_attempt_id", "retries", "queued_at", "awaiting_since", "failure", "spec_id", "commit_sha", "version", "created_by", "created_at", "updated_at", "finished_at", "target_kind", "kind")
+        qualified!($prefix: "id", "project_id", "path", "slug", "idea", "locale", "mode", "context_paths", "state", "attempt", "current_attempt_id", "retries", "queued_at", "awaiting_since", "failure", "spec_id", "commit_sha", "version", "created_by", "created_at", "updated_at", "finished_at", "target_kind", "kind", "deployment_id")
     };
 }
 

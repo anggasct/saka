@@ -882,6 +882,7 @@ impl Engine {
                     target_kind: saka_core::vocab::TargetKind::New,
                     kind: intake.kind,
                     context_paths: Vec::new(),
+                    deployment_id: None,
                 },
                 &cause,
                 None,

@@ -7,7 +7,7 @@ use saka_core::diagnostics::{
 };
 use saka_core::environment::{DeployAction, Environment, VerifySpec};
 use saka_core::event::Event;
-use saka_core::ids::{ChangeRequestId, WorkItemId};
+use saka_core::ids::{ChangeRequestId, SpecDraftId, WorkItemId};
 use saka_core::ids::{DeploymentId, ProjectId, RepoId};
 use saka_core::model::Task;
 use saka_core::model::{Project, Repo};
@@ -28,8 +28,16 @@ use saka_store::{deployment, read};
 
 use crate::action::{Action, Produced};
 use crate::commands::reason;
+use crate::draft::NewSpecDraft;
 use crate::views::Paged;
 use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
+use saka_core::deploy::{FixFacts, FixFailure};
+use saka_core::ids::BlockerId;
+use saka_core::model::Draft;
+use saka_core::vocab::{
+    BlockerAction, DeployCheckState, DraftLocale, DraftMode, SpecDraftState, TargetKind, WorkKind,
+};
+use saka_store::draft as draft_rows;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInfo {
@@ -72,6 +80,7 @@ pub struct DeploymentDetail {
     pub checks: Vec<CheckRecord>,
     pub merges: Vec<MergeRef>,
     pub tasks: Vec<TaskRef>,
+    pub fix_draft: Option<(SpecDraftId, SpecDraftState)>,
 }
 
 pub(crate) fn verification_view(
@@ -220,11 +229,12 @@ impl Engine {
             .repo_infos(&project)?
             .remove(&found.repo_id)
             .ok_or_else(|| EngineError::Internal("deployment without its repo".into()))?;
-        let (checks, merges, tasks) = self.store.read(|c| {
+        let (checks, merges, tasks, fix_draft) = self.store.read(|c| {
             Ok((
                 deployment::checks(c, id)?,
                 deployment::merge_refs(c, id)?,
                 deployment::tasks_of(c, id)?,
+                draft_rows::fix_draft_of(c, id)?,
             ))
         })?;
         Ok(DeploymentDetail {
@@ -235,6 +245,7 @@ impl Engine {
             checks,
             merges,
             tasks,
+            fix_draft,
         })
     }
 }
@@ -841,3 +852,141 @@ impl Engine {
         )
     }
 }
+
+impl Engine {
+    pub async fn draft_fix_with(
+        &self,
+        id: DeploymentId,
+        note: Option<&str>,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Draft> {
+        if note.is_some_and(|n| n.chars().count() > NOTE_MAX) {
+            return Err(crate::register::invalid("note", "too_long"));
+        }
+        let detail = self.deployment(id)?;
+        let deployment = &detail.row.deployment;
+        if deployment.state != DeploymentState::Failed {
+            return Err(Rejection::DeploymentNotFailed.into());
+        }
+        if let Some((spec_draft_id, state)) =
+            self.store.read(|c| draft_rows::fix_draft_of(c, id))?
+            && !matches!(state, SpecDraftState::Succeeded | SpecDraftState::Cancelled)
+        {
+            return Err(Rejection::FixDraftInProgress {
+                spec_draft_id: spec_draft_id.0.to_string(),
+            }
+            .into());
+        }
+        let project = self.load_project_row(deployment.project_id)?;
+        let tasks: Vec<String> = detail.tasks.iter().map(|t| t.task_key.clone()).collect();
+        let failures: Vec<FixFailure> = detail
+            .checks
+            .iter()
+            .filter(|c| c.state != DeployCheckState::Passed)
+            .map(|c| FixFailure {
+                phase: c.phase,
+                command: c.command.clone(),
+                state: c.state,
+                exit_code: c.exit_code,
+                output_tail: c.output_tail.clone(),
+            })
+            .collect();
+        let code = deployment
+            .error
+            .as_ref()
+            .map_or("unknown", |e| e.code.as_str());
+        let idea = deploy::fix_idea(
+            &FixFacts {
+                environment: &deployment.environment,
+                sha: deployment.sha.as_deref(),
+                previous_sha: deployment.previous_sha.as_deref(),
+                phase: deployment.phase,
+                code,
+                tasks: &tasks,
+                failures: &failures,
+            },
+            note,
+        );
+        let short: String = deployment
+            .sha
+            .as_deref()
+            .unwrap_or(&deployment.id.to_string())
+            .chars()
+            .take(7)
+            .collect();
+        let slug = format!("bugfix-deploy-{}-{short}", deployment.environment);
+        let path = match project.project_path.as_str() {
+            "." => format!("specs/{slug}.md"),
+            folder => format!("{folder}/specs/{slug}.md"),
+        };
+        let draft = self
+            .create_spec_draft(
+                project.id,
+                NewSpecDraft {
+                    path,
+                    idea,
+                    locale: DraftLocale::En,
+                    mode: DraftMode::Draft,
+                    target_kind: TargetKind::New,
+                    kind: WorkKind::Bugfix,
+                    context_paths: Vec::new(),
+                    deployment_id: Some(id),
+                },
+                cause,
+                action,
+            )
+            .await?;
+        Ok(draft)
+    }
+
+    pub async fn primary_action_with(
+        &self,
+        id: WorkItemId,
+        blocker_id: BlockerId,
+        expected: Option<BlockerAction>,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let task = self.load_task(id)?;
+        let blocker = task.open_blocker().filter(|b| b.id == blocker_id).cloned();
+        let kind = saka_core::blocker::primary_action(&task).map(|p| p.kind);
+        let (Some(blocker), Some(kind @ (BlockerAction::Revert | BlockerAction::DraftFix))) =
+            (blocker, kind)
+        else {
+            return self.resolve_blocker_with(id, blocker_id, expected, why, cause, action);
+        };
+        if let Some(shown) = expected.filter(|e| *e != kind) {
+            return Err(Rejection::BlockerActionChanged {
+                blocker_id: blocker_id.0.to_string(),
+                expected: shown.as_str(),
+                actual: kind.as_str(),
+            }
+            .into());
+        }
+        if kind == BlockerAction::Revert {
+            return self.revert_with(id, task.item.version, why, cause, action);
+        }
+        let deployment: DeploymentId = blocker
+            .params
+            .get("deployment_id")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let note = reason(why)?;
+        self.draft_fix_with(deployment, Some(&note), cause, None)
+            .await?;
+        self.decide(
+            id,
+            None,
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
+    }
+}
+
+const NOTE_MAX: usize = 1000;

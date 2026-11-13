@@ -250,6 +250,7 @@ pub enum Event {
         target_kind: TargetKind,
         kind: WorkKind,
         context_paths: Vec<String>,
+        deployment_id: Option<DeploymentId>,
     },
     #[serde(rename = "spec.draft.attempt_started")]
     SpecDraftAttemptStarted {

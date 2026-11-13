@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::model::Task;
+use crate::revert;
 use crate::task::can_retry;
 use crate::vocab::{BlockerAction, BlockerCode};
 
@@ -21,6 +22,8 @@ impl BlockerAction {
         )
     }
 }
+
+pub const DEPLOY_RECOVERY: [BlockerAction; 2] = [BlockerAction::Revert, BlockerAction::DraftFix];
 
 pub fn designated(code: BlockerCode) -> BlockerAction {
     use BlockerAction as A;
@@ -74,6 +77,12 @@ pub fn primary_action(task: &Task) -> Option<PrimaryAction> {
         kind => kind,
     };
     let kind = match kind {
+        BlockerAction::Retry if blocker.code == BlockerCode::DeployUnverified => {
+            deploy_recovery(task, &blocker.params).unwrap_or(BlockerAction::Retry)
+        }
+        kind => kind,
+    };
+    let kind = match kind {
         BlockerAction::Retry if !can_retry(task) => BlockerAction::Cancel,
         kind => kind,
     };
@@ -82,9 +91,20 @@ pub fn primary_action(task: &Task) -> Option<PrimaryAction> {
         BlockerAction::LinkAccount => {
             json!({ "integration_id": blocker.params.get("integration_id").cloned().unwrap_or(Value::Null) })
         }
+        BlockerAction::DraftFix => {
+            json!({ "deployment_id": blocker.params.get("deployment_id").cloned().unwrap_or(Value::Null) })
+        }
         _ => json!({}),
     };
     Some(PrimaryAction { kind, params })
+}
+
+fn deploy_recovery(task: &Task, params: &Value) -> Option<BlockerAction> {
+    match params.get("on_failure").and_then(Value::as_str)? {
+        "revert" if revert::eligible(task) => Some(BlockerAction::Revert),
+        "fix" => Some(BlockerAction::DraftFix),
+        _ => None,
+    }
 }
 
 fn updatable(params: &Value) -> bool {

@@ -167,3 +167,58 @@ pub async fn cancel_deployment(
     )
     .await
 }
+
+#[utoipa::path(
+    post, path = "/api/v1/deployments/{deployment_id}/actions/draft-fix", tag = "deployments",
+    params(("deployment_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::DraftFixBody,
+    responses((status = 202, body = dto::SpecDraft), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn draft_fix(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let id = DeploymentId(tri!(path_id(&id)));
+    let req: dto::DraftFixBody = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let viewer = engine.clone();
+    let respond = move |p: Produced<'_>| match p {
+        Produced::Draft(d) => reply(
+            StatusCode::ACCEPTED,
+            &dto::SpecDraft::from_view(&viewer.draft_view(d.clone(), Vec::new(), None)),
+        ),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "deployment.draft_fix",
+        target_type: "deployment",
+        target_id: Some(id.0),
+        reason: req.note.clone(),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            let project = engine
+                .deployment(id)
+                .ok()
+                .map(|d| d.row.deployment.project_id);
+            engine
+                .draft_fix_with(id, req.note.as_deref(), &cause, Some(&action))
+                .await
+                .map(|_| project)
+                .map_err(|e| (e, project))
+        },
+    )
+    .await
+}

@@ -50,6 +50,7 @@ pub struct NewSpecDraft {
     pub target_kind: TargetKind,
     pub kind: WorkKind,
     pub context_paths: Vec<String>,
+    pub deployment_id: Option<saka_core::ids::DeploymentId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -624,6 +625,7 @@ impl Engine {
             target_kind: new.target_kind,
             kind: new.kind,
             context_paths: new.context_paths,
+            deployment_id: new.deployment_id,
         });
         let mut after = core::evolve(None, &event, now)
             .ok_or_else(|| EngineError::Internal("draft not requested".into()))?;

@@ -392,14 +392,13 @@ fn a_waiting_deployment_can_be_cancelled_once_and_a_running_one_cannot() {
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
 }
 
-#[test]
-fn a_task_held_by_a_failed_deployment_shows_its_gate_and_can_be_accepted_without_verification() {
+fn held_api(on_failure: &str) -> Api {
     let environment = RawEnvironment {
         project: "tasks".into(),
         environment: "staging".into(),
         action: "run_host".into(),
         command: Some("./deploy.sh".into()),
-        on_failure: Some("revert".into()),
+        on_failure: Some(on_failure.into()),
         ..RawEnvironment::default()
     };
     let verify = std::collections::BTreeMap::from([(
@@ -424,11 +423,16 @@ fn a_task_held_by_a_failed_deployment_shows_its_gate_and_can_be_accepted_without
     }));
     let state = AppState::new(ApiConfig::new("0.1.0-test"));
     state.set_engine(sim.engine());
-    let api = Api {
+    Api {
         app: router(state),
         sim,
         keys: std::cell::Cell::new(0),
-    };
+    }
+}
+
+#[test]
+fn a_task_held_by_a_failed_deployment_shows_its_gate_and_can_be_accepted_without_verification() {
+    let api = held_api("revert");
     let task = api.sim.task(1);
     let item = task.item.id.to_string();
     let shown = api.get(&format!("/api/v1/work-items/{item}"));
@@ -459,4 +463,116 @@ fn a_task_held_by_a_failed_deployment_shows_its_gate_and_can_be_accepted_without
     let after = api.get(&format!("/api/v1/work-items/{item}"));
     assert_eq!(after.body["deploy_gates"][0]["state"], "accepted");
     assert_eq!(after.body["deploy_gates"][0]["reason"], "staging is flaky");
+}
+
+#[test]
+fn a_draft_fix_is_requested_for_a_failed_deployment_and_once_only() {
+    let api = held_api("fix");
+    let deployment = api
+        .sim
+        .engine()
+        .deployments(
+            api.sim.project_id,
+            None,
+            None,
+            &saka_engine::Page {
+                after: None,
+                limit: 5,
+            },
+        )
+        .unwrap()
+        .items[0]
+        .deployment
+        .id;
+    let path = format!("/api/v1/deployments/{deployment}/actions/draft-fix");
+    let made = api.post(&path, json!({ "note": "after the cache change" }));
+    assert_eq!(made.status, StatusCode::ACCEPTED, "{:?}", made.body);
+    assert_eq!(made.body["kind"], "bugfix");
+    assert_eq!(made.body["deployment_id"], deployment.to_string());
+    assert!(
+        made.body["path"]
+            .as_str()
+            .unwrap()
+            .contains("bugfix-deploy-staging-")
+    );
+    let twice = api.post(&path, json!({}));
+    assert_eq!(twice.status, StatusCode::CONFLICT);
+    assert_eq!(twice.body["code"], "fix_draft_in_progress");
+    assert_eq!(twice.body["params"]["spec_draft_id"], made.body["id"]);
+    let detail = api.get(&format!("/api/v1/deployments/{deployment}"));
+    assert_eq!(detail.body["fix_draft"]["id"], made.body["id"]);
+    let long = api.post(&path, json!({ "note": "x".repeat(1001) }));
+    assert_eq!(long.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let unknown = api.post(
+        &format!(
+            "/api/v1/deployments/{}/actions/draft-fix",
+            Uuid::from_u128(77)
+        ),
+        json!({}),
+    );
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn a_draft_fix_of_a_deployment_that_did_not_fail_is_refused() {
+    let api = Api::new();
+    let made = api.post(
+        &format!(
+            "/api/v1/projects/{}/environments/staging/actions/deploy",
+            api.project()
+        ),
+        json!({ "reason": "ship it" }),
+    );
+    let id = made.body["id"].as_str().unwrap();
+    let refused = api.post(
+        &format!("/api/v1/deployments/{id}/actions/draft-fix"),
+        json!({}),
+    );
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    assert_eq!(refused.body["code"], "deployment_not_failed");
+}
+
+#[test]
+fn the_primary_action_of_a_held_task_reverts_it_or_drafts_the_fix_by_on_failure() {
+    let api = held_api("revert");
+    let item = api.sim.task(1).item.id.to_string();
+    let shown = api.get(&format!("/api/v1/work-items/{item}"));
+    assert_eq!(shown.body["blocker"]["primary_action"]["kind"], "revert");
+    let blocker = shown.body["blocker"]["id"].as_str().unwrap().to_string();
+    let path = format!("/api/v1/work-items/{item}/actions/primary");
+    let stale = api.post(
+        &path,
+        json!({ "blocker_id": blocker, "action": "retry", "reason": "undo it" }),
+    );
+    assert_eq!(stale.status, StatusCode::CONFLICT);
+    assert_eq!(stale.body["code"], "blocker_action_changed");
+    let done = api.post(
+        &path,
+        json!({ "blocker_id": blocker, "action": "revert", "reason": "staging is broken" }),
+    );
+    assert_eq!(done.status, StatusCode::ACCEPTED, "{:?}", done.body);
+    let after = api.get(&format!("/api/v1/work-items/{item}"));
+    assert!(
+        after.body["reverted_by"]["key"]
+            .as_str()
+            .unwrap()
+            .ends_with("-R1")
+    );
+
+    let api = held_api("fix");
+    let item = api.sim.task(1).item.id.to_string();
+    let shown = api.get(&format!("/api/v1/work-items/{item}"));
+    assert_eq!(shown.body["blocker"]["primary_action"]["kind"], "draft_fix");
+    let blocker = shown.body["blocker"]["id"].as_str().unwrap().to_string();
+    let done = api.post(
+        &format!("/api/v1/work-items/{item}/actions/primary"),
+        json!({ "blocker_id": blocker, "action": "draft_fix", "reason": "draft it" }),
+    );
+    assert_eq!(done.status, StatusCode::ACCEPTED, "{:?}", done.body);
+    assert_eq!(done.body["blocker"]["code"], "deploy_unverified");
+    let deployment = shown.body["blocker"]["params"]["deployment_id"]
+        .as_str()
+        .unwrap();
+    let detail = api.get(&format!("/api/v1/deployments/{deployment}"));
+    assert!(detail.body["fix_draft"]["id"].is_string());
 }
