@@ -237,6 +237,16 @@ impl Scm for ScmRouter {
             .post_comment(repo, number, body)
             .await
     }
+    async fn update_change_request(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        body: &str,
+    ) -> PortResult<()> {
+        self.get(&repo.integration_id)?
+            .update_change_request(repo, number, body)
+            .await
+    }
     async fn update_branch(
         &self,
         repo: &RepoRef,

@@ -495,6 +495,34 @@ impl Scm for GitLab {
         }
     }
 
+    async fn update_change_request(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        body: &str,
+    ) -> PortResult<()> {
+        check_comment_body(body)?;
+        let n = number.to_string();
+        let reply = self
+            .project_call(
+                &repo.full_name,
+                Method::PUT,
+                &["merge_requests", &n],
+                Some(&json!({ "description": body })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(()),
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED => {
+                Err(PortError::permanent(
+                    "change_update_refused",
+                    json!({ "status": reply.status.as_u16() }),
+                ))
+            }
+            _ => Err(self.client.unexpected("update_change_request", &reply)),
+        }
+    }
+
     async fn update_branch(
         &self,
         _repo: &RepoRef,

@@ -132,6 +132,8 @@ trait Harness: Sync {
     async fn review_accepted(&self, number: u64, event: ReviewEvent, body: &str);
     async fn review_refused(&self, number: u64, status: u16);
     async fn comment_accepted(&self, number: u64, body: &str);
+    async fn change_body_accepted(&self, number: u64, body: &str);
+    async fn change_body_refused(&self, number: u64, status: u16);
     async fn update_answers(&self, number: u64, answer: UpdateAnswer);
     async fn status_accepted(&self, state: &str, description: &str);
     fn ci_webhook(&self, numbers: &[u64], signing: Signing) -> (Vec<(String, String)>, Vec<u8>);
@@ -593,6 +595,25 @@ impl Harness for GitHubHarness {
             ))
             .and(body_json(json!({ "body": body })))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 1 })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change_body_accepted(&self, number: u64, body: &str) {
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/acme/app/pulls/{number}").as_str()))
+            .and(body_json(json!({ "body": body })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "number": number })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change_body_refused(&self, number: u64, status: u16) {
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/acme/app/pulls/{number}").as_str()))
+            .respond_with(ResponseTemplate::new(status))
             .expect(1)
             .mount(&self.w.server)
             .await;
@@ -1109,6 +1130,29 @@ impl Harness for GitLabHarness {
             .await;
     }
 
+    async fn change_body_accepted(&self, number: u64, body: &str) {
+        Mock::given(method("PUT"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}").as_str(),
+            ))
+            .and(body_json(json!({ "description": body })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "iid": number })))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn change_body_refused(&self, number: u64, status: u16) {
+        Mock::given(method("PUT"))
+            .and(path(
+                format!("/projects/acme%2Fapp/merge_requests/{number}").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&self.w.server)
+            .await;
+    }
+
     async fn update_answers(&self, _number: u64, _answer: UpdateAnswer) {}
 
     async fn status_accepted(&self, state: &str, description: &str) {
@@ -1547,6 +1591,35 @@ async fn a_comment_is_posted_on_the_change(h: &dyn Harness) {
         .unwrap();
 }
 
+async fn the_body_of_a_change_is_replaced(h: &dyn Harness) {
+    h.change_body_accepted(7, "New description").await;
+    h.scm()
+        .update_change_request(&h.repo(), 7, "New description")
+        .await
+        .unwrap();
+}
+
+async fn a_refused_body_update_is_permanent_and_an_oversized_body_never_leaves(h: &dyn Harness) {
+    for (number, status) in [(8, 404), (9, 403)] {
+        h.change_body_refused(number, status).await;
+        let err = h
+            .scm()
+            .update_change_request(&h.repo(), number, "x")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "change_update_refused", "status {status}");
+        assert!(!err.retryable);
+        assert_eq!(err.params["status"], status);
+    }
+    let long = "x".repeat(saka_ports::MAX_REVIEW_BODY_CHARS + 1);
+    let err = h
+        .scm()
+        .update_change_request(&h.repo(), 7, &long)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "git_argument_invalid");
+}
+
 async fn a_branch_update_follows_the_declared_capability(h: &dyn Harness) {
     if !h.declared().update_branch {
         let err = h.scm().update_branch(&h.repo(), 7, HEAD).await.unwrap_err();
@@ -1890,6 +1963,8 @@ conformance!(github_conformance, GitHubHarness:
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
     a_comment_is_posted_on_the_change,
+    the_body_of_a_change_is_replaced,
+    a_refused_body_update_is_permanent_and_an_oversized_body_never_leaves,
     a_branch_update_follows_the_declared_capability,
     capabilities_match_the_declared_matrix,
     diagnosis_returns_the_status_the_declared_capability_names,
@@ -1927,6 +2002,8 @@ conformance!(gitlab_conformance, GitLabHarness:
     a_review_is_posted_at_the_head,
     a_refused_review_is_permanent,
     a_comment_is_posted_on_the_change,
+    the_body_of_a_change_is_replaced,
+    a_refused_body_update_is_permanent_and_an_oversized_body_never_leaves,
     a_branch_update_follows_the_declared_capability,
     capabilities_match_the_declared_matrix,
     diagnosis_returns_the_status_the_declared_capability_names,

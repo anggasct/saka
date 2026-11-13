@@ -278,6 +278,13 @@ pub trait Scm: Send + Sync {
 
     async fn post_comment(&self, repo: &RepoRef, number: u64, body: &str) -> PortResult<()>;
 
+    async fn update_change_request(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        body: &str,
+    ) -> PortResult<()>;
+
     async fn update_branch(
         &self,
         repo: &RepoRef,

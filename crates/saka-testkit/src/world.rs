@@ -66,6 +66,7 @@ pub struct AgentScript {
     pub decisions: VecDeque<Vec<Question>>,
     pub usage: TurnUsage,
     pub rate_limit: Option<Value>,
+    pub results: VecDeque<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,7 @@ impl Default for AgentScript {
             decisions: VecDeque::new(),
             usage: TurnUsage::default(),
             rate_limit: None,
+            results: VecDeque::new(),
         }
     }
 }
@@ -764,6 +766,13 @@ impl FakeWorld {
         self.state().prs.clone()
     }
 
+    pub fn edit_pr_body(&self, number: u64, edit: impl FnOnce(&str) -> String) {
+        let mut s = self.state();
+        if let Some(pr) = s.prs.iter_mut().find(|p| p.number == number) {
+            pr.body = edit(&pr.body);
+        }
+    }
+
     pub fn remote_branches(&self) -> BTreeMap<String, String> {
         let mut s = self.state();
         let home = s.home.clone();
@@ -1417,6 +1426,7 @@ impl State {
             self.emit(session, at, RunnerEventKind::RateLimit { info });
         }
         let end = |s: &mut State, status: &str| {
+            let result_text = s.script.results.pop_front();
             s.emit(
                 session,
                 at,
@@ -1427,7 +1437,7 @@ impl State {
                     input_tokens: Some(usage.input_tokens),
                     output_tokens: Some(usage.output_tokens),
                     result_summary: Some(format!("turn {turn} done")),
-                    result_text: None,
+                    result_text,
                 },
             );
         };
@@ -2891,6 +2901,29 @@ impl Scm for FakeWorld {
             number,
             body: body.to_string(),
         });
+        Ok(())
+    }
+
+    async fn update_change_request(
+        &self,
+        repo: &RepoRef,
+        number: u64,
+        body: &str,
+    ) -> PortResult<()> {
+        check_comment_body(body)?;
+        let mut s = self.state();
+        s.call("update_change_request");
+        let Some(pr) = s
+            .prs
+            .iter_mut()
+            .find(|p| p.repo == repo.full_name && p.number == number)
+        else {
+            return Err(PortError::permanent(
+                "change_update_refused",
+                json!({ "status": 404 }),
+            ));
+        };
+        pr.body = body.to_string();
         Ok(())
     }
 

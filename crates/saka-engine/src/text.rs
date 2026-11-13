@@ -4,6 +4,7 @@ use saka_core::model::{Coded, Environment, Task};
 use saka_core::rejection::Rejection;
 use saka_core::vocab::{SecretPurpose, Stage, WorkKind};
 use saka_spec::{SpecModel, Step};
+use saka_store::agent_summary::{self, RunSummary};
 use saka_store::{SpecRevisionRow, read};
 use serde_json::Value;
 
@@ -12,6 +13,7 @@ use crate::packet::{
     PacketSpec, PacketStep,
 };
 use crate::recipe::Recipe;
+use crate::summary;
 use crate::{Engine, EngineError, Result};
 
 const TITLE_MAX: usize = 72;
@@ -303,14 +305,51 @@ impl Engine {
             .map(|s| s.commands.iter().map(|c| format!("- `{c}`\n")).collect())
             .unwrap_or_default();
         let closes = self.closing_line(task, &pinned)?;
+        let summary = self.summary_block(task)?;
         let body = format!(
-            "{work}\n\n**Spec:** `{path}` @ `{short}`, step {step_id}\n**Acceptance criteria:** {acs}\n**Done when:**\n{commands}\n{closes}{marker}\n",
+            "{work}\n\n**Spec:** `{path}` @ `{short}`, step {step_id}\n**Acceptance criteria:** {acs}\n**Done when:**\n{commands}\n{summary}\n\n{closes}{marker}\n",
             work = task.item.work,
             path = pinned.path,
             step_id = task.item.step_id.as_deref().unwrap_or_default(),
             marker = task_marker(&task.item.task_key),
         );
         Ok((change_title(&task.item.work), body))
+    }
+
+    pub(crate) fn summary_block(&self, task: &Task) -> Result<String> {
+        let mut runs = self
+            .store
+            .read(|c| agent_summary::run_summaries(c, task.item.id))?;
+        runs.reverse();
+        if let Some(run) = task
+            .stage_run
+            .as_ref()
+            .filter(|r| matches!(r.stage, Stage::Dev | Stage::Fix))
+        {
+            let current = match runs.iter().position(|r| r.stage_run_id == run.id) {
+                Some(at) => runs.remove(at),
+                None => RunSummary {
+                    stage_run_id: run.id,
+                    stage: run.stage,
+                    fix_round: run.fix.as_ref().map(|f| f.number),
+                    text: None,
+                },
+            };
+            runs.insert(0, current);
+        }
+        let rounds: Vec<summary::Round> = runs
+            .into_iter()
+            .map(|r| summary::Round {
+                label: match (r.stage, r.fix_round) {
+                    (Stage::Fix, Some(n)) => format!("Fix round {n}"),
+                    (Stage::Fix, None) => "Fix round".to_string(),
+                    _ => "Initial work".to_string(),
+                },
+                text: r.text,
+            })
+            .collect();
+        let redactor = self.project_redactor(task.item.project_id)?;
+        Ok(summary::block(&rounds, &redactor))
     }
 }
 

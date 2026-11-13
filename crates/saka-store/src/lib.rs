@@ -1,6 +1,7 @@
 #[macro_use]
 mod columns;
 
+pub mod agent_summary;
 pub mod authorship;
 mod codec;
 mod conn;
