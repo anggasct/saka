@@ -1,3 +1,4 @@
+mod deploy;
 mod gate;
 mod github;
 mod issue;
@@ -263,6 +264,27 @@ impl Api {
             let body = response.text().await.unwrap_or_default();
             if !status.is_success() {
                 bail!("GET {path}: {status}");
+            }
+            Ok(body)
+        })
+    }
+
+    fn post(&self, path: &str, body: &Value) -> Result<Value> {
+        let key = format!("e2e-{}", jiff::Timestamp::now().as_nanosecond());
+        let request = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header("Idempotency-Key", key)
+            .json(body);
+        self.runtime.block_on(async {
+            let response = request
+                .send()
+                .await
+                .with_context(|| format!("POST {path}"))?;
+            let status = response.status();
+            let body = response.json::<Value>().await.unwrap_or(Value::Null);
+            if !status.is_success() {
+                bail!("POST {path}: {status} {body}");
             }
             Ok(body)
         })
@@ -739,16 +761,21 @@ struct Run<'a> {
     spec_path: String,
     spec: String,
     context: ContextDoc,
+    project_name: String,
 }
 
 fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
     let listen = format!("127.0.0.1:{}", free_loopback_port()?);
+    let target = deploy::Target::start(&run.dir.join("deploy"))?;
     let config_path = run.dir.join("config.toml");
     std::fs::write(
         &config_path,
-        config(run.settings, &listen, &run.dir.join("data")),
+        config(run.settings, &listen, &run.dir.join("data"))
+            + &deploy::environment_block(&run.project_name, &target),
     )
     .context("write the config")?;
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+        .context("restrict the config")?;
     let log = run.dir.join("serve.log");
     let mut server = Some(Server::start(&run.saka, &config_path, &log)?);
     let api = Api::new(&listen)?;
@@ -812,11 +839,13 @@ fn drive(run: &Run<'_>, github: &GitHub) -> Result<()> {
     )?;
     println!("  spec shipped");
     verify(github, &run.base)?;
+    deploy::healthy_path(&api, &project_id, &spec_id, &target)?;
     gate::check(&api, &cli, github, &spec_id)?;
     outside::review_only(&api, &cli, run)?;
     issue::bugfix_from_issue(&api, &cli, github, run, &project_id)?;
     draft(&api, &cli, github, &project_id, run)?;
-    conversation(&api, &cli, github, &project_id, run)
+    conversation(&api, &cli, github, &project_id, run)?;
+    deploy::recover(&api, &cli, github, run, &project_id, &target)
 }
 
 fn draft(api: &Api, cli: &Cli<'_>, github: &GitHub, project: &str, run: &Run<'_>) -> Result<()> {
@@ -1035,6 +1064,7 @@ pub fn run() -> Result<()> {
         "docs: add a review-only project",
     )?;
     issue::prepare_base(&github, &base, &issue::label_name(&run_id))?;
+    let project_name = deploy::prepare_base(&github, &base)?;
     println!("  base branch {base} with {spec_path}");
 
     let run = Run {
@@ -1046,6 +1076,7 @@ pub fn run() -> Result<()> {
         spec_path,
         spec,
         context,
+        project_name,
     };
     match drive(&run, &github) {
         Ok(()) => {
