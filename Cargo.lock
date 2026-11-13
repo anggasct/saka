@@ -4885,6 +4885,7 @@ dependencies = [
  "saka-docs",
  "saka-engine",
  "saka-env",
+ "saka-intake",
  "saka-mcp",
  "saka-notify",
  "saka-ports",

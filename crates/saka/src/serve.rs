@@ -1011,6 +1011,14 @@ async fn run(
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    let incident_signals = match cfg.incident_signals() {
+        Ok(signals) => signals,
+        Err(e) => {
+            tracing::error!(code = e.code, detail = %e.detail, "incident config refused");
+            stop_http(&stop, http).await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let incident_sources_cfg = match cfg.incident_sources_parsed() {
         Ok(sources) => sources,
         Err(e) => {
@@ -1062,6 +1070,7 @@ async fn run(
             releases,
             webhooks: outbound,
             notifier,
+            signals: Arc::new(incident_signals),
             host: Arc::new(saka_env::HostRunner {
                 supervisor: Arc::new(SystemdSupervisor),
                 limits: UnitLimits {

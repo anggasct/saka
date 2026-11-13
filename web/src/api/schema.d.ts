@@ -436,6 +436,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/incidents/{incident_id}/actions/dismiss": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["dismiss_incident"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/incidents/{incident_id}/actions/draft-fix": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["draft_incident_fix"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/incidents/{incident_id}/actions/revert": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["revert_incident"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/issue-intakes/{intake_id}": {
     parameters: {
       query?: never;
@@ -1556,6 +1604,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/hooks/incident/{source}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["receive_incident"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/metrics": {
     parameters: {
       query?: never;
@@ -2393,6 +2457,7 @@ export interface components {
       actor?: string | null;
       deployment?: components["schemas"]["DeploymentSummary"] | null;
       dismiss_reason?: string | null;
+      draft?: components["schemas"]["IncidentDraft"] | null;
       environment?: string | null;
       fingerprint: string;
       first_seen: string;
@@ -2409,11 +2474,13 @@ export interface components {
       /** @description `fixed`, `reverted`, or `signal_resolved`; set when the state is `resolved`. */
       resolution?: string | null;
       resolved_at?: string | null;
+      revert?: components["schemas"]["RevertedBy"] | null;
       /** @description `critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open. */
       severity: string;
       /** @description What the source last said: `firing` or `resolved`. */
       signal_status: string;
       source: string;
+      spec?: components["schemas"]["IncidentSpec"] | null;
       started_at?: string | null;
       /** @description `open`, `handling`, `resolved`, or `dismissed`. */
       state: string;
@@ -2426,15 +2493,53 @@ export interface components {
       number: number;
       url: string;
     };
+    /** @description The outcome of a delivery from a monitoring tool. */
+    IncidentDelivery: {
+      /** @description The key the delivery is deduplicated by: the request id, the delivery header, or a digest of the body. */
+      delivery_id: string;
+      /**
+       * Format: int32
+       * @description Signals dropped because the source already has `max_open` incidents.
+       */
+      limited: number;
+      /** Format: int32 */
+      opened: number;
+      /** @description `accepted`, `duplicate` (no effect), or `ignored` (a valid delivery that carries nothing to act on). */
+      outcome: string;
+      /** Format: int32 */
+      signals: number;
+      /**
+       * Format: int32
+       * @description Alerts beyond the 500 a delivery may carry.
+       */
+      truncated: number;
+      /** Format: int32 */
+      updated: number;
+    };
     IncidentDetail: components["schemas"]["Incident"] & {
       range?: components["schemas"]["IncidentRange"] | null;
       suspects: components["schemas"]["IncidentSuspect"][];
+    };
+    IncidentDraft: {
+      /** Format: uuid */
+      id: string;
+      /** @description `queued`, `preparing`, `drafting`, `awaiting_operator`, `committing`, `succeeded`, `failed`, or `cancelled`. */
+      state: string;
     };
     /** @description The commits a deployment shipped. */
     IncidentRange: {
       /** @description The commit the environment ran before the deployment; `null` for its first deployment. */
       previous_sha?: string | null;
       sha: string;
+    };
+    IncidentRevertBody: {
+      /** @description 1 to 500 characters, one line. */
+      reason: string;
+      /**
+       * Format: uuid
+       * @description A suspect task of the incident.
+       */
+      work_item_id: string;
     };
     /** @description An incident source an operator defined in the server config. The secret is never sent. */
     IncidentSource: {
@@ -2459,6 +2564,13 @@ export interface components {
     };
     IncidentSourceList: {
       items: components["schemas"]["IncidentSource"][];
+    };
+    IncidentSpec: {
+      /** Format: uuid */
+      id: string;
+      path: string;
+      /** @description `draft`, `ready`, `approved`, `shipped`, or `withdrawn`. */
+      state: string;
     };
     /** @description A task or a merged change the linked deployment shipped. */
     IncidentSuspect: {
@@ -2767,6 +2879,7 @@ export interface components {
         actor?: string | null;
         deployment?: components["schemas"]["DeploymentSummary"] | null;
         dismiss_reason?: string | null;
+        draft?: components["schemas"]["IncidentDraft"] | null;
         environment?: string | null;
         fingerprint: string;
         first_seen: string;
@@ -2783,11 +2896,13 @@ export interface components {
         /** @description `fixed`, `reverted`, or `signal_resolved`; set when the state is `resolved`. */
         resolution?: string | null;
         resolved_at?: string | null;
+        revert?: components["schemas"]["RevertedBy"] | null;
         /** @description `critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open. */
         severity: string;
         /** @description What the source last said: `firing` or `resolved`. */
         signal_status: string;
         source: string;
+        spec?: components["schemas"]["IncidentSpec"] | null;
         started_at?: string | null;
         /** @description `open`, `handling`, `resolved`, or `dismissed`. */
         state: string;
@@ -2940,6 +3055,11 @@ export interface components {
         id: string;
         /** @description As the operator wrote it; `null` in lists. */
         idea?: string | null;
+        /**
+         * Format: uuid
+         * @description The incident the draft proposes a fix for; `null` for every other draft.
+         */
+        incident_id?: string | null;
         /** @description `feature | bugfix | refactor | chore | security_patch`: the kind of work the spec describes; the architect writes its template. */
         kind: string;
         last_round?: components["schemas"]["SpecDraftLastRound"] | null;
@@ -3776,6 +3896,11 @@ export interface components {
       id: string;
       /** @description As the operator wrote it; `null` in lists. */
       idea?: string | null;
+      /**
+       * Format: uuid
+       * @description The incident the draft proposes a fix for; `null` for every other draft.
+       */
+      incident_id?: string | null;
       /** @description `feature | bugfix | refactor | chore | security_patch`: the kind of work the spec describes; the architect writes its template. */
       kind: string;
       last_round?: components["schemas"]["SpecDraftLastRound"] | null;
@@ -5212,6 +5337,114 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  dismiss_incident: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        incident_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Incident"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  draft_incident_fix: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        incident_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DraftFixBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecDraft"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  revert_incident: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        incident_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["IncidentRevertBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };
@@ -8125,6 +8358,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Health"];
+        };
+      };
+    };
+  };
+  receive_incident: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The name of an incident source in the server config */
+        source: string;
+      };
+      cookie?: never;
+    };
+    /** @description The raw body of the monitoring tool */
+    requestBody: {
+      content: {
+        "application/json": string;
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncidentDelivery"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
         };
       };
     };

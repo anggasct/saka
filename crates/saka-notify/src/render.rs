@@ -122,6 +122,18 @@ fn deploy_sentence(lang: Lang, params: &Value, task: &str) -> Option<String> {
     })
 }
 
+fn incident_sentence(lang: Lang, params: &Value) -> Option<String> {
+    let incident = params.get("inbox")?.get("incident")?;
+    let severity = clean(text_at(incident, &["severity"])?, 16);
+    let environment = clean(text_at(incident, &["environment"]).unwrap_or("-"), 32);
+    let title = clean(text_at(incident, &["title"])?, NAME_MAX_CHARS);
+    let occurrences = incident.get("occurrences")?.as_u64()?;
+    Some(match lang {
+        Lang::En => format!("{severity} incident in {environment}: {title} ({occurrences}×)"),
+        Lang::Id => format!("Insiden {severity} di {environment}: {title} ({occurrences}×)"),
+    })
+}
+
 pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>) -> String {
     let params = &notification.params;
     let mut lines = Vec::new();
@@ -149,12 +161,15 @@ pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>)
             if event == "inbox_item_opened" {
                 let kind = text_at(params, &["inbox", "kind"]).unwrap_or("-");
                 let subject = text_at(params, &["inbox", "subject"]).unwrap_or("-");
-                lines.push(format!(
-                    "{}: {} / {}",
-                    lang.pick("Waiting", "Menunggu"),
-                    clean(kind, 32),
-                    clean(subject, 32)
-                ));
+                match incident_sentence(lang, params) {
+                    Some(sentence) => lines.push(sentence),
+                    None => lines.push(format!(
+                        "{}: {} / {}",
+                        lang.pick("Waiting", "Menunggu"),
+                        clean(kind, 32),
+                        clean(subject, 32)
+                    )),
+                }
             }
             if event == "review_done"
                 && let Some(outcome) = text_at(params, &["review", "outcome"])

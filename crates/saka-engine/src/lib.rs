@@ -17,6 +17,8 @@ mod hooks_run;
 mod identity;
 mod inbox;
 mod incident;
+mod incident_actions;
+mod incident_ingest;
 mod intake;
 mod issue_intake;
 mod issue_scan;
@@ -83,6 +85,7 @@ pub use draft::{
 pub use hooks::HookReport;
 pub use identity::{DeviceIssued, PairingIssued, Principal, Registered, SessionIssued, digest};
 pub use incident::{IncidentDetail, IncidentQuery, IncidentRow, SourceView, Suspect};
+pub use incident_ingest::{IncidentReceipt, ReceiptOutcome};
 pub use issue_intake::{IssueDraftView, IssueIntakeView, IssueRepoView, IssueSpecView};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use permission_check::{PREVIEW_SCAN, PreviewChange, PreviewView};
@@ -163,6 +166,7 @@ pub struct Ports {
     pub webhooks: Arc<dyn saka_ports::Webhooks>,
     pub notifier: Arc<dyn saka_ports::Notifier>,
     pub host: Arc<dyn saka_ports::HostCommands>,
+    pub signals: Arc<dyn saka_ports::Signals>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -229,6 +233,7 @@ pub struct Engine {
     ports_in_flight: Mutex<std::collections::BTreeMap<saka_core::ids::EnvironmentId, u16>>,
     accounts: accounts::Accounts,
     path_filter: intake::PathFilterCache,
+    incident_limits: Mutex<std::collections::BTreeMap<String, (i64, u32)>>,
 }
 
 impl Engine {
@@ -245,6 +250,7 @@ impl Engine {
             ports_in_flight: Mutex::new(std::collections::BTreeMap::new()),
             accounts: accounts::Accounts::default(),
             path_filter: intake::PathFilterCache::default(),
+            incident_limits: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 

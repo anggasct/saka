@@ -334,6 +334,38 @@ enum IncidentCmd {
         after_help = "Exit codes: 0 ok, 1 failed."
     )]
     Show { id: String },
+    #[command(
+        about = "Asks the architect for a bugfix spec drafted from the incident",
+        after_help = "Exit codes: 0 queued, 1 failed, 4 a recovery is already running or the incident is closed."
+    )]
+    DraftFix {
+        id: String,
+        #[arg(
+            help = "Up to 1000 characters of your own text for the architect",
+            long
+        )]
+        note: Option<String>,
+    },
+    #[command(
+        about = "Reverts a task that shipped the deployment the incident is linked to",
+        after_help = "Exit codes: 0 revert queued, 1 failed, 4 the task is not a suspect, a recovery is already running, or the task cannot be reverted."
+    )]
+    Revert {
+        id: String,
+        #[arg(help = "The suspect task id")]
+        task: String,
+        #[arg(long)]
+        reason: String,
+    },
+    #[command(
+        about = "Dismisses an open incident: a firing alert is ignored until its signal resolves",
+        after_help = "Exit codes: 0 dismissed, 1 failed, 4 the incident is not open."
+    )]
+    Dismiss {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1137,6 +1169,15 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                         client.incident_list(&project, &filter, limit).await
                     }
                     IncidentCmd::Show { id } => client.incident_show(&id).await,
+                    IncidentCmd::DraftFix { id, note } => {
+                        client.incident_draft_fix(&id, note.as_deref()).await
+                    }
+                    IncidentCmd::Revert { id, task, reason } => {
+                        client.incident_revert(&id, &task, &reason).await
+                    }
+                    IncidentCmd::Dismiss { id, reason } => {
+                        client.incident_dismiss(&id, &reason).await
+                    }
                 }
             })
         }

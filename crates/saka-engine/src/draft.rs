@@ -51,6 +51,7 @@ pub struct NewSpecDraft {
     pub kind: WorkKind,
     pub context_paths: Vec<String>,
     pub deployment_id: Option<saka_core::ids::DeploymentId>,
+    pub incident_id: Option<saka_core::ids::IncidentId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -610,6 +611,7 @@ impl Engine {
         if total > MAX_CONTEXT_BYTES {
             return Err(invalid("context_paths", "too_large"));
         }
+        let new_incident = new.incident_id;
         let _guard = self.locked()?;
         self.refuse_taken_target(project_id, &path, &slug, revising)?;
         let now = self.now();
@@ -626,6 +628,7 @@ impl Engine {
             kind: new.kind,
             context_paths: new.context_paths,
             deployment_id: new.deployment_id,
+            incident_id: new.incident_id,
         });
         let mut after = core::evolve(None, &event, now)
             .ok_or_else(|| EngineError::Internal("draft not requested".into()))?;
@@ -639,6 +642,16 @@ impl Engine {
                 Some(action.record(self, cause, Some(project_id), Some(spec_draft_id.0), reply));
         }
         batch.drafts.push(after.clone());
+        if let Some(incident_id) = new_incident {
+            self.link_incident(
+                &mut batch,
+                incident_id,
+                saka_core::incident::Recovery::Draft(spec_draft_id),
+                project_id,
+                cause,
+                now,
+            )?;
+        }
         self.commit(&batch)?;
         Ok(after)
     }
@@ -984,6 +997,7 @@ impl Engine {
             | K::EnvVerifyMerged
             | K::ScmWebhookPrune
             | K::WorkspaceReloadConfig
+            | K::IncidentDraft
             | K::ScmScanChanges
             | K::ScmScanIssues
             | K::IntakeIssueRender
@@ -1600,7 +1614,7 @@ impl Engine {
             path: &path,
             source_commit: &commit,
             bytes: &bytes,
-            origin: if from_issue {
+            origin: if from_issue || d.draft.incident_id.is_some() {
                 SpecOrigin::Intake
             } else {
                 SpecOrigin::Architect

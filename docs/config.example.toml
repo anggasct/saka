@@ -26,8 +26,8 @@ allow_unreviewed_chore = false     # true lets a project's saka.toml skip review
 [workspace]
 config_poll_secs = 300             # 0 or 30..=86400; how often each project's saka.toml is re-read (0 = only on reload)
 
-# [hooks]                          # optional: a listener that only serves POST /hooks/{scm.id}
-# listen = "127.0.0.1:7421"        # must differ from server.listen; put TLS and a public URL in front of it
+[hooks]                            # optional: a listener that serves POST /hooks/{scm.id} and POST /hooks/incident/{name}
+listen = "127.0.0.1:7421"          # must differ from server.listen; put TLS and a public URL in front of it; needed by every incident source
 
 # `saka scm create-app` appends this block with the files it writes in scm/<id>/ next to this config.
 [[scm]]

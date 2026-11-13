@@ -124,6 +124,7 @@ impl Engine {
             self.push_job(&mut jobs, job, Some(project), &cause);
         }
         report.decisions += self.reconcile_issue_intakes(&cause)?;
+        report.decisions += self.reconcile_incidents(&cause)?;
         self.reconcile_user_links(now, &cause, &mut jobs)?;
         for job in self.monitor_sessions(snapshot.tasks.iter().filter_map(Task::live_session)) {
             let project = project_of(&snapshot.tasks, &job);

@@ -32,6 +32,7 @@ fn incident_row(row: &Row<'_>) -> Result<Incident> {
         deployment_id: opt_uuid(row, "deployment_id")?.map(DeploymentId),
         draft_id: opt_uuid(row, "draft_id")?.map(SpecDraftId),
         revert_id: opt_uuid(row, "revert_id")?.map(WorkItemId),
+        released: opt_vocab(row, "released")?,
         dismiss_reason: row.get("dismiss_reason")?,
         actor: row.get("actor")?,
         resolved_at: opt_ts(row, "resolved_at")?,
@@ -44,15 +45,16 @@ pub(crate) fn upsert(tx: &Transaction<'_>, i: &Incident) -> Result<()> {
     tx.execute(
         "INSERT INTO incident (id, project_id, source, fingerprint, state, resolution, signal_status, severity,
            title, summary, environment, url, labels, occurrences, started_at, first_seen, last_seen,
-           deployment_id, draft_id, revert_id, dismiss_reason, actor, resolved_at, created_at, updated_at)
+           deployment_id, draft_id, revert_id, dismiss_reason, actor, resolved_at, created_at, updated_at, released)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-           ?21, ?22, ?23, ?24, ?25)
+           ?21, ?22, ?23, ?24, ?25, ?26)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, resolution = excluded.resolution,
            signal_status = excluded.signal_status, severity = excluded.severity,
            occurrences = excluded.occurrences, last_seen = excluded.last_seen,
            draft_id = excluded.draft_id, revert_id = excluded.revert_id,
            dismiss_reason = excluded.dismiss_reason, actor = excluded.actor,
-           resolved_at = excluded.resolved_at, updated_at = excluded.updated_at",
+           resolved_at = excluded.resolved_at, updated_at = excluded.updated_at,
+           released = excluded.released",
         params![
             i.id.to_string(),
             i.project_id.to_string(),
@@ -79,6 +81,7 @@ pub(crate) fn upsert(tx: &Transaction<'_>, i: &Incident) -> Result<()> {
             i.resolved_at.map(|t| t.0),
             i.created_at.0,
             i.updated_at.0,
+            i.released.map(|r| r.as_str()),
         ],
     )?;
     Ok(())
@@ -178,4 +181,93 @@ pub fn list(
             (i, key)
         })
         .collect())
+}
+
+pub fn latest_of(conn: &Connection, source: &str, fingerprint: &str) -> Result<Option<Incident>> {
+    let found = query(
+        conn,
+        "WHERE source = ?1 AND fingerprint = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
+        &[&source, &fingerprint],
+    )?;
+    Ok(found.into_iter().next())
+}
+
+pub fn live_count(conn: &Connection, source: &str) -> Result<u32> {
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM incident WHERE source = ?1 AND state IN ('open','handling')",
+        [source],
+        |row| row.get(0),
+    )?;
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+pub fn handling(conn: &Connection) -> Result<Vec<Incident>> {
+    query(
+        conn,
+        "WHERE state = 'handling' ORDER BY created_at, id",
+        &[],
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryRow {
+    pub id: uuid::Uuid,
+    pub source: String,
+    pub delivery_key: String,
+    pub received_at: saka_core::time::Timestamp,
+    pub outcome: &'static str,
+    pub signals: u32,
+}
+
+pub fn delivery_seen(
+    conn: &Connection,
+    source: &str,
+    delivery_key: &str,
+) -> Result<Option<saka_core::time::Timestamp>> {
+    let found: Option<i64> = conn
+        .query_row(
+            concat!(
+                "SELECT ",
+                incident_delivery_columns!(),
+                " FROM incident_delivery WHERE source = ?1 AND delivery_key = ?2"
+            ),
+            params![source, delivery_key],
+            |row| row.get("received_at"),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+    Ok(found.map(saka_core::time::Timestamp))
+}
+
+pub(crate) fn upsert_delivery(tx: &Transaction<'_>, d: &DeliveryRow) -> Result<()> {
+    tx.execute(
+        "INSERT INTO incident_delivery (id, source, delivery_key, received_at, outcome, signals)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (source, delivery_key) DO UPDATE SET received_at = excluded.received_at,
+           outcome = excluded.outcome, signals = excluded.signals",
+        params![
+            d.id.to_string(),
+            d.source,
+            d.delivery_key,
+            d.received_at.0,
+            d.outcome,
+            d.signals
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn revert_brief(
+    conn: &Connection,
+    id: WorkItemId,
+) -> Result<Option<(String, saka_core::vocab::WorkItemState)>> {
+    let mut stmt = conn.prepare("SELECT task_key, state FROM work_item WHERE id = ?1")?;
+    let mut found = stmt.query([id.to_string()])?;
+    match found.next()? {
+        Some(row) => Ok(Some((row.get("task_key")?, vocab(row, "state")?))),
+        None => Ok(None),
+    }
 }

@@ -778,6 +778,54 @@ impl Client {
         }
     }
 
+    pub async fn incident_draft_fix(&self, id: &str, note: Option<&str>) -> ExitCode {
+        let body = match note {
+            Some(note) => json!({ "note": note }),
+            None => json!({}),
+        };
+        match self
+            .post(
+                &format!("/api/v1/incidents/{id}/actions/draft-fix"),
+                &body,
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, draft_line),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn incident_revert(&self, id: &str, task: &str, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/incidents/{id}/actions/revert"),
+                &json!({ "work_item_id": task, "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, |body| {
+                format!("{}  {}", text(&body["id"]), text(&body["task_key"]))
+            }),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn incident_dismiss(&self, id: &str, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/incidents/{id}/actions/dismiss"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, incident_line),
+            Err(code) => code,
+        }
+    }
+
     pub async fn incident_show(&self, id: &str) -> ExitCode {
         match self.get(&format!("/api/v1/incidents/{id}")).await {
             Ok(a) => self.finish(&a, incident_detail),

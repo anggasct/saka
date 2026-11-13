@@ -26,6 +26,7 @@ saka-docs = { path = "../saka-docs" }
 saka-engine = { path = "../saka-engine" }
 saka-mcp = { path = "../saka-mcp" }
 saka-env = { path = "../saka-env" }
+saka-intake = { path = "../saka-intake" }
 saka-ports = { path = "../saka-ports" }
 saka-notify = { path = "../saka-notify" }
 saka-scm = { path = "../saka-scm" }

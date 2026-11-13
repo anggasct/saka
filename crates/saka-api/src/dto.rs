@@ -1570,6 +1570,8 @@ pub struct SpecDraft {
     pub context_paths: Vec<String>,
     /// The failed deployment the draft proposes a fix for; `null` for every other draft.
     pub deployment_id: Option<Uuid>,
+    /// The incident the draft proposes a fix for; `null` for every other draft.
+    pub incident_id: Option<Uuid>,
     /// `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`
     pub state: String,
     /// The latest attempt; `null` before the first admission.
@@ -1849,6 +1851,7 @@ impl SpecDraft {
             kind: d.kind.as_str().to_string(),
             context_paths: d.context_paths.clone(),
             deployment_id: d.deployment_id.map(|id| id.0),
+            incident_id: d.incident_id.map(|id| id.0),
             state: d.state.as_str().to_string(),
             attempt: v
                 .draft
@@ -4295,9 +4298,30 @@ pub struct Incident {
     pub last_seen: String,
     /// The last succeeded deployment of the environment before the incident started; it never changes.
     pub deployment: Option<DeploymentSummary>,
+    /// The spec draft of the active or last fix draft; `null` until a fix is drafted.
+    pub draft: Option<IncidentDraft>,
+    /// The spec the fix draft registered; `null` until the draft succeeds.
+    pub spec: Option<IncidentSpec>,
+    /// The revert task of the active or last revert; `null` until a suspect is reverted.
+    pub revert: Option<RevertedBy>,
     pub dismiss_reason: Option<String>,
     pub actor: Option<String>,
     pub resolved_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentDraft {
+    pub id: Uuid,
+    /// `queued`, `preparing`, `drafting`, `awaiting_operator`, `committing`, `succeeded`, `failed`, or `cancelled`.
+    pub state: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentSpec {
+    pub id: Uuid,
+    pub path: String,
+    /// `draft`, `ready`, `approved`, `shipped`, or `withdrawn`.
+    pub state: String,
 }
 
 impl From<&saka_engine::IncidentRow> for Incident {
@@ -4322,6 +4346,20 @@ impl From<&saka_engine::IncidentRow> for Incident {
             first_seen: time(i.first_seen),
             last_seen: time(i.last_seen),
             deployment: r.deployment.as_ref().map(DeploymentSummary::from),
+            draft: r.draft.map(|(id, state)| IncidentDraft {
+                id: id.0,
+                state: state.as_str().into(),
+            }),
+            spec: r.spec.as_ref().map(|(id, path, state)| IncidentSpec {
+                id: id.0,
+                path: path.clone(),
+                state: state.as_str().into(),
+            }),
+            revert: r.revert.as_ref().map(|(id, key, state)| RevertedBy {
+                id: id.0,
+                key: key.clone(),
+                state: state.as_str().into(),
+            }),
             dismiss_reason: i.dismiss_reason.clone(),
             actor: i.actor.clone(),
             resolved_at: opt_time(i.resolved_at),
@@ -4400,6 +4438,45 @@ impl From<&saka_engine::IncidentDetail> for IncidentDetail {
                 sha: sha.clone(),
             }),
             suspects: d.suspects.iter().map(IncidentSuspect::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IncidentRevertBody {
+    /// A suspect task of the incident.
+    pub work_item_id: Uuid,
+    /// 1 to 500 characters, one line.
+    pub reason: String,
+}
+
+/// The outcome of a delivery from a monitoring tool.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentDelivery {
+    /// The key the delivery is deduplicated by: the request id, the delivery header, or a digest of the body.
+    pub delivery_id: String,
+    /// `accepted`, `duplicate` (no effect), or `ignored` (a valid delivery that carries nothing to act on).
+    pub outcome: String,
+    pub signals: u32,
+    pub opened: u32,
+    pub updated: u32,
+    /// Signals dropped because the source already has `max_open` incidents.
+    pub limited: u32,
+    /// Alerts beyond the 500 a delivery may carry.
+    pub truncated: u32,
+}
+
+impl From<&saka_engine::IncidentReceipt> for IncidentDelivery {
+    fn from(r: &saka_engine::IncidentReceipt) -> IncidentDelivery {
+        IncidentDelivery {
+            delivery_id: r.delivery_id.clone(),
+            outcome: r.outcome.as_str().into(),
+            signals: r.signals,
+            opened: r.opened,
+            updated: r.updated,
+            limited: r.limited,
+            truncated: r.truncated,
         }
     }
 }

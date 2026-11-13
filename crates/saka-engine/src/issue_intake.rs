@@ -883,6 +883,7 @@ impl Engine {
                     kind: intake.kind,
                     context_paths: Vec::new(),
                     deployment_id: None,
+                    incident_id: None,
                 },
                 &cause,
                 None,

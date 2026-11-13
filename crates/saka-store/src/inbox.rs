@@ -26,6 +26,7 @@ pub struct OpenedItem {
     pub project_id: ProjectId,
     pub kind: InboxKind,
     pub subject: InboxSubject,
+    pub source_id: String,
     pub work_item_id: Option<WorkItemId>,
     pub task_key: Option<String>,
     pub spec_id: Option<SpecId>,
@@ -229,6 +230,7 @@ fn live_items(tx: &Transaction<'_>, scope: Scope) -> Result<Vec<Live>> {
         Scope::Spec(id) => ("subject = 'spec' AND spec_id = ?1", id.to_string()),
         Scope::Intake(id) => ("subject = 'intake' AND source_id = ?1", id.to_string()),
         Scope::Deployment(id) => ("subject = 'deployment' AND source_id = ?1", id.to_string()),
+        Scope::Incident(id) => ("subject = 'incident' AND source_id = ?1", id.to_string()),
         Scope::Draft(id) => (
             "work_item_id IS NULL AND (
                (subject = 'permission'
@@ -379,6 +381,7 @@ pub(crate) fn sync(
             project_id: d.project_id,
             kind: d.kind,
             subject: d.subject,
+            source_id: d.source_id.clone(),
             work_item_id: d.work_item_id,
             task_key,
             spec_id: d.spec_id,

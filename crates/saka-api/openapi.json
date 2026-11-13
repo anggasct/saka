@@ -1267,6 +1267,180 @@
         }
       }
     },
+    "/api/v1/incidents/{incident_id}/actions/dismiss": {
+      "post": {
+        "tags": [
+          "incidents"
+        ],
+        "operationId": "dismiss_incident",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/incidents/{incident_id}/actions/draft-fix": {
+      "post": {
+        "tags": [
+          "incidents"
+        ],
+        "operationId": "draft_incident_fix",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftFixBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDraft"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/incidents/{incident_id}/actions/revert": {
+      "post": {
+        "tags": [
+          "incidents"
+        ],
+        "operationId": "revert_incident",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentRevertBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/issue-intakes/{intake_id}": {
       "get": {
         "tags": [
@@ -5869,6 +6043,56 @@
         }
       }
     },
+    "/hooks/incident/{source}": {
+      "post": {
+        "tags": [
+          "incidents"
+        ],
+        "operationId": "receive_incident",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The name of an incident source in the server config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The raw body of the monitoring tool",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentDelivery"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -8617,6 +8841,17 @@
               "null"
             ]
           },
+          "draft": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IncidentDraft",
+                "description": "The spec draft of the active or last fix draft; `null` until a fix is drafted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "environment": {
             "type": [
               "string",
@@ -8667,6 +8902,17 @@
               "null"
             ]
           },
+          "revert": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevertedBy",
+                "description": "The revert task of the active or last revert; `null` until a suspect is reverted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "severity": {
             "type": "string",
             "description": "`critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open."
@@ -8677,6 +8923,17 @@
           },
           "source": {
             "type": "string"
+          },
+          "spec": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IncidentSpec",
+                "description": "The spec the fix draft registered; `null` until the draft succeeds."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "started_at": {
             "type": [
@@ -8719,6 +8976,56 @@
           }
         }
       },
+      "IncidentDelivery": {
+        "type": "object",
+        "description": "The outcome of a delivery from a monitoring tool.",
+        "required": [
+          "delivery_id",
+          "outcome",
+          "signals",
+          "opened",
+          "updated",
+          "limited",
+          "truncated"
+        ],
+        "properties": {
+          "delivery_id": {
+            "type": "string",
+            "description": "The key the delivery is deduplicated by: the request id, the delivery header, or a digest of the body."
+          },
+          "limited": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Signals dropped because the source already has `max_open` incidents.",
+            "minimum": 0
+          },
+          "opened": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`accepted`, `duplicate` (no effect), or `ignored` (a valid delivery that carries nothing to act on)."
+          },
+          "signals": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Alerts beyond the 500 a delivery may carry.",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "IncidentDetail": {
         "allOf": [
           {
@@ -8751,6 +9058,23 @@
           }
         ]
       },
+      "IncidentDraft": {
+        "type": "object",
+        "required": [
+          "id",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `preparing`, `drafting`, `awaiting_operator`, `committing`, `succeeded`, `failed`, or `cancelled`."
+          }
+        }
+      },
       "IncidentRange": {
         "type": "object",
         "description": "The commits a deployment shipped.",
@@ -8769,6 +9093,25 @@
             "type": "string"
           }
         }
+      },
+      "IncidentRevertBody": {
+        "type": "object",
+        "required": [
+          "work_item_id",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "1 to 500 characters, one line."
+          },
+          "work_item_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A suspect task of the incident."
+          }
+        },
+        "additionalProperties": false
       },
       "IncidentSource": {
         "type": "object",
@@ -8838,6 +9181,27 @@
             "items": {
               "$ref": "#/components/schemas/IncidentSource"
             }
+          }
+        }
+      },
+      "IncidentSpec": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "path": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "`draft`, `ready`, `approved`, `shipped`, or `withdrawn`."
           }
         }
       },
@@ -9934,6 +10298,17 @@
                     "null"
                   ]
                 },
+                "draft": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/IncidentDraft",
+                      "description": "The spec draft of the active or last fix draft; `null` until a fix is drafted."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "environment": {
                   "type": [
                     "string",
@@ -9984,6 +10359,17 @@
                     "null"
                   ]
                 },
+                "revert": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RevertedBy",
+                      "description": "The revert task of the active or last revert; `null` until a suspect is reverted."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "severity": {
                   "type": "string",
                   "description": "`critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open."
@@ -9994,6 +10380,17 @@
                 },
                 "source": {
                   "type": "string"
+                },
+                "spec": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/IncidentSpec",
+                      "description": "The spec the fix draft registered; `null` until the draft succeeds."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "started_at": {
                   "type": [
@@ -10599,6 +10996,14 @@
                     "null"
                   ],
                   "description": "As the operator wrote it; `null` in lists."
+                },
+                "incident_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The incident the draft proposes a fix for; `null` for every other draft."
                 },
                 "kind": {
                   "type": "string",
@@ -13337,6 +13742,14 @@
               "null"
             ],
             "description": "As the operator wrote it; `null` in lists."
+          },
+          "incident_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The incident the draft proposes a fix for; `null` for every other draft."
           },
           "kind": {
             "type": "string",

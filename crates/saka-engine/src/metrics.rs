@@ -23,6 +23,8 @@ pub struct Counters {
     webhooks: Mutex<BTreeMap<(String, String, String), u64>>,
     hook_runs: Mutex<BTreeMap<(String, String, String), u64>>,
     gate_runs: Mutex<BTreeMap<(String, String), u64>>,
+    incident_deliveries: Mutex<BTreeMap<(String, String), u64>>,
+    incident_signals: Mutex<BTreeMap<(String, String), u64>>,
     auto_retries: Mutex<BTreeMap<(String, String), u64>>,
     merge_turns: Mutex<BTreeMap<(String, String), u64>>,
     merge_dequeues: Mutex<BTreeMap<(String, String), u64>>,
@@ -142,6 +144,14 @@ impl Counters {
 
     pub(crate) fn merge_request(&self, by: &str) {
         bump(&self.merge_requests, by, "");
+    }
+
+    pub(crate) fn incident_delivery(&self, source: &str, outcome: &str) {
+        bump(&self.incident_deliveries, source, outcome);
+    }
+
+    pub(crate) fn incident_signal(&self, source: &str, outcome: &str) {
+        bump(&self.incident_signals, source, outcome);
     }
 
     pub(crate) fn gate_run(&self, source: &str, outcome: &str, seconds: f64) {
@@ -431,6 +441,8 @@ pub struct MetricsSnapshot {
     pub webhook_deliveries: Vec<(String, String, String, u64)>,
     pub hook_runs: Vec<(String, String, String, u64)>,
     pub gate_runs: Vec<(String, String, u64)>,
+    pub incident_deliveries: Vec<(String, String, u64)>,
+    pub incident_signals: Vec<(String, String, u64)>,
     pub auto_retries: Vec<(String, u64)>,
     pub merge_turns: Vec<(String, u64)>,
     pub merge_dequeues: Vec<(String, u64)>,
@@ -598,6 +610,8 @@ impl Engine {
             webhook_deliveries: self.counters.webhook_counts(),
             hook_runs: self.counters.hook_run_counts(),
             gate_runs: copy(&self.counters.gate_runs),
+            incident_deliveries: copy(&self.counters.incident_deliveries),
+            incident_signals: copy(&self.counters.incident_signals),
             auto_retries: copy(&self.counters.auto_retries)
                 .into_iter()
                 .map(|(code, _, n)| (code, n))

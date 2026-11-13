@@ -523,6 +523,30 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
             n,
         );
     }
+    t.family(
+        "saka_incident_deliveries_total",
+        "counter",
+        "Incident source deliveries by source and outcome (accepted, duplicate, ignored, rejected).",
+    );
+    for (source, outcome, n) in &m.incident_deliveries {
+        t.sample(
+            "saka_incident_deliveries_total",
+            &[("source", source), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
+        "saka_incident_signals_total",
+        "counter",
+        "Incident signals by source and outcome (opened, updated, resolved, ignored, limited, truncated).",
+    );
+    for (source, outcome, n) in &m.incident_signals {
+        t.sample(
+            "saka_incident_signals_total",
+            &[("source", source), ("outcome", outcome)],
+            n,
+        );
+    }
     histogram(
         &mut t,
         "saka_gate_duration_seconds",

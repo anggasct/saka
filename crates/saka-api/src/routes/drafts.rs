@@ -96,6 +96,7 @@ pub async fn create_spec_draft(
         &respond,
         |cause, action| async move {
             let new = NewSpecDraft {
+                incident_id: None,
                 path: req.path,
                 idea: req.idea,
                 locale,

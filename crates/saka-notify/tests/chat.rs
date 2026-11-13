@@ -362,3 +362,29 @@ fn an_opened_inbox_item_names_what_waits_and_links_to_it_only_with_a_public_url(
         "Butuh kamu: tasks/s1 di tasks\nMenunggu: permission / permission"
     );
 }
+
+#[test]
+fn an_opened_incident_item_is_one_sentence_with_severity_environment_title_and_count() {
+    let mut params = hook_event("inbox_item_opened");
+    params["inbox"] = json!({
+        "id": "0193f0c4-0000-7000-8000-000000000009",
+        "kind": "incident",
+        "subject": "incident",
+        "incident": {
+            "source": "prod-alerts",
+            "severity": "critical",
+            "environment": "production",
+            "title": "Checkout\nerror rate above 5%",
+            "occurrences": 3
+        }
+    });
+    let n = notification("ops", "hook.event", params);
+    assert_eq!(
+        render(Lang::En, &n, None),
+        "Needs you: tasks/s1 in tasks\ncritical incident in production: Checkouterror rate above 5% (3×)"
+    );
+    assert_eq!(
+        render(Lang::Id, &n, Some("https://saka.example.com")),
+        "Butuh kamu: tasks/s1 di tasks\nInsiden critical di production: Checkouterror rate above 5% (3×)\nhttps://saka.example.com/inbox/0193f0c4-0000-7000-8000-000000000009"
+    );
+}

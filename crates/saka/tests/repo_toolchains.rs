@@ -239,6 +239,7 @@ impl World {
                 webhooks: Arc::new(saka_testkit::FakeHooks::default()),
                 notifier: Arc::new(saka_testkit::FakeHooks::default()),
                 host: Arc::new(saka_testkit::FakeHooks::default()),
+                signals: Arc::new(saka_testkit::FakeSignals::default()),
             },
             EngineConfig {
                 loop_cfg: sim.loop_cfg,

@@ -2472,6 +2472,144 @@ fn incidents_are_listed_and_shown_with_their_deployment() {
 }
 
 #[test]
+fn an_incident_is_dismissed_drafted_and_reverted_from_the_cli_with_the_documented_codes() {
+    use saka_core::Ctx;
+    use saka_core::ids::IdSource;
+    use saka_core::incident::{self, Arrival, IncidentSignal, Observed, RawSource, Source};
+    use saka_core::time::Timestamp;
+    use saka_core::vocab::{IncidentSeverity, SignalStatus};
+
+    struct Ids(u128);
+    impl IdSource for Ids {
+        fn next_id(&mut self) -> uuid::Uuid {
+            self.0 += 1;
+            uuid::Uuid::from_u128(self.0)
+        }
+    }
+
+    let sim = Sim::new(SimConfig {
+        incident_sources: vec![
+            Source::validate(&RawSource {
+                name: "prod-alerts".into(),
+                project: "tasks".into(),
+                kind: "generic".into(),
+                secret_file: "/etc/saka/prod.secret".into(),
+                ..RawSource::default()
+            })
+            .unwrap(),
+        ],
+        ..SimConfig::default()
+    });
+    let open = |fingerprint: &str, base: u128| {
+        let signal = IncidentSignal {
+            fingerprint: fingerprint.into(),
+            status: SignalStatus::Firing,
+            severity: IncidentSeverity::High,
+            title: format!("{fingerprint} failing"),
+            summary: String::new(),
+            environment: None,
+            url: None,
+            started_at: None,
+            labels: Default::default(),
+        };
+        let arrival = Arrival {
+            project_id: sim.project_id,
+            source: "prod-alerts",
+            max_open: 50,
+            live_in_source: 0,
+            deployment_id: None,
+        };
+        let mut ids = Ids(base);
+        let mut ctx = Ctx {
+            now: Timestamp(1_000),
+            ids: &mut ids,
+        };
+        let Observed::Opened(events) = incident::observe(None, &signal, &arrival, &mut ctx) else {
+            panic!("expected an incident");
+        };
+        let created = incident::evolve_all(None, &events, Timestamp(1_000)).unwrap();
+        let mut batch = saka_store::Batch::new(Timestamp(1_000));
+        batch.incidents.push(created.clone());
+        sim.engine().store().commit(&batch).unwrap();
+        created.id.to_string()
+    };
+    let noisy = open("noisy", 100);
+    let broken = open("broken", 200);
+    let server = serve(&sim);
+
+    let dismissed = saka(
+        &server,
+        &["incident", "dismiss", &noisy, "--reason", "known noise"],
+    );
+    assert_eq!(
+        code(&dismissed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&dismissed.stderr)
+    );
+    assert!(
+        stdout(&dismissed).contains("dismissed"),
+        "{}",
+        stdout(&dismissed)
+    );
+    let twice = saka(
+        &server,
+        &["incident", "dismiss", &noisy, "--reason", "again"],
+    );
+    assert_eq!(code(&twice), 4, "409 invalid_state");
+    assert!(String::from_utf8_lossy(&twice.stderr).contains("invalid_state"));
+
+    let drafted = saka(
+        &server,
+        &[
+            "incident",
+            "draft-fix",
+            &broken,
+            "--note",
+            "after the deploy",
+        ],
+    );
+    assert_eq!(
+        code(&drafted),
+        0,
+        "{}",
+        String::from_utf8_lossy(&drafted.stderr)
+    );
+    assert!(
+        stdout(&drafted).contains("bugfix-incident-prod-alerts-"),
+        "{}",
+        stdout(&drafted)
+    );
+    let busy = saka(&server, &["incident", "draft-fix", &broken]);
+    assert_eq!(code(&busy), 4, "409 incident_handling");
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("incident_handling"));
+
+    let stranger = saka(
+        &server,
+        &[
+            "incident",
+            "revert",
+            &noisy,
+            "0193f0c4-0000-7000-8000-000000000001",
+            "--reason",
+            "it broke",
+        ],
+    );
+    assert_eq!(code(&stranger), 4, "409 incident_closed");
+    let unknown = saka(
+        &server,
+        &[
+            "incident",
+            "dismiss",
+            "0193f0c4-0000-7000-8000-000000000000",
+            "--reason",
+            "x",
+        ],
+    );
+    assert_eq!(code(&unknown), 1);
+}
+
+#[test]
 fn a_deployment_is_redeployed_and_cancelled_from_the_cli_with_the_documented_codes() {
     use saka_core::environment::{self, RawEnvironment};
 

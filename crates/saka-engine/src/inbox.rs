@@ -34,11 +34,27 @@ impl Engine {
             .iter()
             .map(|d| (d, self.holds_tasks(batch, d)))
             .collect();
-        let sources = sources.chain(
-            deployments
-                .iter()
-                .map(|(d, gated)| Source::Deployment(d, *gated)),
-        );
+        let incidents: Vec<(&saka_core::incident::Incident, bool)> = batch
+            .incidents
+            .iter()
+            .map(|i| {
+                let listed = self
+                    .incident_source_config(&i.source)
+                    .is_none_or(|s| s.opens_inbox_item(i.severity));
+                (i, listed)
+            })
+            .collect();
+        let sources = sources
+            .chain(
+                deployments
+                    .iter()
+                    .map(|(d, gated)| Source::Deployment(d, *gated)),
+            )
+            .chain(
+                incidents
+                    .iter()
+                    .map(|(i, listed)| Source::Incident(i, *listed)),
+            );
         let mut syncs: Vec<InboxSync> = sources
             .map(|source| {
                 let mut desired = inbox::desired(source, ceilings);
@@ -50,6 +66,12 @@ impl Engine {
                         .filter(|d| d.subject == saka_core::vocab::InboxSubject::Spec)
                     {
                         item.params["issue"] = issue.clone();
+                    }
+                }
+                if let Source::Incident(incident, _) = source {
+                    let suspects = self.incident_suspect_count(incident);
+                    for item in &mut desired {
+                        item.params["suspects"] = serde_json::json!(suspects);
                     }
                 }
                 InboxSync {
@@ -123,6 +145,25 @@ impl Engine {
         }))
     }
 
+    fn incident_ref_of(&self, item: &OpenedItem) -> Option<Box<hook::IncidentRef>> {
+        if item.subject != saka_core::vocab::InboxSubject::Incident {
+            return None;
+        }
+        let id = saka_core::ids::IncidentId(item.source_id.parse().ok()?);
+        let incident = self
+            .store
+            .read(|c| saka_store::incident::load(c, id))
+            .ok()
+            .flatten()?;
+        Some(Box::new(hook::IncidentRef {
+            source: incident.source,
+            severity: incident.severity,
+            environment: incident.environment,
+            title: incident.title,
+            occurrences: incident.occurrences,
+        }))
+    }
+
     pub(crate) fn plan_inbox_hooks(&self, opened: &[OpenedItem], now: Timestamp) -> Option<Batch> {
         if !self
             .cfg
@@ -148,6 +189,7 @@ impl Engine {
                     id: item.id,
                     kind: item.kind,
                     subject: item.subject,
+                    incident: self.incident_ref_of(item),
                 },
                 NamedRef {
                     id: project.id.0,

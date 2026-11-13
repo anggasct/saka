@@ -181,6 +181,8 @@ pub enum Rejection {
     IncidentHandling,
     #[error("the incident is closed")]
     IncidentClosed,
+    #[error("the task did not ship the deployment the incident is linked to")]
+    IncidentSuspectUnknown,
     #[error("the task already has a revert in progress")]
     RevertInProgress { work_item_id: String },
     #[error("the task was already reverted")]
@@ -326,6 +328,7 @@ impl Rejection {
             Rejection::DeploymentFinished => "deployment_finished",
             Rejection::IncidentHandling => "incident_handling",
             Rejection::IncidentClosed => "incident_closed",
+            Rejection::IncidentSuspectUnknown => "incident_suspect_unknown",
             Rejection::RevertInProgress { .. } => "revert_in_progress",
             Rejection::AlreadyReverted { .. } => "already_reverted",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
