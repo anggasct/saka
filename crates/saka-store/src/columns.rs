@@ -9,7 +9,7 @@ macro_rules! spec_draft_columns {
         spec_draft_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "path", "slug", "idea", "locale", "mode", "context_paths", "state", "attempt", "current_attempt_id", "retries", "queued_at", "awaiting_since", "failure", "spec_id", "commit_sha", "version", "created_by", "created_at", "updated_at", "finished_at", "target_kind")
+        qualified!($prefix: "id", "project_id", "path", "slug", "idea", "locale", "mode", "context_paths", "state", "attempt", "current_attempt_id", "retries", "queued_at", "awaiting_since", "failure", "spec_id", "commit_sha", "version", "created_by", "created_at", "updated_at", "finished_at", "target_kind", "kind")
     };
 }
 
@@ -19,6 +19,15 @@ macro_rules! spec_draft_attempt_columns {
     };
     ($prefix:literal) => {
         qualified!($prefix: "id", "spec_draft_id", "project_id", "attempt", "trigger", "reason", "note", "state", "base_sha", "budget", "budget_warnings", "resumed_lost", "rounds", "packet", "packet_sha256", "failure", "started_at", "ended_at")
+    };
+}
+
+macro_rules! issue_intake_columns {
+    () => {
+        issue_intake_columns!("")
+    };
+    ($prefix:literal) => {
+        qualified!($prefix: "id", "project_id", "repo_id", "number", "url", "title", "author", "state", "lane", "kind", "cause", "actor", "spec_id", "draft_id", "failure", "retries", "created_at", "updated_at")
     };
 }
 

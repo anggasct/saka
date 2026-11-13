@@ -27,7 +27,8 @@ impl Engine {
             .iter()
             .map(Source::Task)
             .chain(batch.drafts.iter().map(Source::Draft))
-            .chain(batch.specs.iter().map(Source::Spec));
+            .chain(batch.specs.iter().map(Source::Spec))
+            .chain(batch.issue_intakes.iter().map(Source::Intake));
         sources
             .map(|source| InboxSync {
                 scope: inbox::scope(source),

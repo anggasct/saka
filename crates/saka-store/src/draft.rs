@@ -37,6 +37,7 @@ fn spec_draft(row: &Row<'_>) -> Result<SpecDraft> {
         locale: vocab(row, "locale")?,
         mode: vocab(row, "mode")?,
         target_kind: vocab(row, "target_kind")?,
+        kind: vocab(row, "kind")?,
         context_paths: json(row, "context_paths")?,
         state: vocab(row, "state")?,
         attempt: u32_col(row, "attempt")?,

@@ -3,7 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use saka_core::ids::{ProjectId, SpecDraftId};
-use saka_core::vocab::{DraftLocale, DraftMode, TargetKind};
+use saka_core::vocab::{DraftLocale, DraftMode, TargetKind, WorkKind};
 use saka_engine::{NewSpecDraft, Produced};
 
 use super::{reply, unexpected};
@@ -63,6 +63,13 @@ pub async fn create_spec_draft(
                 .map_err(|_| ApiError::validation("target_kind", "invalid"))
         ),
     };
+    let kind = match req.kind.as_deref() {
+        None => WorkKind::Feature,
+        Some(k) => tri!(
+            k.parse::<WorkKind>()
+                .map_err(|_| ApiError::validation("kind", "invalid"))
+        ),
+    };
     let project = ProjectId(tri!(path_id(&project)));
     let engine = tri!(s.engine().cloned());
     let viewer = engine.clone();
@@ -94,6 +101,7 @@ pub async fn create_spec_draft(
                 locale,
                 mode,
                 target_kind,
+                kind,
                 context_paths: req.context_paths,
             };
             engine

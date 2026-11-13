@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::scope::PathScope;
-use crate::vocab::{Autonomy, Stage, Trigger, WorkKind, WorkflowPreset};
+use crate::vocab::{Autonomy, IssueTrigger, Stage, Trigger, WorkKind, WorkflowPreset};
 
 pub const MAX_FILTER_ENTRIES: usize = 16;
 pub const MAX_FILTER_BYTES: usize = 100;
@@ -11,6 +11,12 @@ pub const DEFAULT_TRIGGER_LABEL: &str = "saka:review";
 pub const DEFAULT_FIX_ROUNDS: u32 = 2;
 pub const MAX_FIX_ROUNDS: u32 = 10;
 pub const MAX_TEST_PATHS: usize = 32;
+pub const DEFAULT_ISSUE_TRIGGER_LABEL: &str = "saka:intake";
+pub const MAX_ISSUE_LABELS: usize = 20;
+pub const MAX_ISSUE_LABEL_CHARS: usize = 50;
+pub const DEFAULT_ISSUE_MAX_OPEN: u32 = 20;
+pub const MAX_ISSUE_MAX_OPEN: u32 = 100;
+pub const MAX_ISSUE_COMMANDS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSetting {
@@ -46,10 +52,57 @@ impl Default for ChangeEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueBugfix {
+    pub done_when: Vec<String>,
+    pub regression: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueEntry {
+    pub trigger: IssueTrigger,
+    pub trigger_label: String,
+    pub labels: Vec<String>,
+    pub exclude_labels: Vec<String>,
+    pub kind_labels: BTreeMap<String, WorkKind>,
+    pub default_kind: WorkKind,
+    pub include_confidential: bool,
+    pub max_open: u32,
+    pub bugfix: Option<IssueBugfix>,
+}
+
+impl Default for IssueEntry {
+    fn default() -> IssueEntry {
+        IssueEntry {
+            trigger: IssueTrigger::Label,
+            trigger_label: DEFAULT_ISSUE_TRIGGER_LABEL.to_string(),
+            labels: Vec::new(),
+            exclude_labels: ["wontfix", "duplicate", "question"]
+                .map(String::from)
+                .to_vec(),
+            kind_labels: [
+                ("bug", WorkKind::Bugfix),
+                ("chore", WorkKind::Chore),
+                ("refactor", WorkKind::Refactor),
+                ("security", WorkKind::SecurityPatch),
+            ]
+            .into_iter()
+            .map(|(label, kind)| (label.to_string(), kind))
+            .collect(),
+            default_kind: WorkKind::Feature,
+            include_confidential: false,
+            max_open: DEFAULT_ISSUE_MAX_OPEN,
+            bugfix: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workflow {
     pub preset: WorkflowPreset,
     pub spec: bool,
     pub change_request: Option<ChangeEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IssueEntry>,
     pub stages: Vec<StageSetting>,
     #[serde(default = "default_fix_rounds")]
     pub fix_rounds: u32,
@@ -172,6 +225,7 @@ impl Workflow {
                 preset,
                 spec: true,
                 change_request: None,
+                issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
@@ -186,6 +240,7 @@ impl Workflow {
                 preset,
                 spec: true,
                 change_request: None,
+                issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
@@ -195,6 +250,7 @@ impl Workflow {
                 preset,
                 spec: false,
                 change_request: Some(ChangeEntry::default()),
+                issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
@@ -207,6 +263,7 @@ impl Workflow {
                 preset,
                 spec: false,
                 change_request: None,
+                issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,

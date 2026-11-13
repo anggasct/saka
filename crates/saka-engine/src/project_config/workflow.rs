@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
 use saka_core::scope::{PathScope, ScopeIssue};
-use saka_core::vocab::{Stage, Trigger, WorkKind, WorkflowPreset};
+use saka_core::vocab::{IssueTrigger, Stage, Trigger, WorkKind, WorkflowPreset};
 use saka_core::workflow::{
-    ChangeEntry, KindIssue, KindOverride, KindRefusal, MAX_FILTER_ENTRIES, MAX_FIX_ROUNDS,
-    MAX_TEST_PATHS, Workflow, WorkflowPolicy, filter_text_ok,
+    ChangeEntry, IssueBugfix, IssueEntry, KindIssue, KindOverride, KindRefusal, MAX_FILTER_ENTRIES,
+    MAX_FIX_ROUNDS, MAX_ISSUE_COMMANDS, MAX_ISSUE_LABEL_CHARS, MAX_ISSUE_LABELS,
+    MAX_ISSUE_MAX_OPEN, MAX_TEST_PATHS, Workflow, WorkflowPolicy, filter_text_ok,
 };
+use saka_spec::{QuickSpec, check_quick};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
@@ -17,10 +19,23 @@ const KEYS: &[&str] = &[
     "preset",
     "spec",
     "change_request",
+    "issue",
     "stages",
     "fix_rounds",
     "kinds",
 ];
+const ISSUE_KEYS: &[&str] = &[
+    "trigger",
+    "trigger_label",
+    "labels",
+    "exclude_labels",
+    "kind_labels",
+    "default_kind",
+    "include_confidential",
+    "max_open",
+    "bugfix",
+];
+const ISSUE_BUGFIX_KEYS: &[&str] = &["done_when", "regression"];
 const KIND_KEYS: &[&str] = &["stages", "autonomy"];
 const BUGFIX_KEYS: &[&str] = &["stages", "autonomy", "test_paths"];
 const ENTRY_KEYS: &[&str] = &[
@@ -154,6 +169,227 @@ fn entry(c: &mut Collector<'_>, table: &DeTable<'_>) -> ChangeEntry {
                 Some(v.span().start),
             ),
         }
+    }
+    entry
+}
+
+fn issue_label(text: &str) -> bool {
+    let chars = text.chars().count();
+    (1..=MAX_ISSUE_LABEL_CHARS).contains(&chars)
+        && !text.contains(',')
+        && !text.chars().any(char::is_control)
+}
+
+fn issue_labels(
+    c: &mut Collector<'_>,
+    value: &Spanned<DeValue<'_>>,
+    field: &str,
+) -> Option<Vec<String>> {
+    let Some(items) = value.get_ref().as_array() else {
+        c.push("field_invalid", field, Some(value.span().start));
+        return None;
+    };
+    if items.len() > MAX_ISSUE_LABELS {
+        c.push("field_invalid", field, Some(value.span().start));
+        return None;
+    }
+    let mut out = Vec::with_capacity(items.len());
+    let mut valid = true;
+    for (j, item) in items.iter().enumerate() {
+        match item.get_ref().as_str().filter(|s| issue_label(s)) {
+            Some(text) => out.push(text.to_string()),
+            None => {
+                c.push(
+                    "field_invalid",
+                    &format!("{field}[{j}]"),
+                    Some(item.span().start),
+                );
+                valid = false;
+            }
+        }
+    }
+    valid.then_some(out)
+}
+
+fn issue_kind(
+    c: &mut Collector<'_>,
+    value: &Spanned<DeValue<'_>>,
+    field: &str,
+) -> Option<WorkKind> {
+    let kind = value
+        .get_ref()
+        .as_str()
+        .and_then(|s| s.parse::<WorkKind>().ok());
+    if kind.is_none() {
+        c.push("kind_invalid", field, Some(value.span().start));
+    }
+    kind
+}
+
+fn issue_kind_labels(
+    c: &mut Collector<'_>,
+    value: &Spanned<DeValue<'_>>,
+) -> Option<BTreeMap<String, WorkKind>> {
+    let field = "workflow.issue.kind_labels";
+    let Some(table) = value.get_ref().as_table() else {
+        c.push("field_invalid", field, Some(value.span().start));
+        return None;
+    };
+    if table.len() > MAX_ISSUE_LABELS {
+        c.push("field_invalid", field, Some(value.span().start));
+        return None;
+    }
+    let mut out = BTreeMap::new();
+    let mut valid = true;
+    for (key, v) in table {
+        let target = format!("{field}.{}", key.get_ref());
+        if !issue_label(key.get_ref()) {
+            c.push("field_invalid", &target, Some(key.span().start));
+            valid = false;
+            continue;
+        }
+        match issue_kind(c, v, &target) {
+            Some(kind) => {
+                out.insert(key.get_ref().to_lowercase(), kind);
+            }
+            None => valid = false,
+        }
+    }
+    valid.then_some(out)
+}
+
+fn issue_bugfix(c: &mut Collector<'_>, value: &Spanned<DeValue<'_>>) -> Option<IssueBugfix> {
+    let base = "workflow.issue.bugfix";
+    let Some(table) = value.get_ref().as_table() else {
+        c.push("field_invalid", base, Some(value.span().start));
+        return None;
+    };
+    c.unknown(table, "workflow.issue.bugfix.", ISSUE_BUGFIX_KEYS);
+    let mut found: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+    let mut valid = true;
+    for (index, key) in ISSUE_BUGFIX_KEYS.iter().enumerate() {
+        let field = format!("{base}.{key}");
+        let Some(v) = get(table, key) else {
+            c.push("field_missing", &field, Some(value.span().start));
+            valid = false;
+            continue;
+        };
+        let Some(items) = v.get_ref().as_array() else {
+            c.push("field_invalid", &field, Some(v.span().start));
+            valid = false;
+            continue;
+        };
+        let texts: Vec<String> = items
+            .iter()
+            .filter_map(|i| i.get_ref().as_str().map(String::from))
+            .collect();
+        if texts.len() != items.len() || !(1..=MAX_ISSUE_COMMANDS).contains(&texts.len()) {
+            c.push("field_invalid", &field, Some(v.span().start));
+            valid = false;
+            continue;
+        }
+        found[index] = texts;
+    }
+    if !valid {
+        return None;
+    }
+    let [done_when, regression] = found;
+    let probe = QuickSpec {
+        kind: WorkKind::Bugfix,
+        title: "issue".to_string(),
+        description: String::new(),
+        done_when: done_when.clone(),
+        regression: regression.clone(),
+        criteria: Vec::new(),
+        locale: saka_spec::Locale::En,
+        repo: None,
+    };
+    let problems: Vec<_> = check_quick(&probe)
+        .into_iter()
+        .filter(|i| i.field.starts_with("done_when") || i.field.starts_with("regression"))
+        .collect();
+    for problem in &problems {
+        c.push(
+            "field_invalid",
+            &format!("{base}.{}", problem.field),
+            Some(value.span().start),
+        );
+    }
+    problems.is_empty().then_some(IssueBugfix {
+        done_when,
+        regression,
+    })
+}
+
+fn issue_entry(c: &mut Collector<'_>, table: &DeTable<'_>) -> IssueEntry {
+    let mut entry = IssueEntry::default();
+    c.unknown(table, "workflow.issue.", ISSUE_KEYS);
+    if let Some(v) = get(table, "trigger") {
+        match v
+            .get_ref()
+            .as_str()
+            .and_then(|s| s.parse::<IssueTrigger>().ok())
+        {
+            Some(t) => entry.trigger = t,
+            None => c.push(
+                "field_invalid",
+                "workflow.issue.trigger",
+                Some(v.span().start),
+            ),
+        }
+    }
+    if let Some(v) = get(table, "trigger_label") {
+        match v.get_ref().as_str().filter(|s| issue_label(s)) {
+            Some(label) => entry.trigger_label = label.to_string(),
+            None => c.push(
+                "field_invalid",
+                "workflow.issue.trigger_label",
+                Some(v.span().start),
+            ),
+        }
+    }
+    for (key, target) in [
+        ("labels", &mut entry.labels),
+        ("exclude_labels", &mut entry.exclude_labels),
+    ] {
+        if let Some(v) = get(table, key)
+            && let Some(items) = issue_labels(c, v, &format!("workflow.issue.{key}"))
+        {
+            *target = items;
+        }
+    }
+    if let Some(v) = get(table, "kind_labels")
+        && let Some(labels) = issue_kind_labels(c, v)
+    {
+        entry.kind_labels = labels;
+    }
+    if let Some(v) = get(table, "default_kind")
+        && let Some(kind) = issue_kind(c, v, "workflow.issue.default_kind")
+    {
+        entry.default_kind = kind;
+    }
+    if let Some(v) = get(table, "include_confidential")
+        && let Some(b) = flag(c, v, "workflow.issue.include_confidential")
+    {
+        entry.include_confidential = b;
+    }
+    if let Some(v) = get(table, "max_open") {
+        let parsed = v
+            .get_ref()
+            .as_integer()
+            .and_then(|n| u32::try_from(n.as_str().parse::<i64>().ok()?).ok())
+            .filter(|n| (1..=MAX_ISSUE_MAX_OPEN).contains(n));
+        match parsed {
+            Some(n) => entry.max_open = n,
+            None => c.push(
+                "field_invalid",
+                "workflow.issue.max_open",
+                Some(v.span().start),
+            ),
+        }
+    }
+    if let Some(v) = get(table, "bugfix") {
+        entry.bugfix = issue_bugfix(c, v);
     }
     entry
 }
@@ -415,6 +651,17 @@ pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> (Workflow, Kind
                 Some(v.span().start),
             ),
             Some(t) => workflow.change_request = Some(entry(c, t)),
+        }
+    }
+    if let Some(v) = get(table, "issue") {
+        match v.get_ref().as_table() {
+            None => c.push("field_invalid", "workflow.issue", Some(v.span().start)),
+            Some(_) if !workflow.spec => c.push(
+                "workflow_entry_not_allowed",
+                "workflow.issue",
+                Some(v.span().start),
+            ),
+            Some(t) => workflow.issue = Some(issue_entry(c, t)),
         }
     }
     if let Some(v) = get(table, "stages") {
@@ -972,5 +1219,150 @@ stages = { review = "off" }
                 .collect::<Vec<_>>(),
             ["kind_review_not_allowed"]
         );
+    }
+
+    const ISSUE_FULL: &str = r#"[workflow.issue]
+trigger = "auto"
+trigger_label = "run-saka"
+labels = ["triage"]
+exclude_labels = ["wontfix"]
+kind_labels = { Bug = "bugfix", docs = "chore" }
+default_kind = "refactor"
+include_confidential = true
+max_open = 5
+
+[workflow.issue.bugfix]
+done_when = ["cargo test --locked"]
+regression = ["cargo test --locked bug"]
+"#;
+
+    #[test]
+    fn an_issue_entry_takes_every_field_from_the_file() {
+        use saka_core::vocab::IssueTrigger;
+        let w = config(ISSUE_FULL).unwrap();
+        let entry = w.issue.unwrap();
+        assert_eq!(entry.trigger, IssueTrigger::Auto);
+        assert_eq!(entry.trigger_label, "run-saka");
+        assert_eq!(entry.labels, ["triage"]);
+        assert_eq!(entry.exclude_labels, ["wontfix"]);
+        assert_eq!(
+            entry.kind_labels.into_iter().collect::<Vec<_>>(),
+            [
+                ("bug".to_string(), WorkKind::Bugfix),
+                ("docs".to_string(), WorkKind::Chore)
+            ]
+        );
+        assert_eq!(entry.default_kind, WorkKind::Refactor);
+        assert!(entry.include_confidential);
+        assert_eq!(entry.max_open, 5);
+        let bugfix = entry.bugfix.unwrap();
+        assert_eq!(bugfix.done_when, ["cargo test --locked"]);
+        assert_eq!(bugfix.regression, ["cargo test --locked bug"]);
+    }
+
+    #[test]
+    fn an_empty_issue_entry_has_the_documented_defaults() {
+        use saka_core::vocab::IssueTrigger;
+        let entry = config("[workflow.issue]\n").unwrap().issue.unwrap();
+        assert_eq!(entry.trigger, IssueTrigger::Label);
+        assert_eq!(entry.trigger_label, "saka:intake");
+        assert_eq!(entry.exclude_labels, ["wontfix", "duplicate", "question"]);
+        assert_eq!(entry.kind_labels["bug"], WorkKind::Bugfix);
+        assert_eq!(entry.kind_labels["security"], WorkKind::SecurityPatch);
+        assert_eq!(entry.default_kind, WorkKind::Feature);
+        assert_eq!((entry.max_open, entry.include_confidential), (20, false));
+        assert!(entry.bugfix.is_none());
+        assert!(config("").unwrap().issue.is_none());
+    }
+
+    #[test]
+    fn an_issue_entry_needs_a_workflow_that_takes_specs() {
+        let review_only = "[workflow]\npreset = \"review_only\"\n\n[workflow.issue]\n";
+        assert!(
+            issues(review_only)
+                .iter()
+                .any(|(code, field, _)| *code == "workflow_entry_not_allowed"
+                    && field == "workflow.issue")
+        );
+        let build_only = "[workflow]\npreset = \"build_only\"\n\n[workflow.issue]\n";
+        assert!(config(build_only).unwrap().issue.is_some());
+        let custom = "[workflow]\npreset = \"custom\"\nspec = false\n\n[workflow.issue]\n";
+        assert!(
+            issues(custom)
+                .iter()
+                .any(|(code, field, _)| *code == "workflow_entry_not_allowed"
+                    && field == "workflow.issue")
+        );
+    }
+
+    #[test]
+    fn an_unknown_kind_is_kind_invalid_and_other_keys_are_unknown() {
+        assert_eq!(
+            issues("[workflow.issue]\nkind_labels = { bug = \"hotfix\" }\n"),
+            [("kind_invalid", "workflow.issue.kind_labels.bug".into(), 9)]
+        );
+        assert_eq!(
+            issues("[workflow.issue]\ndefault_kind = \"epic\"\n"),
+            [("kind_invalid", "workflow.issue.default_kind".into(), 9)]
+        );
+        assert_eq!(
+            issues("[workflow.issue]\nreviewers = 2\n"),
+            [("field_unknown", "workflow.issue.reviewers".into(), 9)]
+        );
+        assert_eq!(
+            issues(
+                "[workflow.issue.bugfix]\ndone_when = [\"a\"]\nregression = [\"b\"]\nretries = 1\n"
+            )[0]
+            .0,
+            "field_unknown"
+        );
+    }
+
+    #[test]
+    fn issue_values_are_range_checked() {
+        for (line, field) in [
+            ("trigger = \"manual\"", "workflow.issue.trigger"),
+            ("trigger_label = \"\"", "workflow.issue.trigger_label"),
+            ("trigger_label = \"a,b\"", "workflow.issue.trigger_label"),
+            ("max_open = 0", "workflow.issue.max_open"),
+            ("max_open = 101", "workflow.issue.max_open"),
+            ("labels = [\"\"]", "workflow.issue.labels[0]"),
+            (
+                "include_confidential = \"yes\"",
+                "workflow.issue.include_confidential",
+            ),
+        ] {
+            let found = issues(&format!("[workflow.issue]\n{line}\n"));
+            assert_eq!(found[0].0, "field_invalid", "{line}");
+            assert_eq!(found[0].1, field, "{line}");
+        }
+        let many = (0..21)
+            .map(|n| format!("\"l{n}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_eq!(
+            issues(&format!("[workflow.issue]\nlabels = [{many}]\n"))[0].1,
+            "workflow.issue.labels"
+        );
+    }
+
+    #[test]
+    fn the_bugfix_lane_needs_both_command_lists_within_bounds() {
+        let missing = issues("[workflow.issue.bugfix]\ndone_when = [\"a\"]\n");
+        assert_eq!(missing[0].0, "field_missing");
+        assert_eq!(missing[0].1, "workflow.issue.bugfix.regression");
+        let empty = issues("[workflow.issue.bugfix]\ndone_when = []\nregression = [\"b\"]\n");
+        assert_eq!(empty[0].1, "workflow.issue.bugfix.done_when");
+        let many = (0..11)
+            .map(|n| format!("\"c{n}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let over = issues(&format!(
+            "[workflow.issue.bugfix]\ndone_when = [{many}]\nregression = [\"b\"]\n"
+        ));
+        assert_eq!(over[0].1, "workflow.issue.bugfix.done_when");
+        let multiline =
+            issues("[workflow.issue.bugfix]\ndone_when = [\"a\\nb\"]\nregression = [\"b\"]\n");
+        assert_eq!(multiline[0].1, "workflow.issue.bugfix.done_when[0]");
     }
 }

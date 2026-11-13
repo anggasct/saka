@@ -23,6 +23,7 @@ pub const TOKEN_REQUIREMENTS: TokenRequirements = TokenRequirements {
         "pipeline_events",
         "job_events",
     ],
+    issue_hook_events: &["issues_events"],
 };
 
 pub const TOKEN: ScmDiagnostics = ScmDiagnostics::Token(TOKEN_REQUIREMENTS);

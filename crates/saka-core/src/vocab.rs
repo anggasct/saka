@@ -64,6 +64,20 @@ vocab!(SpecState { Draft => "draft", Ready => "ready", Approved => "approved", S
 vocab!(SpecOrigin { Manual => "manual", Architect => "architect", Intake => "intake", Quick => "quick" });
 vocab!(WorkKind default Feature { Feature => "feature", Bugfix => "bugfix", Refactor => "refactor", Chore => "chore", SecurityPatch => "security_patch" });
 
+vocab!(IssueIntakeState {
+    Accepted => "accepted",
+    Drafting => "drafting",
+    AwaitingApproval => "awaiting_approval",
+    Approved => "approved",
+    InProgress => "in_progress",
+    Done => "done",
+    Dismissed => "dismissed",
+    Closed => "closed",
+    Failed => "failed",
+});
+vocab!(IssueLane { Bugfix => "bugfix", Draft => "draft" });
+vocab!(IssueCause { Label => "label", Comment => "comment", Author => "author", Operator => "operator" });
+vocab!(IssueTrigger default Label { Label => "label", Auto => "auto" });
 vocab!(RegressionOutcome { Reproduced => "reproduced", NotReproduced => "not_reproduced", InvalidPaths => "invalid_paths", Error => "error" });
 vocab!(Autonomy { Strict => "strict", Standard => "standard", Autonomous => "autonomous" });
 vocab!(WorkflowPreset { FullLoop => "full_loop", ReviewOnly => "review_only", BuildOnly => "build_only", Custom => "custom" });
@@ -173,6 +187,7 @@ vocab!(InboxKind {
     Permission => "permission",
     Blocker => "blocker",
     SpecUnclear => "spec_unclear",
+    Intake => "intake",
 });
 vocab!(InboxSubject {
     Spec => "spec",
@@ -181,6 +196,7 @@ vocab!(InboxSubject {
     Permission => "permission",
     Blocker => "blocker",
     Decision => "decision",
+    Intake => "intake",
 });
 vocab!(InboxState { Open => "open", Answered => "answered", Resolved => "resolved", Dismissed => "dismissed" });
 vocab!(InboxActionKind {
@@ -197,6 +213,8 @@ vocab!(InboxActionKind {
     StartStep => "start_step",
     Merge => "merge",
     AnswerDecision => "answer_decision",
+    RetryIntake => "retry_intake",
+    DismissIntake => "dismiss_intake",
 });
 vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
 vocab!(ChangeRole { Code => "code", Docs => "docs" });

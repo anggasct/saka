@@ -372,6 +372,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/issue-intakes/{intake_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_issue_intake"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/meta": {
     parameters: {
       query?: never;
@@ -588,6 +604,22 @@ export interface paths {
       cookie?: never;
     };
     get: operations["list_project_hooks"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/issue-intakes": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_issue_intakes"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1566,6 +1598,8 @@ export interface components {
       context_paths?: string[];
       /** @description 1 to 8000 characters after trimming; stored as written. */
       idea: string;
+      /** @description `feature` (default), `bugfix`, `refactor`, `chore`, or `security_patch`: picks the spec template the architect fills. */
+      kind?: string | null;
       /** @description `en` (default) or `id`: the template and the language of the prose. */
       locale?: string | null;
       /** @description `draft` (default) or `session`. */
@@ -1980,6 +2014,90 @@ export interface components {
       /** @description The task the item is about, when it is about one. */
       task_key?: string | null;
     };
+    IssueBugfixCommands: {
+      done_when: string[];
+      regression: string[];
+    };
+    IssueIntake: {
+      /** @description The login of the user with write access, or the operator, who started it. */
+      actor: string;
+      /** @description `label | comment | author | operator`: what started the intake. */
+      cause: string;
+      created_at: string;
+      draft?: components["schemas"]["IssueIntakeDraft"] | null;
+      failure?: components["schemas"]["Failure"] | null;
+      /** Format: uuid */
+      id: string;
+      issue: components["schemas"]["IssueIntakeIssue"];
+      /** @description `feature | bugfix | refactor | chore | security_patch` */
+      kind: string;
+      /** @description `bugfix` (a quick spec from the issue) or `draft` (the architect writes the spec). */
+      lane: string;
+      /** Format: uuid */
+      project_id: string;
+      repo: components["schemas"]["IssueIntakeRepo"];
+      /**
+       * Format: int32
+       * @description Manual retries so far, at most 3.
+       */
+      retries: number;
+      spec?: components["schemas"]["IssueIntakeSpec"] | null;
+      /** @description `accepted | drafting | awaiting_approval | approved | in_progress | done | dismissed | closed | failed` */
+      state: string;
+      updated_at: string;
+    };
+    IssueIntakeDraft: {
+      /** Format: uuid */
+      id: string;
+      /** @description The draft state, as in `SpecDraft.state`. */
+      state: string;
+    };
+    IssueIntakeIssue: {
+      author: string;
+      /** Format: int64 */
+      number: number;
+      /** @description One line, at most 120 characters, control characters removed. */
+      title: string;
+      url: string;
+    };
+    IssueIntakeRepo: {
+      full_name: string;
+      /** Format: uuid */
+      id: string;
+      /** @description The binding name in `saka.toml`. */
+      name: string;
+    };
+    IssueIntakeSpec: {
+      /** Format: uuid */
+      id: string;
+      path: string;
+      /** @description `draft | ready | approved | shipped | withdrawn` */
+      state: string;
+    };
+    IssueWorkflow: {
+      bugfix?: components["schemas"]["IssueBugfixCommands"] | null;
+      /** @description The kind of an issue with no kind label. */
+      default_kind: string;
+      /** @description An issue carrying any of these labels is skipped. */
+      exclude_labels: string[];
+      /** @description Whether confidential issues (GitLab) are taken. */
+      include_confidential: boolean;
+      /** @description Label (lower case) to work kind (`feature | bugfix | refactor | chore | security_patch`). */
+      kind_labels: {
+        [key: string]: string;
+      };
+      /** @description An issue is a candidate only when it carries all of these labels; empty requires none. */
+      labels: string[];
+      /**
+       * Format: int32
+       * @description How many intakes that wait for approval a project holds at most (`1..=100`).
+       */
+      max_open: number;
+      /** @description `label | auto` */
+      trigger: string;
+      /** @description The label a user with write access sets to start an intake. */
+      trigger_label: string;
+    };
     KindOverride: {
       /** @description `strict | standard | autonomous`; `null` when the file sets none. It only lowers the level. */
       autonomy?: string | null;
@@ -2154,6 +2272,38 @@ export interface components {
       next_cursor?: string | null;
     };
     /** @description A list page. */
+    Page_IssueIntake: {
+      items: {
+        /** @description The login of the user with write access, or the operator, who started it. */
+        actor: string;
+        /** @description `label | comment | author | operator`: what started the intake. */
+        cause: string;
+        created_at: string;
+        draft?: components["schemas"]["IssueIntakeDraft"] | null;
+        failure?: components["schemas"]["Failure"] | null;
+        /** Format: uuid */
+        id: string;
+        issue: components["schemas"]["IssueIntakeIssue"];
+        /** @description `feature | bugfix | refactor | chore | security_patch` */
+        kind: string;
+        /** @description `bugfix` (a quick spec from the issue) or `draft` (the architect writes the spec). */
+        lane: string;
+        /** Format: uuid */
+        project_id: string;
+        repo: components["schemas"]["IssueIntakeRepo"];
+        /**
+         * Format: int32
+         * @description Manual retries so far, at most 3.
+         */
+        retries: number;
+        spec?: components["schemas"]["IssueIntakeSpec"] | null;
+        /** @description `accepted | drafting | awaiting_approval | approved | in_progress | done | dismissed | closed | failed` */
+        state: string;
+        updated_at: string;
+      }[];
+      next_cursor?: string | null;
+    };
+    /** @description A list page. */
     Page_PermissionRequest: {
       items: {
         answer_source?: string | null;
@@ -2259,6 +2409,8 @@ export interface components {
         id: string;
         /** @description As the operator wrote it; `null` in lists. */
         idea?: string | null;
+        /** @description `feature | bugfix | refactor | chore | security_patch`: the kind of work the spec describes; the architect writes its template. */
+        kind: string;
         last_round?: components["schemas"]["SpecDraftLastRound"] | null;
         /** @description `en | id` */
         locale: string;
@@ -3075,6 +3227,8 @@ export interface components {
       id: string;
       /** @description As the operator wrote it; `null` in lists. */
       idea?: string | null;
+      /** @description `feature | bugfix | refactor | chore | security_patch`: the kind of work the spec describes; the architect writes its template. */
+      kind: string;
       last_round?: components["schemas"]["SpecDraftLastRound"] | null;
       /** @description `en | id` */
       locale: string;
@@ -3598,6 +3752,7 @@ export interface components {
        * @description How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
        */
       fix_rounds: number;
+      issue?: components["schemas"]["IssueWorkflow"] | null;
       /** @description Overrides from `[workflow.kinds.<kind>]`, keyed by kind; only the kinds the file names. */
       kinds: {
         [key: string]: components["schemas"]["KindOverride"];
@@ -4377,6 +4532,35 @@ export interface operations {
       };
     };
   };
+  get_issue_intake: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        intake_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IssueIntake"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   meta: {
     parameters: {
       query?: never;
@@ -5051,6 +5235,40 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_issue_intakes: {
+    parameters: {
+      query?: {
+        /** @description One or more of `accepted, drafting, awaiting_approval, approved, in_progress, done, dismissed, closed, failed`, comma-separated. */
+        state?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_IssueIntake"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

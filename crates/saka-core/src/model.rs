@@ -937,6 +937,7 @@ pub struct SpecDraft {
     pub locale: DraftLocale,
     pub mode: DraftMode,
     pub target_kind: TargetKind,
+    pub kind: WorkKind,
     pub context_paths: Vec<String>,
     pub state: SpecDraftState,
     pub attempt: u32,

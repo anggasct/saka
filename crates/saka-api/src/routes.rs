@@ -14,6 +14,7 @@ macro_rules! tri {
 pub mod approvals;
 pub mod drafts;
 pub mod inbox;
+pub mod issue_intakes;
 pub mod operations;
 pub mod projects;
 pub mod sessions;

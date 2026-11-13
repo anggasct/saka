@@ -9,6 +9,7 @@ mod error;
 pub mod hook_run;
 pub mod identity;
 pub mod inbox;
+pub mod issue_intake;
 mod jobs;
 pub mod list;
 mod migrate;

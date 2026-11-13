@@ -2,12 +2,13 @@ use serde_json::{Value, json};
 
 use crate::autonomy::Ceilings;
 use crate::blocker::primary_action;
-use crate::ids::{ProjectId, SpecDraftId, SpecId, WorkItemId};
+use crate::ids::{IssueIntakeId, ProjectId, SpecDraftId, SpecId, WorkItemId};
+use crate::issue_intake::{IssueIntake, MANUAL_RETRY_LIMIT};
 use crate::model::{Blocker, DecisionRequest, Draft, PermissionRequest, Spec, Task};
 use crate::task::{auto_merge_enabled, merge_ready};
 use crate::vocab::{
     BlockerCode, DecisionState, InboxActionKind, InboxKind, InboxState, InboxSubject,
-    PermissionState, SpecState, Stage, StagePhase, WorkItemOrigin, WorkItemState,
+    IssueIntakeState, PermissionState, SpecState, Stage, StagePhase, WorkItemOrigin, WorkItemState,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -15,6 +16,7 @@ pub enum Source<'a> {
     Task(&'a Task),
     Draft(&'a Draft),
     Spec(&'a Spec),
+    Intake(&'a IssueIntake),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +24,7 @@ pub enum Scope {
     WorkItem(WorkItemId),
     Draft(SpecDraftId),
     Spec(SpecId),
+    Intake(IssueIntakeId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +51,7 @@ pub fn scope(source: Source<'_>) -> Scope {
         Source::Task(task) => Scope::WorkItem(task.item.id),
         Source::Draft(draft) => Scope::Draft(draft.id()),
         Source::Spec(spec) => Scope::Spec(spec.id),
+        Source::Intake(intake) => Scope::Intake(intake.id),
     }
 }
 
@@ -60,6 +64,7 @@ pub fn desired(source: Source<'_>, ceilings: &Ceilings) -> Vec<InboxDraft> {
         Source::Task(task) => for_task(task, ceilings),
         Source::Draft(draft) => for_draft(draft),
         Source::Spec(spec) => for_spec(spec),
+        Source::Intake(intake) => for_intake(intake),
     }
 }
 
@@ -250,6 +255,43 @@ fn for_spec(spec: &Spec) -> Vec<InboxDraft> {
         action: InboxAction {
             kind: InboxActionKind::ApproveSpec,
             params: json!({ "spec_id": spec.id, "revision": spec.latest_revision_id }),
+        },
+    }]
+}
+
+fn for_intake(intake: &IssueIntake) -> Vec<InboxDraft> {
+    let Some(failure) = intake
+        .failure
+        .as_ref()
+        .filter(|_| intake.state == IssueIntakeState::Failed)
+    else {
+        return Vec::new();
+    };
+    let can_retry = intake.retries < MANUAL_RETRY_LIMIT;
+    vec![InboxDraft {
+        kind: InboxKind::Intake,
+        subject: InboxSubject::Intake,
+        source_id: intake.id.to_string(),
+        state: InboxState::Open,
+        project_id: intake.project_id,
+        work_item_id: None,
+        spec_id: intake.spec_id,
+        params: json!({
+            "issue": { "url": intake.url, "number": intake.number, "title": intake.title },
+            "code": failure.code,
+            "failure": failure.params,
+            "lane": intake.lane,
+            "kind": intake.kind,
+            "retries": intake.retries,
+            "can_retry": can_retry,
+        }),
+        action: InboxAction {
+            kind: if can_retry {
+                InboxActionKind::RetryIntake
+            } else {
+                InboxActionKind::DismissIntake
+            },
+            params: json!({ "intake_id": intake.id }),
         },
     }]
 }

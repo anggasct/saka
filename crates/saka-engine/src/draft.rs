@@ -12,7 +12,7 @@ use saka_core::paths::{self, MAX_DOC_BYTES};
 use saka_core::rejection::{FileUnsupported, Rejection, TargetTakenBy};
 use saka_core::vocab::{
     DraftFailureCode, DraftLocale, DraftMode, LintOutcome, PrimaryAction, SpecDraftState,
-    SpecOrigin, TargetKind,
+    SpecOrigin, TargetKind, WorkKind,
 };
 use saka_ports::{
     Blob, Checkout, DocBlob, DocExpect, DocFileWrite, DocFilesCommit, DocFilesWrite, EnvRef,
@@ -48,6 +48,7 @@ pub struct NewSpecDraft {
     pub locale: DraftLocale,
     pub mode: DraftMode,
     pub target_kind: TargetKind,
+    pub kind: WorkKind,
     pub context_paths: Vec<String>,
 }
 
@@ -621,6 +622,7 @@ impl Engine {
             locale: new.locale,
             mode: new.mode,
             target_kind: new.target_kind,
+            kind: new.kind,
             context_paths: new.context_paths,
         });
         let mut after = core::evolve(None, &event, now)
@@ -1165,6 +1167,7 @@ impl Engine {
             locale: d.draft.locale,
             mode: d.draft.mode,
             target_kind: d.draft.target_kind,
+            kind: d.draft.kind,
             idea: d.draft.idea.clone(),
             target: d.draft.path.clone(),
             selected,

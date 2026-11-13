@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, reason = "tests fail loudly on a broken setup")]
 
-use saka_core::vocab::{DraftLocale, DraftMode, PacketOrigin, TargetKind};
+use saka_core::vocab::{DraftLocale, DraftMode, PacketOrigin, TargetKind, WorkKind};
 use saka_engine::packet::{ArchitectInput, PreviousAttempt, render_architect, sources};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -16,6 +16,7 @@ fn input() -> ArchitectInput {
         locale: DraftLocale::Id,
         mode: DraftMode::Draft,
         target_kind: TargetKind::New,
+        kind: WorkKind::Feature,
         idea: "Export tasks as CSV.\nKeep it small.\n".into(),
         target: "docs/specs/export.md".into(),
         selected: vec![
@@ -169,4 +170,35 @@ fn the_sources_of_a_rendered_packet_are_read_back_per_document() {
     assert_eq!(read[&3], format!("docs/prd.md @ {BASE}"));
     assert_eq!(read[&5], format!("docs/glossary.md @ {BASE}"));
     assert!(sources("not a packet").is_empty());
+}
+
+#[test]
+fn the_template_in_the_packet_follows_the_kind_of_work() {
+    let feature = render_architect(&input());
+    for kind in WorkKind::ALL {
+        let packet = render_architect(&ArchitectInput {
+            kind: *kind,
+            ..input()
+        });
+        let template = saka_spec::template(saka_spec::Locale::Id, *kind);
+        assert!(
+            packet.text.contains(template),
+            "{kind}: the packet carries the template of its kind"
+        );
+        assert_eq!(
+            packet.documents[0].content_hash,
+            format!(
+                "sha256:{}",
+                Sha256::digest(template.as_bytes())
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )
+        );
+        assert_eq!(
+            packet == feature,
+            *kind == WorkKind::Feature,
+            "only a feature keeps the feature packet"
+        );
+    }
 }

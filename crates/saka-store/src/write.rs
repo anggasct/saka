@@ -1,5 +1,6 @@
 use rusqlite::{Transaction, params};
 use saka_core::ids::{ProjectId, RepoId, SpecDraftAttemptId, SpecId, WorkItemId};
+use saka_core::issue_intake::IssueIntake;
 use saka_core::job::Job;
 use saka_core::model::{
     AccountQuota, Blocker, ChangeRequest, ContextRef, DecisionRequest, Draft, Environment,
@@ -143,6 +144,7 @@ pub struct Batch {
     pub context_blobs: Vec<ContextBlobRow>,
     pub tasks: Vec<Task>,
     pub drafts: Vec<Draft>,
+    pub issue_intakes: Vec<IssueIntake>,
     pub draft_rounds: Vec<LintRound>,
     pub draft_packets: Vec<(SpecDraftAttemptId, String)>,
     pub spec_dependencies: Vec<SpecDependency>,
@@ -347,6 +349,9 @@ pub(crate) fn write(
     }
     for d in &b.drafts {
         draft(tx, d, &b.draft_packets)?;
+    }
+    for i in &b.issue_intakes {
+        issue_intake(tx, i)?;
     }
     for r in &b.draft_rounds {
         let project = b
@@ -819,14 +824,46 @@ fn run(tx: &Transaction<'_>, project: ProjectId, rows: RunRows<'_>) -> Result<()
     Ok(())
 }
 
+fn issue_intake(tx: &Transaction<'_>, i: &IssueIntake) -> Result<()> {
+    tx.execute(
+        "INSERT INTO issue_intake (id, project_id, repo_id, number, url, title, author, state, lane, kind, cause,
+           actor, spec_id, draft_id, failure, retries, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+         ON CONFLICT (id) DO UPDATE SET state = excluded.state, spec_id = excluded.spec_id,
+           draft_id = excluded.draft_id, failure = excluded.failure, retries = excluded.retries,
+           updated_at = excluded.updated_at",
+        params![
+            i.id.to_string(),
+            i.project_id.to_string(),
+            i.repo_id.to_string(),
+            i64_of(i.number)?,
+            i.url,
+            i.title,
+            i.author,
+            i.state.as_str(),
+            i.lane.as_str(),
+            i.kind.as_str(),
+            i.cause.as_str(),
+            i.actor,
+            i.spec_id.map(|id| id.to_string()),
+            i.draft_id.map(|id| id.to_string()),
+            i.failure.as_ref().map(to_json).transpose()?,
+            i.retries,
+            i.created_at.0,
+            i.updated_at.0,
+        ],
+    )?;
+    Ok(())
+}
+
 fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String)]) -> Result<()> {
     let x = &d.draft;
     tx.execute(
         "INSERT INTO spec_draft (id, project_id, path, slug, idea, locale, mode, target_kind, context_paths, state,
            attempt, current_attempt_id, retries, queued_at, awaiting_since, failure, spec_id, commit_sha, version,
-           created_by, created_at, updated_at, finished_at)
+           created_by, created_at, updated_at, finished_at, kind)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23)
+           ?23, ?24)
          ON CONFLICT (id) DO UPDATE SET state = excluded.state, attempt = excluded.attempt,
            current_attempt_id = excluded.current_attempt_id, retries = excluded.retries,
            queued_at = excluded.queued_at, awaiting_since = excluded.awaiting_since, failure = excluded.failure, spec_id = excluded.spec_id,
@@ -856,6 +893,7 @@ fn draft(tx: &Transaction<'_>, d: &Draft, packets: &[(SpecDraftAttemptId, String
             x.created_at.0,
             x.updated_at.0,
             x.finished_at.map(|t| t.0),
+            x.kind.as_str(),
         ],
     )?;
     if let Some(a) = &d.attempt {

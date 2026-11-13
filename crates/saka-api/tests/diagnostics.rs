@@ -698,6 +698,13 @@ fn a_token_integration_reports_its_credential_repo_access_and_repo_webhooks() {
 }
 
 fn add_web_project(sim: &Sim) -> saka_core::ids::ProjectId {
+    add_web_project_with(sim, saka_core::workflow::Workflow::default())
+}
+
+fn add_web_project_with(
+    sim: &Sim,
+    workflow: saka_core::workflow::Workflow,
+) -> saka_core::ids::ProjectId {
     let engine = sim.engine();
     let repo = |full_name: &str| saka_engine::NewRepo {
         repo_id: None,
@@ -724,7 +731,7 @@ fn add_web_project(sim: &Sim) -> saka_core::ids::ProjectId {
                 base_branch: "main".into(),
                 config_commit: sim.world.base_head(),
                 config_sha256: saka_testkit::ZERO_SHA256.into(),
-                workflow: saka_core::workflow::Workflow::default(),
+                workflow,
                 hook_skip: Vec::new(),
                 bindings: vec![
                     binding("acme/tasks", "api", true),
@@ -942,4 +949,35 @@ fn the_auth_check_skips_without_an_auth_section_fails_without_a_passkey_and_pass
     let found = check(&r.body, "auth.config");
     assert_eq!(found["fix"]["code"], "run_auth_setup");
     assert_eq!(found["fix"]["params"]["command"], "saka auth setup");
+}
+
+#[test]
+fn a_repo_whose_project_takes_issues_needs_the_issue_events_on_its_webhook() {
+    let findings_for = |issues: bool| {
+        let sim = Sim::new(SimConfig::default());
+        let mut workflow = saka_core::workflow::Workflow::default();
+        if issues {
+            workflow.issue = Some(saka_core::workflow::IssueEntry::default());
+        }
+        add_web_project_with(&sim, workflow);
+        sim.world
+            .set_capabilities(saka_testkit::FAKE_TOKEN_CAPABILITIES);
+        sim.world
+            .set_webhook_secret(b"0123456789abcdef0123456789abcdef");
+        let app = api(&sim);
+        sim.world.host().script(|s| {
+            s.hooks.insert(
+                "acme/tasks".into(),
+                RepoHooks::Listed(vec![saka_hook("github")]),
+            );
+        });
+        let r = get(&sim, &app, "/api/v1/diagnostics?check=scm.repo_webhook");
+        let tasks = of(&r.body, "scm.repo_webhook", "acme/tasks");
+        (findings(&tasks), tasks[0]["params"].clone())
+    };
+    let (plain, _) = findings_for(false);
+    assert_eq!(plain, pairs(&[("pass", "repo_webhook_ok")]));
+    let (with, params) = findings_for(true);
+    assert_eq!(with, pairs(&[("warn", "repo_webhook_events_missing")]));
+    assert_eq!(params["missing"], json!(["issues_events"]));
 }

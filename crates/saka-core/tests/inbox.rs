@@ -2,13 +2,16 @@
 
 use saka_core::autonomy::Ceilings;
 use saka_core::blocker::primary_action;
-use saka_core::ids::{BlockerId, ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId};
+use saka_core::ids::{
+    BlockerId, IssueIntakeId, ProjectId, RepoId, SpecId, SpecRevisionId, WorkItemId,
+};
 use saka_core::inbox::{Scope, Source, desired, dismissible, scope};
-use saka_core::model::{Blocker, Spec, Task, WorkItem};
+use saka_core::issue_intake::IssueIntake;
+use saka_core::model::{Blocker, Coded, Spec, Task, WorkItem};
 use saka_core::time::Timestamp;
 use saka_core::vocab::{
-    BlockerCode, InboxActionKind, InboxKind, InboxSubject, SpecOrigin, SpecState, WorkItemOrigin,
-    WorkItemState,
+    BlockerCode, InboxActionKind, InboxKind, InboxSubject, IssueCause, IssueIntakeState, IssueLane,
+    SpecOrigin, SpecState, WorkItemOrigin, WorkItemState, WorkKind,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -161,5 +164,79 @@ fn a_source_names_the_scope_it_owns() {
     assert_eq!(
         scope(Source::Spec(&spec(SpecState::Ready))),
         Scope::Spec(SpecId(id(3)))
+    );
+}
+
+fn intake(state: IssueIntakeState, retries: u32) -> IssueIntake {
+    IssueIntake {
+        id: IssueIntakeId(id(70)),
+        project_id: ProjectId(id(2)),
+        repo_id: RepoId(id(71)),
+        number: 42,
+        url: "https://github.com/acme/app/issues/42".into(),
+        title: "Crash on start".into(),
+        author: "alice".into(),
+        state,
+        lane: IssueLane::Draft,
+        kind: WorkKind::Chore,
+        cause: IssueCause::Label,
+        actor: "maintainer".into(),
+        spec_id: None,
+        draft_id: None,
+        failure: (state == IssueIntakeState::Failed).then(|| Coded {
+            code: "draft_failed".into(),
+            params: json!({ "draft_state": "failed" }),
+        }),
+        retries,
+        created_at: Timestamp(0),
+        updated_at: Timestamp(0),
+    }
+}
+
+#[test]
+fn a_failed_intake_asks_the_operator_to_retry_or_dismiss_and_nothing_else_does() {
+    let items = desired(
+        Source::Intake(&intake(IssueIntakeState::Failed, 1)),
+        &Ceilings::default(),
+    );
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(
+        (item.kind, item.subject),
+        (InboxKind::Intake, InboxSubject::Intake)
+    );
+    assert_eq!(item.source_id, id(70).to_string());
+    assert_eq!(item.action.kind, InboxActionKind::RetryIntake);
+    assert_eq!(
+        item.action.params,
+        json!({ "intake_id": IssueIntakeId(id(70)) })
+    );
+    assert_eq!(item.params["issue"]["number"], 42);
+    assert_eq!(item.params["code"], "draft_failed");
+    assert_eq!(item.params["can_retry"], true);
+    for state in [
+        IssueIntakeState::Accepted,
+        IssueIntakeState::Drafting,
+        IssueIntakeState::AwaitingApproval,
+        IssueIntakeState::Approved,
+        IssueIntakeState::Done,
+        IssueIntakeState::Dismissed,
+        IssueIntakeState::Closed,
+    ] {
+        assert!(desired(Source::Intake(&intake(state, 0)), &Ceilings::default()).is_empty());
+    }
+}
+
+#[test]
+fn an_intake_without_retries_left_only_offers_to_dismiss() {
+    let items = desired(
+        Source::Intake(&intake(IssueIntakeState::Failed, 3)),
+        &Ceilings::default(),
+    );
+    assert_eq!(items[0].action.kind, InboxActionKind::DismissIntake);
+    assert_eq!(items[0].params["can_retry"], false);
+    assert_eq!(
+        scope(Source::Intake(&intake(IssueIntakeState::Failed, 3))),
+        Scope::Intake(IssueIntakeId(id(70)))
     );
 }

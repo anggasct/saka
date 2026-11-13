@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use saka_core::model::{ContextRef, DraftDocument};
 use saka_core::vocab::{
-    ContextOrigin, DocsMode, DraftLocale, DraftMode, PacketOrigin, TargetKind, Tool,
+    ContextOrigin, DocsMode, DraftLocale, DraftMode, PacketOrigin, TargetKind, Tool, WorkKind,
 };
 
 use saka_spec::content_hash;
@@ -327,6 +327,7 @@ pub struct ArchitectInput {
     pub locale: DraftLocale,
     pub mode: DraftMode,
     pub target_kind: TargetKind,
+    pub kind: WorkKind,
     pub idea: String,
     pub target: String,
     pub selected: Vec<(String, Vec<u8>)>,
@@ -403,8 +404,7 @@ pub fn issue_list(issues: &[&serde_json::Value]) -> String {
 pub fn render_architect(input: &ArchitectInput) -> ArchitectPacket {
     let mut text = String::from("<documents>\n");
     let mut documents = Vec::new();
-    let template =
-        saka_spec::template(template_locale(input.locale), saka_spec::WorkKind::Feature).as_bytes();
+    let template = saka_spec::template(template_locale(input.locale), input.kind).as_bytes();
     let rules = saka_spec::rules().as_bytes();
     let fixed = [
         (

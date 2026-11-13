@@ -18,7 +18,7 @@ use crate::time::Timestamp;
 use crate::vocab::{
     DecisionState, DraftAttemptState, DraftFailureCode, DraftLocale, DraftMode, EnvironmentState,
     LintOutcome, PermissionState, PrimaryAction, ResumeCause, SessionState, SpecDraftState,
-    TargetKind, Trigger,
+    TargetKind, Trigger, WorkKind,
 };
 
 pub const MANUAL_RETRY_LIMIT: u32 = 3;
@@ -119,6 +119,7 @@ pub struct NewDraft {
     pub locale: DraftLocale,
     pub mode: DraftMode,
     pub target_kind: TargetKind,
+    pub kind: WorkKind,
     pub context_paths: Vec<String>,
 }
 
@@ -133,6 +134,7 @@ pub fn request(new: NewDraft) -> Event {
         locale: new.locale,
         mode: new.mode,
         target_kind: new.target_kind,
+        kind: new.kind,
         context_paths: new.context_paths,
     }
 }
@@ -795,6 +797,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
         locale,
         mode,
         target_kind,
+        kind,
         context_paths,
     } = event
     {
@@ -807,6 +810,7 @@ pub fn evolve(draft: Option<Draft>, event: &Event, now: Timestamp) -> Option<Dra
             locale: *locale,
             mode: *mode,
             target_kind: *target_kind,
+            kind: *kind,
             context_paths: context_paths.clone(),
             state: SpecDraftState::Queued,
             attempt: 0,

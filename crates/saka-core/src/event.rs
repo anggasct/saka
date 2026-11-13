@@ -8,9 +8,9 @@ use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
     BlockerId, ChangeRequestId, CredentialId, DecisionRequestId, DeviceId, EnvironmentId,
-    GateResultId, HookRunId, InboxItemId, LoginSessionId, PairingId, PermissionRequestId,
-    PermissionRuleId, ProjectId, RegressionCheckId, RepoId, ReviewId, SessionId,
-    SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
+    GateResultId, HookRunId, InboxItemId, IssueIntakeId, LoginSessionId, PairingId,
+    PermissionRequestId, PermissionRuleId, ProjectId, RegressionCheckId, RepoId, ReviewId,
+    SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
     UserLinkAuthorizationId, UserLinkId, WorkItemId,
 };
 use crate::job::JobKind;
@@ -24,10 +24,10 @@ use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect,
     ExternalCause, GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState,
-    InboxSubject, InterruptBy, LintOutcome, MatchKind, MergeMethod, PairingPurpose,
-    PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger, ResumeCause, ResumeReason,
-    ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage, StagePhase,
-    SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
+    InboxSubject, InterruptBy, IssueCause, IssueIntakeState, IssueLane, LintOutcome, MatchKind,
+    MergeMethod, PairingPurpose, PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger,
+    ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin,
+    Stage, StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -178,6 +178,49 @@ pub enum Event {
         revision_id: SpecRevisionId,
     },
 
+    #[serde(rename = "intake.issue.accepted")]
+    IssueIntakeAccepted {
+        intake_id: IssueIntakeId,
+        project_id: ProjectId,
+        repo_id: RepoId,
+        number: u64,
+        url: String,
+        title: String,
+        author: String,
+        lane: IssueLane,
+        kind: WorkKind,
+        cause: IssueCause,
+        actor: String,
+    },
+    #[serde(rename = "intake.issue.linked")]
+    IssueIntakeLinked {
+        intake_id: IssueIntakeId,
+        spec_id: Option<SpecId>,
+        draft_id: Option<SpecDraftId>,
+    },
+    #[serde(rename = "intake.issue.state_changed")]
+    IssueIntakeStateChanged {
+        intake_id: IssueIntakeId,
+        from: IssueIntakeState,
+        to: IssueIntakeState,
+    },
+    #[serde(rename = "intake.issue.failed")]
+    IssueIntakeFailed {
+        intake_id: IssueIntakeId,
+        code: String,
+        params: Value,
+    },
+    #[serde(rename = "intake.issue.retried")]
+    IssueIntakeRetried {
+        intake_id: IssueIntakeId,
+        retries: u32,
+    },
+    #[serde(rename = "intake.issue.dismissed")]
+    IssueIntakeDismissed {
+        intake_id: IssueIntakeId,
+        reason: Option<String>,
+    },
+
     #[serde(rename = "spec.draft.requested")]
     SpecDraftRequested {
         spec_draft_id: SpecDraftId,
@@ -188,6 +231,7 @@ pub enum Event {
         locale: DraftLocale,
         mode: DraftMode,
         target_kind: TargetKind,
+        kind: WorkKind,
         context_paths: Vec<String>,
     },
     #[serde(rename = "spec.draft.attempt_started")]
@@ -951,6 +995,7 @@ pub enum Stream {
     Pairing(PairingId),
     Device(DeviceId),
     Credential(CredentialId),
+    IssueIntake(IssueIntakeId),
 }
 
 impl Stream {
@@ -972,6 +1017,7 @@ impl Stream {
             Stream::Pairing(_) => "pairing",
             Stream::Device(_) => "device",
             Stream::Credential(_) => "credential",
+            Stream::IssueIntake(_) => "issue_intake",
         }
     }
 
@@ -993,6 +1039,7 @@ impl Stream {
             Stream::Pairing(id) => id.0,
             Stream::Device(id) => id.0,
             Stream::Credential(id) => id.0,
+            Stream::IssueIntake(id) => id.0,
         }
     }
 }
@@ -1047,6 +1094,12 @@ impl Event {
             | E::SpecApproved { spec_id, .. }
             | E::SpecWithdrawn { spec_id, .. }
             | E::SpecShipped { spec_id, .. } => Stream::Spec(*spec_id),
+            E::IssueIntakeAccepted { intake_id, .. }
+            | E::IssueIntakeLinked { intake_id, .. }
+            | E::IssueIntakeStateChanged { intake_id, .. }
+            | E::IssueIntakeFailed { intake_id, .. }
+            | E::IssueIntakeRetried { intake_id, .. }
+            | E::IssueIntakeDismissed { intake_id, .. } => Stream::IssueIntake(*intake_id),
             E::SpecDraftRequested { spec_draft_id, .. }
             | E::SpecDraftAttemptStarted { spec_draft_id, .. }
             | E::SpecDraftPacketRendered { spec_draft_id, .. }

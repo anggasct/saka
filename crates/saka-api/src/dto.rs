@@ -106,6 +106,8 @@ pub struct Workflow {
     pub spec: bool,
     /// The entry point for pull requests opened outside Saka; `null` when the workflow has none.
     pub change_request: Option<WorkflowEntry>,
+    /// The entry point for issues turned into specs; `null` when the file has no `[workflow.issue]`.
+    pub issue: Option<IssueWorkflow>,
     /// The stages in pipeline order, each with its trigger.
     pub stages: Vec<WorkflowStage>,
     /// How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
@@ -143,6 +145,34 @@ pub struct WorkflowEntry {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct IssueWorkflow {
+    /// `label | auto`
+    pub trigger: String,
+    /// The label a user with write access sets to start an intake.
+    pub trigger_label: String,
+    /// An issue is a candidate only when it carries all of these labels; empty requires none.
+    pub labels: Vec<String>,
+    /// An issue carrying any of these labels is skipped.
+    pub exclude_labels: Vec<String>,
+    /// Label (lower case) to work kind (`feature | bugfix | refactor | chore | security_patch`).
+    pub kind_labels: BTreeMap<String, String>,
+    /// The kind of an issue with no kind label.
+    pub default_kind: String,
+    /// Whether confidential issues (GitLab) are taken.
+    pub include_confidential: bool,
+    /// How many intakes that wait for approval a project holds at most (`1..=100`).
+    pub max_open: u32,
+    /// The commands of the light bugfix lane; `null` sends bugfix issues through the architect.
+    pub bugfix: Option<IssueBugfixCommands>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueBugfixCommands {
+    pub done_when: Vec<String>,
+    pub regression: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WorkflowStage {
     /// `dev | review | fix | merge`
     pub stage: String,
@@ -164,6 +194,24 @@ impl From<&saka_core::workflow::Workflow> for Workflow {
                 include_forks: e.include_forks,
                 include_drafts: e.include_drafts,
                 trigger_label: e.trigger_label.clone(),
+            }),
+            issue: w.issue.as_ref().map(|e| IssueWorkflow {
+                trigger: e.trigger.as_str().to_string(),
+                trigger_label: e.trigger_label.clone(),
+                labels: e.labels.clone(),
+                exclude_labels: e.exclude_labels.clone(),
+                kind_labels: e
+                    .kind_labels
+                    .iter()
+                    .map(|(label, kind)| (label.clone(), kind.as_str().to_string()))
+                    .collect(),
+                default_kind: e.default_kind.as_str().to_string(),
+                include_confidential: e.include_confidential,
+                max_open: e.max_open,
+                bugfix: e.bugfix.as_ref().map(|b| IssueBugfixCommands {
+                    done_when: b.done_when.clone(),
+                    regression: b.regression.clone(),
+                }),
             }),
             stages: w
                 .stages
@@ -1486,6 +1534,8 @@ pub struct SpecDraft {
     pub mode: String,
     /// `new` (a new spec file) or `revise` (an edit of the spec file that already exists).
     pub target_kind: String,
+    /// `feature | bugfix | refactor | chore | security_patch`: the kind of work the spec describes; the architect writes its template.
+    pub kind: String,
     pub context_paths: Vec<String>,
     /// `queued | preparing | drafting | awaiting_operator | committing | succeeded | failed | cancelled`
     pub state: String,
@@ -1763,6 +1813,7 @@ impl SpecDraft {
             locale: d.locale.as_str().to_string(),
             mode: d.mode.as_str().to_string(),
             target_kind: d.target_kind.as_str().to_string(),
+            kind: d.kind.as_str().to_string(),
             context_paths: d.context_paths.clone(),
             state: d.state.as_str().to_string(),
             attempt: v
@@ -2927,6 +2978,9 @@ pub struct CreateSpecDraftBody {
     /// `new` (default) or `revise`: `revise` needs `path` to exist on the base branch.
     #[serde(default)]
     pub target_kind: Option<String>,
+    /// `feature` (default), `bugfix`, `refactor`, `chore`, or `security_patch`: picks the spec template the architect fills.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -4111,4 +4165,119 @@ pub struct CeremonyFinishBody {
     pub ceremony_id: String,
     /// The credential the browser returned, in the JSON form of the WebAuthn spec.
     pub credential: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueIntake {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub repo: IssueIntakeRepo,
+    pub issue: IssueIntakeIssue,
+    /// `accepted | drafting | awaiting_approval | approved | in_progress | done | dismissed | closed | failed`
+    pub state: String,
+    /// `bugfix` (a quick spec from the issue) or `draft` (the architect writes the spec).
+    pub lane: String,
+    /// `feature | bugfix | refactor | chore | security_patch`
+    pub kind: String,
+    /// `label | comment | author | operator`: what started the intake.
+    pub cause: String,
+    /// The login of the user with write access, or the operator, who started it.
+    pub actor: String,
+    /// The spec the intake produced; `null` until one exists.
+    pub spec: Option<IssueIntakeSpec>,
+    /// The architect draft of the `draft` lane; `null` on the `bugfix` lane.
+    pub draft: Option<IssueIntakeDraft>,
+    /// `{code, params}` while `failed`.
+    pub failure: Option<Failure>,
+    /// Manual retries so far, at most 3.
+    pub retries: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueIntakeRepo {
+    pub id: Uuid,
+    /// The binding name in `saka.toml`.
+    pub name: String,
+    pub full_name: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueIntakeIssue {
+    pub number: u64,
+    pub url: String,
+    /// One line, at most 120 characters, control characters removed.
+    pub title: String,
+    pub author: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueIntakeSpec {
+    pub id: Uuid,
+    pub path: String,
+    /// `draft | ready | approved | shipped | withdrawn`
+    pub state: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IssueIntakeDraft {
+    pub id: Uuid,
+    /// The draft state, as in `SpecDraft.state`.
+    pub state: String,
+}
+
+impl IssueIntake {
+    pub fn from_view(v: &saka_engine::IssueIntakeView) -> IssueIntake {
+        let i = &v.intake;
+        IssueIntake {
+            id: i.id.0,
+            project_id: i.project_id.0,
+            repo: IssueIntakeRepo {
+                id: i.repo_id.0,
+                name: v.repo.as_ref().map(|r| r.name.clone()).unwrap_or_default(),
+                full_name: v
+                    .repo
+                    .as_ref()
+                    .map(|r| r.full_name.clone())
+                    .unwrap_or_default(),
+            },
+            issue: IssueIntakeIssue {
+                number: i.number,
+                url: i.url.clone(),
+                title: i.title.clone(),
+                author: i.author.clone(),
+            },
+            state: i.state.as_str().to_string(),
+            lane: i.lane.as_str().to_string(),
+            kind: i.kind.as_str().to_string(),
+            cause: i.cause.as_str().to_string(),
+            actor: i.actor.clone(),
+            spec: v.spec.as_ref().map(|s| IssueIntakeSpec {
+                id: s.id.0,
+                path: s.path.clone(),
+                state: s.state.as_str().to_string(),
+            }),
+            draft: v.draft.as_ref().map(|d| IssueIntakeDraft {
+                id: d.id.0,
+                state: d.state.as_str().to_string(),
+            }),
+            failure: i.failure.as_ref().map(|f| Failure {
+                code: f.code.clone(),
+                params: f.params.clone(),
+            }),
+            retries: i.retries,
+            created_at: time(i.created_at),
+            updated_at: time(i.updated_at),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct IssueIntakeQuery {
+    /// One or more of `accepted, drafting, awaiting_approval, approved, in_progress, done, dismissed, closed, failed`, comma-separated.
+    pub state: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
 }
