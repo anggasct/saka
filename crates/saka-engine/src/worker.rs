@@ -78,6 +78,7 @@ pub enum Effect {
     Skipped,
     Later(Job),
     Hook(crate::hooks::HookReport),
+    Deploy(crate::deploy_run::DeployWork),
 }
 
 pub type Execution = std::result::Result<Effect, PortError>;
@@ -365,6 +366,12 @@ impl Engine {
         if job.kind == JobKind::HookRun {
             return self.hook_job(job).await;
         }
+        if job.kind == JobKind::DeployRun {
+            return self.deploy_run_job(job).await;
+        }
+        if job.kind == JobKind::DeployVerify {
+            return self.deploy_verify_job(job).await;
+        }
         if job.kind == JobKind::ScmScanChanges {
             return self.scan_job(job).await;
         }
@@ -467,7 +474,9 @@ impl Engine {
             | JobKind::ScmIssueClose
             | JobKind::ScmUserLinkPoll
             | JobKind::ScmUserLinkRefresh
-            | JobKind::HookRun => Ok(Effect::Skipped),
+            | JobKind::HookRun
+            | JobKind::DeployRun
+            | JobKind::DeployVerify => Ok(Effect::Skipped),
             JobKind::ScmDeleteBranch => {
                 let wanted = task.is_at(Stage::Sync, StagePhase::TearingDown)
                     || task.item.state == saka_core::vocab::WorkItemState::Done;
@@ -485,6 +494,9 @@ impl Engine {
     pub fn complete_job(&self, job: &ClaimedJob, execution: Execution) -> Result<JobReport> {
         if job.kind == JobKind::HookRun {
             return self.complete_hook_job(job, execution);
+        }
+        if matches!(job.kind, JobKind::DeployRun | JobKind::DeployVerify) {
+            return self.complete_deploy_job(job, execution);
         }
         let owner = self.cfg.worker_id.clone();
         let draft = saka_core::job::spec_draft_of(&job.payload);
@@ -516,7 +528,9 @@ impl Engine {
                 done(events),
                 JobResult::Succeeded,
             ),
-            Ok(Effect::Nothing | Effect::Hook(_)) => (None, done(vec![]), JobResult::Succeeded),
+            Ok(Effect::Nothing | Effect::Hook(_) | Effect::Deploy(_)) => {
+                (None, done(vec![]), JobResult::Succeeded)
+            }
             Ok(Effect::Skipped) => (None, done(vec![]), JobResult::Skipped),
             Ok(Effect::Later(next)) => (
                 None,

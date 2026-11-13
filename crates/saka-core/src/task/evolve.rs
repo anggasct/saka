@@ -1,8 +1,8 @@
 use super::queries::count_retry;
 use crate::event::Event;
 use crate::model::{
-    Blocker, ChangeRequest, Coded, ExternalChange, GateResult, RegressionCheck, Revert, Review,
-    ReviewPosted, StageRun, Task, Usage, WorkItem,
+    Blocker, ChangeRequest, Coded, DeployGate, ExternalChange, GateResult, RegressionCheck, Revert,
+    Review, ReviewPosted, StageRun, Task, Usage, WorkItem,
 };
 use crate::session;
 use crate::time::Timestamp;
@@ -212,6 +212,27 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         return;
     }
     match event {
+        E::DeployGateChanged {
+            environment,
+            state,
+            deployment_id,
+            reason,
+            ..
+        } => {
+            let kept = t
+                .deploy_gates
+                .iter()
+                .find(|g| &g.environment == environment)
+                .and_then(|g| g.deployment.clone())
+                .filter(|d| Some(d.id) == *deployment_id);
+            t.deploy_gates.retain(|g| &g.environment != environment);
+            t.deploy_gates.push(DeployGate {
+                environment: environment.clone(),
+                state: *state,
+                reason: reason.clone(),
+                deployment: kept,
+            });
+        }
         E::StageRunCancelled { stage_run_id, .. } => {
             let mut returns_to_review = false;
             if let Some(run) = t.stage_run.as_mut().filter(|r| r.id == *stage_run_id)

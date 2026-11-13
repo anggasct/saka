@@ -37,6 +37,8 @@ pub struct Counters {
     path_scope_violations: Mutex<BTreeMap<(String, String), u64>>,
     docs_changes: Mutex<BTreeMap<(String, String), u64>>,
     reverts: Mutex<BTreeMap<(String, String), u64>>,
+    deployments: Mutex<BTreeMap<(String, String), u64>>,
+    deploy_checks: Mutex<BTreeMap<(String, String), u64>>,
     quick_specs: Mutex<BTreeMap<(String, String), u64>>,
     issue_intakes: Mutex<BTreeMap<(String, String, String), u64>>,
     issue_denied: Mutex<BTreeMap<(String, String), u64>>,
@@ -185,6 +187,14 @@ impl Counters {
 
     pub(crate) fn docs_change(&self, outcome: &str) {
         bump(&self.docs_changes, outcome, "");
+    }
+
+    pub(crate) fn deployment(&self, environment: &str, outcome: &str) {
+        bump(&self.deployments, environment, outcome);
+    }
+
+    pub(crate) fn deploy_check(&self, phase: &str, state: &str) {
+        bump(&self.deploy_checks, phase, state);
     }
 
     pub(crate) fn revert(&self, outcome: &str) {
@@ -436,6 +446,8 @@ pub struct MetricsSnapshot {
     pub path_scope_violations: Vec<(String, u64)>,
     pub docs_changes: Vec<(String, u64)>,
     pub reverts: Vec<(String, u64)>,
+    pub deployments: Vec<(String, String, u64)>,
+    pub deploy_checks: Vec<(String, String, u64)>,
     pub quick_specs: Vec<(String, String, u64)>,
     pub issue_intakes: Vec<(String, String, String, u64)>,
     pub issue_denied: u64,
@@ -630,6 +642,8 @@ impl Engine {
                 .into_iter()
                 .map(|(stage, _, n)| (stage, n))
                 .collect(),
+            deployments: copy(&self.counters.deployments),
+            deploy_checks: copy(&self.counters.deploy_checks),
             reverts: ["merged", "conflict", "cancelled"]
                 .iter()
                 .map(|outcome| {

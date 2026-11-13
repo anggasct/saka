@@ -1,10 +1,13 @@
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::Response;
 use saka_core::ids::{DeploymentId, ProjectId};
+use saka_engine::Produced;
 
+use super::{reply, unexpected};
 use crate::dto;
-use crate::http::{encode_cursor, ok, page, path_id};
+use crate::http::{Mutation, body, encode_cursor, mutate, ok, page, path_id, require_key};
 use crate::problem::ApiError;
 use crate::state::AppState;
 
@@ -67,4 +70,100 @@ pub async fn get_deployment(State(s): State<AppState>, Path(id): Path<String>) -
     let id = DeploymentId(tri!(path_id(&id)));
     let detail = tri!(engine.deployment(id));
     ok(StatusCode::OK, &dto::Deployment::from(&detail))
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/projects/{project_id}/environments/{environment}/actions/deploy", tag = "deployments",
+    params(("project_id" = uuid::Uuid, Path), ("environment" = String, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RequiredReason,
+    responses((status = 202, body = dto::Deployment), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn deploy_environment(
+    State(s): State<AppState>,
+    Path((project, environment)): Path<(String, String)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let project = ProjectId(tri!(path_id(&project)));
+    let req: dto::RequiredReason = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Deployment(row) => reply(StatusCode::ACCEPTED, &dto::Deployment::from(row)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "deployment.deploy",
+        target_type: "project",
+        target_id: Some(project.0),
+        reason: Some(req.reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            engine
+                .deploy_environment_with(project, &environment, &req.reason, &cause, Some(&action))
+                .map(|_| Some(project))
+                .map_err(|e| (e, Some(project)))
+        },
+    )
+    .await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/deployments/{deployment_id}/actions/cancel", tag = "deployments",
+    params(("deployment_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::RequiredReason,
+    responses((status = 200, body = dto::Deployment), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn cancel_deployment(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    let key = tri!(require_key(&headers));
+    let id = DeploymentId(tri!(path_id(&id)));
+    let req: dto::RequiredReason = tri!(body(&raw));
+    let engine = tri!(s.engine().cloned());
+    let respond = |p: Produced<'_>| match p {
+        Produced::Deployment(row) => reply(StatusCode::OK, &dto::Deployment::from(row)),
+        _ => unexpected(),
+    };
+    let m = Mutation {
+        name: "deployment.cancel",
+        target_type: "deployment",
+        target_id: Some(id.0),
+        reason: Some(req.reason.clone()),
+    };
+    mutate(
+        &s,
+        key,
+        &method,
+        uri.path(),
+        &raw,
+        m,
+        &respond,
+        |cause, action| async move {
+            let project = engine
+                .deployment(id)
+                .ok()
+                .map(|d| d.row.deployment.project_id);
+            engine
+                .cancel_deployment_with(id, &req.reason, &cause, Some(&action))
+                .map(|_| project)
+                .map_err(|e| (e, project))
+        },
+    )
+    .await
 }

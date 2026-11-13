@@ -7,6 +7,7 @@ mod config_check;
 mod context;
 mod decisions;
 mod deploy;
+mod deploy_run;
 pub mod diagnostics;
 mod docs;
 mod draft;
@@ -529,6 +530,7 @@ impl Engine {
             log_runtime(e, &cause.actor);
             let event_id = self.push_event(batch, e, project, cause, now);
             self.plan_task_hooks(batch, &after, e, event_id, cause, now)?;
+            self.plan_deployments(batch, &mut after, e, cause, now)?;
         }
         Ok(after)
     }

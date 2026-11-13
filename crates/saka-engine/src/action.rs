@@ -30,6 +30,7 @@ pub enum Produced<'a> {
     Session(&'a Session),
     Rule(&'a PermissionRule),
     HookRun(&'a saka_core::hook::HookRun),
+    Deployment(&'a crate::deploy::DeploymentRow),
     Inbox(&'a crate::InboxItem),
     Doc(&'a DocWriteView),
     UserLinkAuthorization(&'a crate::accounts::AuthorizationView),

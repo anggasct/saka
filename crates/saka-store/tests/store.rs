@@ -1224,10 +1224,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(43));
+    assert_eq!(w.store.schema_version().unwrap(), Some(44));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1908,6 +1908,7 @@ fn deployment_request(
         cause,
         action: saka_core::vocab::DeployActionKind::RunHost,
         target_url: None,
+        on_failure: saka_core::vocab::OnFailure::Revert,
         actor: None,
         reason: None,
         change_request_id: None,

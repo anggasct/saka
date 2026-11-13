@@ -90,6 +90,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FileNotFound { .. }
         | R::UserLinkNotFound
         | R::InboxItemNotFound
+        | R::EnvironmentNotFound
         | R::IssueNotFound
         | R::ChangeRequestNotFound { .. } => StatusCode::NOT_FOUND,
         R::RevisionStale | R::VersionStale | R::FileStale { .. } => StatusCode::PRECONDITION_FAILED,

@@ -284,6 +284,26 @@ enum DeployCmd {
         after_help = "Exit codes: 0 ok, 1 failed."
     )]
     Show { id: String },
+    #[command(
+        about = "Deploys the tip of an environment's branch again",
+        after_help = "Exit codes: 0 queued, 1 failed, 4 a deployment is already waiting."
+    )]
+    Redeploy {
+        #[arg(help = "Project id or name")]
+        project: String,
+        environment: String,
+        #[arg(long)]
+        reason: String,
+    },
+    #[command(
+        about = "Cancels a deployment that is queued, waiting for readiness, or verifying",
+        after_help = "Exit codes: 0 cancelled, 1 failed, 4 the deploy action is running or the deployment finished."
+    )]
+    Cancel {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1053,6 +1073,16 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .await
                     }
                     DeployCmd::Show { id } => client.deploy_show(&id).await,
+                    DeployCmd::Redeploy {
+                        project,
+                        environment,
+                        reason,
+                    } => {
+                        client
+                            .deploy_redeploy(&project, &environment, &reason)
+                            .await
+                    }
+                    DeployCmd::Cancel { id, reason } => client.deploy_cancel(&id, &reason).await,
                 }
             })
         }

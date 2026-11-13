@@ -2,13 +2,15 @@ use serde_json::{Value, json};
 
 use crate::autonomy::Ceilings;
 use crate::blocker::primary_action;
-use crate::ids::{IssueIntakeId, ProjectId, SpecDraftId, SpecId, WorkItemId};
+use crate::deploy::Deployment;
+use crate::ids::{DeploymentId, IssueIntakeId, ProjectId, SpecDraftId, SpecId, WorkItemId};
 use crate::issue_intake::{IssueIntake, MANUAL_RETRY_LIMIT};
 use crate::model::{Blocker, DecisionRequest, Draft, PermissionRequest, Spec, Task};
 use crate::task::{auto_merge_enabled, merge_ready};
 use crate::vocab::{
-    BlockerCode, DecisionState, InboxActionKind, InboxKind, InboxState, InboxSubject,
-    IssueIntakeState, PermissionState, SpecState, Stage, StagePhase, WorkItemOrigin, WorkItemState,
+    BlockerCode, DecisionState, DeploymentState, InboxActionKind, InboxKind, InboxState,
+    InboxSubject, IssueIntakeState, PermissionState, SpecState, Stage, StagePhase, WorkItemOrigin,
+    WorkItemState,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +19,7 @@ pub enum Source<'a> {
     Draft(&'a Draft),
     Spec(&'a Spec),
     Intake(&'a IssueIntake),
+    Deployment(&'a Deployment, bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +28,7 @@ pub enum Scope {
     Draft(SpecDraftId),
     Spec(SpecId),
     Intake(IssueIntakeId),
+    Deployment(DeploymentId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +56,7 @@ pub fn scope(source: Source<'_>) -> Scope {
         Source::Draft(draft) => Scope::Draft(draft.id()),
         Source::Spec(spec) => Scope::Spec(spec.id),
         Source::Intake(intake) => Scope::Intake(intake.id),
+        Source::Deployment(deployment, _) => Scope::Deployment(deployment.id),
     }
 }
 
@@ -65,6 +70,7 @@ pub fn desired(source: Source<'_>, ceilings: &Ceilings) -> Vec<InboxDraft> {
         Source::Draft(draft) => for_draft(draft),
         Source::Spec(spec) => for_spec(spec),
         Source::Intake(intake) => for_intake(intake),
+        Source::Deployment(deployment, gated) => for_deployment(deployment, gated),
     }
 }
 
@@ -258,6 +264,36 @@ fn for_spec(spec: &Spec) -> Vec<InboxDraft> {
         action: InboxAction {
             kind: InboxActionKind::ApproveSpec,
             params: json!({ "spec_id": spec.id, "revision": spec.latest_revision_id }),
+        },
+    }]
+}
+
+fn for_deployment(deployment: &Deployment, gated: bool) -> Vec<InboxDraft> {
+    if deployment.state != DeploymentState::Failed || gated {
+        return Vec::new();
+    }
+    vec![InboxDraft {
+        kind: InboxKind::Deployment,
+        subject: InboxSubject::Deployment,
+        source_id: deployment.id.to_string(),
+        state: InboxState::Open,
+        project_id: deployment.project_id,
+        work_item_id: None,
+        spec_id: None,
+        params: json!({
+            "environment": deployment.environment,
+            "deployment_id": deployment.id,
+            "phase": deployment.phase,
+            "code": deployment.error.as_ref().map(|e| e.code.clone()),
+            "sha": deployment.sha,
+            "on_failure": deployment.on_failure,
+        }),
+        action: InboxAction {
+            kind: InboxActionKind::Redeploy,
+            params: json!({
+                "project_id": deployment.project_id,
+                "environment": deployment.environment,
+            }),
         },
     }]
 }

@@ -1,20 +1,35 @@
 use std::collections::BTreeMap;
 
-use saka_core::deploy::{CheckRecord, Deployment};
+use saka_core::Ctx;
+use saka_core::deploy::{self, CheckRecord, Deployment, Input, QueueRequest};
 use saka_core::diagnostics::{
     self as eval, DeployEnvironmentFacts, DeployFacts, Finding, VerifyFacts,
 };
 use saka_core::environment::{DeployAction, Environment, VerifySpec};
+use saka_core::event::Event;
+use saka_core::ids::{ChangeRequestId, WorkItemId};
 use saka_core::ids::{DeploymentId, ProjectId, RepoId};
+use saka_core::model::Task;
 use saka_core::model::{Project, Repo};
 use saka_core::rejection::Rejection;
+use saka_core::task::{self, TaskInput};
+use saka_core::time::Timestamp;
+use saka_core::vocab::{
+    BlockerCode, ChangeRole, DeployCause, DeployGateState, DeploymentState, Stage, StagePhase,
+    Trigger, WorkItemOrigin,
+};
 use saka_core::vocab::{CheckId, DeployActionKind, OnFailure};
+use saka_ports::IdsSource;
+use saka_store::Batch;
+use saka_store::deployment::DeployGateRow;
 use saka_store::deployment::{DeploymentFilter, MergeRef, TaskRef};
 use saka_store::list::Page;
 use saka_store::{deployment, read};
 
+use crate::action::{Action, Produced};
+use crate::commands::reason;
 use crate::views::Paged;
-use crate::{Engine, EngineError, Result};
+use crate::{Cause, Engine, EngineError, Extra, Mode, Result, Shows};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInfo {
@@ -304,5 +319,525 @@ impl Engine {
             CheckId::DeployVerifyMissing => eval::deploy_verify_missing(&facts),
             _ => eval::deploy_ready_missing(&facts),
         }
+    }
+}
+
+fn batch_queued<'a>(
+    batch: &'a Batch,
+    project: ProjectId,
+    environment: &str,
+) -> Option<&'a Deployment> {
+    batch.deployments.iter().find(|d| {
+        d.project_id == project
+            && d.environment == environment
+            && d.state == DeploymentState::Queued
+    })
+}
+
+fn gate_row(event: &Event) -> Option<DeployGateRow> {
+    let Event::DeployGateChanged {
+        work_item_id,
+        environment,
+        state,
+        deployment_id,
+        reason,
+    } = event
+    else {
+        return None;
+    };
+    Some(DeployGateRow {
+        work_item_id: *work_item_id,
+        environment: environment.clone(),
+        state: *state,
+        deployment_id: *deployment_id,
+        reason: reason.clone(),
+    })
+}
+
+impl Engine {
+    pub(crate) fn plan_deployments(
+        &self,
+        batch: &mut Batch,
+        task: &mut Task,
+        event: &Event,
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<()> {
+        match event {
+            Event::DeployGateChanged { .. } => {
+                batch.deploy_gates.extend(gate_row(event));
+            }
+            Event::ChangeRequestMerged {
+                role: ChangeRole::Code,
+                change_request_id,
+                ..
+            } if !self.cfg.environments.is_empty() => {
+                self.queue_merge_deployments(batch, task, *change_request_id, cause, now)?;
+            }
+            Event::StageRunCreated {
+                stage: Stage::Sync,
+                entry_phase: StagePhase::TearingDown,
+                retry_of: Some(retried),
+                trigger: Trigger::Manual,
+                ..
+            } if retried.code == BlockerCode::DeployUnverified.as_str() => {
+                self.retry_deploy_gates(batch, task, cause, now)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn emit_gate(
+        &self,
+        batch: &mut Batch,
+        task: &mut Task,
+        event: Event,
+        cause: &Cause,
+        now: Timestamp,
+    ) {
+        if let Some(next) = task::evolve(Some(task.clone()), &event, now) {
+            *task = next;
+        }
+        self.push_event(batch, &event, Some(task.item.project_id), cause, now);
+        batch.deploy_gates.extend(gate_row(&event));
+    }
+
+    fn put_deployment(&self, batch: &mut Batch, deployment: Deployment) {
+        match batch.deployments.iter_mut().find(|d| d.id == deployment.id) {
+            Some(slot) => *slot = deployment,
+            None => batch.deployments.push(deployment),
+        }
+    }
+
+    fn queued_for(
+        &self,
+        batch: &Batch,
+        project: ProjectId,
+        environment: &str,
+    ) -> Result<Option<Deployment>> {
+        match batch_queued(batch, project, environment) {
+            Some(found) => Ok(Some(found.clone())),
+            None => Ok(self
+                .store
+                .read(|c| deployment::queued_of(c, project, environment))?),
+        }
+    }
+
+    pub(crate) fn queue_deployment(
+        &self,
+        batch: &mut Batch,
+        project: &Project,
+        env: &Environment,
+        request: QueueRequest,
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<(Deployment, bool)> {
+        let existing = self.queued_for(batch, project.id, &env.name)?;
+        let mut ids = IdsSource(&*self.ports.ids);
+        let events = deploy::queue(existing.as_ref(), request, &mut Ctx { now, ids: &mut ids })?;
+        let created = existing.is_none();
+        for event in &events {
+            self.push_event(batch, event, Some(project.id), cause, now);
+        }
+        let target = deploy::evolve_all(existing, &events, now).ok_or_else(|| {
+            EngineError::Internal("a deployment request produced no deployment".into())
+        })?;
+        self.put_deployment(batch, target.clone());
+        Ok((target, created))
+    }
+
+    fn queue_merge_deployments(
+        &self,
+        batch: &mut Batch,
+        task: &mut Task,
+        change_request_id: ChangeRequestId,
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<()> {
+        let Some(base_branch) = task.change_request.as_ref().map(|c| c.base_branch.clone()) else {
+            return Ok(());
+        };
+        let Some(project) = self
+            .store
+            .read(|c| read::load_project(c, task.item.project_id))?
+        else {
+            return Ok(());
+        };
+        let gated_origin = task.item.origin != WorkItemOrigin::ExternalChange;
+        let environments: Vec<Environment> = self
+            .environments_of(&project)
+            .into_iter()
+            .cloned()
+            .collect();
+        for env in environments {
+            let Ok(bound) = env.bind(&project.repos) else {
+                continue;
+            };
+            if bound.repo.repo_id != task.item.repo_id || bound.branch != base_branch {
+                continue;
+            }
+            let request = QueueRequest {
+                project_id: project.id,
+                repo_id: task.item.repo_id,
+                environment: env.name.clone(),
+                branch: bound.branch.clone(),
+                cause: DeployCause::Merge,
+                action: env.action.kind(),
+                target_url: env.target_url.clone(),
+                on_failure: env.on_failure,
+                actor: None,
+                reason: None,
+                change_request_id: Some(change_request_id),
+            };
+            let (target, created) =
+                self.queue_deployment(batch, &project, &env, request, cause, now)?;
+            if created {
+                let mut excluded = vec![task.item.id];
+                excluded.extend(task.revert.as_ref().map(|r| r.of));
+                self.attach_open_gates(
+                    batch, &project, &env.name, target.id, &excluded, cause, now,
+                )?;
+            }
+            if env.gate && gated_origin {
+                let event = Event::DeployGateChanged {
+                    work_item_id: task.item.id,
+                    environment: env.name.clone(),
+                    state: DeployGateState::Pending,
+                    deployment_id: Some(target.id),
+                    reason: None,
+                };
+                self.emit_gate(batch, task, event, cause, now);
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one step of attaching gates, with the batch and the cause passed through"
+    )]
+    pub(crate) fn attach_open_gates(
+        &self,
+        batch: &mut Batch,
+        project: &Project,
+        environment: &str,
+        target: DeploymentId,
+        except: &[WorkItemId],
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<()> {
+        let gates = self
+            .store
+            .read(|c| deployment::open_gates_of(c, project.id, environment))?;
+        for gate in gates {
+            if except.contains(&gate.work_item_id) || gate.deployment_id == Some(target) {
+                continue;
+            }
+            let current = match gate.deployment_id {
+                Some(id) => self.store.read(|c| deployment::load(c, id))?,
+                None => None,
+            };
+            let attachable = current.is_none_or(|d| {
+                matches!(
+                    d.state,
+                    DeploymentState::Failed | DeploymentState::Cancelled
+                )
+            });
+            if attachable {
+                self.repoint_gate(
+                    batch,
+                    &gate,
+                    gate.state,
+                    Some(target),
+                    gate.reason.clone(),
+                    cause,
+                    now,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one gate change with the batch and the cause passed through"
+    )]
+    fn repoint_gate(
+        &self,
+        batch: &mut Batch,
+        gate: &DeployGateRow,
+        state: DeployGateState,
+        deployment_id: Option<DeploymentId>,
+        reason: Option<String>,
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<()> {
+        let existing = batch
+            .tasks
+            .iter()
+            .position(|t| t.item.id == gate.work_item_id);
+        let loaded = match existing {
+            Some(at) => Some(batch.tasks.remove(at)),
+            None => self
+                .store
+                .read(|c| read::load_task(c, gate.work_item_id, &self.cfg.workflow_policy))?,
+        };
+        let Some(mut other) = loaded else {
+            return Ok(());
+        };
+        let event = Event::DeployGateChanged {
+            work_item_id: gate.work_item_id,
+            environment: gate.environment.clone(),
+            state,
+            deployment_id,
+            reason,
+        };
+        self.emit_gate(batch, &mut other, event, cause, now);
+        batch.tasks.push(other);
+        Ok(())
+    }
+
+    pub(crate) fn skip_gate(
+        &self,
+        batch: &mut Batch,
+        gate: &DeployGateRow,
+        cause: &Cause,
+    ) -> Result<()> {
+        let now = batch.now;
+        self.repoint_gate(
+            batch,
+            gate,
+            DeployGateState::Skipped,
+            None,
+            Some("environment_removed".to_string()),
+            cause,
+            now,
+        )
+    }
+
+    fn retry_deploy_gates(
+        &self,
+        batch: &mut Batch,
+        task: &mut Task,
+        cause: &Cause,
+        now: Timestamp,
+    ) -> Result<()> {
+        let Some(project) = self
+            .store
+            .read(|c| read::load_project(c, task.item.project_id))?
+        else {
+            return Ok(());
+        };
+        let failed: Vec<String> = task
+            .deploy_gates
+            .iter()
+            .filter(|g| g.state == DeployGateState::Failed)
+            .map(|g| g.environment.clone())
+            .collect();
+        for name in failed {
+            let found = self
+                .environments_of(&project)
+                .into_iter()
+                .find(|e| e.name == name)
+                .cloned();
+            let bound = found.as_ref().and_then(|e| e.bind(&project.repos).ok());
+            let (Some(env), Some(bound)) = (found, bound) else {
+                let event = Event::DeployGateChanged {
+                    work_item_id: task.item.id,
+                    environment: name,
+                    state: DeployGateState::Skipped,
+                    deployment_id: None,
+                    reason: Some("environment_removed".to_string()),
+                };
+                self.emit_gate(batch, task, event, cause, now);
+                continue;
+            };
+            let request = QueueRequest {
+                project_id: project.id,
+                repo_id: bound.repo.repo_id,
+                environment: env.name.clone(),
+                branch: bound.branch.clone(),
+                cause: DeployCause::Retry,
+                action: env.action.kind(),
+                target_url: env.target_url.clone(),
+                on_failure: env.on_failure,
+                actor: Some(cause.actor.clone()),
+                reason: None,
+                change_request_id: None,
+            };
+            let existing = self.queued_for(batch, project.id, &env.name)?;
+            let target = match existing {
+                Some(queued) => queued,
+                None => {
+                    let (created, _) =
+                        self.queue_deployment(batch, &project, &env, request, cause, now)?;
+                    created
+                }
+            };
+            self.attach_open_gates(
+                batch,
+                &project,
+                &env.name,
+                target.id,
+                &[task.item.id],
+                cause,
+                now,
+            )?;
+            let event = Event::DeployGateChanged {
+                work_item_id: task.item.id,
+                environment: env.name.clone(),
+                state: DeployGateState::Pending,
+                deployment_id: Some(target.id),
+                reason: None,
+            };
+            self.emit_gate(batch, task, event, cause, now);
+        }
+        Ok(())
+    }
+
+    pub fn deploy_environment_with(
+        &self,
+        project_id: ProjectId,
+        environment: &str,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<DeploymentRow> {
+        let why = reason(why)?;
+        let _guard = self.locked()?;
+        let now = self.now();
+        let project = self.load_project_row(project_id)?;
+        let env = self
+            .environments_of(&project)
+            .into_iter()
+            .find(|e| e.name == environment)
+            .cloned()
+            .ok_or(EngineError::Rejected(Rejection::EnvironmentNotFound))?;
+        let bound = env
+            .bind(&project.repos)
+            .map_err(|_| EngineError::Rejected(Rejection::EnvironmentNotFound))?;
+        let mut batch = Batch::new(now);
+        let request = QueueRequest {
+            project_id,
+            repo_id: bound.repo.repo_id,
+            environment: env.name.clone(),
+            branch: bound.branch.clone(),
+            cause: DeployCause::Redeploy,
+            action: env.action.kind(),
+            target_url: env.target_url.clone(),
+            on_failure: env.on_failure,
+            actor: Some(cause.actor.clone()),
+            reason: Some(why),
+            change_request_id: None,
+        };
+        let (created, _) =
+            self.queue_deployment(&mut batch, &project, &env, request, cause, now)?;
+        self.attach_open_gates(&mut batch, &project, &env.name, created.id, &[], cause, now)?;
+        let infos = self.repo_infos(&project)?;
+        let row = DeploymentRow {
+            repo: infos
+                .get(&created.repo_id)
+                .cloned()
+                .ok_or_else(|| EngineError::Internal("deployment without its repo".into()))?,
+            deployment: created,
+        };
+        if let Some(a) = action {
+            let reply = (a.respond)(Produced::Deployment(&row));
+            batch.action = Some(a.record(
+                self,
+                cause,
+                Some(project_id),
+                Some(row.deployment.id.0),
+                reply,
+            ));
+        }
+        self.commit(&batch)?;
+        Ok(row)
+    }
+
+    pub fn cancel_deployment_with(
+        &self,
+        id: DeploymentId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<DeploymentRow> {
+        let why = reason(why)?;
+        let _guard = self.locked()?;
+        let now = self.now();
+        let current = self
+            .store
+            .read(|c| deployment::load(c, id))?
+            .ok_or(EngineError::Rejected(Rejection::NotFound))?;
+        let events = deploy::decide(
+            &current,
+            Input::Cancel {
+                reason: why,
+                actor: Some(cause.actor.clone()),
+            },
+        )?;
+        let cancelled = deploy::evolve_all(Some(current.clone()), &events, now)
+            .ok_or_else(|| EngineError::Internal("a cancelled deployment vanished".into()))?;
+        let mut batch = Batch::new(now);
+        for event in &events {
+            self.push_event(&mut batch, event, Some(current.project_id), cause, now);
+        }
+        let queued = self.queued_for(&batch, current.project_id, &current.environment)?;
+        let gates = self.store.read(|c| deployment::gates_of(c, id))?;
+        if let Some(target) = queued.filter(|q| q.id != id) {
+            for gate in gates
+                .iter()
+                .filter(|g| matches!(g.state, DeployGateState::Pending | DeployGateState::Failed))
+            {
+                self.repoint_gate(
+                    &mut batch,
+                    gate,
+                    gate.state,
+                    Some(target.id),
+                    gate.reason.clone(),
+                    cause,
+                    now,
+                )?;
+            }
+        }
+        batch.deployments.push(cancelled.clone());
+        let project = self.load_project_row(current.project_id)?;
+        let infos = self.repo_infos(&project)?;
+        let row = DeploymentRow {
+            repo: infos
+                .get(&cancelled.repo_id)
+                .cloned()
+                .ok_or_else(|| EngineError::Internal("deployment without its repo".into()))?,
+            deployment: cancelled,
+        };
+        if let Some(a) = action {
+            let reply = (a.respond)(Produced::Deployment(&row));
+            batch.action = Some(a.record(self, cause, Some(current.project_id), Some(id.0), reply));
+        }
+        self.counters.deployment(&current.environment, "cancelled");
+        self.commit(&batch)?;
+        Ok(row)
+    }
+
+    pub fn accept_unverified_with(
+        &self,
+        id: WorkItemId,
+        blocker_id: saka_core::ids::BlockerId,
+        why: &str,
+        cause: &Cause,
+        action: Option<&Action<'_>>,
+    ) -> Result<Vec<Event>> {
+        let reason = reason(why)?;
+        self.decide(
+            id,
+            Some(TaskInput::AcceptUnverified { blocker_id, reason }),
+            Mode::Command,
+            cause,
+            Extra {
+                action: action.map(|a| (a, Shows::Task)),
+                ..Extra::default()
+            },
+        )
     }
 }

@@ -165,6 +165,8 @@ pub enum Rejection {
     },
     #[error("the task cannot be reverted: {reason}")]
     RevertNotAllowed { reason: &'static str },
+    #[error("no such environment")]
+    EnvironmentNotFound,
     #[error("the environment already has a deployment waiting")]
     DeploymentQueued { deployment_id: String },
     #[error("the deployment is running its deploy action")]
@@ -308,6 +310,7 @@ impl Rejection {
             Rejection::StageNotTakeable { .. } => "stage_not_takeable",
             Rejection::ReturnTargetInvalid { .. } => "return_target_invalid",
             Rejection::RevertNotAllowed { .. } => "revert_not_allowed",
+            Rejection::EnvironmentNotFound => "environment_not_found",
             Rejection::DeploymentQueued { .. } => "deployment_queued",
             Rejection::DeploymentRunning => "deployment_running",
             Rejection::DeploymentFinished => "deployment_finished",

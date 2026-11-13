@@ -131,6 +131,33 @@ fn every_hook_event_renders_in_both_languages() {
         "Blocked: tasks/s1 in tasks\nReason: regression_not_reproduced\nThe agent did not prove its regression test fails without the fix. Retry to make it write the test first.\nhttps://saka.example.com/delivery/tasks/0193f0c4-0000-7000-8000-000000000004"
     );
     assert!(render(Lang::Id, &n, link).contains("Coba lagi agar ia menulis test lebih dulu."),);
+    let mut deploy = hook_event("blocked");
+    deploy["blocker"]["code"] = json!("deploy_unverified");
+    deploy["blocker"]["params"] = json!({
+        "environment": "staging",
+        "deployment_id": "0193f0c4-0000-7000-8000-000000000008",
+        "phase": "verify",
+        "code": "verify_failed",
+    });
+    let n = notification("ops", "hook.event", deploy);
+    assert!(
+        render(Lang::En, &n, link)
+            .contains("Deployment to staging failed at verify (verify_failed); tasks/s1 is held."),
+        "{}",
+        render(Lang::En, &n, link)
+    );
+    assert!(
+        render(Lang::Id, &n, link)
+            .contains("Deployment ke staging gagal di verify (verify_failed); tasks/s1 tertahan.")
+    );
+    let mut failed = hook_event("deploy_failed");
+    failed["task"] = Value::Null;
+    failed["spec"] = Value::Null;
+    failed["change"] = Value::Null;
+    failed["deployment"] =
+        json!({ "id": "0193f0c4-0000-7000-8000-000000000008", "environment": "staging" });
+    let n = notification("ops", "hook.event", failed);
+    assert!(render(Lang::En, &n, link).starts_with("Deployment failed: staging in tasks"));
     let mut spec = hook_event("spec_shipped");
     spec["task"] = Value::Null;
     let n = notification("ops", "hook.event", spec);

@@ -60,6 +60,7 @@ fn link(public_url: Option<&str>, params: &Value) -> Option<String> {
 fn subject(params: &Value) -> String {
     let named = text_at(params, &["task", "key"])
         .or_else(|| text_at(params, &["spec", "path"]))
+        .or_else(|| text_at(params, &["deployment", "environment"]))
         .map(str::to_string);
     let numbered = || {
         params
@@ -82,6 +83,8 @@ fn headline(lang: Lang, event: &str, subject: &str, project: &str) -> String {
         "review_done" => ("Review done", "Review selesai"),
         "spec_shipped" => ("Spec shipped", "Spec selesai"),
         "inbox_item_opened" => ("Needs you", "Butuh kamu"),
+        "deployed" => ("Deployed", "Ter-deploy"),
+        "deploy_failed" => ("Deployment failed", "Deployment gagal"),
         _ => ("Saka event", "Event Saka"),
     };
     let word = lang.pick(en, id);
@@ -97,6 +100,26 @@ fn blocker_sentence(lang: Lang, code: &str) -> Option<&'static str> {
         )),
         _ => None,
     }
+}
+
+fn deploy_sentence(lang: Lang, params: &Value, task: &str) -> Option<String> {
+    let environment = clean(text_at(params, &["blocker", "params", "environment"])?, 32);
+    let phase = clean(
+        text_at(params, &["blocker", "params", "phase"]).unwrap_or("-"),
+        16,
+    );
+    let code = clean(
+        text_at(params, &["blocker", "params", "code"]).unwrap_or("-"),
+        64,
+    );
+    Some(match lang {
+        Lang::En => {
+            format!("Deployment to {environment} failed at {phase} ({code}); {task} is held.")
+        }
+        Lang::Id => {
+            format!("Deployment ke {environment} gagal di {phase} ({code}); {task} tertahan.")
+        }
+    })
 }
 
 pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>) -> String {
@@ -119,6 +142,9 @@ pub fn render(lang: Lang, notification: &Notification, public_url: Option<&str>)
                     clean(code, 64)
                 ));
                 lines.extend(blocker_sentence(lang, code).map(str::to_string));
+                if code == "deploy_unverified" {
+                    lines.extend(deploy_sentence(lang, params, &subject(params)));
+                }
             }
             if event == "inbox_item_opened" {
                 let kind = text_at(params, &["inbox", "kind"]).unwrap_or("-");

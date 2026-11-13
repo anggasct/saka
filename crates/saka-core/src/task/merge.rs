@@ -6,7 +6,7 @@ use super::{
 };
 use crate::Ctx;
 use crate::event::Event;
-use crate::model::Coded;
+use crate::model::{Coded, DeployGate};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{
@@ -565,6 +565,7 @@ impl Decider<'_> {
             .hook_gates
             .iter()
             .all(|g| g.state == HookRunState::Succeeded)
+            && self.task.deploy_gates.iter().all(DeployGate::cleared)
     }
 
     pub(super) fn settle_hook_gates(&self, ctx: &mut Ctx<'_>) -> Vec<Event> {

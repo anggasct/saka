@@ -947,6 +947,8 @@ pub struct WorkItem {
     pub revert_of: Option<WorkItemRef>,
     /// The revert task of this one that is still live or done; `null` when none was requested and when the last one was cancelled.
     pub reverted_by: Option<RevertedBy>,
+    /// One gate per gated environment the task's merge was deployed to; empty when none.
+    pub deploy_gates: Vec<DeployGate>,
     /// The newest reviewer verdict of the task; `null` before any review ran.
     pub review: Option<ReviewSummary>,
     /// The latest fix round of the task; `null` before a round ran and when the workflow has no `fix` stage.
@@ -1425,6 +1427,7 @@ impl WorkItem {
                 key: r.key.clone(),
                 state: r.state.as_str().to_string(),
             }),
+            deploy_gates: t.deploy_gates.iter().map(DeployGate::from).collect(),
             review: latest_review(t).map(|r| ReviewSummary::of(r, t)),
             fix: FixProgress::of(t),
             regression: RegressionEvidence::of(t),
@@ -2968,6 +2971,15 @@ pub struct RequiredReason {
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct AcceptUnverifiedBody {
+    /// The open `deploy_unverified` blocker of the task.
+    pub blocker_id: Uuid,
+    /// 1 to 500 characters, kept in the audit trail.
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReturnBody {
     /// `dev`, `review`, `fix`, or `merge`: the stage the task re-enters. Empty means the stage it left when that is `dev` or `merge`, otherwise `dev`.
     #[serde(default)]
@@ -3758,7 +3770,7 @@ pub struct HookTarget {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Hook {
     pub name: String,
-    /// `change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, `blocked`, or `inbox_item_opened`.
+    /// `change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, `blocked`, `inbox_item_opened`, `deployed`, or `deploy_failed`.
     pub on: String,
     /// `after` or `gate`.
     pub mode: String,
@@ -3767,6 +3779,7 @@ pub struct Hook {
     pub repos: Vec<String>,
     pub branches: Vec<String>,
     pub codes: Vec<String>,
+    pub environments: Vec<String>,
     pub timeout_secs: u64,
     pub target: HookTarget,
 }
@@ -3805,6 +3818,7 @@ impl From<&saka_core::hook::Hook> for Hook {
             repos: h.filter.repos.clone(),
             branches: h.filter.branches.clone(),
             codes: h.filter.codes.iter().map(|c| c.as_str().into()).collect(),
+            environments: h.filter.environments.clone(),
             timeout_secs: h.timeout_ms / 1000,
             target,
         }
@@ -3893,6 +3907,34 @@ pub struct HookRunQuery {
     pub work_item_id: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeployGate {
+    pub environment: String,
+    /// `pending`, `passed`, `failed`, `accepted`, or `skipped`.
+    pub state: String,
+    /// The operator's reason when the gate was accepted, or `environment_removed` when it was skipped.
+    pub reason: Option<String>,
+    /// The deployment that holds the gate; `null` when it is not known.
+    pub deployment: Option<DeploymentSummary>,
+}
+
+impl From<&saka_core::model::DeployGate> for DeployGate {
+    fn from(g: &saka_core::model::DeployGate) -> DeployGate {
+        DeployGate {
+            environment: g.environment.clone(),
+            state: g.state.as_str().into(),
+            reason: g.reason.clone(),
+            deployment: g.deployment.as_ref().map(|d| DeploymentSummary {
+                id: d.id.0,
+                state: d.state.as_str().into(),
+                sha: d.sha.clone(),
+                phase: d.phase.map(|p| p.as_str().into()),
+                finished_at: opt_time(d.finished_at),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -4203,9 +4245,9 @@ pub struct InboxItem {
     pub id: Uuid,
     pub project_id: Uuid,
     pub project_name: String,
-    /// `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`.
+    /// `decision`, `approval`, `permission`, `blocker`, `spec_unclear`, `intake`, or `deployment`.
     pub kind: String,
-    /// `spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`.
+    /// `spec`, `step_start`, `merge`, `permission`, `blocker`, `decision`, `intake`, or `deployment`.
     pub subject: String,
     /// `open`, `answered`, `resolved`, or `dismissed`.
     pub state: String,

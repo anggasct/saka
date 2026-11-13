@@ -37,6 +37,7 @@ impl Engine {
                     .filter(|l| l.owner == crate::OPERATOR)
                     .collect(),
                 authorships: saka_store::authorship::project_authorships(c)?,
+                deployments: saka_store::deployment::unfinished(c)?,
             })
         })?;
         self.counters
@@ -177,6 +178,7 @@ impl Engine {
             self.push_job(&mut batch, job, project.flatten(), &cause);
         }
         self.recover_drafts(&cause, &mut batch)?;
+        self.recover_deployments()?;
         let queued = batch.jobs.len();
         if queued > 0 {
             self.commit(&batch)?;

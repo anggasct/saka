@@ -45,7 +45,7 @@ macro_rules! deployment_columns {
         deployment_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "project_id", "repo_id", "environment", "branch", "sha", "previous_sha", "cause", "state", "phase", "error", "action", "target_url", "verification", "actor", "reason", "queued_at", "started_at", "finished_at", "updated_at")
+        qualified!($prefix: "id", "project_id", "repo_id", "environment", "branch", "sha", "previous_sha", "cause", "state", "phase", "error", "action", "target_url", "verification", "actor", "reason", "queued_at", "started_at", "finished_at", "updated_at", "on_failure")
     };
 }
 

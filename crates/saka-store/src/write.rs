@@ -161,6 +161,7 @@ pub struct Batch {
     pub permission_rules: Vec<PermissionRule>,
     pub hook_runs: Vec<saka_core::hook::HookRun>,
     pub deployments: Vec<saka_core::deploy::Deployment>,
+    pub deploy_gates: Vec<crate::deployment::DeployGateRow>,
     pub deployment_checks: Vec<(saka_core::ids::DeploymentId, saka_core::deploy::CheckRecord)>,
     pub activities: Vec<(ProjectId, SessionActivity)>,
     pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
@@ -447,6 +448,9 @@ pub(crate) fn write(
     }
     for d in &b.deployments {
         crate::deployment::upsert(tx, d)?;
+    }
+    for g in &b.deploy_gates {
+        crate::deployment::upsert_gate(tx, g, b.now)?;
     }
     for (id, check) in &b.deployment_checks {
         crate::deployment::upsert_check(tx, *id, check)?;

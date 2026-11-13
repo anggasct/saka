@@ -650,6 +650,64 @@
         }
       }
     },
+    "/api/v1/deployments/{deployment_id}/actions/cancel": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "cancel_deployment",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/diagnostics": {
       "get": {
         "tags": [
@@ -2076,6 +2134,72 @@
             }
           },
           "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/environments/{environment}/actions/deploy": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "deploy_environment",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          },
+          "4XX": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4750,6 +4874,64 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/actions/accept-unverified": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "accept_unverified",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptUnverifiedBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items/{work_item_id}/actions/cancel": {
       "post": {
         "tags": [
@@ -5501,6 +5683,25 @@
   },
   "components": {
     "schemas": {
+      "AcceptUnverifiedBody": {
+        "type": "object",
+        "required": [
+          "blocker_id",
+          "reason"
+        ],
+        "properties": {
+          "blocker_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The open `deploy_unverified` blocker of the task."
+          },
+          "reason": {
+            "type": "string",
+            "description": "1 to 500 characters, kept in the audit trail."
+          }
+        },
+        "additionalProperties": false
+      },
       "AcceptanceCriterion": {
         "type": "object",
         "required": [
@@ -6489,6 +6690,40 @@
           },
           "verification": {
             "$ref": "#/components/schemas/EnvironmentVerification"
+          }
+        }
+      },
+      "DeployGate": {
+        "type": "object",
+        "required": [
+          "environment",
+          "state"
+        ],
+        "properties": {
+          "deployment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentSummary",
+                "description": "The deployment that holds the gate; `null` when it is not known."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "environment": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's reason when the gate was accepted, or `environment_removed` when it was skipped."
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending`, `passed`, `failed`, `accepted`, or `skipped`."
           }
         }
       },
@@ -7610,6 +7845,7 @@
           "repos",
           "branches",
           "codes",
+          "environments",
           "timeout_secs",
           "target"
         ],
@@ -7630,6 +7866,12 @@
               "type": "string"
             }
           },
+          "environments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "mode": {
             "type": "string",
             "description": "`after` or `gate`."
@@ -7639,7 +7881,7 @@
           },
           "on": {
             "type": "string",
-            "description": "`change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, `blocked`, or `inbox_item_opened`."
+            "description": "`change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, `blocked`, `inbox_item_opened`, `deployed`, or `deploy_failed`."
           },
           "repos": {
             "type": "array",
@@ -7908,7 +8150,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "`decision`, `approval`, `permission`, `blocker`, or `spec_unclear`."
+            "description": "`decision`, `approval`, `permission`, `blocker`, `spec_unclear`, `intake`, or `deployment`."
           },
           "opened_at": {
             "type": "string"
@@ -7936,7 +8178,7 @@
           },
           "subject": {
             "type": "string",
-            "description": "`spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`."
+            "description": "`spec`, `step_start`, `merge`, `permission`, `blocker`, `decision`, `intake`, or `deployment`."
           },
           "title": {
             "$ref": "#/components/schemas/InboxTitle"
@@ -9003,7 +9245,7 @@
                 },
                 "kind": {
                   "type": "string",
-                  "description": "`decision`, `approval`, `permission`, `blocker`, or `spec_unclear`."
+                  "description": "`decision`, `approval`, `permission`, `blocker`, `spec_unclear`, `intake`, or `deployment`."
                 },
                 "opened_at": {
                   "type": "string"
@@ -9031,7 +9273,7 @@
                 },
                 "subject": {
                   "type": "string",
-                  "description": "`spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`."
+                  "description": "`spec`, `step_start`, `merge`, `permission`, `blocker`, `decision`, `intake`, or `deployment`."
                 },
                 "title": {
                   "$ref": "#/components/schemas/InboxTitle"
@@ -9831,6 +10073,7 @@
                 "state",
                 "priority",
                 "waiting_on",
+                "deploy_gates",
                 "gates",
                 "pending_permission_count",
                 "available_actions",
@@ -9895,6 +10138,13 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "deploy_gates": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeployGate"
+                  },
+                  "description": "One gate per gated environment the task's merge was deployed to; empty when none."
                 },
                 "docs_change_request": {
                   "oneOf": [
@@ -13507,6 +13757,7 @@
           "state",
           "priority",
           "waiting_on",
+          "deploy_gates",
           "gates",
           "pending_permission_count",
           "available_actions",
@@ -13571,6 +13822,13 @@
           },
           "created_at": {
             "type": "string"
+          },
+          "deploy_gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeployGate"
+            },
+            "description": "One gate per gated environment the task's merge was deployed to; empty when none."
           },
           "docs_change_request": {
             "oneOf": [

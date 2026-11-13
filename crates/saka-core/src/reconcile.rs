@@ -1,7 +1,8 @@
 use crate::admission::{self, Candidate, Waiting};
 use crate::authorship::{ProjectAuthorship, UserLink, resume_trigger};
+use crate::deploy::{Deployment, startable};
 use crate::ids::{SpecId, WorkItemId};
-use crate::job::Job;
+use crate::job::{Job, JobKind};
 use crate::model::{AccountQuota, Spec, SpecDependency, Task, WorkItemDependency};
 use crate::react::phase_jobs;
 use crate::task::{LoopConfig, TaskInput};
@@ -27,6 +28,7 @@ pub struct Snapshot {
     pub port_blocks: Option<usize>,
     pub user_links: Vec<UserLink>,
     pub authorships: Vec<ProjectAuthorship>,
+    pub deployments: Vec<Deployment>,
 }
 
 fn holds_port_block(task: &Task) -> bool {
@@ -283,6 +285,15 @@ pub fn reconcile(
         if let Some(trigger) = credential_resume(snapshot, task, now) {
             actions.push(Action::Decide(task.item.id, TaskInput::Resume { trigger }));
         }
+    }
+
+    for deployment in startable(&snapshot.deployments) {
+        actions.push(Action::Enqueue(Job::new(
+            JobKind::DeployRun,
+            deployment.id,
+            serde_json::json!({ "deployment_id": deployment.id }),
+            now,
+        )));
     }
 
     for id in crate::queue::next_turns(tasks) {

@@ -46,7 +46,7 @@ pub use state::{ApiConfig, AppState};
         routes::drafts::commit_spec_draft, routes::drafts::discard_spec_draft,
         routes::issue_intakes::list_issue_intakes, routes::issue_intakes::get_issue_intake,
         routes::issue_intakes::create_issue_intake, routes::issue_intakes::dismiss_issue_intake, routes::issue_intakes::retry_issue_intake,
-        routes::deployments::list_environments, routes::deployments::list_deployments, routes::deployments::get_deployment,
+        routes::deployments::list_environments, routes::deployments::list_deployments, routes::deployments::get_deployment, routes::deployments::deploy_environment, routes::deployments::cancel_deployment, routes::tasks::accept_unverified,
         routes::operations::list_project_hooks, routes::operations::list_hook_runs, routes::operations::get_hook_run, routes::inbox::list_inbox, routes::inbox::inbox_summary, routes::dismiss_inbox_item, routes::operations::rerun_hook,
         auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
         auth_routes::register_start, auth_routes::register_finish, auth_routes::login_start, auth_routes::login_finish, auth_routes::logout, auth_routes::revoke_credential,
@@ -139,6 +139,14 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/deployments/{deployment_id}",
             get(routes::deployments::get_deployment),
         )
+        .route(
+            "/api/v1/projects/{project_id}/environments/{environment}/actions/deploy",
+            post(routes::deployments::deploy_environment),
+        )
+        .route(
+            "/api/v1/deployments/{deployment_id}/actions/cancel",
+            post(routes::deployments::cancel_deployment),
+        )
         .route("/api/v1/inbox", get(routes::inbox::list_inbox))
         .route("/api/v1/inbox/summary", get(routes::inbox::inbox_summary))
         .route(
@@ -182,6 +190,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/work-items/{work_item_id}/actions/retry",
             post(routes::tasks::retry),
+        )
+        .route(
+            "/api/v1/work-items/{work_item_id}/actions/accept-unverified",
+            post(routes::tasks::accept_unverified),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/revert",

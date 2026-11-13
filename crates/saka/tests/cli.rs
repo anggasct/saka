@@ -2260,6 +2260,7 @@ fn deployments_are_listed_and_shown_with_their_evidence() {
             cause: DeployCause::Redeploy,
             action: DeployActionKind::RunHost,
             target_url: None,
+            on_failure: saka_core::vocab::OnFailure::Revert,
             actor: None,
             reason: None,
             change_request_id: None,
@@ -2358,6 +2359,61 @@ fn deployments_are_listed_and_shown_with_their_evidence() {
         &["deploy", "show", "0193f0c4-0000-7000-8000-000000000000"],
     );
     assert_eq!(code(&unknown), 1);
+}
+
+#[test]
+fn a_deployment_is_redeployed_and_cancelled_from_the_cli_with_the_documented_codes() {
+    use saka_core::environment::{self, RawEnvironment};
+
+    let environments = environment::parse_all(&[RawEnvironment {
+        project: "tasks".into(),
+        environment: "staging".into(),
+        action: "run_host".into(),
+        command: Some("./deploy.sh".into()),
+        on_failure: Some("revert".into()),
+        ..RawEnvironment::default()
+    }])
+    .unwrap();
+    let sim = Sim::new(SimConfig {
+        environments,
+        ..SimConfig::default()
+    });
+    let server = serve(&sim);
+    let made = saka(
+        &server,
+        &[
+            "--json", "deploy", "redeploy", "tasks", "staging", "--reason", "ship it",
+        ],
+    );
+    assert_eq!(code(&made), 0, "{}", String::from_utf8_lossy(&made.stderr));
+    let id = json(&made)["id"].as_str().unwrap().to_string();
+    let twice = saka(
+        &server,
+        &[
+            "deploy", "redeploy", "tasks", "staging", "--reason", "again",
+        ],
+    );
+    assert_eq!(code(&twice), 4, "409 deployment_queued");
+    assert!(String::from_utf8_lossy(&twice.stderr).contains("deployment_queued"));
+    let none = saka(
+        &server,
+        &["deploy", "redeploy", "tasks", "nowhere", "--reason", "x"],
+    );
+    assert_eq!(code(&none), 1, "404 environment_not_found");
+    let cancelled = saka(&server, &["deploy", "cancel", &id, "--reason", "no"]);
+    assert_eq!(
+        code(&cancelled),
+        0,
+        "{}",
+        String::from_utf8_lossy(&cancelled.stderr)
+    );
+    assert!(
+        stdout(&cancelled).contains("cancelled"),
+        "{}",
+        stdout(&cancelled)
+    );
+    let finished = saka(&server, &["deploy", "cancel", &id, "--reason", "again"]);
+    assert_eq!(code(&finished), 4, "409 deployment_finished");
 }
 
 #[test]

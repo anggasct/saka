@@ -14,6 +14,7 @@ export const deploy: Hook = {
   repos: ["app"],
   branches: ["main"],
   codes: [],
+  environments: [],
   timeout_secs: 300,
   target: {
     command: "./scripts/deploy.sh staging",
@@ -33,6 +34,7 @@ export const announce: Hook = {
   repos: [],
   branches: [],
   codes: [],
+  environments: [],
   timeout_secs: 10,
   target: {
     command: null,

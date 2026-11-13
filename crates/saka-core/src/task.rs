@@ -1,4 +1,5 @@
 mod change;
+mod deploy_gates;
 mod evolve;
 mod gates;
 mod merge;
@@ -262,6 +263,10 @@ pub enum TaskInput {
     Retry {
         reason: String,
     },
+    AcceptUnverified {
+        blocker_id: BlockerId,
+        reason: String,
+    },
     Cancel {
         reason: String,
     },
@@ -385,6 +390,7 @@ pub fn decide(
             | TaskInput::ReviewPosted { .. }
             | TaskInput::Tick
             | TaskInput::Retry { .. }
+            | TaskInput::AcceptUnverified { .. }
             | TaskInput::AutoRetry
             | TaskInput::Resume { .. }
             | TaskInput::ResolveBlocker { .. }
@@ -616,6 +622,9 @@ pub fn decide(
         }
         I::EnvironmentTornDown { teardown_failures } => d.environment_torn_down(teardown_failures),
         I::Retry { reason } => return d.retry(reason, ctx),
+        I::AcceptUnverified { blocker_id, reason } => {
+            return d.accept_unverified(blocker_id, reason, ctx);
+        }
         I::AutoRetry => d.auto_retry(ctx),
         I::Resume { trigger } => d.resume(trigger, ctx),
         I::Cancel { reason } => return d.cancel(reason),

@@ -57,6 +57,10 @@ impl Decider<'_> {
             }
             return self.settle_gate(head, false, None, None, ctx);
         }
+        let deploy = self.settle_deploy_gates(ctx);
+        if !deploy.is_empty() {
+            return deploy;
+        }
         self.settle_hook_gates(ctx)
     }
 

@@ -326,6 +326,30 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_docs_changes_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_deployments_total",
+        "counter",
+        "Deployments that finished, by environment and outcome.",
+    );
+    for (environment, outcome, n) in &m.deployments {
+        t.sample(
+            "saka_deployments_total",
+            &[("environment", environment), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
+        "saka_deploy_checks_total",
+        "counter",
+        "Deployment checks, by phase and state.",
+    );
+    for (phase, state, n) in &m.deploy_checks {
+        t.sample(
+            "saka_deploy_checks_total",
+            &[("phase", phase), ("state", state)],
+            n,
+        );
+    }
+    t.family(
         "saka_reverts_total",
         "counter",
         "Revert tasks, by how they ended: merged, stopped on a conflict, or cancelled.",
