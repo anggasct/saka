@@ -26,13 +26,13 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, ChangeRole, DeployActionKind, DeployCause, DeployPhase, DeviceKind,
-    DraftFailureCode, DraftLocale, DraftMode, Effect, ExternalCause, GateOutcome, GateSource,
-    HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, InterruptBy, IssueCause,
-    IssueClosedBy, IssueIntakeState, IssueLane, LintOutcome, MatchKind, MergeMethod,
-    PairingPurpose, PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger, ResumeCause,
-    ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage,
-    StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
+    ChangeCredentialKind, ChangeRole, DeployActionKind, DeployCause, DeployGateState, DeployPhase,
+    DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect, ExternalCause, GateOutcome,
+    GateSource, HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, InterruptBy,
+    IssueCause, IssueClosedBy, IssueIntakeState, IssueLane, LintOutcome, MatchKind, MergeMethod,
+    OnFailure, PairingPurpose, PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger,
+    ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin,
+    Stage, StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -923,6 +923,7 @@ pub enum Event {
         cause: DeployCause,
         action: DeployActionKind,
         target_url: Option<String>,
+        on_failure: OnFailure,
         actor: Option<String>,
         reason: Option<String>,
     },
@@ -961,6 +962,14 @@ pub enum Event {
         deployment_id: DeploymentId,
         reason: String,
         actor: Option<String>,
+    },
+    #[serde(rename = "delivery.deploy_gate.changed")]
+    DeployGateChanged {
+        work_item_id: WorkItemId,
+        environment: String,
+        state: DeployGateState,
+        deployment_id: Option<DeploymentId>,
+        reason: Option<String>,
     },
     #[serde(rename = "delivery.inbox_item.dismissed")]
     InboxItemDismissed {
@@ -1305,6 +1314,7 @@ impl Event {
             | E::DeploymentSucceeded { deployment_id }
             | E::DeploymentFailed { deployment_id, .. }
             | E::DeploymentCancelled { deployment_id, .. } => Stream::Deployment(*deployment_id),
+            E::DeployGateChanged { work_item_id, .. } => Stream::WorkItem(*work_item_id),
             E::InboxItemDismissed { inbox_item_id, .. } => Stream::InboxItem(*inbox_item_id),
             E::PairingCreated { pairing_id, .. } => Stream::Pairing(*pairing_id),
             E::DevicePaired { device_id, .. } | E::DeviceRevoked { device_id } => {

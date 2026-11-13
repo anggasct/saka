@@ -93,7 +93,7 @@ fn the_merge_queue_migration_keeps_rows_and_opens_the_queue_phases_and_the_queue
     assert_eq!(
         store.migration().applied,
         vec![
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44
         ]
     );
     drop(store);

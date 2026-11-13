@@ -47,6 +47,16 @@ impl Decider<'_> {
         reason: String,
         ctx: &mut Ctx<'_>,
     ) -> Result<Vec<Event>, Rejection> {
+        self.retry_resolving(trigger, None, reason, ctx)
+    }
+
+    pub(super) fn retry_resolving(
+        &self,
+        trigger: Trigger,
+        resolution: Option<BlockerResolution>,
+        reason: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
         let blocked = self.item().state == WorkItemState::Blocked;
         let Some(blocker) = self.task.open_blocker().filter(|_| blocked) else {
             return Err(Rejection::InvalidState {
@@ -116,11 +126,11 @@ impl Decider<'_> {
         let mut events = vec![Event::BlockerResolved {
             work_item_id: self.item().id,
             blocker_id: blocker.id,
-            resolution: if trigger == Trigger::Auto {
+            resolution: resolution.unwrap_or(if trigger == Trigger::Auto {
                 BlockerResolution::Auto
             } else {
                 BlockerResolution::Retried
-            },
+            }),
             reason: Some(reason),
         }];
         let repush = match (&run, pushed_head) {
@@ -600,7 +610,7 @@ pub fn retry_entry(code: BlockerCode, params: &Value) -> Option<(Stage, StagePha
         }
         B::MergeConflict | B::ChangeBehindBase => (Stage::Merge, StagePhase::AwaitingCi),
         B::DodFailed => (Stage::Sync, StagePhase::Verifying),
-        B::HookFailed => (Stage::Sync, StagePhase::TearingDown),
+        B::HookFailed | B::DeployUnverified => (Stage::Sync, StagePhase::TearingDown),
         B::ScmUnavailable => {
             let phase: StagePhase = params.get("phase").and_then(Value::as_str)?.parse().ok()?;
             let stage = match phase {

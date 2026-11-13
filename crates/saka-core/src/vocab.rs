@@ -192,6 +192,7 @@ vocab!(InboxKind {
     Blocker => "blocker",
     SpecUnclear => "spec_unclear",
     Intake => "intake",
+    Deployment => "deployment",
 });
 vocab!(InboxSubject {
     Spec => "spec",
@@ -201,6 +202,7 @@ vocab!(InboxSubject {
     Blocker => "blocker",
     Decision => "decision",
     Intake => "intake",
+    Deployment => "deployment",
 });
 vocab!(InboxState { Open => "open", Answered => "answered", Resolved => "resolved", Dismissed => "dismissed" });
 vocab!(InboxActionKind {
@@ -219,6 +221,7 @@ vocab!(InboxActionKind {
     AnswerDecision => "answer_decision",
     RetryIntake => "retry_intake",
     DismissIntake => "dismiss_intake",
+    Redeploy => "redeploy",
 });
 vocab!(ScopeStage { Dev => "dev", Merge => "merge", Sync => "sync" });
 vocab!(ChangeRole { Code => "code", Docs => "docs" });
@@ -269,6 +272,8 @@ vocab!(HookEvent {
     SpecShipped => "spec_shipped",
     Blocked => "blocked",
     InboxItemOpened => "inbox_item_opened",
+    Deployed => "deployed",
+    DeployFailed => "deploy_failed",
 });
 vocab!(DeployActionKind { Run => "run", RunHost => "run_host", Webhook => "webhook" });
 vocab!(OnFailure { Revert => "revert", Fix => "fix" });

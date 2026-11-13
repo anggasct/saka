@@ -719,6 +719,43 @@ impl Client {
         }
     }
 
+    pub async fn deploy_redeploy(
+        &self,
+        project: &str,
+        environment: &str,
+        reason: &str,
+    ) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        match self
+            .post(
+                &format!("/api/v1/projects/{id}/environments/{environment}/actions/deploy"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, deployment_line),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn deploy_cancel(&self, id: &str, reason: &str) -> ExitCode {
+        match self
+            .post(
+                &format!("/api/v1/deployments/{id}/actions/cancel"),
+                &json!({ "reason": reason }),
+                None,
+            )
+            .await
+        {
+            Ok(a) => self.finish(&a, deployment_line),
+            Err(code) => code,
+        }
+    }
+
     pub async fn hook_rerun(&self, id: &str, reason: &str) -> ExitCode {
         match self
             .post(

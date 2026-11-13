@@ -6,16 +6,18 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::blocker::primary_action;
+use crate::deploy::Deployment;
 use crate::event::Event;
 use crate::ids::{
-    BlockerId, HookRunId, IdSource, InboxItemId, ProjectId, RepoId, ReviewId, SpecId, WorkItemId,
+    BlockerId, DeploymentId, HookRunId, IdSource, InboxItemId, ProjectId, RepoId, ReviewId, SpecId,
+    WorkItemId,
 };
 use crate::model::{Coded, Spec, Task};
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{
-    BlockerAction, BlockerCode, ChangeRole, HookActionKind, HookEvent, HookMode, HookRunState,
-    InboxKind, InboxSubject, ReviewOutcome,
+    BlockerAction, BlockerCode, ChangeRole, DeployPhase, DeploymentState, HookActionKind,
+    HookEvent, HookMode, HookRunState, InboxKind, InboxSubject, ReviewOutcome,
 };
 
 pub const MAX_PER_PROJECT: usize = 32;
@@ -42,6 +44,8 @@ pub struct RawHook {
     pub branches: Vec<String>,
     #[serde(default)]
     pub codes: Vec<String>,
+    #[serde(default)]
+    pub environments: Vec<String>,
     pub action: String,
     #[serde(default)]
     pub command: Option<String>,
@@ -96,6 +100,7 @@ pub struct HookFilter {
     pub repos: Vec<String>,
     pub branches: Vec<String>,
     pub codes: Vec<BlockerCode>,
+    pub environments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +294,11 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
             return Err(issue("hook_filter_invalid", name, Some("branches")));
         }
     }
+    let environments = filter_list(name, "environments", &raw.environments)?;
+    let on_deploy = matches!(on, HookEvent::Deployed | HookEvent::DeployFailed);
+    if environments.iter().any(|e| !slug_ok(e)) || (!environments.is_empty() && !on_deploy) {
+        return Err(issue("hook_filter_invalid", name, Some("environments")));
+    }
     let codes_raw = filter_list(name, "codes", &raw.codes)?;
     if !codes_raw.is_empty() && on != HookEvent::Blocked {
         return Err(issue("hook_filter_invalid", name, Some("codes")));
@@ -301,7 +311,11 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
     if run {
         let commit_event = matches!(
             on,
-            HookEvent::ChangeOpened | HookEvent::Merged | HookEvent::TaskDone
+            HookEvent::ChangeOpened
+                | HookEvent::Merged
+                | HookEvent::TaskDone
+                | HookEvent::Deployed
+                | HookEvent::DeployFailed
         );
         let tip_event = on == HookEvent::SpecShipped && repos.len() == 1;
         if !commit_event && !tip_event {
@@ -370,6 +384,7 @@ fn parse_one(raw: &RawHook) -> Result<Hook, HookIssue> {
             repos: repos.to_vec(),
             branches: branches.to_vec(),
             codes,
+            environments: environments.to_vec(),
         },
         timeout_ms: timeout * 1000,
         action,
@@ -431,6 +446,8 @@ pub struct BlockerRef {
     pub id: BlockerId,
     pub code: BlockerCode,
     pub action: Option<BlockerAction>,
+    #[serde(default)]
+    pub params: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -449,6 +466,17 @@ pub struct ReviewRef {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeploymentRef {
+    pub id: DeploymentId,
+    pub environment: String,
+    pub state: DeploymentState,
+    pub phase: Option<DeployPhase>,
+    pub sha: Option<String>,
+    pub previous_sha: Option<String>,
+    pub target_url: Option<String>,
+}
+
 pub const REVIEW_SUMMARY_CHARS: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +493,7 @@ pub struct HookContext {
     pub blocker: Option<BlockerRef>,
     pub review: Option<Box<ReviewRef>>,
     pub inbox: Option<InboxRef>,
+    pub deployment: Option<DeploymentRef>,
     pub occurred_at: String,
 }
 
@@ -519,7 +548,10 @@ pub fn task_context(
             (HookEvent::ReviewDone, Some(head_sha.clone()), None)
         }
         Event::WorkItemBlocked {
-            blocker_id, code, ..
+            blocker_id,
+            code,
+            params,
+            ..
         } if *code != BlockerCode::HookFailed => (
             HookEvent::Blocked,
             None,
@@ -527,6 +559,7 @@ pub fn task_context(
                 id: *blocker_id,
                 code: *code,
                 action: primary_action(task).map(|a| a.kind),
+                params: shared_params(*code, params),
             }),
         ),
         _ => return None,
@@ -560,8 +593,20 @@ pub fn task_context(
         blocker,
         review,
         inbox: None,
+        deployment: None,
         occurred_at: now.to_rfc3339(),
     })
+}
+
+fn shared_params(code: BlockerCode, params: &Value) -> Option<Value> {
+    if code != BlockerCode::DeployUnverified {
+        return None;
+    }
+    let shared: serde_json::Map<String, Value> = ["environment", "deployment_id", "phase", "code"]
+        .iter()
+        .filter_map(|key| params.get(*key).map(|v| ((*key).to_string(), v.clone())))
+        .collect();
+    Some(Value::Object(shared))
 }
 
 pub fn spec_context(spec: &Spec, project_name: &str, now: Timestamp) -> HookContext {
@@ -584,6 +629,7 @@ pub fn spec_context(spec: &Spec, project_name: &str, now: Timestamp) -> HookCont
         blocker: None,
         review: None,
         inbox: None,
+        deployment: None,
         occurred_at: now.to_rfc3339(),
     }
 }
@@ -608,11 +654,47 @@ pub fn inbox_context(
         blocker: None,
         review: None,
         inbox: Some(inbox),
+        deployment: None,
         occurred_at: now.to_rfc3339(),
     }
 }
 
-fn clean(value: &str) -> String {
+pub fn deployment_context(
+    deployment: &Deployment,
+    facts: &Facts,
+    event: HookEvent,
+    now: Timestamp,
+) -> HookContext {
+    HookContext {
+        event,
+        project: NamedRef {
+            id: facts.project_id.0,
+            name: facts.project_name.clone(),
+        },
+        repo: facts.repo.clone(),
+        task: None,
+        revert_of: None,
+        spec: None,
+        change: None,
+        branch: Some(deployment.branch.clone()),
+        sha: deployment.sha.clone(),
+        blocker: None,
+        review: None,
+        inbox: None,
+        deployment: Some(DeploymentRef {
+            id: deployment.id,
+            environment: deployment.environment.clone(),
+            state: deployment.state,
+            phase: deployment.phase,
+            sha: deployment.sha.clone(),
+            previous_sha: deployment.previous_sha.clone(),
+            target_url: deployment.target_url.clone(),
+        }),
+        occurred_at: now.to_rfc3339(),
+    }
+}
+
+pub(crate) fn clean(value: &str) -> String {
     value.chars().filter(|c| !c.is_control()).collect()
 }
 
@@ -649,6 +731,24 @@ impl HookContext {
         set(
             "SAKA_REVIEW_OUTCOME",
             self.review.as_ref().map(|r| r.outcome.as_str().to_string()),
+        );
+        set(
+            "SAKA_DEPLOY_ID",
+            self.deployment.as_ref().map(|d| d.id.to_string()),
+        );
+        set(
+            "SAKA_DEPLOY_ENV",
+            self.deployment.as_ref().map(|d| d.environment.clone()),
+        );
+        set(
+            "SAKA_DEPLOY_URL",
+            self.deployment.as_ref().and_then(|d| d.target_url.clone()),
+        );
+        set(
+            "SAKA_PREVIOUS_SHA",
+            self.deployment
+                .as_ref()
+                .and_then(|d| d.previous_sha.clone()),
         );
         vars
     }
@@ -689,6 +789,14 @@ pub fn matches(hook: &Hook, ctx: &HookContext) -> bool {
         if !hit {
             return false;
         }
+    }
+    if !f.environments.is_empty()
+        && !ctx
+            .deployment
+            .as_ref()
+            .is_some_and(|d| f.environments.contains(&d.environment))
+    {
+        return false;
     }
     if !f.codes.is_empty() {
         return ctx
@@ -1166,9 +1274,11 @@ mod tests {
                 id: BlockerId(Uuid::from_u128(3)),
                 code: BlockerCode::CiRed,
                 action: Some(BlockerAction::Retry),
+                params: None,
             }),
             review: None,
             inbox: None,
+            deployment: None,
             occurred_at: Timestamp(0).to_rfc3339(),
         }
     }
@@ -1208,5 +1318,82 @@ mod tests {
         assert!(matches(&hook(f.clone()), &ctx(HookEvent::Blocked)));
         f.codes = vec!["dod_failed".into()];
         assert!(!matches(&hook(f), &ctx(HookEvent::Blocked)));
+    }
+
+    fn on_deploy(on: &str, extra: impl FnOnce(&mut RawHook)) -> RawHook {
+        let mut hook = raw("notify");
+        hook.on = on.into();
+        extra(&mut hook);
+        hook
+    }
+
+    #[test]
+    fn deploy_events_take_an_environment_filter_and_never_gate() {
+        for on in ["deployed", "deploy_failed"] {
+            assert_eq!(
+                code(on_deploy(on, |h| h.environments = vec!["staging".into()])),
+                "ok",
+                "{on}"
+            );
+            assert_eq!(
+                code(on_deploy(on, |h| h.mode = Some("gate".into()))),
+                "hook_gate_event_invalid",
+                "{on}"
+            );
+            let mut run = command("run", on);
+            run.environments = vec!["staging".into()];
+            assert_eq!(code(run), "ok", "a run hook checks out the deployed sha");
+        }
+        assert_eq!(
+            code(on_deploy("merged", |h| h.environments = vec!["staging".into()])),
+            "hook_filter_invalid"
+        );
+        assert_eq!(
+            code(on_deploy("deployed", |h| h.environments = vec!["Bad Name".into()])),
+            "hook_filter_invalid"
+        );
+    }
+
+    fn deployed_ctx(environment: &str) -> HookContext {
+        let mut ctx = ctx(HookEvent::Deployed);
+        ctx.deployment = Some(DeploymentRef {
+            id: DeploymentId(Uuid::from_u128(7)),
+            environment: environment.into(),
+            state: DeploymentState::Succeeded,
+            phase: Some(DeployPhase::Verify),
+            sha: Some("a".repeat(40)),
+            previous_sha: Some("b".repeat(40)),
+            target_url: Some("https://staging.example.com".into()),
+        });
+        ctx
+    }
+
+    #[test]
+    fn a_deploy_hook_matches_only_its_environments_and_the_context_names_the_deployment() {
+        let all = hook(on_deploy("deployed", |_| {}));
+        let staging = hook(on_deploy("deployed", |h| {
+            h.environments = vec!["staging".into()]
+        }));
+        let mut other = deployed_ctx("preview");
+        other.project.name = "saka".into();
+        assert!(matches(&all, &other));
+        assert!(!matches(&staging, &other));
+        let mut ours = deployed_ctx("staging");
+        ours.project.name = "saka".into();
+        assert!(matches(&staging, &ours));
+        let vars: std::collections::BTreeMap<_, _> = ours
+            .env_vars(HookRunId(Uuid::from_u128(9)), "after")
+            .into_iter()
+            .collect();
+        assert_eq!(vars["SAKA_DEPLOY_ENV"], "staging");
+        assert_eq!(vars["SAKA_DEPLOY_URL"], "https://staging.example.com");
+        assert_eq!(vars["SAKA_DEPLOY_ID"], Uuid::from_u128(7).to_string());
+        assert_eq!(vars["SAKA_PREVIOUS_SHA"], "b".repeat(40));
+        assert!(
+            !ctx(HookEvent::Merged)
+                .env_vars(HookRunId(Uuid::from_u128(9)), "x")
+                .iter()
+                .any(|(k, _)| k.starts_with("SAKA_DEPLOY"))
+        );
     }
 }

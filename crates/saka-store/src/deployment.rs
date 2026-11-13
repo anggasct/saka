@@ -4,7 +4,7 @@ use saka_core::ids::{ChangeRequestId, DeploymentId, ProjectId, RepoId, WorkItemI
 use saka_core::model::Coded;
 use saka_core::vocab::{DeployGateState, DeploymentState};
 
-use crate::codec::{opt_json, opt_vocab, to_json, u32_col, uuid, vocab};
+use crate::codec::{opt_json, opt_uuid, opt_vocab, to_json, u32_col, uuid, vocab};
 use crate::error::Result;
 use crate::list::{Key, Page};
 use crate::read::{opt_ts, ts};
@@ -31,6 +31,7 @@ fn deployment_row(row: &Row<'_>) -> Result<Deployment> {
         error: opt_json::<Coded>(row, "error")?,
         action: vocab(row, "action")?,
         target_url: row.get("target_url")?,
+        on_failure: vocab(row, "on_failure")?,
         verification: opt_json(row, "verification")?,
         actor: row.get("actor")?,
         reason: row.get("reason")?,
@@ -73,8 +74,8 @@ pub(crate) fn upsert(tx: &Transaction<'_>, d: &Deployment) -> Result<()> {
     tx.execute(
         "INSERT INTO deployment (id, project_id, repo_id, environment, branch, sha, previous_sha, cause, state,
            phase, error, action, target_url, verification, actor, reason, queued_at, started_at, finished_at,
-           updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+           updated_at, on_failure)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT (id) DO UPDATE SET sha = excluded.sha, previous_sha = excluded.previous_sha,
            state = excluded.state, phase = excluded.phase, error = excluded.error,
            verification = excluded.verification, actor = excluded.actor, reason = excluded.reason,
@@ -101,6 +102,7 @@ pub(crate) fn upsert(tx: &Transaction<'_>, d: &Deployment) -> Result<()> {
             d.started_at.map(|t| t.0),
             d.finished_at.map(|t| t.0),
             d.updated_at.0,
+            d.on_failure.as_str(),
         ],
     )?;
     for merge in &d.merges {
@@ -353,4 +355,110 @@ pub fn list(
             (d, key)
         })
         .collect())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployGateRow {
+    pub work_item_id: WorkItemId,
+    pub environment: String,
+    pub state: DeployGateState,
+    pub deployment_id: Option<DeploymentId>,
+    pub reason: Option<String>,
+}
+
+pub(crate) fn upsert_gate(
+    tx: &Transaction<'_>,
+    g: &DeployGateRow,
+    now: saka_core::time::Timestamp,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO deploy_gate (work_item_id, environment, state, deployment_id, reason, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+         ON CONFLICT (work_item_id, environment) DO UPDATE SET state = excluded.state,
+           deployment_id = excluded.deployment_id, reason = excluded.reason, updated_at = excluded.updated_at",
+        params![
+            g.work_item_id.to_string(),
+            g.environment,
+            g.state.as_str(),
+            g.deployment_id.map(|d| d.to_string()),
+            g.reason,
+            now.0,
+        ],
+    )?;
+    if let Some(deployment) = g.deployment_id {
+        tx.execute(
+            "INSERT OR IGNORE INTO deployment_task (deployment_id, work_item_id) VALUES (?1, ?2)",
+            params![deployment.to_string(), g.work_item_id.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn gates_of(conn: &Connection, deployment: DeploymentId) -> Result<Vec<DeployGateRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT work_item_id, environment, state, deployment_id, reason FROM deploy_gate
+         WHERE deployment_id = ?1 ORDER BY created_at, work_item_id",
+    )?;
+    let mut rows = stmt.query([deployment.to_string()])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(DeployGateRow {
+            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+            environment: row.get("environment")?,
+            state: vocab(row, "state")?,
+            deployment_id: opt_uuid(row, "deployment_id")?.map(DeploymentId),
+            reason: row.get("reason")?,
+        });
+    }
+    Ok(out)
+}
+
+pub fn open_gates_of(
+    conn: &Connection,
+    project: ProjectId,
+    environment: &str,
+) -> Result<Vec<DeployGateRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT g.work_item_id AS work_item_id, g.environment AS environment, g.state AS state,
+           g.deployment_id AS deployment_id, g.reason AS reason
+         FROM deploy_gate g JOIN work_item w ON w.id = g.work_item_id
+         WHERE w.project_id = ?1 AND g.environment = ?2 AND g.state IN ('pending','failed')
+         ORDER BY g.created_at, g.work_item_id",
+    )?;
+    let mut rows = stmt.query(params![project.to_string(), environment])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(DeployGateRow {
+            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+            environment: row.get("environment")?,
+            state: vocab(row, "state")?,
+            deployment_id: opt_uuid(row, "deployment_id")?.map(DeploymentId),
+            reason: row.get("reason")?,
+        });
+    }
+    Ok(out)
+}
+
+pub fn all_open_gates(conn: &Connection) -> Result<Vec<(ProjectId, DeployGateRow)>> {
+    let mut stmt = conn.prepare(
+        "SELECT w.project_id AS project_id, g.work_item_id AS work_item_id, g.environment AS environment,
+           g.state AS state, g.deployment_id AS deployment_id, g.reason AS reason
+         FROM deploy_gate g JOIN work_item w ON w.id = g.work_item_id
+         WHERE g.state IN ('pending','failed') ORDER BY g.created_at, g.work_item_id",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push((
+            ProjectId(uuid(row, "project_id")?),
+            DeployGateRow {
+                work_item_id: WorkItemId(uuid(row, "work_item_id")?),
+                environment: row.get("environment")?,
+                state: vocab(row, "state")?,
+                deployment_id: opt_uuid(row, "deployment_id")?.map(DeploymentId),
+                reason: row.get("reason")?,
+            },
+        ));
+    }
+    Ok(out)
 }

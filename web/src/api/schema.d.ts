@@ -260,6 +260,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/deployments/{deployment_id}/actions/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["cancel_deployment"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/diagnostics": {
     parameters: {
       query?: never;
@@ -622,6 +638,22 @@ export interface paths {
     get: operations["list_environments"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/environments/{environment}/actions/deploy": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["deploy_environment"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1252,6 +1284,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/accept-unverified": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["accept_unverified"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/cancel": {
     parameters: {
       query?: never;
@@ -1480,6 +1528,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    AcceptUnverifiedBody: {
+      /**
+       * Format: uuid
+       * @description The open `deploy_unverified` blocker of the task.
+       */
+      blocker_id: string;
+      /** @description 1 to 500 characters, kept in the audit trail. */
+      reason: string;
+    };
     AcceptanceCriterion: {
       id: string;
       text: string;
@@ -1766,6 +1823,14 @@ export interface components {
       repo: components["schemas"]["DeployRepo"];
       target_url?: string | null;
       verification: components["schemas"]["EnvironmentVerification"];
+    };
+    DeployGate: {
+      deployment?: components["schemas"]["DeploymentSummary"] | null;
+      environment: string;
+      /** @description The operator's reason when the gate was accepted, or `environment_removed` when it was skipped. */
+      reason?: string | null;
+      /** @description `pending`, `passed`, `failed`, `accepted`, or `skipped`. */
+      state: string;
     };
     DeployRepo: {
       full_name: string;
@@ -2103,10 +2168,11 @@ export interface components {
       action: string;
       branches: string[];
       codes: string[];
+      environments: string[];
       /** @description `after` or `gate`. */
       mode: string;
       name: string;
-      /** @description `change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, `blocked`, or `inbox_item_opened`. */
+      /** @description `change_opened`, `review_done`, `merged`, `task_done`, `spec_shipped`, `blocked`, `inbox_item_opened`, `deployed`, or `deploy_failed`. */
       on: string;
       repos: string[];
       target: components["schemas"]["HookTarget"];
@@ -2187,7 +2253,7 @@ export interface components {
       dismissible: boolean;
       /** Format: uuid */
       id: string;
-      /** @description `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`. */
+      /** @description `decision`, `approval`, `permission`, `blocker`, `spec_unclear`, `intake`, or `deployment`. */
       kind: string;
       opened_at: string;
       /** @description What the item is about. Never holds a secret value. */
@@ -2199,7 +2265,7 @@ export interface components {
       spec_id?: string | null;
       /** @description `open`, `answered`, `resolved`, or `dismissed`. */
       state: string;
-      /** @description `spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`. */
+      /** @description `spec`, `step_start`, `merge`, `permission`, `blocker`, `decision`, `intake`, or `deployment`. */
       subject: string;
       title: components["schemas"]["InboxTitle"];
       /** Format: uuid */
@@ -2520,7 +2586,7 @@ export interface components {
         dismissible: boolean;
         /** Format: uuid */
         id: string;
-        /** @description `decision`, `approval`, `permission`, `blocker`, or `spec_unclear`. */
+        /** @description `decision`, `approval`, `permission`, `blocker`, `spec_unclear`, `intake`, or `deployment`. */
         kind: string;
         opened_at: string;
         /** @description What the item is about. Never holds a secret value. */
@@ -2532,7 +2598,7 @@ export interface components {
         spec_id?: string | null;
         /** @description `open`, `answered`, `resolved`, or `dismissed`. */
         state: string;
-        /** @description `spec`, `step_start`, `merge`, `permission`, `blocker`, or `decision`. */
+        /** @description `spec`, `step_start`, `merge`, `permission`, `blocker`, `decision`, `intake`, or `deployment`. */
         subject: string;
         title: components["schemas"]["InboxTitle"];
         /** Format: uuid */
@@ -2760,6 +2826,8 @@ export interface components {
         budget?: components["schemas"]["WorkItemBudget"] | null;
         change_request?: components["schemas"]["ChangeRequest"] | null;
         created_at: string;
+        /** @description One gate per gated environment the task's merge was deployed to; empty when none. */
+        deploy_gates: components["schemas"]["DeployGate"][];
         docs_change_request?: components["schemas"]["DocsChangeRequest"] | null;
         done_at?: string | null;
         environment?: components["schemas"]["WorkItemEnvironment"] | null;
@@ -3909,6 +3977,8 @@ export interface components {
       budget?: components["schemas"]["WorkItemBudget"] | null;
       change_request?: components["schemas"]["ChangeRequest"] | null;
       created_at: string;
+      /** @description One gate per gated environment the task's merge was deployed to; empty when none. */
+      deploy_gates: components["schemas"]["DeployGate"][];
       docs_change_request?: components["schemas"]["DocsChangeRequest"] | null;
       done_at?: string | null;
       environment?: components["schemas"]["WorkItemEnvironment"] | null;
@@ -4564,6 +4634,42 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  cancel_deployment: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        deployment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Deployment"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };
@@ -5471,6 +5577,43 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  deploy_environment: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        project_id: string;
+        environment: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Deployment"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };
@@ -7154,6 +7297,42 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  accept_unverified: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AcceptUnverifiedBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
         headers: {
           [name: string]: unknown;
         };

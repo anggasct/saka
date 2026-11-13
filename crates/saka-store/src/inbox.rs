@@ -228,6 +228,7 @@ fn live_items(tx: &Transaction<'_>, scope: Scope) -> Result<Vec<Live>> {
         Scope::WorkItem(id) => ("work_item_id = ?1", id.to_string()),
         Scope::Spec(id) => ("subject = 'spec' AND spec_id = ?1", id.to_string()),
         Scope::Intake(id) => ("subject = 'intake' AND source_id = ?1", id.to_string()),
+        Scope::Deployment(id) => ("subject = 'deployment' AND source_id = ?1", id.to_string()),
         Scope::Draft(id) => (
             "work_item_id IS NULL AND (
                (subject = 'permission'
@@ -385,4 +386,26 @@ pub(crate) fn sync(
         });
     }
     Ok(())
+}
+
+pub fn open_deployment_items(
+    conn: &Connection,
+    project: ProjectId,
+    environment: &str,
+) -> Result<Vec<saka_core::ids::DeploymentId>> {
+    let mut stmt = conn.prepare(
+        "SELECT source_id FROM inbox_item
+         WHERE subject = 'deployment' AND state IN ('open','answered') AND project_id = ?1
+           AND json_extract(params, '$.environment') = ?2",
+    )?;
+    let ids = stmt.query_map(params![project.to_string(), environment], |r| {
+        r.get::<_, String>(0)
+    })?;
+    let mut out = Vec::new();
+    for id in ids {
+        if let Ok(parsed) = Uuid::parse_str(&id?) {
+            out.push(saka_core::ids::DeploymentId(parsed));
+        }
+    }
+    Ok(out)
 }

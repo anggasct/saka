@@ -98,6 +98,7 @@ pub(super) enum TaskAction {
     Takeover,
     Return,
     Revert,
+    AcceptUnverified,
 }
 
 #[allow(clippy::too_many_arguments, reason = "the request parts of one action")]
@@ -154,6 +155,11 @@ pub(super) async fn task_action(
             };
             (None, Some(req.reason))
         }
+        TaskAction::AcceptUnverified => {
+            let req: dto::AcceptUnverifiedBody = tri!(body(&raw));
+            blocker = Some(BlockerId(req.blocker_id));
+            (None, Some(req.reason))
+        }
         TaskAction::Primary => {
             let req: dto::PrimaryActionBody = tri!(body(&raw));
             blocker = Some(BlockerId(req.blocker_id));
@@ -186,6 +192,7 @@ pub(super) async fn task_action(
         TaskAction::Takeover => "work_item.takeover",
         TaskAction::Return => "work_item.return",
         TaskAction::Revert => "work_item.revert",
+        TaskAction::AcceptUnverified => "work_item.accept_unverified",
     };
     let m = Mutation {
         name,
@@ -258,6 +265,18 @@ pub(super) async fn task_action(
                         )
                         .await
                 }
+                TaskAction::AcceptUnverified => match blocker {
+                    Some(blocker_id) => engine.accept_unverified_with(
+                        item,
+                        blocker_id,
+                        reason.as_deref().unwrap_or_default(),
+                        &cause,
+                        Some(&action),
+                    ),
+                    None => Err(EngineError::Rejected(
+                        saka_core::rejection::Rejection::NotFound,
+                    )),
+                },
                 TaskAction::Primary => match blocker {
                     Some(blocker_id) => engine.resolve_blocker_with(
                         item,
@@ -327,6 +346,32 @@ pub async fn revert(
     raw: Bytes,
 ) -> Response {
     task_action(s, id, method, uri, headers, raw, TaskAction::Revert).await
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/work-items/{work_item_id}/actions/accept-unverified", tag = "delivery",
+    params(("work_item_id" = uuid::Uuid, Path), ("Idempotency-Key" = String, Header, description = "1 to 128 printable ASCII characters")),
+    request_body = dto::AcceptUnverifiedBody,
+    responses((status = 202, body = dto::WorkItem), (status = "4XX", body = dto::Problem, content_type = "application/problem+json"))
+)]
+pub async fn accept_unverified(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    raw: Bytes,
+) -> Response {
+    task_action(
+        s,
+        id,
+        method,
+        uri,
+        headers,
+        raw,
+        TaskAction::AcceptUnverified,
+    )
+    .await
 }
 
 #[utoipa::path(

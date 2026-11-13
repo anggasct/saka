@@ -17,9 +17,20 @@ use uuid::Uuid;
 
 use crate::action::{Action, Produced};
 use crate::commands::reason;
+use crate::hooks_run::{FailureCodes, HOOK_CODES};
 use crate::views::Paged;
 use crate::worker::{Effect, Execution, JobReport, JobResult, field};
 use crate::{Cause, Engine, EngineError, Result};
+
+pub(crate) struct SignedPost<'a> {
+    pub project_id: ProjectId,
+    pub event: String,
+    pub delivery_id: String,
+    pub body: Vec<u8>,
+    pub url: &'a str,
+    pub secret_name: &'a str,
+    pub timeout_ms: u64,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HookReport {
@@ -155,7 +166,7 @@ impl Engine {
         Ok(())
     }
 
-    fn hook_facts(
+    pub(crate) fn hook_facts(
         &self,
         project_id: ProjectId,
         repo_id: Option<RepoId>,
@@ -442,14 +453,14 @@ impl Engine {
         }))
     }
 
-    fn hook_secret(
+    pub(crate) fn project_secret(
         &self,
-        run: &HookRun,
+        project_id: ProjectId,
         name: &str,
     ) -> PortResult<Option<saka_core::secret::SecretText>> {
         let rows = self
             .store
-            .read(|c| read::project_secrets(c, run.project_id))
+            .read(|c| read::project_secrets(c, project_id))
             .map_err(|e| {
                 PortError::retryable("store_unavailable", json!({ "detail": e.to_string() }))
             })?;
@@ -460,10 +471,7 @@ impl Engine {
             nonce: row.nonce,
             ciphertext: row.ciphertext,
         };
-        let scope = SecretScope::Project {
-            project_id: run.project_id,
-            name,
-        };
+        let scope = SecretScope::Project { project_id, name };
         self.ports.secrets.open(&scope, &sealed).map(Some)
     }
 
@@ -474,12 +482,35 @@ impl Engine {
         url: &str,
         secret_name: &str,
     ) -> std::result::Result<HookReport, PortError> {
-        let secret = match self.hook_secret(run, secret_name) {
+        let body = serde_json::to_vec(&run.context.payload(run.id, &run.hook)).map_err(|e| {
+            PortError::permanent("hook_payload_invalid", json!({ "detail": e.to_string() }))
+        })?;
+        self.signed_webhook(
+            SignedPost {
+                project_id: run.project_id,
+                event: run.trigger.as_str().to_string(),
+                delivery_id: run.id.to_string(),
+                body,
+                url,
+                secret_name,
+                timeout_ms: hook.timeout_ms,
+            },
+            &HOOK_CODES,
+        )
+        .await
+    }
+
+    pub(crate) async fn signed_webhook(
+        &self,
+        post: SignedPost<'_>,
+        codes: &FailureCodes,
+    ) -> std::result::Result<HookReport, PortError> {
+        let secret = match self.project_secret(post.project_id, post.secret_name) {
             Ok(Some(secret)) => secret,
             Ok(None) => {
                 return Ok(failed(
-                    "hook_secret_missing",
-                    json!({ "name": secret_name }),
+                    codes.secret_missing,
+                    json!({ "name": post.secret_name }),
                     empty_result(),
                     0,
                 ));
@@ -488,25 +519,22 @@ impl Engine {
             Err(_) => {
                 return Ok(failed(
                     "hook_secret_unreadable",
-                    json!({ "name": secret_name }),
+                    json!({ "name": post.secret_name }),
                     empty_result(),
                     0,
                 ));
             }
         };
-        let body = serde_json::to_vec(&run.context.payload(run.id, &run.hook)).map_err(|e| {
-            PortError::permanent("hook_payload_invalid", json!({ "detail": e.to_string() }))
-        })?;
-        let post = WebhookPost {
-            url: url.to_string(),
-            event: run.trigger.as_str().to_string(),
-            delivery_id: run.id.to_string(),
-            body,
+        let request = WebhookPost {
+            url: post.url.to_string(),
+            event: post.event,
+            delivery_id: post.delivery_id,
+            body: post.body,
             secret,
-            timeout_ms: hook.timeout_ms,
+            timeout_ms: post.timeout_ms,
             timestamp_secs: self.now().0.div_euclid(1000),
         };
-        match self.ports.webhooks.post(&post).await {
+        match self.ports.webhooks.post(&request).await {
             Ok(WebhookReceipt { status }) => {
                 let mut result = empty_result();
                 result["http_status"] = json!(status);

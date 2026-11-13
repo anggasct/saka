@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::Ctx;
 use crate::event::Event;
+use crate::hook::{NamedRef, RepoRef, TaskRef, clean};
 use crate::ids::{ChangeRequestId, DeploymentId, ProjectId, RepoId};
 use crate::model::Coded;
 use crate::rejection::Rejection;
 use crate::time::Timestamp;
 use crate::vocab::{
-    DeployActionKind, DeployCause, DeployCheckState, DeployPhase, DeploymentState, VerifyMode,
+    DeployActionKind, DeployCause, DeployCheckState, DeployPhase, DeploymentState, OnFailure,
+    VerifyMode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +51,7 @@ pub struct Deployment {
     pub error: Option<Coded>,
     pub action: DeployActionKind,
     pub target_url: Option<String>,
+    pub on_failure: OnFailure,
     pub verification: Option<Verification>,
     pub actor: Option<String>,
     pub reason: Option<String>,
@@ -95,6 +99,7 @@ pub struct QueueRequest {
     pub cause: DeployCause,
     pub action: DeployActionKind,
     pub target_url: Option<String>,
+    pub on_failure: OnFailure,
     pub actor: Option<String>,
     pub reason: Option<String>,
     pub change_request_id: Option<ChangeRequestId>,
@@ -129,6 +134,7 @@ pub fn queue(
                 cause: request.cause,
                 action: request.action,
                 target_url: request.target_url,
+                on_failure: request.on_failure,
                 actor: request.actor,
                 reason: request.reason,
             }];
@@ -262,6 +268,7 @@ pub fn evolve(deployment: Option<Deployment>, event: &Event, now: Timestamp) -> 
                 cause,
                 action,
                 target_url,
+                on_failure,
                 actor,
                 reason,
             },
@@ -279,6 +286,7 @@ pub fn evolve(deployment: Option<Deployment>, event: &Event, now: Timestamp) -> 
             error: None,
             action: *action,
             target_url: target_url.clone(),
+            on_failure: *on_failure,
             verification: None,
             actor: actor.clone(),
             reason: reason.clone(),
@@ -340,6 +348,50 @@ pub fn evolve(deployment: Option<Deployment>, event: &Event, now: Timestamp) -> 
     }
 }
 
+pub fn env_vars(deployment: &Deployment, project: &str, repo: &str) -> Vec<(String, String)> {
+    let mut vars = vec![
+        ("SAKA_DEPLOY_ID".to_string(), deployment.id.to_string()),
+        (
+            "SAKA_DEPLOY_ENV".to_string(),
+            clean(&deployment.environment),
+        ),
+        ("SAKA_BRANCH".to_string(), clean(&deployment.branch)),
+        ("SAKA_REPO".to_string(), clean(repo)),
+        ("SAKA_PROJECT".to_string(), clean(project)),
+    ];
+    let mut set = |name: &str, value: Option<&String>| {
+        if let Some(value) = value {
+            vars.push((name.to_string(), clean(value)));
+        }
+    };
+    set("SAKA_DEPLOY_URL", deployment.target_url.as_ref());
+    set("SAKA_SHA", deployment.sha.as_ref());
+    set("SAKA_PREVIOUS_SHA", deployment.previous_sha.as_ref());
+    vars
+}
+
+pub fn webhook_body(
+    deployment: &Deployment,
+    project: &NamedRef,
+    repo: &RepoRef,
+    tasks: &[TaskRef],
+    now: Timestamp,
+) -> Value {
+    json!({
+        "id": deployment.id,
+        "event": "deploy",
+        "environment": deployment.environment,
+        "project": project,
+        "repo": repo,
+        "branch": deployment.branch,
+        "sha": deployment.sha,
+        "previous_sha": deployment.previous_sha,
+        "target_url": deployment.target_url,
+        "tasks": tasks,
+        "occurred_at": now.to_rfc3339(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -366,6 +418,7 @@ mod tests {
             cause,
             action: DeployActionKind::RunHost,
             target_url: None,
+            on_failure: OnFailure::Revert,
             actor: None,
             reason: None,
             change_request_id: merge.map(|n| ChangeRequestId(Uuid::from_u128(n))),

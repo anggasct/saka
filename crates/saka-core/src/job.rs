@@ -68,6 +68,8 @@ job_kinds! {
     HookRun => "hook.run", 3;
     ScmScanChanges => "scm.scan_changes", 3;
     EnvPrepareReview => "env.prepare_review", 3;
+    DeployRun => "deploy.run", 3;
+    DeployVerify => "deploy.verify", 3;
     ScmPostReview => "scm.post_review", 3;
     ScmIntegrate => "scm.integrate", 5;
     ScmUpdateBranch => "scm.update_branch", 5;
@@ -134,6 +136,8 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmUserLinkPoll
         | JobKind::ScmUserLinkRefresh
         | JobKind::HookRun
+        | JobKind::DeployRun
+        | JobKind::DeployVerify
         | JobKind::ScmScanChanges
         | JobKind::ScmScanIssues
         | JobKind::IntakeIssueRender
@@ -222,6 +226,8 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmOpenDocsChangeRequest => "scm.open_cr",
         JobKind::ScmMergeDocs => "scm.merge_docs",
         JobKind::HookRun => "hook",
+        JobKind::DeployRun => "deploy",
+        JobKind::DeployVerify => "deploy-verify",
         JobKind::ScmScanChanges => "scm.scan",
         JobKind::EnvPrepareReview => "env.prepare_review",
         JobKind::ScmPostReview => "scm.post_review",

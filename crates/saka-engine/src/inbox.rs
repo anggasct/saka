@@ -29,7 +29,17 @@ impl Engine {
             .chain(batch.drafts.iter().map(Source::Draft))
             .chain(batch.specs.iter().map(Source::Spec))
             .chain(batch.issue_intakes.iter().map(Source::Intake));
-        sources
+        let deployments: Vec<(&saka_core::deploy::Deployment, bool)> = batch
+            .deployments
+            .iter()
+            .map(|d| (d, self.holds_tasks(batch, d)))
+            .collect();
+        let sources = sources.chain(
+            deployments
+                .iter()
+                .map(|(d, gated)| Source::Deployment(d, *gated)),
+        );
+        let mut syncs: Vec<InboxSync> = sources
             .map(|source| {
                 let mut desired = inbox::desired(source, ceilings);
                 if let Source::Spec(spec) = source
@@ -47,7 +57,40 @@ impl Engine {
                     desired,
                 }
             })
-            .collect()
+            .collect();
+        for d in batch
+            .deployments
+            .iter()
+            .filter(|d| d.state == saka_core::vocab::DeploymentState::Succeeded)
+        {
+            let older = self
+                .store
+                .read(|c| saka_store::inbox::open_deployment_items(c, d.project_id, &d.environment))
+                .unwrap_or_default();
+            syncs.extend(older.into_iter().map(|id| InboxSync {
+                scope: inbox::Scope::Deployment(id),
+                desired: Vec::new(),
+            }));
+        }
+        syncs
+    }
+
+    fn holds_tasks(&self, batch: &Batch, d: &saka_core::deploy::Deployment) -> bool {
+        let open = |state| {
+            matches!(
+                state,
+                saka_core::vocab::DeployGateState::Pending
+                    | saka_core::vocab::DeployGateState::Failed
+            )
+        };
+        batch
+            .deploy_gates
+            .iter()
+            .any(|g| g.deployment_id == Some(d.id) && open(g.state))
+            || self
+                .store
+                .read(|c| saka_store::deployment::gates_of(c, d.id))
+                .is_ok_and(|gates| gates.iter().any(|g| open(g.state)))
     }
 
     fn issue_link(

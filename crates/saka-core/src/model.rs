@@ -703,6 +703,7 @@ pub struct Task {
     pub quota_observations: Vec<AccountQuota>,
     pub added_rules: Vec<PermissionRule>,
     pub hook_gates: Vec<HookGate>,
+    pub deploy_gates: Vec<DeployGate>,
     pub reviews: Vec<Review>,
     pub revert: Option<Revert>,
     #[serde(skip)]
@@ -745,6 +746,38 @@ pub struct HookGate {
     pub error: Option<Coded>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateDeployment {
+    pub id: crate::ids::DeploymentId,
+    pub state: crate::vocab::DeploymentState,
+    pub phase: Option<crate::vocab::DeployPhase>,
+    pub sha: Option<String>,
+    pub error: Option<Coded>,
+    pub on_failure: crate::vocab::OnFailure,
+    pub finished_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeployGate {
+    pub environment: String,
+    pub state: crate::vocab::DeployGateState,
+    pub reason: Option<String>,
+    pub deployment: Option<GateDeployment>,
+}
+
+impl DeployGate {
+    pub fn cleared(&self) -> bool {
+        use crate::vocab::DeployGateState as G;
+        matches!(self.state, G::Passed | G::Accepted | G::Skipped)
+    }
+
+    pub fn deployment_succeeded(&self) -> bool {
+        self.deployment
+            .as_ref()
+            .is_some_and(|d| d.state == crate::vocab::DeploymentState::Succeeded)
+    }
+}
+
 impl Task {
     pub fn change_of(&mut self, role: ChangeRole) -> Option<&mut ChangeRequest> {
         match role {
@@ -776,6 +809,7 @@ impl Task {
             quota_observations: Vec::new(),
             added_rules: Vec::new(),
             hook_gates: Vec::new(),
+            deploy_gates: Vec::new(),
             reviews: Vec::new(),
             revert: None,
             reverted_by: None,

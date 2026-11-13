@@ -103,6 +103,7 @@ export function task(step: number, extra: Partial<WorkItem>): WorkItem {
     merge_auto: false,
     change_request: null,
     gates: [],
+    deploy_gates: [],
     blocker: null,
     session: null,
     pending_permission_count: 0,

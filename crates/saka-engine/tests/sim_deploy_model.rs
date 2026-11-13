@@ -229,6 +229,7 @@ mod stored {
                 cause: DeployCause::Redeploy,
                 action: DeployActionKind::RunHost,
                 target_url: None,
+                on_failure: saka_core::vocab::OnFailure::Revert,
                 actor: Some("operator:local".into()),
                 reason: Some("again".into()),
                 change_request_id: None,

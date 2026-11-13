@@ -456,6 +456,46 @@ pub fn load_tasks(
             t.hook_gates.push(gate);
         }
     }
+    for (work_item, gate) in rows(
+        conn,
+        "SELECT work_item_id, environment, state, reason, deployment_id, d_state, d_phase, d_sha, d_error, d_on_failure,
+           d_finished_at
+         FROM (SELECT g.work_item_id AS work_item_id, g.environment AS environment, g.state AS state,
+                 g.reason AS reason, g.deployment_id AS deployment_id, g.created_at AS created_at,
+                 d.state AS d_state, d.phase AS d_phase, d.sha AS d_sha, d.error AS d_error, d.on_failure AS d_on_failure,
+                 d.finished_at AS d_finished_at
+               FROM deploy_gate g LEFT JOIN deployment d ON d.id = g.deployment_id)",
+        selection,
+        "created_at, environment",
+        b,
+        |row| {
+            let deployment = match opt_uuid(row, "deployment_id")? {
+                Some(id) => Some(saka_core::model::GateDeployment {
+                    id: saka_core::ids::DeploymentId(id),
+                    state: vocab(row, "d_state")?,
+                    phase: opt_vocab(row, "d_phase")?,
+                    sha: row.get("d_sha")?,
+                    error: opt_json(row, "d_error")?,
+                    on_failure: vocab(row, "d_on_failure")?,
+                    finished_at: opt_ts(row, "d_finished_at")?,
+                }),
+                None => None,
+            };
+            Ok((
+                WorkItemId(uuid(row, "work_item_id")?),
+                saka_core::model::DeployGate {
+                    environment: row.get("environment")?,
+                    state: vocab(row, "state")?,
+                    reason: row.get("reason")?,
+                    deployment,
+                },
+            ))
+        },
+    )? {
+        if let Some(t) = tasks.get_mut(&work_item) {
+            t.deploy_gates.push(gate);
+        }
+    }
     for e in rows(
         conn,
         ENVIRONMENT_SELECT,
