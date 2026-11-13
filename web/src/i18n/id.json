@@ -135,7 +135,7 @@
   "error.revert_not_allowed": "Task revert tidak bisa di-revert; kerjakan ulang lewat spec.",
   "error.revert_in_progress": "Task ini sudah punya revert yang sedang berjalan.",
   "error.already_reverted": "Task ini sudah di-revert.",
-  "error.redo_revision_changed": "Step ini berubah setelah task dibuat. Approve ulang spec, lalu kerjakan ulang.",
+  "error.redo_step_removed": "Step ini tidak ada lagi di revisi spec yang sedang di-approve.",
   "error.already_redone": "Task ini sudah dikerjakan ulang.",
   "error.blocker_not_open": "Blocker ini sudah tidak terbuka; task sudah berjalan lagi.",
   "error.blocker_action_changed": "Aksi ini sudah berubah sejak ditampilkan; buka task untuk melihat yang terbaru.",

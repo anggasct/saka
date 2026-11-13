@@ -8,7 +8,10 @@ use saka_core::rejection::Rejection;
 use saka_core::vocab::{BlockerCode, SpecState, WorkItemState};
 use saka_engine::EngineError;
 use saka_store::read;
-use saka_testkit::{AgentScript, CommandScript, FileEdit, Sim, SimConfig, one_step_spec};
+use saka_testkit::{
+    APPROVAL_PATH, AgentScript, CommandScript, FileEdit, Sim, SimConfig, approval_spec,
+    one_step_spec,
+};
 
 const STEPS: usize = 30_000;
 const PROBE: &str = "curl -fsS $SAKA_DEPLOY_URL/version";
@@ -113,7 +116,7 @@ fn a_redo_replaces_the_cancelled_step_hands_over_its_dependants_and_the_spec_shi
 }
 
 #[test]
-fn a_second_redo_counts_up_and_a_redone_or_changed_step_is_refused() {
+fn a_second_redo_counts_up_and_a_redone_or_running_step_is_refused() {
     let mut sim = Sim::new(SimConfig::default());
     sim.approve();
     let first = live(&sim, 1);
@@ -151,6 +154,44 @@ fn a_second_redo_counts_up_and_a_redone_or_changed_step_is_refused() {
     assert!(sim.run_to_shipped(STEPS), "{:?}", sim.outcome());
     assert_eq!(sim.spec().state, SpecState::Shipped);
     assert_eq!(live(&sim, 1).item.task_key, third.item.task_key);
+}
+
+#[test]
+fn a_redo_after_the_spec_was_approved_again_pins_the_current_revision_and_the_spec_ships() {
+    let mut sim = Sim::new(SimConfig::default());
+    let steps = |last: &'static str| {
+        approval_spec(
+            "",
+            &[("Build", "AC-01"), ("Wire", "AC-01"), (last, "AC-02")],
+        )
+    };
+    let first = sim.register(APPROVAL_PATH, &steps("Finish"));
+    sim.approve_spec(first.spec_id, first.revision_id).unwrap();
+    sim.spec_id = first.spec_id;
+    assert!(sim.run_until(STEPS, |s| s.task(2).item.state == WorkItemState::InStage));
+    let wire = live(&sim, 2);
+    assert_eq!(wire.item.spec_revision_id, Some(first.revision_id));
+    cancel(&sim, wire.item.id);
+
+    let changed = sim.register(APPROVAL_PATH, &steps("Finish, changed"));
+    sim.approve_spec(first.spec_id, changed.revision_id)
+        .unwrap();
+    assert_eq!(live(&sim, 2).item.spec_revision_id, Some(first.revision_id));
+    assert_eq!(
+        live(&sim, 3).item.spec_revision_id,
+        Some(changed.revision_id)
+    );
+
+    redo(&sim, &wire, "again", None).unwrap();
+    let redone = live(&sim, 2);
+    assert_eq!(redone.item.task_key, format!("{}.2", wire.item.task_key));
+    assert_eq!(redone.item.spec_revision_id, Some(changed.revision_id));
+    assert_eq!(redone.item.step_index, Some(2));
+    assert_eq!(deps_of(&sim, redone.item.id), vec![live(&sim, 1).item.id]);
+    assert_eq!(deps_of(&sim, live(&sim, 3).item.id), vec![redone.item.id]);
+
+    assert!(sim.run_to_shipped(STEPS), "{:?}", sim.outcome());
+    assert_eq!(sim.spec().state, SpecState::Shipped);
 }
 
 fn staging() -> RawEnvironment {

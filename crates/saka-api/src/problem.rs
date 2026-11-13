@@ -152,7 +152,7 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::FixDraftInProgress { .. }
         | R::DeploymentFinished
         | R::AlreadyReverted { .. }
-        | R::RedoRevisionChanged
+        | R::RedoStepRemoved { .. }
         | R::AlreadyRedone { .. }
         | R::InboxItemNotDismissible { .. }
         | R::InboxItemClosed { .. }

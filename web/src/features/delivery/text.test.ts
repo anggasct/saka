@@ -829,7 +829,7 @@ const ERRORS = [
   "revert_not_allowed",
   "revert_in_progress",
   "already_reverted",
-  "redo_revision_changed",
+  "redo_step_removed",
   "already_redone",
   "spec_has_active_tasks",
   "entry_point_disabled",

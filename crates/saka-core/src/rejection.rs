@@ -187,8 +187,8 @@ pub enum Rejection {
     RevertInProgress { work_item_id: String },
     #[error("the task was already reverted")]
     AlreadyReverted { work_item_id: String },
-    #[error("the step changed since the task was created; approve the spec again first")]
-    RedoRevisionChanged,
+    #[error("the step is not in the approved revision of the spec")]
+    RedoStepRemoved { step_id: String },
     #[error("the task was already redone")]
     AlreadyRedone { work_item_id: String },
     #[error("blocker is not open")]
@@ -335,7 +335,7 @@ impl Rejection {
             Rejection::IncidentSuspectUnknown => "incident_suspect_unknown",
             Rejection::RevertInProgress { .. } => "revert_in_progress",
             Rejection::AlreadyReverted { .. } => "already_reverted",
-            Rejection::RedoRevisionChanged => "redo_revision_changed",
+            Rejection::RedoStepRemoved { .. } => "redo_step_removed",
             Rejection::AlreadyRedone { .. } => "already_redone",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
             Rejection::BlockerActionChanged { .. } => "blocker_action_changed",
@@ -413,6 +413,7 @@ impl Rejection {
             | Rejection::AlreadyRedone { work_item_id } => {
                 json!({ "work_item_id": work_item_id })
             }
+            Rejection::RedoStepRemoved { step_id } => json!({ "step_id": step_id }),
             Rejection::DeploymentQueued { deployment_id } => {
                 json!({ "deployment_id": deployment_id })
             }

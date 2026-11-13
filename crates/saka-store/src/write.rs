@@ -432,12 +432,6 @@ pub(crate) fn write(
     }
     for (from, to) in &b.moved_work_item_dependencies {
         tx.execute(
-            "INSERT INTO work_item_dependency (work_item_id, depends_on_work_item_id, project_id, created_at)
-             SELECT ?2, depends_on_work_item_id, project_id, ?3 FROM work_item_dependency WHERE work_item_id = ?1
-             ON CONFLICT (work_item_id, depends_on_work_item_id) DO NOTHING",
-            params![from.to_string(), to.to_string(), b.now.0],
-        )?;
-        tx.execute(
             "UPDATE work_item_dependency SET depends_on_work_item_id = ?2 WHERE depends_on_work_item_id = ?1",
             params![from.to_string(), to.to_string()],
         )?;

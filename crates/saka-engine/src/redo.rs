@@ -2,13 +2,13 @@ use saka_core::Ctx;
 use saka_core::deploy::FixFailure;
 use saka_core::event::Event;
 use saka_core::ids::WorkItemId;
-use saka_core::model::Task;
-use saka_core::redo::{self, Facts, FailedDeployment, Landed, Outcome};
+use saka_core::model::{RevisionView, Task, WorkItem, WorkItemDependency};
+use saka_core::redo::{self, Current, Facts, FailedDeployment, Landed, Outcome};
 use saka_core::rejection::Rejection;
 use saka_core::task;
 use saka_core::vocab::{DeployCheckState, DeploymentState, WorkItemState};
 use saka_ports::IdsSource;
-use saka_store::{Batch, deployment, read};
+use saka_store::{Batch, TaskSet, deployment, read};
 
 use crate::action::{Action, Produced};
 use crate::revert::{REASON_MAX, operator_text};
@@ -46,7 +46,18 @@ impl Engine {
         }
         let mut ids = IdsSource(&*self.ports.ids);
         let mut ctx = Ctx { now, ids: &mut ids };
-        let events = redo::request(&origin, reason, note, &mut ctx)?;
+        let (revision, items) = self.redo_revision(&origin)?;
+        let bound = self
+            .store
+            .read(|c| read::load_project(c, origin.item.project_id))?
+            .ok_or(Rejection::NotFound)?;
+        let current = revision.as_ref().map(|revision| Current {
+            revision,
+            repos: &bound.repos,
+            tasks: &items,
+        });
+        let redo::Requested { events, depends_on } =
+            redo::request(&origin, reason, note, current.as_ref(), &mut ctx)?;
         let [requested, superseded, created] = events.as_slice() else {
             return Err(EngineError::Internal("redo request made no task".into()));
         };
@@ -66,6 +77,13 @@ impl Engine {
         batch
             .moved_work_item_dependencies
             .push((id, redo_task.item.id));
+        batch
+            .work_item_dependencies
+            .extend(depends_on.into_iter().map(|depends_on| WorkItemDependency {
+                work_item_id: redo_task.item.id,
+                depends_on_work_item_id: depends_on,
+                project_id: redo_task.item.project_id,
+            }));
         if let Some(action) = action {
             let reply = (action.respond)(Produced::Task(&redo_task));
             batch.action = Some(action.record(self, cause, project, Some(id.0), reply));
@@ -80,6 +98,26 @@ impl Engine {
             "delivery.redo.requested"
         );
         Ok(events)
+    }
+
+    fn redo_revision(&self, origin: &Task) -> Result<(Option<RevisionView>, Vec<WorkItem>)> {
+        let (Some(spec_id), Some(revision_id)) = (
+            origin.item.spec_id,
+            origin.spec_standing.and_then(|s| s.approved_revision_id),
+        ) else {
+            return Ok((None, Vec::new()));
+        };
+        let policy = &self.cfg.workflow_policy;
+        self.store
+            .read(|c| {
+                let revision = read::revision_view(c, revision_id)?;
+                let items = read::load_tasks(c, TaskSet::Spec(spec_id), policy)?
+                    .into_iter()
+                    .map(|t| t.item)
+                    .collect();
+                Ok((revision, items))
+            })
+            .map_err(Into::into)
     }
 
     pub(crate) fn redo_attempt_text(&self, task: &Task) -> Result<Option<String>> {
