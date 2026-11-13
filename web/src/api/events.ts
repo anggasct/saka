@@ -52,6 +52,8 @@ export const EVENT_KINDS = [
   "delivery.stage_run.succeeded",
   "delivery.gate.started",
   "delivery.gate.observed",
+  "delivery.gate.rerun_requested",
+  "delivery.gate.rerun_settled",
   "delivery.regression.requested",
   "delivery.regression.observed",
   "delivery.regression.delivered",

@@ -834,6 +834,7 @@ const ERRORS = [
   "spec_has_active_tasks",
   "entry_point_disabled",
   "review_already_requested",
+  "ci_rerun_unavailable",
   "fix_not_available",
   "change_request_not_found",
   "change_request_not_open",

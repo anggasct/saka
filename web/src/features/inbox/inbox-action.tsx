@@ -133,7 +133,8 @@ function Permission({ item }: { item: InboxItem }) {
   );
 }
 
-type BlockerKind = "retry" | "cancel" | "takeover" | "update_branch" | "revert";
+type BlockerKind =
+  "retry" | "cancel" | "takeover" | "update_branch" | "rerun_checks" | "revert";
 
 function blockerCopy(t: T, kind: BlockerKind) {
   switch (kind) {
@@ -164,6 +165,13 @@ function blockerCopy(t: T, kind: BlockerKind) {
         title: t("task.update_branch.title"),
         description: t("task.update_branch.description"),
         submit: t("task.update_branch.submit"),
+      };
+    case "rerun_checks":
+      return {
+        trigger: t("task.rerun_checks.trigger"),
+        title: t("task.rerun_checks.title"),
+        description: t("task.rerun_checks.description"),
+        submit: t("task.rerun_checks.submit"),
       };
     case "revert":
       return {
@@ -337,6 +345,7 @@ export function Primary({ item }: { item: InboxItem }) {
     case "cancel":
     case "takeover":
     case "update_branch":
+    case "rerun_checks":
     case "revert":
       return <Blocker item={item} kind={kind} />;
     case "redeploy":

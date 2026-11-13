@@ -6,6 +6,7 @@ import { useT } from "@/i18n/use-t";
 import type { WorkItem } from "./queries";
 import {
   CancelDialog,
+  RerunChecksDialog,
   RetryDialog,
   RevertDialog,
   TakeoverDialog,
@@ -34,6 +35,8 @@ export function PrimaryAction({
       return <CancelDialog task={task} primary />;
     case "takeover":
       return <TakeoverDialog task={task} primary />;
+    case "rerun_checks":
+      return <RerunChecksDialog task={task} primary />;
     case "update_branch":
       return <UpdateBranchDialog task={task} />;
     case "revert":

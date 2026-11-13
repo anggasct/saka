@@ -802,4 +802,124 @@ describe("review request", () => {
       { blocker_id: BLOCKER, reason: "catch up" },
     ]);
   });
+
+  it("re-runs the failed checks from the blocker when that is its primary action", async () => {
+    const red = detail(
+      task(1, {
+        state: "blocked",
+        stage: "merge",
+        change_request: change,
+        blocker: {
+          ...BASE_BLOCKER,
+          code: "ci_red",
+          params: {
+            source: "scm",
+            checks: ["test"],
+            head_sha: HEAD,
+            reruns: 0,
+            rerunnable: true,
+          },
+          stage: "merge",
+          primary_action: { kind: "rerun_checks", params: {} },
+        },
+        available_actions: ["rerun_checks", "retry", "cancel"],
+      }),
+    );
+    const { requests } = fakeApi(
+      routes(() => red, { [`${DETAIL}/actions/primary`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const card = await screen.findByRole("region", { name: "Blocker" });
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Re-run the failed checks" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "flaky");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Re-run the checks" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(posts(requests, "primary").map((r) => r.body)).toEqual([
+      { blocker_id: BLOCKER, reason: "flaky" },
+    ]);
+    expect(posts(requests, "rerun-checks")).toHaveLength(0);
+  });
+
+  it("offers the re-run beside a retry that is primary once the automatic re-runs are spent", async () => {
+    const spent = detail(
+      task(1, {
+        state: "blocked",
+        stage: "merge",
+        change_request: change,
+        blocker: {
+          ...BASE_BLOCKER,
+          code: "ci_red",
+          params: {
+            source: "scm",
+            checks: ["test"],
+            head_sha: HEAD,
+            reruns: 1,
+            rerunnable: true,
+          },
+          stage: "merge",
+        },
+        available_actions: ["rerun_checks", "retry", "cancel"],
+      }),
+    );
+    const { requests } = fakeApi(
+      routes(() => spent, { [`${DETAIL}/actions/rerun-checks`]: ACCEPTED }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const dialog = await open("Re-run the failed checks");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "once more");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Re-run the checks" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(posts(requests, "rerun-checks").map((r) => r.body)).toEqual([
+      { reason: "once more" },
+    ]);
+    expect(posts(requests, "primary")).toHaveLength(0);
+  });
+
+  it("says why the checks cannot be re-run when the server refuses", async () => {
+    const spent = detail(
+      task(1, {
+        state: "blocked",
+        stage: "merge",
+        change_request: change,
+        blocker: {
+          ...BASE_BLOCKER,
+          code: "ci_red",
+          params: { source: "scm", checks: ["test"], head_sha: HEAD },
+          stage: "merge",
+        },
+        available_actions: ["rerun_checks", "retry", "cancel"],
+      }),
+    );
+    fakeApi(
+      routes(() => spent, {
+        [`${DETAIL}/actions/rerun-checks`]: problem(
+          409,
+          "ci_rerun_unavailable",
+          {
+            reason: "not_rerunnable",
+          },
+        ),
+      }),
+    );
+    renderWithProviders(<TaskPage workItemId={ID} />);
+    const dialog = await open("Re-run the failed checks");
+    await userEvent.type(within(dialog).getByLabelText("Reason"), "again");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Re-run the checks" }),
+    );
+    expect(
+      await within(dialog).findByText(/cannot be run again here/),
+    ).toBeInTheDocument();
+  });
 });

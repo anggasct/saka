@@ -15,6 +15,7 @@ import {
   requestFix,
   requestReview,
   redoTask,
+  rerunChecks,
   retryTask,
   returnTask,
   revertTask,
@@ -263,6 +264,35 @@ export function RetryDialog({
   );
 }
 
+export function RerunChecksDialog({
+  task,
+  primary = false,
+}: {
+  task: WorkItem;
+  primary?: boolean;
+}) {
+  const t = useT();
+  const after = useAfterAction();
+  const run = primaryRun(task);
+  return (
+    <ActionDialog
+      trigger={t("task.rerun_checks.trigger")}
+      triggerVariant={primary ? "default" : "outline"}
+      title={t("task.rerun_checks.title")}
+      description={t("task.rerun_checks.description")}
+      reason={{ label: t("dialog.reason"), required: true }}
+      submit={t("task.rerun_checks.submit")}
+      onSubmit={(reason, key) =>
+        after(() =>
+          primary && run
+            ? run(reason ?? "", key)
+            : rerunChecks(task.id, reason ?? "", key),
+        )
+      }
+    />
+  );
+}
+
 export function UpdateBranchDialog({ task }: { task: WorkItem }) {
   const t = useT();
   const after = useAfterAction();
@@ -463,6 +493,7 @@ export function TaskActions({ task }: { task: WorkItem | WorkItemDetail }) {
       {actions.includes("review") && <ReviewDialog task={task} />}
       {actions.includes("fix") && <FixDialog task={task} />}
       {actions.includes("merge") && <MergeDialog task={task} />}
+      {actions.includes("rerun_checks") && <RerunChecksDialog task={task} />}
       {actions.includes("retry") && <RetryDialog task={task} />}
       {actions.includes("return") && <ReturnDialog task={task} />}
       {actions.includes("takeover") && <TakeoverDialog task={task} />}
