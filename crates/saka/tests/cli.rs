@@ -2228,6 +2228,139 @@ fn hook_commands_list_hooks_show_runs_and_run_one_again() {
 }
 
 #[test]
+fn deployments_are_listed_and_shown_with_their_evidence() {
+    use saka_core::Ctx;
+    use saka_core::deploy::{self, CheckRecord, Input, QueueRequest};
+    use saka_core::ids::IdSource;
+    use saka_core::model::Coded;
+    use saka_core::time::Timestamp;
+    use saka_core::vocab::{DeployActionKind, DeployCause, DeployCheckState, DeployPhase};
+
+    struct Ids(u128);
+    impl IdSource for Ids {
+        fn next_id(&mut self) -> uuid::Uuid {
+            self.0 += 1;
+            uuid::Uuid::from_u128(self.0)
+        }
+    }
+
+    let sim = Sim::new(SimConfig::default());
+    let mut ids = Ids(500);
+    let mut ctx = Ctx {
+        now: Timestamp(1_000),
+        ids: &mut ids,
+    };
+    let events = deploy::queue(
+        None,
+        QueueRequest {
+            project_id: sim.project_id,
+            repo_id: sim.project().project.repos[0].repo_id,
+            environment: "staging".into(),
+            branch: "main".into(),
+            cause: DeployCause::Redeploy,
+            action: DeployActionKind::RunHost,
+            target_url: None,
+            actor: None,
+            reason: None,
+            change_request_id: None,
+        },
+        &mut ctx,
+    )
+    .unwrap();
+    let step = |d: Option<deploy::Deployment>, input: Option<Input>| {
+        let events = match (&d, input) {
+            (Some(d), Some(input)) => deploy::decide(d, input).unwrap(),
+            _ => events.clone(),
+        };
+        events
+            .iter()
+            .fold(d, |d, e| deploy::evolve(d, e, Timestamp(2_000)))
+    };
+    let queued = step(None, None);
+    let started = step(
+        queued,
+        Some(Input::Start {
+            sha: "c".repeat(40),
+            previous_sha: None,
+        }),
+    );
+    let failed = step(
+        started,
+        Some(Input::Fail {
+            phase: DeployPhase::Verify,
+            error: Coded {
+                code: "verify_failed".into(),
+                params: serde_json::json!({ "failed": 1, "total": 1 }),
+            },
+        }),
+    )
+    .unwrap();
+    let mut batch = saka_store::Batch::new(Timestamp(3_000));
+    batch.deployments.push(failed.clone());
+    batch.deployment_checks.push((
+        failed.id,
+        CheckRecord {
+            phase: DeployPhase::Verify,
+            ordinal: 0,
+            command: Some("npm run smoke".into()),
+            state: DeployCheckState::Failed,
+            exit_code: Some(1),
+            http_status: None,
+            attempts: 1,
+            duration_ms: 42,
+            output_tail: String::new(),
+            log: None,
+            started_at: Timestamp(2_100),
+            finished_at: Timestamp(2_142),
+        },
+    ));
+    sim.engine().store().commit(&batch).unwrap();
+    let server = serve(&sim);
+
+    let listed = saka(&server, &["deploy", "list", "tasks"]);
+    assert_eq!(
+        code(&listed),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let line = stdout(&listed);
+    assert!(
+        line.contains(&format!(
+            "{}  staging  failed  redeploy  cccccccc",
+            failed.id
+        )),
+        "{line}"
+    );
+    let none = saka(&server, &["deploy", "list", "tasks", "--state", "queued"]);
+    assert_eq!(code(&none), 0);
+    assert!(stdout(&none).trim().is_empty());
+    let bad = saka(&server, &["deploy", "list", "tasks", "--state", "gone"]);
+    assert_eq!(code(&bad), 1, "422 validation_failed");
+
+    let shown = saka(&server, &["deploy", "show", &failed.id.to_string()]);
+    assert_eq!(
+        code(&shown),
+        0,
+        "{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let text = stdout(&shown);
+    assert!(text.contains("failed at verify: verify_failed"), "{text}");
+    assert!(text.contains("check  verify  #0  failed  42 ms"), "{text}");
+    let raw = saka(
+        &server,
+        &["--json", "deploy", "show", &failed.id.to_string()],
+    );
+    assert_eq!(json(&raw)["checks"][0]["command"], "npm run smoke");
+    let unknown = saka(
+        &server,
+        &["deploy", "show", "0193f0c4-0000-7000-8000-000000000000"],
+    );
+    assert_eq!(code(&unknown), 1);
+}
+
+#[test]
 fn serve_refuses_a_host_hook_when_other_users_can_write_the_config() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
@@ -2235,6 +2368,24 @@ fn serve_refuses_a_host_hook_when_other_users_can_write_the_config() {
         dir.path(),
         &format!(
             "{}[[hook]]\nname = \"host\"\nproject = \"tasks\"\non = \"merged\"\naction = \"run_host\"\ncommand = \"./deploy.sh\"\n",
+            own_listen()
+        ),
+    );
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
+    let out = run_saka(&config, &["serve"]);
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("config_hook_file_writable"), "{stderr}");
+}
+
+#[test]
+fn serve_refuses_a_host_deploy_when_other_users_can_write_the_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "{}[[deploy]]\nproject = \"tasks\"\nenvironment = \"staging\"\naction = \"run_host\"\ncommand = \"./deploy.sh\"\non_failure = \"revert\"\n",
             own_listen()
         ),
     );

@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 
+use crate::environment::VerifySpec;
 use crate::event::Event;
 use crate::ids::{ProjectId, RepoId, WorkItemId};
 use crate::model::{ConfigError, Project, ProjectRepo, Repo};
@@ -11,6 +12,19 @@ use crate::vocab::{ReloadTrigger, WorkItemState};
 use crate::workflow::Workflow;
 
 pub const MAX_BINDINGS: usize = 16;
+
+pub fn branch_ok(branch: &str) -> bool {
+    !branch.is_empty()
+        && branch.len() <= 255
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && branch
+            .split('/')
+            .all(|s| !s.is_empty() && !s.ends_with(".lock"))
+        && branch
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+}
 
 pub fn bindings_hold(repos: &[ProjectRepo]) -> bool {
     let names: BTreeSet<&str> = repos.iter().map(|r| r.name.as_str()).collect();
@@ -110,6 +124,7 @@ pub struct NewConfig<'a> {
     pub sha256: &'a str,
     pub workflow: Workflow,
     pub hook_skip: Vec<String>,
+    pub verify: BTreeMap<String, VerifySpec>,
     pub repos: Vec<ProjectRepo>,
     pub trigger: ReloadTrigger,
 }
@@ -122,6 +137,7 @@ pub fn config_changed(project_id: ProjectId, config: NewConfig<'_>) -> Option<Ev
         config_sha256: config.sha256.to_string(),
         workflow: config.workflow,
         hook_skip: config.hook_skip,
+        verify: config.verify,
         repos: config.repos,
         trigger: config.trigger,
     })
@@ -162,6 +178,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_sha256,
             workflow,
             hook_skip,
+            verify,
             repos,
         } => Some(Project {
             id: *project_id,
@@ -174,6 +191,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_error: None,
             workflow: workflow.clone(),
             hook_skip: hook_skip.clone(),
+            verify: verify.clone(),
             repos: sorted(repos),
             created_at: project.as_ref().map_or(now, |p| p.created_at),
             updated_at: now,
@@ -184,6 +202,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_sha256,
             workflow,
             hook_skip,
+            verify,
             repos,
             ..
         } => project.map(|p| Project {
@@ -192,6 +211,7 @@ pub fn evolve_project(project: Option<Project>, event: &Event, now: Timestamp) -
             config_sha256: config_sha256.clone(),
             workflow: workflow.clone(),
             hook_skip: hook_skip.clone(),
+            verify: verify.clone(),
             config_error: None,
             repos: sorted(repos),
             updated_at: now,
@@ -229,4 +249,17 @@ fn sorted(repos: &[ProjectRepo]) -> Vec<ProjectRepo> {
             .then_with(|| a.name.cmp(&b.name))
     });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::branch_ok;
+
+    #[test]
+    fn branch_names_follow_the_git_ref_rules_saka_relies_on() {
+        assert!(branch_ok("release/1.2"));
+        for bad in ["", "-x", "a..b", "a b", "a/", "x.lock"] {
+            assert!(!branch_ok(bad), "{bad}");
+        }
+    }
 }

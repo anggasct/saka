@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use saka_core::environment::VerifySpec;
 use saka_core::scope::{PathScope, ScopeIssue};
 use saka_core::vocab::Autonomy;
 use saka_core::workflow::Workflow;
@@ -10,6 +11,7 @@ use sha2::{Digest, Sha256};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
+mod verify;
 mod workflow;
 
 pub use workflow::{KindLines, kind_issue};
@@ -22,6 +24,7 @@ pub struct ProjectConfig {
     pub workflow: Workflow,
     pub kind_lines: KindLines,
     pub hook_skip: Vec<HookSkip>,
+    pub verify: BTreeMap<String, VerifySpec>,
     pub repos: Vec<RepoEntry>,
 }
 
@@ -466,7 +469,7 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
         text,
         issues: Vec::new(),
     };
-    c.unknown(doc, "", &["project", "repo", "workflow", "hooks"]);
+    c.unknown(doc, "", &["project", "repo", "workflow", "hooks", "verify"]);
     let (name, project_autonomy) = match project_name(&mut c, doc) {
         Some((name, requested)) => (Some(name), requested),
         None => (None, None),
@@ -477,6 +480,7 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
     }
     let (workflow, kind_lines) = workflow::parse(&mut c, doc);
     let hook_skip = hook_skip(&mut c, doc);
+    let verify = verify::parse(&mut c, doc);
     let mut issues = c.issues;
     issues.sort_by_key(|i| i.line.unwrap_or(0));
     match name {
@@ -485,6 +489,7 @@ pub fn parse(bytes: &[u8]) -> Result<ProjectConfig, Vec<Issue>> {
             workflow,
             kind_lines,
             hook_skip,
+            verify,
             repos,
         }),
         _ => Err(issues),
@@ -611,6 +616,84 @@ url = "https://github.com/acme/web"
                 ("field_unknown", "hooks.run".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn verification_is_read_per_environment_with_defaults_and_limits() {
+        let text = format!(
+            "{TWO_REPOS}\n[verify.staging]\nready = \"curl -fsS $SAKA_DEPLOY_URL\"\nready_timeout_secs = 600\ncommands = [\"npm run smoke\"]\n\n[verify.preview]\n"
+        );
+        let cfg = parse(text.as_bytes()).unwrap();
+        let staging = &cfg.verify["staging"];
+        assert_eq!(staging.ready.as_deref(), Some("curl -fsS $SAKA_DEPLOY_URL"));
+        assert_eq!(
+            (
+                staging.ready_timeout_secs,
+                staging.ready_interval_secs,
+                staging.timeout_secs
+            ),
+            (600, 15, 300)
+        );
+        assert_eq!(staging.commands, ["npm run smoke"]);
+        assert_eq!(cfg.verify["preview"], VerifySpec::default());
+        assert!(parse(TWO_REPOS.as_bytes()).unwrap().verify.is_empty());
+    }
+
+    #[test]
+    fn verification_problems_carry_a_code_a_field_and_a_line() {
+        let problems = |extra: &str| -> Vec<(&'static str, String)> {
+            codes(&format!("{TWO_REPOS}\n{extra}"))
+                .into_iter()
+                .map(|(c, f, _)| (c, f.unwrap()))
+                .collect()
+        };
+        let many = format!("[verify.a]\ncommands = [{}]\n", ["\"x\""; 11].join(", "));
+        for (text, expected) in [
+            (
+                "[verify.a]\ncommands = [\"ok\", \"\", \"a\\nb\"]\n".to_string(),
+                vec![
+                    ("verify_command_invalid", "verify.a.commands[1]"),
+                    ("verify_command_invalid", "verify.a.commands[2]"),
+                ],
+            ),
+            (many, vec![("verify_too_many", "verify.a.commands")]),
+            (
+                "[verify.a]\nready_timeout_secs = 9\nready_interval_secs = 301\ntimeout_secs = 0\n"
+                    .to_string(),
+                vec![
+                    ("verify_timeout_invalid", "verify.a.ready_timeout_secs"),
+                    ("verify_timeout_invalid", "verify.a.ready_interval_secs"),
+                    ("verify_timeout_invalid", "verify.a.timeout_secs"),
+                ],
+            ),
+            (
+                "[verify.a]\ntimeout_secs = \"soon\"\nready = 3\ncommands = \"x\"\nextra = 1\n"
+                    .to_string(),
+                vec![
+                    ("field_unknown", "verify.a.extra"),
+                    ("field_invalid", "verify.a.ready"),
+                    ("field_invalid", "verify.a.timeout_secs"),
+                    ("field_invalid", "verify.a.commands"),
+                ],
+            ),
+            (
+                "[verify.Bad_Name]\n".to_string(),
+                vec![("field_invalid", "verify.Bad_Name")],
+            ),
+            (
+                "[verify]\nstaging = 3\n".to_string(),
+                vec![("field_invalid", "verify.staging")],
+            ),
+        ] {
+            let mut found = problems(&text);
+            let mut expected: Vec<(&'static str, String)> = expected
+                .into_iter()
+                .map(|(c, f)| (c, f.to_string()))
+                .collect();
+            found.sort();
+            expected.sort();
+            assert_eq!(found, expected, "{text}");
+        }
     }
 
     #[test]

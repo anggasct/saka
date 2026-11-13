@@ -6,6 +6,7 @@ mod commands;
 mod config_check;
 mod context;
 mod decisions;
+mod deploy;
 pub mod diagnostics;
 mod docs;
 mod draft;
@@ -70,6 +71,7 @@ pub use config_check::{
     CheckConfig, CheckedRepo, CheckedWorkspace, ConfigCheckView, ConfigProblem, RegisteredProject,
     RemoteConfig,
 };
+pub use deploy::{DeploymentDetail, DeploymentRow, EnvironmentView, RepoInfo, VerificationView};
 pub use diagnostics::{DiagnosticFilter, DiagnosticLimits};
 pub use docs::{DocContentView, DocTreeView, DocWriteView, Precondition, SpecProblem};
 pub use draft::{
@@ -114,6 +116,7 @@ pub struct EngineConfig {
     pub config_poll_secs: u32,
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
+    pub environments: Vec<saka_core::environment::Environment>,
     pub auth_enabled: bool,
     pub workflow_policy: saka_core::workflow::WorkflowPolicy,
     pub public_url: Option<String>,

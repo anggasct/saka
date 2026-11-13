@@ -611,6 +611,45 @@
         }
       }
     },
+    "/api/v1/deployments/{deployment_id}": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "get_deployment",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/diagnostics": {
       "get": {
         "tags": [
@@ -1915,6 +1954,128 @@
             "description": "The token is gone, or there was none"
           },
           "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/deployments": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "list_deployments",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Deployment"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/environments": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "list_environments",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentList"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6256,6 +6417,434 @@
           }
         }
       },
+      "DeployEnvironment": {
+        "type": "object",
+        "description": "An environment an operator defined for a project. The deploy command, webhook URL and secret names are never sent.",
+        "required": [
+          "name",
+          "repo",
+          "branch",
+          "action",
+          "gate",
+          "on_failure",
+          "verification"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`run`, `run_host`, or `webhook`."
+          },
+          "active": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch": {
+            "type": "string"
+          },
+          "gate": {
+            "type": "boolean",
+            "description": "Whether a task waits for a healthy deployment before it is done."
+          },
+          "last_succeeded": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "on_failure": {
+            "type": "string",
+            "description": "`revert` or `fix`: the primary action of a failed deployment."
+          },
+          "queued": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repo": {
+            "$ref": "#/components/schemas/DeployRepo"
+          },
+          "target_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verification": {
+            "$ref": "#/components/schemas/EnvironmentVerification"
+          }
+        }
+      },
+      "DeployRepo": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "full_name"
+        ],
+        "properties": {
+          "full_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Deployment": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "environment",
+          "repo",
+          "branch",
+          "cause",
+          "state",
+          "queued_at"
+        ],
+        "properties": {
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string",
+            "description": "`merge`, `redeploy`, or `retry`."
+          },
+          "checks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentCheck"
+            },
+            "description": "The evidence of each phase. Only in the detail."
+          },
+          "environment": {
+            "type": "string"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "merges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentMerge"
+            },
+            "description": "The merges the deployment carries. Only in the detail."
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`deploy`, `ready`, or `verify`; on a failed deployment, the phase that failed."
+          },
+          "previous_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sha of the last succeeded deployment of the environment when this one started."
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "queued_at": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "$ref": "#/components/schemas/DeployRepo"
+          },
+          "sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The branch tip read when the deployment started; `null` until then."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`."
+          },
+          "tasks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DeploymentTask"
+            },
+            "description": "The tasks the deployment holds. Only in the detail."
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentVerification"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "DeploymentCheck": {
+        "type": "object",
+        "required": [
+          "phase",
+          "ordinal",
+          "state",
+          "attempts",
+          "duration_ms",
+          "output_tail",
+          "started_at",
+          "finished_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` for the deploy action: host commands are not stored."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "output_tail": {
+            "type": "string",
+            "description": "Redacted output of the target, at most 8 KiB. Untrusted text."
+          },
+          "phase": {
+            "type": "string",
+            "description": "`deploy`, `ready`, or `verify`."
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "`passed`, `failed`, `timed_out`, or `skipped`."
+          }
+        }
+      },
+      "DeploymentError": {
+        "type": "object",
+        "required": [
+          "code",
+          "params"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {}
+        }
+      },
+      "DeploymentMerge": {
+        "type": "object",
+        "required": [
+          "change_request_id",
+          "number",
+          "url"
+        ],
+        "properties": {
+          "change_request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "merge_commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "DeploymentSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "state"
+        ],
+        "properties": {
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`deploy`, `ready`, or `verify`; `null` until the deployment starts."
+          },
+          "sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`."
+          }
+        }
+      },
+      "DeploymentTask": {
+        "type": "object",
+        "required": [
+          "id",
+          "key"
+        ],
+        "properties": {
+          "gate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`pending`, `passed`, `failed`, `accepted`, or `skipped`; `null` when the task has no gate on the environment."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "DeploymentVerification": {
+        "type": "object",
+        "required": [
+          "commands",
+          "mode"
+        ],
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "description": "`commands` or `none`."
+          },
+          "ready": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The readiness probe copied from `saka.toml` when the deployment reached it."
+          }
+        }
+      },
       "Device": {
         "type": "object",
         "required": [
@@ -6560,6 +7149,46 @@
             "type": "string",
             "format": "uuid",
             "description": "The workspace repo the checkout is made from."
+          }
+        }
+      },
+      "EnvironmentList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeployEnvironment"
+            }
+          }
+        }
+      },
+      "EnvironmentVerification": {
+        "type": "object",
+        "required": [
+          "ready",
+          "commands",
+          "warnings"
+        ],
+        "properties": {
+          "commands": {
+            "type": "integer",
+            "description": "How many verification commands `saka.toml` defines.",
+            "minimum": 0
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Whether `saka.toml` defines a readiness probe for the environment."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`verify_missing` or `ready_missing`."
           }
         }
       },
@@ -8021,6 +8650,162 @@
                 "state": {
                   "type": "string",
                   "description": "`asked | answered | delivered | expired`"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Page_Deployment": {
+        "type": "object",
+        "description": "A list page.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "environment",
+                "repo",
+                "branch",
+                "cause",
+                "state",
+                "queued_at"
+              ],
+              "properties": {
+                "actor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "branch": {
+                  "type": "string"
+                },
+                "cause": {
+                  "type": "string",
+                  "description": "`merge`, `redeploy`, or `retry`."
+                },
+                "checks": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "$ref": "#/components/schemas/DeploymentCheck"
+                  },
+                  "description": "The evidence of each phase. Only in the detail."
+                },
+                "environment": {
+                  "type": "string"
+                },
+                "error": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DeploymentError"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finished_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "merges": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "$ref": "#/components/schemas/DeploymentMerge"
+                  },
+                  "description": "The merges the deployment carries. Only in the detail."
+                },
+                "phase": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`deploy`, `ready`, or `verify`; on a failed deployment, the phase that failed."
+                },
+                "previous_sha": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The sha of the last succeeded deployment of the environment when this one started."
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "queued_at": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "repo": {
+                  "$ref": "#/components/schemas/DeployRepo"
+                },
+                "sha": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The branch tip read when the deployment started; `null` until then."
+                },
+                "started_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "description": "`queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`."
+                },
+                "tasks": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "$ref": "#/components/schemas/DeploymentTask"
+                  },
+                  "description": "The tasks the deployment holds. Only in the detail."
+                },
+                "verification": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DeploymentVerification"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             }
@@ -13450,6 +14235,9 @@
     },
     {
       "name": "hooks"
+    },
+    {
+      "name": "deployments"
     },
     {
       "name": "inbox"

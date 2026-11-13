@@ -123,6 +123,9 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
         ("project.user_token", "tasks"),
         ("project.config", "tasks"),
         ("toolchain.repo", "tasks/app"),
+        ("deploy.config", "tasks"),
+        ("deploy.verify_missing", "tasks"),
+        ("deploy.ready_missing", "tasks"),
     ]
     .iter()
     .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -203,7 +206,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
     );
     assert_eq!(
         r.body["summary"],
-        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 8 })
+        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 11 })
     );
     assert_eq!(
         rows(&sim),
@@ -402,7 +405,7 @@ fn a_report_is_counted_in_metrics_and_logged() {
         "\"pass\":10",
         "\"warn\":0",
         "\"fail\":1",
-        "\"skip\":8",
+        "\"skip\":11",
         "\"duration_ms\":",
     ] {
         assert!(text.contains(field), "{field} in {text}");
@@ -733,6 +736,7 @@ fn add_web_project_with(
                 config_sha256: saka_testkit::ZERO_SHA256.into(),
                 workflow,
                 hook_skip: Vec::new(),
+                verify: Default::default(),
                 bindings: vec![
                     binding("acme/tasks", "api", true),
                     binding("acme/web", "site", false),

@@ -732,6 +732,19 @@ impl Engine {
                     run: async move { self.project_config_check(project) }.boxed(),
                 });
             }
+            for id in [
+                CheckId::DeployConfig,
+                CheckId::DeployVerifyMissing,
+                CheckId::DeployReadyMissing,
+            ] {
+                if filter.wants(id) {
+                    planned.push(Planned {
+                        id,
+                        subject: Subject::project(&pid, &project.name),
+                        run: self.deploy_findings(project, id).boxed(),
+                    });
+                }
+            }
             if !filter.wants(CheckId::ToolchainRepo) {
                 continue;
             }

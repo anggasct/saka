@@ -776,6 +776,14 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::UserLinkRemoved { .. }
         | E::HookRunQueued { .. }
         | E::HookRunFinished { .. }
+        | E::DeploymentQueued { .. }
+        | E::DeploymentJoined { .. }
+        | E::DeploymentStarted { .. }
+        | E::DeploymentPhaseChanged { .. }
+        | E::DeploymentCheckFinished { .. }
+        | E::DeploymentSucceeded { .. }
+        | E::DeploymentFailed { .. }
+        | E::DeploymentCancelled { .. }
         | E::InboxItemDismissed { .. }
         | E::PairingCreated { .. }
         | E::DevicePaired { .. }

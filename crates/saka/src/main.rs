@@ -135,6 +135,9 @@ enum Command {
     #[command(about = "Hooks of a project: what is configured, what ran, and run it again")]
     #[command(subcommand)]
     Hook(HookCmd),
+    #[command(about = "Deployments of a project's environments: list them and read their evidence")]
+    #[command(subcommand)]
+    Deploy(DeployCmd),
     #[command(about = "Chat notification channels from the operator config")]
     #[command(subcommand)]
     Notify(NotifyCmd),
@@ -255,6 +258,32 @@ enum HookCmd {
         #[arg(long)]
         reason: String,
     },
+}
+
+#[derive(Subcommand)]
+enum DeployCmd {
+    #[command(
+        about = "Lists recent deployments of a project, newest first",
+        after_help = "Exit codes: 0 ok, 1 failed, 3 problems."
+    )]
+    List {
+        #[arg(help = "Project id or name")]
+        project: String,
+        #[arg(help = "Only deployments of this environment", long)]
+        environment: Option<String>,
+        #[arg(
+            help = "queued, deploying, awaiting_ready, verifying, succeeded, failed, or cancelled",
+            long
+        )]
+        state: Option<String>,
+        #[arg(help = "How many deployments, 1 to 200", long, default_value_t = 20)]
+        limit: u32,
+    },
+    #[command(
+        about = "Shows a deployment with the evidence of each phase and the tasks it holds",
+        after_help = "Exit codes: 0 ok, 1 failed."
+    )]
+    Show { id: String },
 }
 
 #[derive(Subcommand)]
@@ -1006,6 +1035,24 @@ fn run(cli: Cli) -> Result<ExitCode, ExitCode> {
                             .await
                     }
                     HookCmd::Rerun { id, reason } => client.hook_rerun(&id, &reason).await,
+                }
+            })
+        }
+        Command::Deploy(cmd) => {
+            let client = connect(server(cli.server)?, cli.json, cli.token_file.as_deref())?;
+            current_thread()?.block_on(async {
+                match cmd {
+                    DeployCmd::List {
+                        project,
+                        environment,
+                        state,
+                        limit,
+                    } => {
+                        client
+                            .deploy_list(&project, environment.as_deref(), state.as_deref(), limit)
+                            .await
+                    }
+                    DeployCmd::Show { id } => client.deploy_show(&id).await,
                 }
             })
         }

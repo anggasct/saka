@@ -40,6 +40,24 @@ macro_rules! hook_run_columns {
     };
 }
 
+macro_rules! deployment_columns {
+    () => {
+        deployment_columns!("")
+    };
+    ($prefix:literal) => {
+        qualified!($prefix: "id", "project_id", "repo_id", "environment", "branch", "sha", "previous_sha", "cause", "state", "phase", "error", "action", "target_url", "verification", "actor", "reason", "queued_at", "started_at", "finished_at", "updated_at")
+    };
+}
+
+macro_rules! deployment_check_columns {
+    () => {
+        deployment_check_columns!("")
+    };
+    ($prefix:literal) => {
+        qualified!($prefix: "deployment_id", "phase", "ordinal", "command", "state", "exit_code", "http_status", "attempts", "duration_ms", "output_tail", "log", "started_at", "finished_at")
+    };
+}
+
 macro_rules! inbox_item_columns {
     () => {
         inbox_item_columns!("")
@@ -54,7 +72,7 @@ macro_rules! project_columns {
         project_columns!("")
     };
     ($prefix:literal) => {
-        qualified!($prefix: "id", "name", "workspace_repo_id", "project_path", "base_branch", "config_commit", "created_at", "updated_at", "config_sha256", "config_error", "workflow", "hook_skip")
+        qualified!($prefix: "id", "name", "workspace_repo_id", "project_path", "base_branch", "config_commit", "created_at", "updated_at", "config_sha256", "config_error", "workflow", "hook_skip", "verify")
     };
 }
 
@@ -314,6 +332,8 @@ mod tests {
             ("spec_draft", spec_draft_columns!()),
             ("spec_draft_attempt", spec_draft_attempt_columns!()),
             ("hook_run", hook_run_columns!()),
+            ("deployment", deployment_columns!()),
+            ("deployment_check", deployment_check_columns!()),
             ("inbox_item", inbox_item_columns!()),
             ("project", project_columns!()),
             ("repo", repo_columns!()),

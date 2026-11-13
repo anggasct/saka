@@ -3896,6 +3896,287 @@ pub struct HookRunQuery {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct DeployRepo {
+    pub id: Uuid,
+    pub name: String,
+    pub full_name: String,
+}
+
+impl From<&saka_engine::RepoInfo> for DeployRepo {
+    fn from(r: &saka_engine::RepoInfo) -> DeployRepo {
+        DeployRepo {
+            id: r.id.0,
+            name: r.name.clone(),
+            full_name: r.full_name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EnvironmentVerification {
+    /// Whether `saka.toml` defines a readiness probe for the environment.
+    pub ready: bool,
+    /// How many verification commands `saka.toml` defines.
+    pub commands: usize,
+    /// `verify_missing` or `ready_missing`.
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentSummary {
+    pub id: Uuid,
+    /// `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`.
+    pub state: String,
+    pub sha: Option<String>,
+    /// `deploy`, `ready`, or `verify`; `null` until the deployment starts.
+    pub phase: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+impl From<&saka_core::deploy::Deployment> for DeploymentSummary {
+    fn from(d: &saka_core::deploy::Deployment) -> DeploymentSummary {
+        DeploymentSummary {
+            id: d.id.0,
+            state: d.state.as_str().into(),
+            sha: d.sha.clone(),
+            phase: d.phase.map(|p| p.as_str().into()),
+            finished_at: opt_time(d.finished_at),
+        }
+    }
+}
+
+/// An environment an operator defined for a project. The deploy command, webhook URL and secret names are never sent.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeployEnvironment {
+    pub name: String,
+    pub repo: DeployRepo,
+    pub branch: String,
+    /// `run`, `run_host`, or `webhook`.
+    pub action: String,
+    pub target_url: Option<String>,
+    /// Whether a task waits for a healthy deployment before it is done.
+    pub gate: bool,
+    /// `revert` or `fix`: the primary action of a failed deployment.
+    pub on_failure: String,
+    pub verification: EnvironmentVerification,
+    pub queued: Option<DeploymentSummary>,
+    pub active: Option<DeploymentSummary>,
+    pub last_succeeded: Option<DeploymentSummary>,
+}
+
+impl From<&saka_engine::EnvironmentView> for DeployEnvironment {
+    fn from(e: &saka_engine::EnvironmentView) -> DeployEnvironment {
+        DeployEnvironment {
+            name: e.name.clone(),
+            repo: DeployRepo::from(&e.repo),
+            branch: e.branch.clone(),
+            action: e.action.as_str().into(),
+            target_url: e.target_url.clone(),
+            gate: e.gate,
+            on_failure: e.on_failure.as_str().into(),
+            verification: EnvironmentVerification {
+                ready: e.verification.ready,
+                commands: e.verification.commands,
+                warnings: e
+                    .verification
+                    .warnings
+                    .iter()
+                    .map(|w| (*w).into())
+                    .collect(),
+            },
+            queued: e.queued.as_ref().map(DeploymentSummary::from),
+            active: e.active.as_ref().map(DeploymentSummary::from),
+            last_succeeded: e.last_succeeded.as_ref().map(DeploymentSummary::from),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentVerification {
+    /// The readiness probe copied from `saka.toml` when the deployment reached it.
+    pub ready: Option<String>,
+    pub commands: Vec<String>,
+    /// `commands` or `none`.
+    pub mode: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentError {
+    pub code: String,
+    pub params: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentCheck {
+    /// `deploy`, `ready`, or `verify`.
+    pub phase: String,
+    pub ordinal: u32,
+    /// `null` for the deploy action: host commands are not stored.
+    pub command: Option<String>,
+    /// `passed`, `failed`, `timed_out`, or `skipped`.
+    pub state: String,
+    pub exit_code: Option<i32>,
+    pub http_status: Option<u16>,
+    pub attempts: u32,
+    pub duration_ms: i64,
+    /// Redacted output of the target, at most 8 KiB. Untrusted text.
+    pub output_tail: String,
+    pub started_at: String,
+    pub finished_at: String,
+}
+
+impl From<&saka_core::deploy::CheckRecord> for DeploymentCheck {
+    fn from(c: &saka_core::deploy::CheckRecord) -> DeploymentCheck {
+        DeploymentCheck {
+            phase: c.phase.as_str().into(),
+            ordinal: c.ordinal,
+            command: c.command.clone(),
+            state: c.state.as_str().into(),
+            exit_code: c.exit_code,
+            http_status: c.http_status,
+            attempts: c.attempts,
+            duration_ms: c.duration_ms,
+            output_tail: c.output_tail.clone(),
+            started_at: time(c.started_at),
+            finished_at: time(c.finished_at),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentMerge {
+    pub change_request_id: Uuid,
+    pub number: u64,
+    pub url: String,
+    pub merge_commit_sha: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DeploymentTask {
+    pub id: Uuid,
+    pub key: String,
+    /// `pending`, `passed`, `failed`, `accepted`, or `skipped`; `null` when the task has no gate on the environment.
+    pub gate: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Deployment {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub environment: String,
+    pub repo: DeployRepo,
+    pub branch: String,
+    /// The branch tip read when the deployment started; `null` until then.
+    pub sha: Option<String>,
+    /// The sha of the last succeeded deployment of the environment when this one started.
+    pub previous_sha: Option<String>,
+    /// `merge`, `redeploy`, or `retry`.
+    pub cause: String,
+    /// `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`.
+    pub state: String,
+    /// `deploy`, `ready`, or `verify`; on a failed deployment, the phase that failed.
+    pub phase: Option<String>,
+    pub error: Option<DeploymentError>,
+    pub verification: Option<DeploymentVerification>,
+    /// The evidence of each phase. Only in the detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<DeploymentCheck>>,
+    /// The merges the deployment carries. Only in the detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merges: Option<Vec<DeploymentMerge>>,
+    /// The tasks the deployment holds. Only in the detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<Vec<DeploymentTask>>,
+    pub actor: Option<String>,
+    pub reason: Option<String>,
+    pub queued_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+impl From<&saka_engine::DeploymentRow> for Deployment {
+    fn from(row: &saka_engine::DeploymentRow) -> Deployment {
+        let d = &row.deployment;
+        Deployment {
+            id: d.id.0,
+            project_id: d.project_id.0,
+            environment: d.environment.clone(),
+            repo: DeployRepo::from(&row.repo),
+            branch: d.branch.clone(),
+            sha: d.sha.clone(),
+            previous_sha: d.previous_sha.clone(),
+            cause: d.cause.as_str().into(),
+            state: d.state.as_str().into(),
+            phase: d.phase.map(|p| p.as_str().into()),
+            error: d.error.as_ref().map(|e| DeploymentError {
+                code: e.code.clone(),
+                params: e.params.clone(),
+            }),
+            verification: d.verification.as_ref().map(|v| DeploymentVerification {
+                ready: v.ready.clone(),
+                commands: v.commands.clone(),
+                mode: v.mode.as_str().into(),
+            }),
+            checks: None,
+            merges: None,
+            tasks: None,
+            actor: d.actor.clone(),
+            reason: d.reason.clone(),
+            queued_at: time(d.queued_at),
+            started_at: opt_time(d.started_at),
+            finished_at: opt_time(d.finished_at),
+        }
+    }
+}
+
+impl From<&saka_engine::DeploymentDetail> for Deployment {
+    fn from(detail: &saka_engine::DeploymentDetail) -> Deployment {
+        Deployment {
+            checks: Some(detail.checks.iter().map(DeploymentCheck::from).collect()),
+            merges: Some(
+                detail
+                    .merges
+                    .iter()
+                    .map(|m| DeploymentMerge {
+                        change_request_id: m.change_request_id.0,
+                        number: m.number,
+                        url: m.url.clone(),
+                        merge_commit_sha: m.merge_commit_sha.clone(),
+                    })
+                    .collect(),
+            ),
+            tasks: Some(
+                detail
+                    .tasks
+                    .iter()
+                    .map(|t| DeploymentTask {
+                        id: t.work_item_id.0,
+                        key: t.task_key.clone(),
+                        gate: t.gate.map(|g| g.as_str().into()),
+                    })
+                    .collect(),
+            ),
+            ..Deployment::from(&detail.row)
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EnvironmentList {
+    pub items: Vec<DeployEnvironment>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DeploymentQuery {
+    pub environment: Option<String>,
+    /// `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`.
+    pub state: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InboxTitle {
     /// The task the item is about, when it is about one.
     pub task_key: Option<String>,

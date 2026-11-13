@@ -49,7 +49,8 @@ pub fn designated(code: BlockerCode) -> BlockerAction {
         | B::DodFailed
         | B::DocsMergeFailed
         | B::HookFailed
-        | B::RegressionNotReproduced => A::Retry,
+        | B::RegressionNotReproduced
+        | B::DeployUnverified => A::Retry,
         B::ChangeClosed => A::Cancel,
         B::BranchMoved | B::RevertConflict => A::Takeover,
         B::SecretMissing | B::SecretUnreadable => A::SetSecret,

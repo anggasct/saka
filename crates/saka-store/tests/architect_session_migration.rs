@@ -107,7 +107,10 @@ fn the_session_migration_keeps_drafts_and_accepts_the_awaiting_state_only_for_se
         conn.execute_batch(ROWS).unwrap();
     }
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
-    assert_eq!(store.migration().applied, vec![36, 37, 38, 39, 40, 41, 42]);
+    assert_eq!(
+        store.migration().applied,
+        vec![36, 37, 38, 39, 40, 41, 42, 43]
+    );
     drop(store);
 
     let conn = Connection::open(&path).unwrap();

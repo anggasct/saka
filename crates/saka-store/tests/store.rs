@@ -123,6 +123,7 @@ impl World {
             config_sha256: format!("sha256:{}", "0".repeat(64)),
             workflow: without_review(),
             hook_skip: Vec::new(),
+            verify: Default::default(),
             repos: vec![ProjectRepo {
                 repo_id,
                 name: "app".into(),
@@ -1223,10 +1224,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(42));
+    assert_eq!(w.store.schema_version().unwrap(), Some(43));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -1893,6 +1894,114 @@ fn diagnostics_read_the_last_received_webhook_and_the_latest_authorization() {
             .unwrap()
             .is_none()
     );
+}
+
+fn deployment_request(
+    w: &World,
+    cause: saka_core::vocab::DeployCause,
+) -> saka_core::deploy::QueueRequest {
+    saka_core::deploy::QueueRequest {
+        project_id: w.project.id,
+        repo_id: w.project.repos[0].repo_id,
+        environment: "staging".into(),
+        branch: "main".into(),
+        cause,
+        action: saka_core::vocab::DeployActionKind::RunHost,
+        target_url: None,
+        actor: None,
+        reason: None,
+        change_request_id: None,
+    }
+}
+
+fn queue_deployment(w: &mut World) -> saka_core::deploy::Deployment {
+    let request = deployment_request(w, saka_core::vocab::DeployCause::Redeploy);
+    let mut ctx = Ctx {
+        now: w.now,
+        ids: &mut w.ids,
+    };
+    let events = saka_core::deploy::queue(None, request, &mut ctx).unwrap();
+    events
+        .iter()
+        .fold(None, |d, e| saka_core::deploy::evolve(d, e, w.now))
+        .unwrap()
+}
+
+#[test]
+fn deployments_round_trip_and_an_environment_keeps_one_queued_and_one_active() {
+    use saka_core::deploy::{Input, decide};
+    use saka_core::vocab::DeploymentState;
+    let mut w = World::new();
+    let first = queue_deployment(&mut w);
+    let mut batch = Batch::new(w.now);
+    batch.deployments.push(first.clone());
+    w.store.commit(&batch).unwrap();
+    let stored = w
+        .store
+        .read(|c| saka_store::deployment::load(c, first.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, first);
+
+    let second = queue_deployment(&mut w);
+    let mut dup = Batch::new(w.now);
+    dup.deployments.push(second.clone());
+    assert!(
+        w.store.commit(&dup).is_err(),
+        "a second queued deployment in the same environment is refused"
+    );
+
+    let started = decide(
+        &first,
+        Input::Start {
+            sha: "a".repeat(40),
+            previous_sha: None,
+        },
+    )
+    .unwrap();
+    let started = saka_core::deploy::evolve_all(Some(first.clone()), &started, w.now).unwrap();
+    let mut batch = Batch::new(w.now);
+    batch.deployments.push(started.clone());
+    batch.deployments.push(second.clone());
+    w.store.commit(&batch).unwrap();
+    let current = w
+        .store
+        .read(|c| saka_store::deployment::active_of(c, first.project_id, "staging"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.state, DeploymentState::Deploying);
+    let waiting = w
+        .store
+        .read(|c| saka_store::deployment::queued_of(c, first.project_id, "staging"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(waiting.id, second.id);
+
+    let mut third = queue_deployment(&mut w);
+    third.state = DeploymentState::Verifying;
+    let mut active_dup = Batch::new(w.now);
+    active_dup.deployments.push(third);
+    assert!(
+        w.store.commit(&active_dup).is_err(),
+        "a second active deployment in the same environment is refused"
+    );
+    let listed = w
+        .store
+        .read(|c| {
+            saka_store::deployment::list(
+                c,
+                &saka_store::deployment::DeploymentFilter {
+                    project: Some(first.project_id),
+                    ..Default::default()
+                },
+                &saka_store::list::Page {
+                    after: None,
+                    limit: 10,
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(listed.len(), 2);
 }
 
 fn without_review() -> saka_core::workflow::Workflow {

@@ -172,6 +172,7 @@ vocab!(
         ChangeBehindBase => "change_behind_base",
         RegressionNotReproduced => "regression_not_reproduced",
         RevertConflict => "revert_conflict",
+        DeployUnverified => "deploy_unverified",
     }
 );
 vocab!(BlockerAction {
@@ -244,6 +245,9 @@ vocab!(CheckId {
     ProjectUserToken => "project.user_token",
     ProjectConfig => "project.config",
     ToolchainRepo => "toolchain.repo",
+    DeployConfig => "deploy.config",
+    DeployVerifyMissing => "deploy.verify_missing",
+    DeployReadyMissing => "deploy.ready_missing",
 });
 vocab!(HostTool { Rust => "rust", Python => "python" });
 vocab!(DiagnosticStatus { Pass => "pass", Warn => "warn", Fail => "fail", Skip => "skip" });
@@ -266,6 +270,22 @@ vocab!(HookEvent {
     Blocked => "blocked",
     InboxItemOpened => "inbox_item_opened",
 });
+vocab!(DeployActionKind { Run => "run", RunHost => "run_host", Webhook => "webhook" });
+vocab!(OnFailure { Revert => "revert", Fix => "fix" });
+vocab!(DeployCause { Merge => "merge", Redeploy => "redeploy", Retry => "retry" });
+vocab!(DeploymentState {
+    Queued => "queued",
+    Deploying => "deploying",
+    AwaitingReady => "awaiting_ready",
+    Verifying => "verifying",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+vocab!(VerifyMode { Commands => "commands", None => "none" });
+vocab!(DeployPhase { Deploy => "deploy", Ready => "ready", Verify => "verify" });
+vocab!(DeployCheckState { Passed => "passed", Failed => "failed", TimedOut => "timed_out", Skipped => "skipped" });
+vocab!(DeployGateState { Pending => "pending", Passed => "passed", Failed => "failed", Accepted => "accepted", Skipped => "skipped" });
 vocab!(HookMode { After => "after", Gate => "gate" });
 vocab!(HookActionKind { Run => "run", RunHost => "run_host", Webhook => "webhook", Notify => "notify" });
 vocab!(HookRunState { Pending => "pending", Succeeded => "succeeded", Failed => "failed" });
@@ -299,7 +319,7 @@ vocab!(UserTokenCause { Missing => "missing", Expired => "expired", Rejected => 
 vocab!(UserTokenState { Active => "active", Invalid => "invalid" });
 vocab!(ResumeTrigger { CredentialRenewed => "credential renewed", AuthorshipModeChanged => "authorship mode changed" });
 vocab!(ContextOrigin { Link => "link", Always => "always" });
-vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto", TakenOver => "taken_over", Reverted => "reverted" });
+vocab!(BlockerResolution { Retried => "retried", Cancelled => "cancelled", Auto => "auto", TakenOver => "taken_over", Reverted => "reverted", Accepted => "accepted" });
 vocab!(EnvironmentState { Preparing => "preparing", Ready => "ready", Failed => "failed", TeardownFailed => "teardown_failed", TornDown => "torn_down" });
 vocab!(SessionState {
     Starting => "starting",

@@ -689,6 +689,36 @@ impl Client {
         }
     }
 
+    pub async fn deploy_list(
+        &self,
+        project: &str,
+        environment: Option<&str>,
+        state: Option<&str>,
+        limit: u32,
+    ) -> ExitCode {
+        let id = match self.project_id(project).await {
+            Ok(id) => id,
+            Err(code) => return code,
+        };
+        let mut path = format!("/api/v1/projects/{id}/deployments?limit={limit}");
+        for (key, value) in [("environment", environment), ("state", state)] {
+            if let Some(value) = value {
+                path.push_str(&format!("&{key}={value}"));
+            }
+        }
+        match self.get(&path).await {
+            Ok(a) => self.finish(&a, |body| lines(body, deployment_line)),
+            Err(code) => code,
+        }
+    }
+
+    pub async fn deploy_show(&self, id: &str) -> ExitCode {
+        match self.get(&format!("/api/v1/deployments/{id}")).await {
+            Ok(a) => self.finish(&a, deployment_detail),
+            Err(code) => code,
+        }
+    }
+
     pub async fn hook_rerun(&self, id: &str, reason: &str) -> ExitCode {
         match self
             .post(
@@ -1856,6 +1886,45 @@ fn lines(body: &Value, line: impl Fn(&Value) -> String) -> String {
         .as_array()
         .map(|items| items.iter().map(&line).collect::<Vec<_>>().join("\n"))
         .unwrap_or_default()
+}
+
+fn deployment_line(d: &Value) -> String {
+    let sha: String = d["sha"].as_str().unwrap_or("-").chars().take(8).collect();
+    format!(
+        "{}  {}  {}  {}  {}  {}",
+        text(&d["id"]),
+        text(&d["environment"]),
+        text(&d["state"]),
+        text(&d["cause"]),
+        sha,
+        text(&d["queued_at"])
+    )
+}
+
+fn deployment_detail(d: &Value) -> String {
+    let mut out = vec![deployment_line(d)];
+    if let Some(error) = d["error"].as_object() {
+        let phase = text(&d["phase"]);
+        let code = error.get("code").map(text).unwrap_or_default();
+        out.push(format!("failed at {phase}: {code}"));
+    }
+    for task in d["tasks"].as_array().into_iter().flatten() {
+        out.push(format!(
+            "task  {}  {}",
+            text(&task["key"]),
+            text(&task["gate"])
+        ));
+    }
+    for check in d["checks"].as_array().into_iter().flatten() {
+        out.push(format!(
+            "check  {}  #{}  {}  {} ms",
+            text(&check["phase"]),
+            text(&check["ordinal"]),
+            text(&check["state"]),
+            text(&check["duration_ms"])
+        ));
+    }
+    out.join("\n")
 }
 
 fn intake_line(i: &Value) -> String {

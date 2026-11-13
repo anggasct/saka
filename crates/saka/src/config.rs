@@ -56,6 +56,8 @@ pub struct Config {
     #[serde(default)]
     pub hook: Vec<saka_core::hook::RawHook>,
     #[serde(default)]
+    pub deploy: Vec<saka_core::environment::RawEnvironment>,
+    #[serde(default)]
     pub notify: Notify,
     #[serde(default)]
     pub autonomy: AutonomyConfig,
@@ -791,9 +793,31 @@ impl Config {
         Ok(hooks)
     }
 
+    pub fn environments_parsed(
+        &self,
+    ) -> Result<Vec<saka_core::environment::Environment>, ConfigError> {
+        let mut environments =
+            saka_core::environment::parse_all(&self.deploy).map_err(|issue| {
+                let field = issue.field.map(|f| format!(".{f}")).unwrap_or_default();
+                err(
+                    "config_deploy_invalid",
+                    format!("{}: environment {:?}{field}", issue.code, issue.environment),
+                )
+            })?;
+        for environment in &mut environments {
+            if let saka_core::environment::DeployAction::RunHost { cwd: Some(cwd), .. } =
+                &mut environment.action
+            {
+                *cwd = expand(cwd).to_string_lossy().into_owned();
+            }
+        }
+        Ok(environments)
+    }
+
     fn check_hook_file(&self, path: &std::path::Path) -> Result<(), ConfigError> {
         use std::os::unix::fs::MetadataExt;
-        let runs_host = self.hook.iter().any(|h| h.action == "run_host");
+        let runs_host = self.hook.iter().any(|h| h.action == "run_host")
+            || self.deploy.iter().any(|d| d.action == "run_host");
         if !runs_host {
             return Ok(());
         }
@@ -918,6 +942,7 @@ impl Config {
             ));
         }
         let hooks = self.hooks_parsed()?;
+        self.environments_parsed()?;
         self.notify.validate()?;
         for hook in &hooks {
             if let saka_core::hook::HookAction::Notify { channel } = &hook.action
@@ -1705,6 +1730,12 @@ mod tests {
         assert_eq!(hooks[2].action.kind().as_str(), "run");
         assert_eq!(hooks[3].action.kind().as_str(), "run_host");
         assert_eq!(hooks[4].mode.as_str(), "gate");
+        let environments = cfg.environments_parsed().unwrap();
+        assert_eq!(environments.len(), 2);
+        assert_eq!(environments[0].name, "staging");
+        assert_eq!(environments[0].timeout_ms, 900_000);
+        assert!(environments[0].gate && !environments[1].gate);
+        assert_eq!(environments[1].action.kind().as_str(), "webhook");
         assert_eq!(
             cfg.scm[0].client_id.as_deref(),
             Some("Iv23liAbCdEfGh123456")
@@ -1737,6 +1768,54 @@ mod tests {
         let e = Config::parse(&twice).unwrap_err();
         assert!(e.detail.starts_with("hook_name_duplicate"), "{}", e.detail);
         let e = Config::parse(&hook("nope = 1\n")).unwrap_err();
+        assert_eq!(e.code, "config_unknown_field");
+    }
+
+    #[test]
+    fn deploy_environments_are_checked_with_a_coded_error_that_names_the_environment_and_field() {
+        let deploy = |extra: &str| {
+            format!(
+                "[[deploy]]\nproject = \"tasks\"\nenvironment = \"staging\"\naction = \"run_host\"\ncommand = \"./deploy.sh\"\n{extra}"
+            )
+        };
+        assert_eq!(
+            Config::parse(&deploy("on_failure = \"revert\"\n"))
+                .unwrap()
+                .deploy
+                .len(),
+            1
+        );
+        for (extra, expected) in [
+            ("", "deploy_on_failure_required"),
+            (
+                "on_failure = \"fix\"\nsecrets = [\"X\"]\n",
+                "deploy_field_invalid",
+            ),
+            (
+                "on_failure = \"fix\"\ntimeout_secs = 3601\n",
+                "deploy_timeout_invalid",
+            ),
+            (
+                "on_failure = \"fix\"\ntarget_url = \"http://example.com\"\n",
+                "deploy_url_invalid",
+            ),
+        ] {
+            let e = Config::parse(&deploy(extra)).unwrap_err();
+            assert_eq!(e.code, "config_deploy_invalid", "{extra}");
+            assert!(e.detail.starts_with(expected), "{extra}: {}", e.detail);
+        }
+        let twice = format!(
+            "{}{}",
+            deploy("on_failure = \"fix\"\n"),
+            deploy("on_failure = \"fix\"\n")
+        );
+        let e = Config::parse(&twice).unwrap_err();
+        assert!(
+            e.detail.starts_with("deploy_environment_duplicate"),
+            "{}",
+            e.detail
+        );
+        let e = Config::parse(&deploy("on_failure = \"fix\"\nnope = 1\n")).unwrap_err();
         assert_eq!(e.code, "config_unknown_field");
     }
 

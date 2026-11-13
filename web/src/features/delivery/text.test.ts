@@ -396,6 +396,33 @@ const VARIANTS: [string, Record<string, unknown>][] = [
   ["revert_conflict", { reason: "empty" }],
   ["revert_conflict", {}],
   [
+    "deploy_unverified",
+    {
+      environment: "staging",
+      deployment_id: "d1",
+      phase: "verify",
+      code: "verify_failed",
+    },
+  ],
+  [
+    "deploy_unverified",
+    {
+      environment: "staging",
+      deployment_id: "d1",
+      phase: "ready",
+      code: "ready_timed_out",
+    },
+  ],
+  [
+    "deploy_unverified",
+    {
+      environment: "preview",
+      deployment_id: "d2",
+      phase: "deploy",
+      code: "deploy_command_failed",
+    },
+  ],
+  [
     "ci_red",
     {
       source: "saka",

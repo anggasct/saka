@@ -244,6 +244,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/deployments/{deployment_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_deployment"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/diagnostics": {
     parameters: {
       query?: never;
@@ -575,6 +591,38 @@ export interface paths {
     put: operations["set_user_token"];
     post?: never;
     delete: operations["remove_user_token"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/deployments": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_deployments"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/environments": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_environments"];
+    put?: never;
+    post?: never;
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -1702,6 +1750,119 @@ export interface components {
       /** @description `asked | answered | delivered | expired` */
       state: string;
     };
+    /** @description An environment an operator defined for a project. The deploy command, webhook URL and secret names are never sent. */
+    DeployEnvironment: {
+      /** @description `run`, `run_host`, or `webhook`. */
+      action: string;
+      active?: components["schemas"]["DeploymentSummary"] | null;
+      branch: string;
+      /** @description Whether a task waits for a healthy deployment before it is done. */
+      gate: boolean;
+      last_succeeded?: components["schemas"]["DeploymentSummary"] | null;
+      name: string;
+      /** @description `revert` or `fix`: the primary action of a failed deployment. */
+      on_failure: string;
+      queued?: components["schemas"]["DeploymentSummary"] | null;
+      repo: components["schemas"]["DeployRepo"];
+      target_url?: string | null;
+      verification: components["schemas"]["EnvironmentVerification"];
+    };
+    DeployRepo: {
+      full_name: string;
+      /** Format: uuid */
+      id: string;
+      name: string;
+    };
+    Deployment: {
+      actor?: string | null;
+      branch: string;
+      /** @description `merge`, `redeploy`, or `retry`. */
+      cause: string;
+      /** @description The evidence of each phase. Only in the detail. */
+      checks?: components["schemas"]["DeploymentCheck"][] | null;
+      environment: string;
+      error?: components["schemas"]["DeploymentError"] | null;
+      finished_at?: string | null;
+      /** Format: uuid */
+      id: string;
+      /** @description The merges the deployment carries. Only in the detail. */
+      merges?: components["schemas"]["DeploymentMerge"][] | null;
+      /** @description `deploy`, `ready`, or `verify`; on a failed deployment, the phase that failed. */
+      phase?: string | null;
+      /** @description The sha of the last succeeded deployment of the environment when this one started. */
+      previous_sha?: string | null;
+      /** Format: uuid */
+      project_id: string;
+      queued_at: string;
+      reason?: string | null;
+      repo: components["schemas"]["DeployRepo"];
+      /** @description The branch tip read when the deployment started; `null` until then. */
+      sha?: string | null;
+      started_at?: string | null;
+      /** @description `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`. */
+      state: string;
+      /** @description The tasks the deployment holds. Only in the detail. */
+      tasks?: components["schemas"]["DeploymentTask"][] | null;
+      verification?: components["schemas"]["DeploymentVerification"] | null;
+    };
+    DeploymentCheck: {
+      /** Format: int32 */
+      attempts: number;
+      /** @description `null` for the deploy action: host commands are not stored. */
+      command?: string | null;
+      /** Format: int64 */
+      duration_ms: number;
+      /** Format: int32 */
+      exit_code?: number | null;
+      finished_at: string;
+      /** Format: int32 */
+      http_status?: number | null;
+      /** Format: int32 */
+      ordinal: number;
+      /** @description Redacted output of the target, at most 8 KiB. Untrusted text. */
+      output_tail: string;
+      /** @description `deploy`, `ready`, or `verify`. */
+      phase: string;
+      started_at: string;
+      /** @description `passed`, `failed`, `timed_out`, or `skipped`. */
+      state: string;
+    };
+    DeploymentError: {
+      code: string;
+      params: unknown;
+    };
+    DeploymentMerge: {
+      /** Format: uuid */
+      change_request_id: string;
+      merge_commit_sha?: string | null;
+      /** Format: int64 */
+      number: number;
+      url: string;
+    };
+    DeploymentSummary: {
+      finished_at?: string | null;
+      /** Format: uuid */
+      id: string;
+      /** @description `deploy`, `ready`, or `verify`; `null` until the deployment starts. */
+      phase?: string | null;
+      sha?: string | null;
+      /** @description `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`. */
+      state: string;
+    };
+    DeploymentTask: {
+      /** @description `pending`, `passed`, `failed`, `accepted`, or `skipped`; `null` when the task has no gate on the environment. */
+      gate?: string | null;
+      /** Format: uuid */
+      id: string;
+      key: string;
+    };
+    DeploymentVerification: {
+      commands: string[];
+      /** @description `commands` or `none`. */
+      mode: string;
+      /** @description The readiness probe copied from `saka.toml` when the deployment reached it. */
+      ready?: string | null;
+    };
     Device: {
       created_at: string;
       /** Format: uuid */
@@ -1798,6 +1959,17 @@ export interface components {
        * @description The workspace repo the checkout is made from.
        */
       repo_id: string;
+    };
+    EnvironmentList: {
+      items: components["schemas"]["DeployEnvironment"][];
+    };
+    EnvironmentVerification: {
+      /** @description How many verification commands `saka.toml` defines. */
+      commands: number;
+      /** @description Whether `saka.toml` defines a readiness probe for the environment. */
+      ready: boolean;
+      /** @description `verify_missing` or `ready_missing`. */
+      warnings: string[];
     };
     EvaluateBody: {
       /** @description The Bash command; ignored for other tools. */
@@ -2256,6 +2428,42 @@ export interface components {
         question: string;
         /** @description `asked | answered | delivered | expired` */
         state: string;
+      }[];
+      next_cursor?: string | null;
+    };
+    /** @description A list page. */
+    Page_Deployment: {
+      items: {
+        actor?: string | null;
+        branch: string;
+        /** @description `merge`, `redeploy`, or `retry`. */
+        cause: string;
+        /** @description The evidence of each phase. Only in the detail. */
+        checks?: components["schemas"]["DeploymentCheck"][] | null;
+        environment: string;
+        error?: components["schemas"]["DeploymentError"] | null;
+        finished_at?: string | null;
+        /** Format: uuid */
+        id: string;
+        /** @description The merges the deployment carries. Only in the detail. */
+        merges?: components["schemas"]["DeploymentMerge"][] | null;
+        /** @description `deploy`, `ready`, or `verify`; on a failed deployment, the phase that failed. */
+        phase?: string | null;
+        /** @description The sha of the last succeeded deployment of the environment when this one started. */
+        previous_sha?: string | null;
+        /** Format: uuid */
+        project_id: string;
+        queued_at: string;
+        reason?: string | null;
+        repo: components["schemas"]["DeployRepo"];
+        /** @description The branch tip read when the deployment started; `null` until then. */
+        sha?: string | null;
+        started_at?: string | null;
+        /** @description `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`. */
+        state: string;
+        /** @description The tasks the deployment holds. Only in the detail. */
+        tasks?: components["schemas"]["DeploymentTask"][] | null;
+        verification?: components["schemas"]["DeploymentVerification"] | null;
       }[];
       next_cursor?: string | null;
     };
@@ -4336,6 +4544,35 @@ export interface operations {
       };
     };
   };
+  get_deployment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        deployment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Deployment"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   diagnostics: {
     parameters: {
       query?: {
@@ -5162,6 +5399,78 @@ export interface operations {
         content?: never;
       };
       "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_deployments: {
+    parameters: {
+      query?: {
+        environment?: string;
+        /** @description `queued`, `deploying`, `awaiting_ready`, `verifying`, `succeeded`, `failed`, or `cancelled`. */
+        state?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_Deployment"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_environments: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EnvironmentList"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

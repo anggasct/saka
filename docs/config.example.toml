@@ -245,3 +245,34 @@ action = "run"
 command = "./scripts/smoke.sh staging"
 repos = ["app"]
 branches = ["main"]
+
+# A [[deploy]] entry defines an environment: what to run after a merge to its branch, and how a failure is
+# recovered. Saka queues one deployment per merge (a newer merge joins the one still waiting), runs the action,
+# then runs the project's own checks from saka.toml ([verify.<environment>]) against the target. A task is done
+# only after the deployment that carries it succeeded, unless gate = false. Environments live only here: saka.toml
+# and .saka/ cannot define them. `run_host` follows the same rules as a host hook (this file must not be writable
+# by anyone else, no project secret is passed).
+
+[[deploy]]
+project = "tasks"                  # a project name, or its id
+environment = "staging"            # ^[a-z0-9-]{1,32}$, unique per project
+repo = "app"                       # repo binding name; required when the project binds more than one repo
+branch = "main"                    # optional; default is the base branch of the repo binding
+action = "run_host"                # run | run_host | webhook
+command = "./deploy.sh staging"    # run, run_host: SAKA_DEPLOY_ID, SAKA_DEPLOY_ENV, SAKA_DEPLOY_URL, SAKA_SHA, SAKA_PREVIOUS_SHA, SAKA_BRANCH, SAKA_REPO, SAKA_PROJECT
+cwd = "~/deploy"                   # run_host; optional
+timeout_secs = 900                 # 1..=3600, default 900 (webhook: 1..=30, default 10)
+target_url = "https://staging.example.com"   # optional; https, or http on a loopback host; passed as SAKA_DEPLOY_URL
+gate = true                        # default true: a task waits for a healthy deployment before it is done
+on_failure = "revert"              # required: revert | fix, the primary action when the deployment fails
+verify_secrets = ["SMOKE_TOKEN"]   # optional: project secrets for the readiness probe and the checks
+
+[[deploy]]
+project = "tasks"
+environment = "preview"
+repo = "app"
+action = "webhook"
+url = "https://ci.example.com/hooks/deploy"   # signed like a hook webhook; X-Saka-Delivery is the deployment id
+secret = "DEPLOY_SIGNING_KEY"      # a project secret that signs the body with HMAC-SHA256
+gate = false
+on_failure = "fix"
