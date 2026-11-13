@@ -35,7 +35,7 @@ pub use state::{ApiConfig, AppState};
         routes::specs::add_spec, routes::specs::add_quick_spec, routes::specs::list_specs, routes::specs::get_spec, routes::specs::approve_spec, routes::specs::withdraw_spec,
         routes::specs::spec_template,
         routes::specs::list_files, routes::specs::get_file, routes::specs::put_file,
-        routes::tasks::list_work_items, routes::tasks::get_work_item, routes::tasks::get_work_packet, routes::tasks::start, routes::tasks::merge, routes::tasks::retry, routes::tasks::revert, routes::tasks::cancel, routes::tasks::takeover, routes::tasks::return_to_loop, routes::tasks::primary_action, routes::tasks::review, routes::tasks::fix, routes::tasks::take_external_change,
+        routes::tasks::list_work_items, routes::tasks::get_work_item, routes::tasks::get_work_packet, routes::tasks::start, routes::tasks::merge, routes::tasks::retry, routes::tasks::revert, routes::tasks::redo, routes::tasks::cancel, routes::tasks::takeover, routes::tasks::return_to_loop, routes::tasks::primary_action, routes::tasks::review, routes::tasks::fix, routes::tasks::take_external_change,
         routes::approvals::list_permissions, routes::approvals::answer_permission, routes::approvals::list_decisions, routes::approvals::get_decision, routes::approvals::answer_decision, routes::sessions::get_session,
         routes::sessions::list_sessions, routes::sessions::get_timeline, routes::sessions::steer, routes::sessions::interrupt, routes::sessions::stop,
         routes::approvals::list_permission_rules, routes::approvals::add_permission_rule, routes::approvals::preview_permission_rule, routes::approvals::evaluate_permission, routes::approvals::revoke_rule, routes::system::list_agent_accounts,
@@ -228,6 +228,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/work-items/{work_item_id}/actions/revert",
             post(routes::tasks::revert),
+        )
+        .route(
+            "/api/v1/work-items/{work_item_id}/actions/redo",
+            post(routes::tasks::redo),
         )
         .route(
             "/api/v1/work-items/{work_item_id}/actions/primary",

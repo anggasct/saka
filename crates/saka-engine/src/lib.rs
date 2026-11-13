@@ -29,6 +29,7 @@ pub mod project_config;
 mod quick;
 pub mod recipe;
 mod reconciler;
+mod redo;
 mod register;
 mod reload;
 mod revert;

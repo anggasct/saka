@@ -6575,3 +6575,197 @@ fn a_task_without_a_merged_change_cannot_be_reverted() {
     );
     problem(&r, StatusCode::CONFLICT, "invalid_state");
 }
+
+#[test]
+fn a_cancelled_step_is_redone_through_the_action_and_both_tasks_link_to_each_other() {
+    let mut api = Api::new(SimConfig::default());
+    api.sim.approve();
+    let origin = api.sim.task(1);
+    let path = format!("/api/v1/work-items/{}", origin.item.id.0);
+    let redo = format!("{path}/actions/redo");
+    let running = api.get(&path);
+    assert!(
+        !running.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("redo"))
+    );
+    let running_tag = running.headers["etag"].to_str().unwrap().to_string();
+    let early = api.post(
+        &redo,
+        &[("if-match", &running_tag)],
+        json!({ "reason": "too early" }),
+    );
+    problem(&early, StatusCode::CONFLICT, "invalid_state");
+
+    let engine = api.sim.engine();
+    engine
+        .cancel_with(
+            origin.item.id,
+            "not now",
+            &engine.cause("human:operator:local"),
+            None,
+        )
+        .unwrap();
+    let detail = api.get(&path);
+    assert!(
+        detail.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("redo")),
+        "{}",
+        detail.body
+    );
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+
+    problem(
+        &api.post(&redo, &[], json!({ "reason": "again" })),
+        StatusCode::PRECONDITION_REQUIRED,
+        "precondition_required",
+    );
+    problem(
+        &api.post(
+            &redo,
+            &[("if-match", "W/\"1\"")],
+            json!({ "reason": "again" }),
+        ),
+        StatusCode::PRECONDITION_FAILED,
+        "version_stale",
+    );
+    for reason in ["", "  ", &"x".repeat(501)] {
+        let r = api.post(&redo, &[("if-match", &etag)], json!({ "reason": reason }));
+        problem(&r, StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    }
+    let long_note = api.post(
+        &redo,
+        &[("if-match", &etag)],
+        json!({ "reason": "ok", "note": "n".repeat(2001) }),
+    );
+    problem(
+        &long_note,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "validation_failed",
+    );
+    let extra = api.post(
+        &redo,
+        &[("if-match", &etag)],
+        json!({ "reason": "ok", "paths": [] }),
+    );
+    assert_eq!(extra.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let key = api.key();
+    let body = json!({ "reason": "try again", "note": "keep the old route" });
+    let before = api.last_seq();
+    let made = api.post_with(&redo, Some(&key), &[("if-match", &etag)], &body);
+    assert_eq!(made.status, StatusCode::ACCEPTED, "{}", made.body);
+    assert_eq!(made.body["state"], "queued");
+    assert_eq!(made.body["task_key"], format!("{}.2", origin.item.task_key));
+    assert_eq!(made.body["redo_of"]["id"], origin.item.id.0.to_string());
+    assert_eq!(made.body["redo_of"]["key"], origin.item.task_key);
+    assert_eq!(made.body["redone_by"], Value::Null);
+    assert_eq!(made.body["step_id"], origin.item.step_id.clone().unwrap());
+    let kinds: Vec<String> = api
+        .sim
+        .engine()
+        .events_after(before, 50)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "delivery.work_item.redo_requested",
+            "delivery.work_item.superseded",
+            "delivery.work_item.redo_created"
+        ]
+    );
+    let recorded: i64 = api
+        .sim
+        .engine()
+        .store()
+        .read(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM action_request WHERE action = 'work_item.redo' AND response_status = 202",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })
+        .unwrap();
+    assert_eq!(recorded, 1);
+    let replay = api.post_with(&redo, Some(&key), &[("if-match", &etag)], &body);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(replay.body, made.body);
+
+    let shown = api.get(&path);
+    assert_eq!(shown.body["state"], "superseded");
+    assert_eq!(shown.body["redone_by"]["id"], made.body["id"]);
+    assert_eq!(shown.body["redone_by"]["state"], "queued");
+    let again = api.post(
+        &redo,
+        &[("if-match", shown.headers["etag"].to_str().unwrap())],
+        json!({ "reason": "twice" }),
+    );
+    problem(&again, StatusCode::CONFLICT, "already_redone");
+    assert_eq!(again.body["params"]["work_item_id"], made.body["id"]);
+}
+
+#[test]
+fn a_step_of_a_withdrawn_spec_or_one_whose_revision_moved_cannot_be_redone() {
+    let mut api = Api::new(SimConfig::default());
+    let first = api.sim.register(
+        saka_testkit::APPROVAL_PATH,
+        &approval_spec(
+            "",
+            &[("Build the base", "AC-01"), ("Finish the rest", "AC-02")],
+        ),
+    );
+    api.sim
+        .approve_spec(first.spec_id, first.revision_id)
+        .unwrap();
+    api.sim.spec_id = first.spec_id;
+    assert!(api.sim.run_until(STEPS, |s| {
+        s.task(1).item.state == WorkItemState::InStage
+    }));
+    let origin = api.sim.task(1);
+    let engine = api.sim.engine();
+    let cause = engine.cause("human:operator:local");
+    engine
+        .cancel_with(origin.item.id, "not now", &cause, None)
+        .unwrap();
+    let changed = api.sim.register(
+        saka_testkit::APPROVAL_PATH,
+        &approval_spec(
+            "",
+            &[
+                ("Build the base", "AC-01"),
+                ("Finish the rest, changed", "AC-02"),
+            ],
+        ),
+    );
+    assert!(changed.lint_ok, "{:?}", changed.issues);
+    api.sim
+        .approve_spec(changed.spec_id, changed.revision_id)
+        .unwrap();
+
+    let path = format!("/api/v1/work-items/{}", origin.item.id.0);
+    let redo = format!("{path}/actions/redo");
+    let detail = api.get(&path);
+    assert!(
+        !detail.body["available_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("redo"))
+    );
+    let etag = detail.headers["etag"].to_str().unwrap().to_string();
+    let moved = api.post(&redo, &[("if-match", &etag)], json!({ "reason": "again" }));
+    problem(&moved, StatusCode::CONFLICT, "redo_revision_changed");
+
+    api.sim
+        .engine()
+        .withdraw_spec(changed.spec_id, "dropped", &cause)
+        .unwrap();
+    let withdrawn = api.post(&redo, &[("if-match", &etag)], json!({ "reason": "again" }));
+    problem(&withdrawn, StatusCode::CONFLICT, "invalid_state");
+}

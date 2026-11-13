@@ -1249,12 +1249,23 @@ impl Client {
     }
 
     pub async fn task_merge(&self, id: &str, reason: Option<&str>) -> ExitCode {
-        self.task_versioned(id, "merge", reason, "merging").await
+        self.task_versioned(id, "merge", json!({ "reason": reason }), "merging")
+            .await
     }
 
     pub async fn task_revert(&self, id: &str, reason: &str) -> ExitCode {
-        self.task_versioned(id, "revert", Some(reason), "revert")
+        self.task_versioned(id, "revert", json!({ "reason": reason }), "revert")
             .await
+    }
+
+    pub async fn task_redo(&self, id: &str, reason: &str, note: Option<&str>) -> ExitCode {
+        self.task_versioned(
+            id,
+            "redo",
+            json!({ "reason": reason, "note": note }),
+            "redo",
+        )
+        .await
     }
 
     pub async fn task_show(&self, id: &str) -> ExitCode {
@@ -1283,6 +1294,15 @@ impl Client {
                         text(&b["reverted_by"]["state"])
                     ));
                 }
+                if let Some(key) = b["redo_of"]["key"].as_str() {
+                    out.push_str(&format!("\nredoes {key}"));
+                }
+                if let Some(key) = b["redone_by"]["key"].as_str() {
+                    out.push_str(&format!(
+                        "\nredone by {key} {}",
+                        text(&b["redone_by"]["state"])
+                    ));
+                }
                 out
             }),
             Err(code) => code,
@@ -1290,14 +1310,15 @@ impl Client {
     }
 
     pub async fn task_start(&self, id: &str) -> ExitCode {
-        self.task_versioned(id, "start", None, "starting").await
+        self.task_versioned(id, "start", json!({ "reason": null }), "starting")
+            .await
     }
 
     async fn task_versioned(
         &self,
         id: &str,
         action: &str,
-        reason: Option<&str>,
+        body: serde_json::Value,
         verb: &str,
     ) -> ExitCode {
         let current = match self.get(&format!("/api/v1/work-items/{id}")).await {
@@ -1312,7 +1333,7 @@ impl Client {
         match self
             .post(
                 &format!("/api/v1/work-items/{id}/actions/{action}"),
-                &json!({ "reason": reason }),
+                &body,
                 Some(&tag),
             )
             .await

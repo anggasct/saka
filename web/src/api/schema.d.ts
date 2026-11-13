@@ -1476,6 +1476,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/redo": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["redo"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/retry": {
     parameters: {
       query?: never;
@@ -3169,6 +3185,8 @@ export interface components {
         priority: number;
         /** Format: uuid */
         project_id: string;
+        redo_of?: components["schemas"]["WorkItemRef"] | null;
+        redone_by?: components["schemas"]["RevertedBy"] | null;
         regression?: components["schemas"]["RegressionEvidence"] | null;
         /** Format: uuid */
         repo_id: string;
@@ -3525,6 +3543,12 @@ export interface components {
       migrations: string;
       reconciler: string;
       worker: string;
+    };
+    RedoBody: {
+      /** @description Up to 2000 characters, shown to the agent in the work packet of the new task. */
+      note?: string | null;
+      /** @description 1 to 500 characters. */
+      reason: string;
     };
     RegressionCommand: {
       command: string;
@@ -4330,6 +4354,8 @@ export interface components {
       priority: number;
       /** Format: uuid */
       project_id: string;
+      redo_of?: components["schemas"]["WorkItemRef"] | null;
+      redone_by?: components["schemas"]["RevertedBy"] | null;
       regression?: components["schemas"]["RegressionEvidence"] | null;
       /** Format: uuid */
       repo_id: string;
@@ -8049,6 +8075,44 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["PrimaryActionBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  redo: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+        /** @description W/"<version>" */
+        "If-Match": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RedoBody"];
       };
     };
     responses: {

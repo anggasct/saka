@@ -730,6 +730,87 @@ fn approve_writes_the_step_graph_with_the_work_items() {
 }
 
 #[test]
+fn a_redo_links_both_tasks_and_hands_the_waiting_step_to_the_new_one() {
+    let mut w = World::new();
+    let tasks = w.approve();
+    let at = |n: u32| {
+        tasks
+            .iter()
+            .find(|t| t.item.step_index == Some(n))
+            .unwrap()
+            .clone()
+    };
+    let (first, second) = (at(1), at(2));
+    let cancelled = Event::WorkItemCancelled {
+        work_item_id: first.item.id,
+        reason: "operator".into(),
+    };
+    let mut origin = task::evolve(Some(first.clone()), &cancelled, w.now).unwrap();
+    origin.spec_standing = Some(saka_core::model::SpecStanding {
+        state: SpecState::Approved,
+        approved_revision_id: origin.item.spec_revision_id,
+    });
+    let mut ctx = Ctx {
+        now: w.now,
+        ids: &mut w.ids,
+    };
+    let events = saka_core::redo::request(&origin, "again".into(), None, &mut ctx).unwrap();
+    let mut batch = Batch::new(w.now);
+    let mut redo_id = None;
+    let mut after = origin.clone();
+    for e in &events {
+        match e {
+            Event::WorkItemSuperseded { .. } => {
+                after = task::evolve(Some(after.clone()), e, w.now).unwrap();
+            }
+            Event::WorkItemRedoCreated { work_item_id, .. } => {
+                redo_id = Some(*work_item_id);
+                batch.tasks.extend(task::evolve(None, e, w.now));
+            }
+            _ => {}
+        }
+        batch
+            .events
+            .push(record(e, w.project.id, &mut w.ids, w.now));
+    }
+    batch.tasks.push(after);
+    let redo_id = redo_id.unwrap();
+    batch
+        .moved_work_item_dependencies
+        .push((first.item.id, redo_id));
+    w.store.commit(&batch).unwrap();
+
+    let load = |id: WorkItemId| {
+        w.store
+            .read(|c| read::load_task(c, id, &saka_core::workflow::WorkflowPolicy::default()))
+            .unwrap()
+            .unwrap()
+    };
+    let old = load(first.item.id);
+    let new = load(redo_id);
+    assert_eq!(old.item.state, WorkItemState::Superseded);
+    assert_eq!(old.redone_by.as_ref().map(|l| l.id), Some(redo_id));
+    assert_eq!(new.redo.as_ref().map(|r| r.of), Some(first.item.id));
+    assert_eq!(new.redo.as_ref().map(|r| r.reason.as_str()), Some("again"));
+    assert_eq!(
+        new.spec_standing.map(|s| s.state),
+        Some(SpecState::Approved)
+    );
+    assert!(old.redo.is_none() && new.redone_by.is_none());
+    let waiting = w
+        .store
+        .read(|c| read::work_item_dependencies_of(c, &[second.item.id]))
+        .unwrap();
+    assert_eq!(
+        waiting
+            .iter()
+            .map(|d| d.depends_on_work_item_id)
+            .collect::<Vec<_>>(),
+        vec![redo_id]
+    );
+}
+
+#[test]
 fn a_task_loads_with_the_workflow_of_its_kind_and_the_project_keeps_the_overrides() {
     use saka_core::vocab::{Autonomy, Stage, Trigger, WorkKind};
     use saka_core::workflow::{KindOverride, WorkflowPolicy};
@@ -1225,10 +1306,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
             25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-            47
+            47, 48
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(47));
+    assert_eq!(w.store.schema_version().unwrap(), Some(48));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

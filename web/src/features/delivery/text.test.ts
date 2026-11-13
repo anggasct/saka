@@ -829,6 +829,8 @@ const ERRORS = [
   "revert_not_allowed",
   "revert_in_progress",
   "already_reverted",
+  "redo_revision_changed",
+  "already_redone",
   "entry_point_disabled",
   "review_already_requested",
   "fix_not_available",

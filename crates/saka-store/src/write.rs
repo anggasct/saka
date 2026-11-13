@@ -158,6 +158,7 @@ pub struct Batch {
     pub work_item_dependencies: Vec<WorkItemDependency>,
     pub replaced_spec_dependencies: Vec<SpecId>,
     pub replaced_work_item_dependencies: Vec<WorkItemId>,
+    pub moved_work_item_dependencies: Vec<(WorkItemId, WorkItemId)>,
     pub permission_rules: Vec<PermissionRule>,
     pub hook_runs: Vec<saka_core::hook::HookRun>,
     pub deployments: Vec<saka_core::deploy::Deployment>,
@@ -427,6 +428,18 @@ pub(crate) fn write(
                 d.project_id.to_string(),
                 b.now.0,
             ],
+        )?;
+    }
+    for (from, to) in &b.moved_work_item_dependencies {
+        tx.execute(
+            "INSERT INTO work_item_dependency (work_item_id, depends_on_work_item_id, project_id, created_at)
+             SELECT ?2, depends_on_work_item_id, project_id, ?3 FROM work_item_dependency WHERE work_item_id = ?1
+             ON CONFLICT (work_item_id, depends_on_work_item_id) DO NOTHING",
+            params![from.to_string(), to.to_string(), b.now.0],
+        )?;
+        tx.execute(
+            "UPDATE work_item_dependency SET depends_on_work_item_id = ?2 WHERE depends_on_work_item_id = ?1",
+            params![from.to_string(), to.to_string()],
         )?;
     }
     for d in &b.work_item_dependencies {
@@ -731,8 +744,8 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
     let i = &t.item;
     tx.execute(
         "INSERT INTO work_item (id, project_id, origin, spec_id, spec_revision_id, step_id, step_index, task_key, work,
-           repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at, kind, revert_of, revert_reason)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+           repo_id, branch, state, stage, stage_phase, priority, version, admitted_at, done_at, start_approved_at, created_at, updated_at, kind, revert_of, revert_reason, redo_of, redo_reason, redo_note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
          ON CONFLICT (id) DO UPDATE SET spec_revision_id = excluded.spec_revision_id, kind = excluded.kind,
            step_index = excluded.step_index, work = excluded.work, repo_id = excluded.repo_id, state = excluded.state, stage = excluded.stage,
            stage_phase = excluded.stage_phase, priority = excluded.priority, version = excluded.version,
@@ -763,6 +776,9 @@ fn task(tx: &Transaction<'_>, t: &Task) -> Result<()> {
             i.kind.map(|k| k.as_str()),
             t.revert.as_ref().map(|r| r.of.to_string()),
             t.revert.as_ref().map(|r| r.reason.as_str()),
+            t.redo.as_ref().map(|r| r.of.to_string()),
+            t.redo.as_ref().map(|r| r.reason.as_str()),
+            t.redo.as_ref().and_then(|r| r.note.as_deref()),
         ],
     )?;
     if let Some(x) = &t.external {

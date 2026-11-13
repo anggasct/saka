@@ -569,6 +569,31 @@ pub enum Event {
         priority: i64,
         reason: String,
     },
+    #[serde(rename = "delivery.work_item.redo_requested")]
+    WorkItemRedoRequested {
+        work_item_id: WorkItemId,
+        redo_id: WorkItemId,
+        reason: String,
+    },
+    #[serde(rename = "delivery.work_item.redo_created")]
+    WorkItemRedoCreated {
+        work_item_id: WorkItemId,
+        project_id: ProjectId,
+        spec_id: SpecId,
+        spec_revision_id: SpecRevisionId,
+        step_id: String,
+        step_index: u32,
+        repo_id: RepoId,
+        kind: WorkKind,
+        priority: i64,
+        redo_of: WorkItemId,
+        redo_of_key: String,
+        task_key: String,
+        work: String,
+        branch: String,
+        reason: String,
+        note: Option<String>,
+    },
     #[serde(rename = "delivery.work_item.reverted")]
     WorkItemReverted {
         work_item_id: WorkItemId,
@@ -1321,6 +1346,8 @@ impl Event {
             | E::WorkItemDone { work_item_id, .. }
             | E::WorkItemRevertRequested { work_item_id, .. }
             | E::WorkItemRevertCreated { work_item_id, .. }
+            | E::WorkItemRedoRequested { work_item_id, .. }
+            | E::WorkItemRedoCreated { work_item_id, .. }
             | E::WorkItemReverted { work_item_id, .. }
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }

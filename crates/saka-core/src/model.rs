@@ -681,6 +681,20 @@ pub struct Revert {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Redo {
+    pub of: WorkItemId,
+    pub of_key: String,
+    pub reason: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecStanding {
+    pub state: SpecState,
+    pub approved_revision_id: Option<SpecRevisionId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub item: WorkItem,
     pub stage_run: Option<StageRun>,
@@ -706,8 +720,13 @@ pub struct Task {
     pub deploy_gates: Vec<DeployGate>,
     pub reviews: Vec<Review>,
     pub revert: Option<Revert>,
+    pub redo: Option<Redo>,
     #[serde(skip)]
     pub reverted_by: Option<TaskLink>,
+    #[serde(skip)]
+    pub redone_by: Option<TaskLink>,
+    #[serde(skip)]
+    pub spec_standing: Option<SpecStanding>,
     #[serde(skip)]
     pub workflow: Workflow,
     #[serde(skip)]
@@ -812,7 +831,10 @@ impl Task {
             deploy_gates: Vec::new(),
             reviews: Vec::new(),
             revert: None,
+            redo: None,
             reverted_by: None,
+            redone_by: None,
+            spec_standing: None,
             workflow: Workflow::default(),
             policy: RepoPolicy::default(),
         }
