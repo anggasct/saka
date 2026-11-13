@@ -11,7 +11,7 @@ import { cn } from "@/ui/cn";
 
 import { Primary, Secondary } from "./inbox-action";
 import type { InboxItem } from "./queries";
-import { heading, kindTone, sentence } from "./text";
+import { heading, issueOf, kindTone, sentence } from "./text";
 
 export function InboxCard({
   item,
@@ -32,6 +32,7 @@ export function InboxCard({
   const title = heading(t, item);
   const params = record(item.params);
   const summary = text(params.summary);
+  const issue = issueOf(params);
   const decision = item.subject === "decision";
   const context = text(params.context);
   return (
@@ -61,6 +62,16 @@ export function InboxCard({
         {title}
       </h2>
       <p className="break-words">{sentence(t, item, format.relative)}</p>
+      {issue !== null && item.subject === "spec" && (
+        <a
+          className="inline-flex min-h-11 items-center text-sm font-medium break-words text-primary underline underline-offset-4"
+          href={issue.url}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {t("inbox.fromIssue", { number: issue.number })}
+        </a>
+      )}
       {decision && context !== "" && (
         <p className="break-words whitespace-pre-wrap text-muted-foreground">
           {context}

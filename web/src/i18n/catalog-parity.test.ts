@@ -6,6 +6,12 @@ import { DIAGNOSTIC_CODES } from "@/features/settings/diagnostic-codes";
 import { CATALOGS, LOCALES } from "./messages";
 
 const ERROR_CODES = [
+  "issue_not_found",
+  "intake_active",
+  "intake_already_approved",
+  "intake_closed",
+  "intake_not_failed",
+  "intake_retries_exhausted",
   "project_config_invalid",
   "scm_integration_unknown",
   "scm_repo_inaccessible",

@@ -210,6 +210,45 @@ A check ends in one outcome. `reproduced`: a command failed. `not_reproduced`: e
 
 The agent has three checks per dev run. The third check that is not `reproduced`, or a dev session that ends without `reproduced`, blocks the task with `regression_not_reproduced`. Retry resets the branch of the task to the base it was created from, records the old head in the `delivery.regression.branch_reset` event, and starts a new dev run with the same instructions. A fix round after review does not ask for another check. Metrics: `saka_regression_checks_total{outcome}`.
 
+## Issues become specs
+
+A `[workflow.issue]` table in `saka.toml` lets Saka turn GitHub or GitLab issues into specs, for a workflow that takes specs (not `review_only`). Every field is optional:
+
+```toml
+[workflow.issue]
+trigger = "label"              # label (default) | auto
+trigger_label = "saka:intake"  # 1 to 50 characters, no comma
+labels = []                    # extra labels the issue must all carry
+exclude_labels = ["wontfix", "duplicate", "question"]
+kind_labels = { bug = "bugfix", chore = "chore", refactor = "refactor", security = "security_patch" }
+default_kind = "feature"
+include_confidential = false   # GitLab confidential issues
+max_open = 20                  # intakes waiting for approval, 1 to 100
+
+[workflow.issue.bugfix]        # optional: the light lane for bugs
+done_when = ["cargo test --locked"]
+regression = ["cargo test --locked"]
+```
+
+Someone with write access starts an intake by adding the `trigger_label` to an issue, or by commenting `/saka intake` at the start of a line (not in a quote or a code block). With `trigger = "auto"`, an issue created by someone with write access also starts one. You can take an issue in yourself with Add issue in Delivery or `saka issue intake <project> <number> [--repo <name>]`.
+
+**Only users with write access can start an intake.** Anyone can open an issue on a public repo, so Saka checks the write access of whoever added the label, wrote the comment, or created the issue. Everyone else is ignored without a word on the issue; Saka only logs `intake.issue.denied` and counts it in `saka_issue_intake_denied_total`. The issue text is untrusted: Saka redacts secrets, keeps at most 16 KiB, writes it into a quick spec as plain text that cannot add a section, a criterion, or a command, and hands it to the architect inside a fenced block marked as untrusted data. Comments written after the intake never reach the spec.
+
+The labels pick the kind (`kind_labels`, the safest kind wins when several match, `default_kind` when none does). A `bugfix` issue with a `[workflow.issue.bugfix]` table becomes a quick bugfix spec with those commands. Every other issue goes through the architect, with the template of its kind. Both end in a spec waiting for your approval: Inbox shows it with a link to the issue, and nothing runs before you approve it. Issues from before you turned the entry on are not taken in; an edit of the issue after the intake does not change the spec.
+
+Saka answers on the issue, once per milestone: accepted, the spec is ready for approval, approved, the first pull request, done, dismissed, failed, and when `max_open` is full. The comments carry no local path or secret, and a link to Saka only when `[notify] public_url` is set. The pull request of the last step of the spec says `Closes #<number>` (or `Closes <owner>/<repo>#<number>` when the step is in another repo), so the provider closes the issue when the code merges. Closing the issue before approval withdraws the spec or cancels the draft. In Delivery, the group From issues lists each intake with its state, lane, kind, and spec or draft, with Retry (at most three times) and Dismiss. A failed intake also opens an Inbox item. Dismiss works until the spec is approved; after that, cancel its task.
+
+```
+saka issue list <project> [--state accepted,failed]
+saka issue intake <project> <number> [--repo <name>]
+saka issue dismiss <intake id> [--reason <text>]
+saka issue retry <intake id>
+```
+
+Exit codes follow the rest of the CLI: 0 done, 1 failed, 4 refused (already taken in, already approved, nothing to retry), `--json` prints the response.
+
+Intake needs the integration to read issues and write comments. For a GitHub App that is the Issues permission (read and write) and the Issues event; `saka scm create-app` asks for both, and an App you created earlier must accept them in its settings. `saka doctor` reports a missing permission or event. For GitLab, the project hook needs the issue events (`issues_events`) and comment events (`note_events`); `saka doctor` reports a missing `issues_events` when a project takes issues. Without a webhook Saka polls, so an intake starts within `poll_interval_secs`.
+
 ## Development
 
 | Path | Contents |

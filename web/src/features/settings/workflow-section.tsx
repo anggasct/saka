@@ -61,6 +61,100 @@ function ChangeFilters({ entry }: { entry: Entry }) {
   );
 }
 
+type IssueEntry = NonNullable<Project["workflow"]["issue"]>;
+
+function IssueDetails({ entry }: { entry: IssueEntry }) {
+  const t = useT();
+  const kinds = Object.entries(entry.kind_labels);
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium">
+        {t("settings.workflow.issue.title")}
+      </h3>
+      <dl className="grid gap-x-4 gap-y-1 rounded-lg border border-border p-3 text-sm sm:grid-cols-[max-content_1fr]">
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.triggerLabel")}
+        </dt>
+        <dd>
+          <code className="rounded bg-muted px-1 text-xs break-all">
+            {entry.trigger_label}
+          </code>
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.labels")}
+        </dt>
+        <dd>
+          <Patterns items={entry.labels} />
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.exclude")}
+        </dt>
+        <dd>
+          <Patterns items={entry.exclude_labels} />
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.kindLabels")}
+        </dt>
+        <dd>
+          {kinds.length === 0 ? (
+            t("settings.workflow.any")
+          ) : (
+            <ul className="space-y-1">
+              {kinds.map(([name, kind]) => (
+                <li key={name}>
+                  {t("settings.workflow.issue.kindLabel", {
+                    name,
+                    kind: label(t, "kind", kind),
+                  })}
+                </li>
+              ))}
+            </ul>
+          )}
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.defaultKind")}
+        </dt>
+        <dd>{label(t, "kind", entry.default_kind)}</dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.confidential")}
+        </dt>
+        <dd>
+          {entry.include_confidential
+            ? t("settings.workflow.included")
+            : t("settings.workflow.skipped")}
+        </dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.maxOpen")}
+        </dt>
+        <dd>{entry.max_open}</dd>
+        <dt className="text-muted-foreground">
+          {t("settings.workflow.issue.bugfix")}
+        </dt>
+        <dd>
+          {entry.bugfix === null || entry.bugfix === undefined ? (
+            t("settings.workflow.issue.bugfix.none")
+          ) : (
+            <dl className="space-y-1">
+              <dt className="text-muted-foreground">
+                {t("settings.workflow.issue.doneWhen")}
+              </dt>
+              <dd>
+                <Scope globs={entry.bugfix.done_when} />
+              </dd>
+              <dt className="text-muted-foreground">
+                {t("settings.workflow.issue.regression")}
+              </dt>
+              <dd>
+                <Scope globs={entry.bugfix.regression} />
+              </dd>
+            </dl>
+          )}
+        </dd>
+      </dl>
+    </div>
+  );
+}
+
 type KindOverride = Project["workflow"]["kinds"][string];
 
 function KindOverrides({ kinds }: { kinds: Project["workflow"]["kinds"] }) {
@@ -141,6 +235,7 @@ export function WorkflowSection({ project }: { project: Project }) {
   const t = useT();
   const { workflow } = project;
   const entry = workflow.change_request;
+  const issue = workflow.issue;
   return (
     <Section title={t("settings.workflow.title")}>
       <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[max-content_1fr]">
@@ -158,6 +253,17 @@ export function WorkflowSection({ project }: { project: Project }) {
               <li>
                 {t("settings.workflow.entry.change_request", {
                   trigger: label(t, "trigger", entry.trigger),
+                })}
+              </li>
+            )}
+            {issue !== null && issue !== undefined && (
+              <li>
+                {t("settings.workflow.entry.issue", {
+                  trigger: label(
+                    t,
+                    "settings.workflow.issue.trigger",
+                    issue.trigger,
+                  ),
                 })}
               </li>
             )}
@@ -198,6 +304,7 @@ export function WorkflowSection({ project }: { project: Project }) {
         <KindOverrides kinds={workflow.kinds} />
       </div>
       {entry !== null && entry !== undefined && <ChangeFilters entry={entry} />}
+      {issue !== null && issue !== undefined && <IssueDetails entry={issue} />}
     </Section>
   );
 }

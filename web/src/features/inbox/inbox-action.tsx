@@ -17,6 +17,11 @@ import { errorText, label, record, text } from "@/features/delivery/text";
 import { useT } from "@/i18n/use-t";
 import { Button } from "@/ui/button";
 
+import {
+  dismissIssueIntake,
+  retryIssueIntake,
+} from "@/features/issues/queries";
+
 import type { InboxItem } from "./queries";
 import { approveSpec, dismissItem } from "./queries";
 
@@ -41,6 +46,8 @@ const ROOTS = [
   QUERY_ROOTS.permissions,
   QUERY_ROOTS.specs,
   QUERY_ROOTS.sessions,
+  QUERY_ROOTS.issueIntakes,
+  QUERY_ROOTS.specDrafts,
 ];
 
 function useAfterAction() {
@@ -200,6 +207,49 @@ function Approve({ item }: { item: InboxItem }) {
   );
 }
 
+function IntakeRetry({ item }: { item: InboxItem }) {
+  const t = useT();
+  const after = useAfterAction();
+  const id = text(record(item.action.params).intake_id);
+  return (
+    <ActionDialog
+      trigger={t("issues.retry.trigger")}
+      triggerVariant="default"
+      title={t("issues.retry.title")}
+      description={t("issues.retry.description", {
+        left: 3 - Number(record(item.params).retries),
+      })}
+      submit={t("issues.retry.submit")}
+      onSubmit={(_, key) => after(() => retryIssueIntake(id, key))}
+    />
+  );
+}
+
+function IntakeDismiss({
+  item,
+  primary,
+}: {
+  item: InboxItem;
+  primary: boolean;
+}) {
+  const t = useT();
+  const after = useAfterAction();
+  const id = text(record(item.action.params).intake_id);
+  return (
+    <ActionDialog
+      trigger={t("issues.dismiss.trigger")}
+      triggerVariant={primary ? "default" : "outline"}
+      title={t("issues.dismiss.title")}
+      description={t("issues.dismiss.description")}
+      reason={{ label: t("issues.dismiss.reason"), required: false }}
+      submit={t("issues.dismiss.submit")}
+      onSubmit={(reason, key) =>
+        after(() => dismissIssueIntake(id, reason, key))
+      }
+    />
+  );
+}
+
 function Start({ item }: { item: InboxItem }) {
   const t = useT();
   const after = useAfterAction();
@@ -258,6 +308,10 @@ export function Primary({ item }: { item: InboxItem }) {
       return <Start item={item} />;
     case "merge":
       return <Merge item={item} />;
+    case "retry_intake":
+      return <IntakeRetry item={item} />;
+    case "dismiss_intake":
+      return <IntakeDismiss item={item} primary />;
     case "retry":
     case "cancel":
     case "takeover":
@@ -314,6 +368,9 @@ export function Secondary({ item }: { item: InboxItem }) {
         >
           {t("inbox.open.spec")}
         </Link>
+      )}
+      {item.action.kind === "retry_intake" && (
+        <IntakeDismiss item={item} primary={false} />
       )}
       {item.dismissible && (
         <ActionDialog

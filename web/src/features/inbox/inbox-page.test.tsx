@@ -12,6 +12,10 @@ import {
   BLOCKER_ID,
   DECISION_ID,
   decisionItem,
+  exhaustedIntakeItem,
+  INTAKE_ID,
+  intakeItem,
+  issueApprovalItem,
   mergeItem,
   permissionItem,
   REQUEST_ID,
@@ -398,5 +402,76 @@ describe("inbox badge", () => {
     });
     stop();
     expect(queryClient).toBeInstanceOf(QueryClient);
+  });
+
+  it("links the issue a spec came from on its approval card", async () => {
+    fakeApi(routes(() => [issueApprovalItem]));
+    renderApp("/");
+    const approval = await card("Mark tasks as done");
+    expect(
+      within(approval).getByRole("link", { name: "From issue #41" }),
+    ).toHaveAttribute("href", "https://github.com/acme/tasks/issues/41");
+  });
+
+  it("offers retry and dismiss on a failed intake and sends them to the intake", async () => {
+    const { requests } = fakeApi(
+      routes(() => [intakeItem], {
+        [`/api/v1/issue-intakes/${INTAKE_ID}/actions/retry`]: {
+          status: 202,
+          body: {},
+        },
+        [`/api/v1/issue-intakes/${INTAKE_ID}/actions/dismiss`]: { body: {} },
+      }),
+    );
+    renderApp("/");
+    const failed = await card("Issue #41: Crash on start");
+    expect(
+      within(failed).getByText(
+        /could not turn this issue into a spec \(draft_failed\)/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(failed).getByText("Issue")).toBeInTheDocument();
+    await userEvent.click(
+      within(failed).getByRole("button", { name: "Retry" }),
+    );
+    let dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/You can retry 2 more times/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Retry" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    await userEvent.click(
+      within(failed).getByRole("button", { name: "Dismiss" }),
+    );
+    dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByRole("textbox"), "not ours");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Dismiss" }),
+    );
+    await waitFor(() => {
+      expect(posts(requests).map((r) => [r.path, r.body])).toEqual([
+        [`/api/v1/issue-intakes/${INTAKE_ID}/actions/retry`, {}],
+        [
+          `/api/v1/issue-intakes/${INTAKE_ID}/actions/dismiss`,
+          { reason: "not ours" },
+        ],
+      ]);
+    });
+  });
+
+  it("offers only dismiss on an intake that has no retries left", async () => {
+    fakeApi(routes(() => [exhaustedIntakeItem]));
+    renderApp("/");
+    const failed = await card("Issue #41: Crash on start");
+    expect(
+      within(failed).queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(failed).getAllByRole("button", { name: "Dismiss" }),
+    ).toHaveLength(1);
   });
 });

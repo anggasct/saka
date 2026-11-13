@@ -8,6 +8,7 @@ import type { Routes } from "@/test/fake-api";
 import { project, PROJECT_ID, spec } from "@/test/fixtures";
 import { REQUESTS, RULES } from "@/test/permission-fixtures";
 import { HOOK_RUNS, HOOKS } from "@/test/hooks-fixtures";
+import { issueProject } from "@/test/issue-fixtures";
 import { renderApp } from "@/test/render";
 import {
   invalidConfig,
@@ -313,6 +314,55 @@ describe("Workflow", () => {
     expect(within(filters).getAllByText("Any")).toHaveLength(2);
     expect(within(filters).getByText("Skipped")).toBeInTheDocument();
     expect(within(filters).getByText("Included")).toBeInTheDocument();
+  });
+
+  it("shows the issue entry read-only with its labels, kinds, limit, and bugfix commands", async () => {
+    fakeApi(routes({ [PROJECT]: { body: issueProject } }));
+    renderApp(SETTINGS);
+    const workflow = await screen.findByRole("region", { name: "Workflow" });
+    expect(
+      within(workflow).getByText("Issues (on the label)"),
+    ).toBeInTheDocument();
+    const heading = within(workflow).getByRole("heading", {
+      name: "Issue intake",
+    });
+    const entry = within(heading.parentElement ?? workflow);
+    expect(entry.getByText("saka:intake")).toBeInTheDocument();
+    expect(entry.getByText("wontfix")).toBeInTheDocument();
+    expect(entry.getByText("bug is a Bugfix")).toBeInTheDocument();
+    expect(entry.getByText("20")).toBeInTheDocument();
+    expect(entry.getByText("cargo test --locked")).toBeInTheDocument();
+    expect(entry.getByText("cargo test --locked crash")).toBeInTheDocument();
+    expect(
+      workflow.querySelectorAll("input, select, textarea, button"),
+    ).toHaveLength(0);
+  });
+
+  it("says bugfix issues go through the architect when no bugfix commands are set", async () => {
+    const entry = issueProject.workflow.issue;
+    fakeApi(
+      routes({
+        [PROJECT]: {
+          body: {
+            ...issueProject,
+            workflow: {
+              ...issueProject.workflow,
+              issue: { ...entry, trigger: "auto", bugfix: null },
+            },
+          },
+        },
+      }),
+    );
+    renderApp(SETTINGS);
+    const workflow = await screen.findByRole("region", { name: "Workflow" });
+    expect(
+      within(workflow).getByText("Bugfix issues go through the architect."),
+    ).toBeInTheDocument();
+    expect(
+      within(workflow).getByText(
+        "Issues (every issue by a user with write access)",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("lists the overrides per kind and whether the operator allows unreviewed chores", async () => {
