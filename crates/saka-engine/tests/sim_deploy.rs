@@ -9,7 +9,7 @@ use saka_core::model::Task;
 use saka_core::secret::SecretText;
 use saka_core::vocab::{
     BlockerCode, BlockerResolution, DeployCause, DeployCheckState, DeployGateState, DeployPhase,
-    DeploymentState, InboxKind, SpecState, WorkItemState,
+    DeploymentState, InboxKind, SpecState, Stage, WorkItemState,
 };
 use saka_engine::{HookRunFilter, Page};
 use saka_testkit::{CommandScript, HostScript, Sim, SimConfig, WebhookScript};
@@ -1297,4 +1297,46 @@ mod recovery {
             deployments(&sim)[0].id.to_string()
         );
     }
+}
+
+#[test]
+fn a_task_waiting_on_its_deployment_does_not_hold_the_only_task_slot() {
+    let mut sim = Sim::new(SimConfig {
+        max_active_tasks: 1,
+        ..config(&[staging()])
+    });
+    for _ in 0..40 {
+        sim.world.script_command(PROBE, CommandScript::Exit(1));
+    }
+    let other = sim.register(
+        saka_testkit::AFTER_GRAPH_PATH,
+        saka_testkit::AFTER_GRAPH_SPEC,
+    );
+    sim.approve();
+    sim.approve_spec(other.spec_id, other.revision_id).unwrap();
+    let first = sim.spec().id;
+    assert!(
+        sim.run_until(STEPS, |s| {
+            let waiting = s.tasks_of(first).iter().any(|t| {
+                t.item.stage == Some(Stage::Sync)
+                    && t.deploy_gates
+                        .iter()
+                        .any(|g| g.state == DeployGateState::Pending)
+            });
+            let working = s.tasks_of(other.spec_id).iter().any(|t| {
+                t.item.state == WorkItemState::InStage && t.item.stage == Some(Stage::Dev)
+            });
+            waiting && working
+        }),
+        "{:?}",
+        sim.outcome()
+    );
+    assert!(
+        sim.run_until(STEPS, |s| {
+            s.spec().state == SpecState::Shipped
+                && s.spec_of(other.spec_id).state == SpecState::Shipped
+        }),
+        "{:?}",
+        sim.outcome()
+    );
 }
