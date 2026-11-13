@@ -55,6 +55,7 @@ fn cfg() -> LoopConfig {
         account: "claude:default".into(),
         autonomy: Ceilings::default(),
         ci_appear_timeout_ms: 600_000,
+        max_ci_reruns: 3,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
@@ -330,6 +331,7 @@ fn a_merge_request_needs_the_approval_at_the_exact_head_and_is_never_automatic()
         head_sha: MOVED.into(),
         outcome: saka_core::vocab::GateOutcome::Passed,
         checks: passing(),
+        passed_after_rerun: None,
     }];
     apply(&mut moved, &events);
     let version = moved.task.item.version;

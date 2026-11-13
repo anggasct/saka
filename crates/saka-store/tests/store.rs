@@ -59,6 +59,7 @@ fn cfg() -> LoopConfig {
         account: "claude:default".into(),
         autonomy: saka_core::autonomy::Ceilings::default(),
         ci_appear_timeout_ms: 600_000,
+        max_ci_reruns: 3,
         poll_interval_ms: 15_000,
         merge_method: MergeMethod::Squash,
         delete_branch_after_merge: true,
@@ -1319,10 +1320,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
             25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-            47, 48
+            47, 48, 49
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(48));
+    assert_eq!(w.store.schema_version().unwrap(), Some(49));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

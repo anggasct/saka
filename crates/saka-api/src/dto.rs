@@ -112,6 +112,8 @@ pub struct Workflow {
     pub stages: Vec<WorkflowStage>,
     /// How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
     pub fix_rounds: u32,
+    /// How many times Saka re-runs the failed CI jobs of one head by itself before the task blocks (`0..=3`).
+    pub ci_reruns: u32,
     /// Overrides from `[workflow.kinds.<kind>]`, keyed by kind; only the kinds the file names.
     pub kinds: BTreeMap<String, KindOverride>,
 }
@@ -222,6 +224,7 @@ impl From<&saka_core::workflow::Workflow> for Workflow {
                 })
                 .collect(),
             fix_rounds: w.fix_rounds,
+            ci_reruns: w.ci_reruns,
             kinds: w
                 .kinds
                 .iter()
@@ -729,6 +732,20 @@ pub struct ChangeRequest {
     pub base_branch: String,
     pub merge_commit_sha: Option<String>,
     pub merged_at: Option<String>,
+    /// The re-runs of failed CI jobs at the current head; `null` until the first one.
+    pub ci_rerun: Option<CiRerun>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CiRerun {
+    /// Re-runs requested at this head, by Saka or by the operator.
+    pub count: u32,
+    /// The checks that failed when the last re-run was requested.
+    pub checks: Vec<String>,
+    /// A re-run is under way: the task waits in `merge/awaiting_ci`.
+    pub pending: bool,
+    /// `false` once a re-run found nothing the provider can run again.
+    pub rerunnable: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -777,7 +794,17 @@ pub struct Gate {
     /// `pending | passed | failed`
     pub outcome: String,
     pub checks: Vec<GateCheck>,
+    /// Set on a passed `scm` gate whose head had failed checks re-run first: the evidence of a flaky check.
+    pub passed_after_rerun: Option<PassedAfterRerun>,
     pub observed_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PassedAfterRerun {
+    /// Re-runs it took at this head.
+    pub reruns: u32,
+    /// The checks that failed before the re-run.
+    pub checks: Vec<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -792,10 +819,10 @@ pub struct Blocker {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PrimaryAction {
-    /// `retry | cancel | takeover | update_branch | set_secret | link_account | set_user_token |
-    /// edit_spec`. The first four run through `actions/primary`; the others need input the client
-    /// collects. `update_branch` asks the code host to merge the base into the branch of an outside
-    /// pull request.
+    /// `retry | cancel | takeover | update_branch | rerun_checks | set_secret | link_account |
+    /// set_user_token | edit_spec`. The first five run through `actions/primary`; the others need
+    /// input the client collects. `update_branch` asks the code host to merge the base into the
+    /// branch of an outside pull request; `rerun_checks` runs the failed CI jobs of the same head again.
     pub kind: String,
     /// `set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`.
     pub params: Value,
@@ -1409,6 +1436,12 @@ impl WorkItem {
                 base_branch: c.base_branch.clone(),
                 merge_commit_sha: c.merge_commit_sha.clone(),
                 merged_at: opt_time(c.merged_at),
+                ci_rerun: t.ci_rerun_at(&c.head_sha).map(|r| CiRerun {
+                    count: r.count,
+                    checks: r.checks.clone(),
+                    pending: r.pending,
+                    rerunnable: r.rerunnable,
+                }),
             }),
             docs_change_request: t.docs_change.as_ref().map(|c| DocsChangeRequest {
                 id: c.id.0,
@@ -3472,6 +3505,10 @@ fn gates_at_head(t: &saka_core::model::Task) -> Vec<Gate> {
         head_sha: g.head_sha.clone(),
         outcome: g.outcome.as_str().to_string(),
         checks: g.checks.iter().map(GateCheck::from).collect(),
+        passed_after_rerun: g.passed_after_rerun.as_ref().map(|p| PassedAfterRerun {
+            reruns: p.reruns,
+            checks: p.checks.clone(),
+        }),
         observed_at: time(g.observed_at),
     })
     .collect()

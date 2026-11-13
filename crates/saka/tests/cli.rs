@@ -60,6 +60,62 @@ fn json(o: &Output) -> Value {
 }
 
 #[test]
+fn rerun_checks_runs_the_failed_checks_again_and_task_show_names_the_flake() {
+    let mut cfg = SimConfig {
+        ci: saka_testkit::CiScript::Fail(vec!["test".into()]),
+        ..SimConfig::default()
+    };
+    cfg.workflow.ci_reruns = 0;
+    cfg.operator.merge = false;
+    cfg.operator.retry = vec![];
+    let mut sim = Sim::new(cfg);
+    sim.world.set_rerun(saka_testkit::RerunScript::Passes);
+    sim.approve();
+    let blocked = |s: &Sim| s.task(1).item.state == saka_core::vocab::WorkItemState::Blocked;
+    assert!(sim.run_until(8_000, blocked));
+    let id = sim.task(1).item.id.0.to_string();
+    let server = serve(&sim);
+
+    assert_eq!(
+        code(&saka(&server, &["task", "rerun-checks", &id])),
+        2,
+        "usage: --reason is required"
+    );
+    let rerun = saka(
+        &server,
+        &["task", "rerun-checks", &id, "--reason", "unrelated flake"],
+    );
+    assert_eq!(
+        code(&rerun),
+        0,
+        "{}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    assert!(stdout(&rerun).contains("in_stage"), "{}", stdout(&rerun));
+    assert_eq!(
+        code(&saka(
+            &server,
+            &["task", "rerun-checks", &id, "--reason", "again"]
+        )),
+        4,
+        "the task is not blocked any more"
+    );
+
+    assert!(sim.run_until(8_000, |s| {
+        s.task(1).is_at(
+            saka_core::vocab::Stage::Merge,
+            saka_core::vocab::StagePhase::AwaitingMerge,
+        )
+    }));
+    let shown = stdout(&saka(&server, &["task", "show", &id]));
+    assert!(shown.contains("ci re-runs 1 done"), "{shown}");
+    assert!(
+        shown.contains("scm gate passed after 1 re-run(s): test"),
+        "{shown}"
+    );
+}
+
+#[test]
 fn operator_commands_call_the_api_and_exit_with_documented_codes() {
     let sim = Sim::new(SimConfig::default());
     sim.world.put_doc(

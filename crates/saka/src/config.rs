@@ -281,12 +281,15 @@ fn default_listen() -> String {
 pub struct Scheduler {
     #[serde(default = "two")]
     pub max_active_tasks: usize,
+    #[serde(default = "three")]
+    pub max_ci_reruns: u32,
 }
 
 impl Default for Scheduler {
     fn default() -> Scheduler {
         Scheduler {
             max_active_tasks: 2,
+            max_ci_reruns: 3,
         }
     }
 }
@@ -1007,6 +1010,12 @@ impl Config {
                 "scheduler.max_active_tasks must be 1..=16",
             ));
         }
+        if self.scheduler.max_ci_reruns > 10 {
+            return Err(err(
+                "config_invalid",
+                "scheduler.max_ci_reruns must be 0..=10",
+            ));
+        }
         let poll = self.workspace.config_poll_secs;
         if poll != 0 && !(30..=86_400).contains(&poll) {
             return Err(err(
@@ -1453,6 +1462,20 @@ mod tests {
         let cfg = Config::parse("").unwrap();
         assert_eq!(cfg.server.listen, "127.0.0.1:7420");
         assert_eq!(cfg.scheduler.max_active_tasks, 2);
+        assert_eq!(cfg.scheduler.max_ci_reruns, 3);
+        assert_eq!(
+            Config::parse("[scheduler]\nmax_ci_reruns = 11\n")
+                .unwrap_err()
+                .code,
+            "config_invalid"
+        );
+        assert_eq!(
+            Config::parse("[scheduler]\nmax_ci_reruns = 0\n")
+                .unwrap()
+                .scheduler
+                .max_ci_reruns,
+            0
+        );
         assert_eq!(cfg.agent.limits.tasks_max, 512);
         assert_eq!(
             Config::parse("[server]\nport = 1\n").unwrap_err().code,
@@ -1904,6 +1927,7 @@ mod tests {
         assert_eq!(cfg.env.limits.tasks_max, 512);
         assert_eq!(cfg.toolchain.npm_registry_url, "https://registry.npmjs.org");
         assert_eq!(cfg.workspace.config_poll_secs, 300);
+        assert_eq!(cfg.scheduler.max_ci_reruns, 3);
         assert!(!cfg.workflow.allow_unreviewed_chore);
         let auth = cfg.auth_settings().unwrap();
         assert_eq!(auth.origin.serialized(), "https://saka.example.com");

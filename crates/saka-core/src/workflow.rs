@@ -10,6 +10,8 @@ pub const MAX_FILTER_BYTES: usize = 100;
 pub const DEFAULT_TRIGGER_LABEL: &str = "saka:review";
 pub const DEFAULT_FIX_ROUNDS: u32 = 2;
 pub const MAX_FIX_ROUNDS: u32 = 10;
+pub const DEFAULT_CI_RERUNS: u32 = 1;
+pub const MAX_CI_RERUNS: u32 = 3;
 pub const MAX_TEST_PATHS: usize = 32;
 pub const DEFAULT_ISSUE_TRIGGER_LABEL: &str = "saka:intake";
 pub const MAX_ISSUE_LABELS: usize = 20;
@@ -188,6 +190,8 @@ pub struct Workflow {
     pub stages: Vec<StageSetting>,
     #[serde(default = "default_fix_rounds")]
     pub fix_rounds: u32,
+    #[serde(default = "default_ci_reruns")]
+    pub ci_reruns: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub kinds: BTreeMap<WorkKind, KindOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,6 +243,10 @@ pub struct KindIssue {
 
 fn default_fix_rounds() -> u32 {
     DEFAULT_FIX_ROUNDS
+}
+
+fn default_ci_reruns() -> u32 {
+    DEFAULT_CI_RERUNS
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +317,7 @@ impl Workflow {
                 change_request: None,
                 issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                ci_reruns: DEFAULT_CI_RERUNS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
                 stages: vec![
@@ -324,6 +333,7 @@ impl Workflow {
                 change_request: None,
                 issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                ci_reruns: DEFAULT_CI_RERUNS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
                 stages: vec![stage(Stage::Dev, Trigger::Auto)],
@@ -334,6 +344,7 @@ impl Workflow {
                 change_request: Some(ChangeEntry::default()),
                 issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                ci_reruns: DEFAULT_CI_RERUNS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
                 stages: vec![
@@ -347,6 +358,7 @@ impl Workflow {
                 change_request: None,
                 issue: None,
                 fix_rounds: DEFAULT_FIX_ROUNDS,
+                ci_reruns: DEFAULT_CI_RERUNS,
                 kinds: BTreeMap::new(),
                 autonomy_cap: None,
                 stages: Vec::new(),

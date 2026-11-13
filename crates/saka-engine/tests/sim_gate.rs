@@ -72,7 +72,10 @@ fn a_failing_check_blocks_as_ci_red_with_the_failing_names() {
     assert_eq!(blocker.code, BlockerCode::CiRed);
     assert_eq!(
         blocker.params,
-        json!({ "source": "scm", "checks": ["lint", "test"], "head_sha": head })
+        json!({
+            "source": "scm", "checks": ["lint", "test"], "head_sha": head,
+            "reruns": 1, "rerunnable": false, "rerun_unsupported": true,
+        })
     );
     match request_merge(&sim) {
         Err(EngineError::Rejected(Rejection::MergeNotReady { gate_outcome, .. })) => {

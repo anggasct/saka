@@ -1492,6 +1492,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/work-items/{work_item_id}/actions/rerun-checks": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["rerun_checks"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/work-items/{work_item_id}/actions/retry": {
     parameters: {
       query?: never;
@@ -1802,6 +1818,7 @@ export interface components {
     };
     ChangeRequest: {
       base_branch: string;
+      ci_rerun?: components["schemas"]["CiRerun"] | null;
       head_sha: string;
       /** Format: uuid */
       id: string;
@@ -1850,6 +1867,19 @@ export interface components {
       default_branch: string;
       full_name: string;
       integration_id: string;
+    };
+    CiRerun: {
+      /** @description The checks that failed when the last re-run was requested. */
+      checks: string[];
+      /**
+       * Format: int32
+       * @description Re-runs requested at this head, by Saka or by the operator.
+       */
+      count: number;
+      /** @description A re-run is under way: the task waits in `merge/awaiting_ci`. */
+      pending: boolean;
+      /** @description `false` once a re-run found nothing the provider can run again. */
+      rerunnable: boolean;
     };
     CommitSpecDraftBody: {
       /** @description 1 to 200 characters; the docs commit message. Defaults to the usual one. */
@@ -2303,6 +2333,7 @@ export interface components {
       observed_at: string;
       /** @description `pending | passed | failed` */
       outcome: string;
+      passed_after_rerun?: components["schemas"]["PassedAfterRerun"] | null;
       /** @description Whether this source decides merge readiness under the repo's `[gate] source`. */
       required: boolean;
       /** @description `scm` or `saka`. */
@@ -3246,6 +3277,15 @@ export interface components {
      * @enum {string}
      */
     PairingPurpose: "setup" | "passkey" | "token";
+    PassedAfterRerun: {
+      /** @description The checks that failed before the re-run. */
+      checks: string[];
+      /**
+       * Format: int32
+       * @description Re-runs it took at this head.
+       */
+      reruns: number;
+    };
     PasskeyCredential: {
       created_at: string;
       /** Format: uuid */
@@ -3368,10 +3408,10 @@ export interface components {
     };
     PrimaryAction: {
       /**
-       * @description `retry | cancel | takeover | update_branch | set_secret | link_account | set_user_token |
-       *     edit_spec`. The first four run through `actions/primary`; the others need input the client
-       *     collects. `update_branch` asks the code host to merge the base into the branch of an outside
-       *     pull request.
+       * @description `retry | cancel | takeover | update_branch | rerun_checks | set_secret | link_account |
+       *     set_user_token | edit_spec`. The first five run through `actions/primary`; the others need
+       *     input the client collects. `update_branch` asks the code host to merge the base into the
+       *     branch of an outside pull request; `rerun_checks` runs the failed CI jobs of the same head again.
        */
       kind: string;
       /** @description `set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`. */
@@ -4457,6 +4497,11 @@ export interface components {
     };
     Workflow: {
       change_request?: components["schemas"]["WorkflowEntry"] | null;
+      /**
+       * Format: int32
+       * @description How many times Saka re-runs the failed CI jobs of one head by itself before the task blocks (`0..=3`).
+       */
+      ci_reruns: number;
       /**
        * Format: int32
        * @description How many fix rounds a task gets at most (`1..=10`); counts only when the workflow has a `fix` stage.
@@ -8113,6 +8158,42 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["RedoBody"];
+      };
+    };
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkItem"];
+        };
+      };
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  rerun_checks: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description 1 to 128 printable ASCII characters */
+        "Idempotency-Key": string;
+      };
+      path: {
+        work_item_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RequiredReason"];
       };
     };
     responses: {

@@ -113,6 +113,31 @@ pub fn react(task: &Task, event: &Event, cfg: &LoopConfig, now: Timestamp) -> Ve
             })
             .into_iter()
             .collect(),
+        E::CiRerunRequested {
+            work_item_id,
+            head_sha,
+            number,
+            checks,
+            ..
+        } => task
+            .change_request
+            .as_ref()
+            .map(|cr| {
+                Job::new(
+                    JobKind::ScmRerunChecks,
+                    format!("{work_item_id}:{head_sha}:{number}"),
+                    json!({
+                        "work_item_id": work_item_id,
+                        "repo_id": cr.repo_id,
+                        "head_sha": head_sha,
+                        "number": number,
+                        "checks": checks,
+                    }),
+                    now,
+                )
+            })
+            .into_iter()
+            .collect(),
         _ => {
             let mut jobs = run_view(task)
                 .map(|view| session::react(&view, event, now))

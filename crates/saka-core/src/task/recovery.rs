@@ -192,6 +192,86 @@ impl Decider<'_> {
         ])
     }
 
+    pub(super) fn rerun_checks(
+        &self,
+        reason: String,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Vec<Event>, Rejection> {
+        let invalid = || Rejection::InvalidState {
+            state: self.state_name(),
+        };
+        let (Some(blocker), Some(cr)) = (self.task.open_blocker(), &self.task.change_request)
+        else {
+            return Err(invalid());
+        };
+        if blocker.code != BlockerCode::CiRed || self.item().state != WorkItemState::Blocked {
+            return Err(invalid());
+        }
+        let unavailable = |reason| Rejection::CiRerunUnavailable { reason };
+        if blocker.params.get("source").and_then(Value::as_str) != Some("scm") {
+            return Err(unavailable("source_not_scm"));
+        }
+        if cr.state != ChangeState::Open {
+            return Err(unavailable("change_not_open"));
+        }
+        let head_sha = blocker
+            .params
+            .get("head_sha")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let used = self.task.ci_rerun_at(head_sha).map_or(0, |s| s.count);
+        if head_sha != cr.head_sha
+            || !crate::blocker::rerunnable(&blocker.params)
+            || used >= self.cfg.max_ci_reruns
+        {
+            return Err(unavailable("not_rerunnable"));
+        }
+        let checks: Vec<String> = blocker
+            .params
+            .get("checks")
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let retry_of = Coded {
+            code: blocker.code.as_str().to_string(),
+            params: blocker.params.clone(),
+        };
+        let run = self.new_run(
+            Stage::Merge,
+            Trigger::Auto,
+            StagePhase::AwaitingCi,
+            Some(reason.clone()),
+            Some(retry_of),
+            ctx,
+        );
+        let Event::StageRunCreated { stage_run_id, .. } = &run else {
+            return Err(invalid());
+        };
+        let requested = Event::CiRerunRequested {
+            work_item_id: self.item().id,
+            stage_run_id: *stage_run_id,
+            head_sha: head_sha.to_string(),
+            number: used + 1,
+            checks,
+            manual: true,
+        };
+        Ok(vec![
+            Event::BlockerResolved {
+                work_item_id: self.item().id,
+                blocker_id: blocker.id,
+                resolution: BlockerResolution::Retried,
+                reason: Some(reason),
+            },
+            run,
+            requested,
+        ])
+    }
+
     pub(super) fn retry_round(&self, blocker: &Blocker) -> FixRound {
         if let Some(round) = self
             .task
@@ -246,6 +326,7 @@ impl Decider<'_> {
             Some(BlockerAction::Cancel) => self.cancel(reason),
             Some(BlockerAction::Takeover) => self.takeover(reason),
             Some(BlockerAction::UpdateBranch) => self.update_branch(reason, ctx),
+            Some(BlockerAction::RerunChecks) => self.rerun_checks(reason, ctx),
             Some(other) => Err(Rejection::ActionNeedsInput {
                 action: other.as_str(),
             }),
@@ -295,6 +376,24 @@ impl Decider<'_> {
     ) -> Vec<Event> {
         if kind == JobKind::EnvTeardown {
             return self.teardown_failed(error);
+        }
+        if kind == JobKind::ScmRerunChecks {
+            let Some(state) = self
+                .task
+                .change_request
+                .as_ref()
+                .and_then(|cr| cr.ci_rerun.as_ref())
+                .filter(|r| r.pending)
+            else {
+                return vec![];
+            };
+            return self.ci_rerun_settled(
+                state.head_sha.clone(),
+                state.count,
+                Vec::new(),
+                state.checks.clone(),
+                ctx,
+            );
         }
         if kind == JobKind::GateReproduce {
             return self.regression_unrunnable(ctx);
@@ -368,6 +467,7 @@ impl Decider<'_> {
             I::Cancel { reason } => self.cancel(reason),
             I::Takeover { .. }
             | I::Retry { .. }
+            | I::RerunChecks { .. }
             | I::ResolveBlocker { .. }
             | I::RequestMerge { .. } => Err(Rejection::InvalidState {
                 state: self.state_name(),

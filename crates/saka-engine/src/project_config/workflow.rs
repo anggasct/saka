@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use saka_core::scope::{PathScope, ScopeIssue};
 use saka_core::vocab::{IssueTrigger, Stage, Trigger, WorkKind, WorkflowPreset};
 use saka_core::workflow::{
-    ChangeEntry, IssueBugfix, IssueEntry, KindIssue, KindOverride, KindRefusal, MAX_FILTER_ENTRIES,
-    MAX_FIX_ROUNDS, MAX_ISSUE_COMMANDS, MAX_ISSUE_LABEL_CHARS, MAX_ISSUE_LABELS,
-    MAX_ISSUE_MAX_OPEN, MAX_TEST_PATHS, Workflow, WorkflowPolicy, filter_text_ok,
+    ChangeEntry, IssueBugfix, IssueEntry, KindIssue, KindOverride, KindRefusal, MAX_CI_RERUNS,
+    MAX_FILTER_ENTRIES, MAX_FIX_ROUNDS, MAX_ISSUE_COMMANDS, MAX_ISSUE_LABEL_CHARS,
+    MAX_ISSUE_LABELS, MAX_ISSUE_MAX_OPEN, MAX_TEST_PATHS, Workflow, WorkflowPolicy, filter_text_ok,
 };
 use saka_spec::{QuickSpec, check_quick};
 use toml::Spanned;
@@ -22,6 +22,7 @@ const KEYS: &[&str] = &[
     "issue",
     "stages",
     "fix_rounds",
+    "ci_reruns",
     "kinds",
 ];
 const ISSUE_KEYS: &[&str] = &[
@@ -445,6 +446,22 @@ fn fix_rounds(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<De
     }
 }
 
+fn ci_reruns(c: &mut Collector<'_>, workflow: &mut Workflow, value: &Spanned<DeValue<'_>>) {
+    let reruns = value
+        .get_ref()
+        .as_integer()
+        .and_then(|n| u32::try_from(n.as_str().parse::<i64>().ok()?).ok())
+        .filter(|n| *n <= MAX_CI_RERUNS);
+    match reruns {
+        None => c.push(
+            "field_invalid",
+            "workflow.ci_reruns",
+            Some(value.span().start),
+        ),
+        Some(n) => workflow.ci_reruns = n,
+    }
+}
+
 fn kind_stage(
     c: &mut Collector<'_>,
     value: &Spanned<DeValue<'_>>,
@@ -670,6 +687,9 @@ pub(super) fn parse(c: &mut Collector<'_>, doc: &DeTable<'_>) -> (Workflow, Kind
     if let Some(v) = get(table, "fix_rounds") {
         fix_rounds(c, &mut workflow, v);
     }
+    if let Some(v) = get(table, "ci_reruns") {
+        ci_reruns(c, &mut workflow, v);
+    }
     if let Some(v) = get(table, "kinds") {
         kinds(c, &mut workflow, &mut lines, v);
     }
@@ -777,6 +797,32 @@ fix = "manual"
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn the_ci_reruns_default_to_one_and_take_zero_to_three() {
+        assert_eq!(config("").unwrap().ci_reruns, 1);
+        for good in 0..=3 {
+            assert_eq!(
+                config(&format!("[workflow]\nci_reruns = {good}\n"))
+                    .unwrap()
+                    .ci_reruns,
+                good
+            );
+        }
+        for bad in ["4", "-1", "\"one\"", "1.5"] {
+            assert_eq!(
+                issues(&format!("[workflow]\nci_reruns = {bad}\n")),
+                [("field_invalid", "workflow.ci_reruns".to_string(), 9)],
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn ci_reruns_are_allowed_in_every_preset() {
+        let w = config("[workflow]\npreset = \"build_only\"\nci_reruns = 0\n").unwrap();
+        assert_eq!(w.ci_reruns, 0);
     }
 
     #[test]

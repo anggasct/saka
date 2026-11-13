@@ -19,6 +19,7 @@ session_hours = 168                  # 1..=720; a browser session ends this long
 
 [scheduler]
 max_active_tasks = 2               # 1..=16
+max_ci_reruns = 3                  # 0..=10; most times a task's failed CI jobs are re-run at one head, by Saka or by you; a project's [workflow] ci_reruns (0..=3) sets how many Saka does by itself
 
 [workflow]
 allow_unreviewed_chore = false     # true lets a project's saka.toml skip review for the chore kind

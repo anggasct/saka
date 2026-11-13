@@ -5659,6 +5659,64 @@
         }
       }
     },
+    "/api/v1/work-items/{work_item_id}/actions/rerun-checks": {
+      "post": {
+        "tags": [
+          "delivery"
+        ],
+        "operationId": "rerun_checks",
+        "parameters": [
+          {
+            "name": "work_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 printable ASCII characters",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequiredReason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItem"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work-items/{work_item_id}/actions/retry": {
       "post": {
         "tags": [
@@ -6642,6 +6700,17 @@
           "base_branch": {
             "type": "string"
           },
+          "ci_rerun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CiRerun",
+                "description": "The re-runs of failed CI jobs at the current head; `null` until the first one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "head_sha": {
             "type": "string"
           },
@@ -6802,6 +6871,38 @@
           },
           "integration_id": {
             "type": "string"
+          }
+        }
+      },
+      "CiRerun": {
+        "type": "object",
+        "required": [
+          "count",
+          "checks",
+          "pending",
+          "rerunnable"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The checks that failed when the last re-run was requested."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Re-runs requested at this head, by Saka or by the operator.",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "A re-run is under way: the task waits in `merge/awaiting_ci`."
+          },
+          "rerunnable": {
+            "type": "boolean",
+            "description": "`false` once a re-run found nothing the provider can run again."
           }
         }
       },
@@ -8350,6 +8451,17 @@
           "outcome": {
             "type": "string",
             "description": "`pending | passed | failed`"
+          },
+          "passed_after_rerun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PassedAfterRerun",
+                "description": "Set on a passed `scm` gate whose head had failed checks re-run first: the evidence of a flaky check."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "required": {
             "type": "boolean",
@@ -11708,6 +11820,28 @@
           "token"
         ]
       },
+      "PassedAfterRerun": {
+        "type": "object",
+        "required": [
+          "reruns",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The checks that failed before the re-run."
+          },
+          "reruns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Re-runs it took at this head.",
+            "minimum": 0
+          }
+        }
+      },
       "PasskeyCredential": {
         "type": "object",
         "required": [
@@ -12084,7 +12218,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "description": "`retry | cancel | takeover | update_branch | set_secret | link_account | set_user_token |\nedit_spec`. The first four run through `actions/primary`; the others need input the client\ncollects. `update_branch` asks the code host to merge the base into the branch of an outside\npull request."
+            "description": "`retry | cancel | takeover | update_branch | rerun_checks | set_secret | link_account |\nset_user_token | edit_spec`. The first five run through `actions/primary`; the others need\ninput the client collects. `update_branch` asks the code host to merge the base into the\nbranch of an outside pull request; `rerun_checks` runs the failed CI jobs of the same head again."
           },
           "params": {
             "description": "`set_secret`: `{ names }`; `link_account`: `{ integration_id }`; otherwise `{}`."
@@ -15590,6 +15724,7 @@
           "spec",
           "stages",
           "fix_rounds",
+          "ci_reruns",
           "kinds"
         ],
         "properties": {
@@ -15603,6 +15738,12 @@
                 "type": "null"
               }
             ]
+          },
+          "ci_reruns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times Saka re-runs the failed CI jobs of one head by itself before the task blocks (`0..=3`).",
+            "minimum": 0
           },
           "fix_rounds": {
             "type": "integer",

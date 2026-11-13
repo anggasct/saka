@@ -1160,8 +1160,8 @@ fn stage_run(tx: &Transaction<'_>, t: &Task, r: &StageRun) -> Result<()> {
 
 fn gate(tx: &Transaction<'_>, t: &Task, g: &GateResult) -> Result<()> {
     tx.execute(
-        "INSERT INTO gate_result (id, stage_run_id, work_item_id, project_id, source, head_sha, outcome, checks, observed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO gate_result (id, stage_run_id, work_item_id, project_id, source, head_sha, outcome, checks, observed_at, passed_after_rerun)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (id) DO NOTHING",
         params![
             g.id.to_string(),
@@ -1173,6 +1173,7 @@ fn gate(tx: &Transaction<'_>, t: &Task, g: &GateResult) -> Result<()> {
             g.outcome.as_str(),
             to_json(&g.checks)?,
             g.observed_at.0,
+            g.passed_after_rerun.as_ref().map(to_json).transpose()?,
         ],
     )?;
     Ok(())
@@ -1257,10 +1258,10 @@ fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<(
     tx.execute(
         "INSERT INTO change_request (id, project_id, work_item_id, repo_id, number, url, head_branch, base_branch,
            head_sha, state, merge_commit_sha, merged_at, last_polled_at, created_at, updated_at, role, skipped_at,
-           update_head_sha)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+           update_head_sha, ci_rerun)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
          ON CONFLICT (id) DO UPDATE SET head_sha = excluded.head_sha, state = excluded.state,
-           update_head_sha = excluded.update_head_sha,
+           update_head_sha = excluded.update_head_sha, ci_rerun = excluded.ci_rerun,
            merge_commit_sha = excluded.merge_commit_sha, merged_at = excluded.merged_at,
            skipped_at = excluded.skipped_at,
            last_polled_at = excluded.last_polled_at, updated_at = excluded.updated_at",
@@ -1283,6 +1284,7 @@ fn change_request(tx: &Transaction<'_>, t: &Task, c: &ChangeRequest) -> Result<(
             c.role.as_str(),
             c.skipped_at.map(|x| x.0),
             c.update_head_sha,
+            c.ci_rerun.as_ref().map(to_json).transpose()?,
         ],
     )?;
     Ok(())

@@ -254,6 +254,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_merge_dequeues_total", &[("reason", reason)], n);
     }
     t.family(
+        "saka_ci_reruns_total",
+        "counter",
+        "Re-runs of failed CI jobs, by outcome (passed, failed, unsupported).",
+    );
+    for (outcome, n) in &m.ci_reruns {
+        t.sample("saka_ci_reruns_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_merge_requests_total",
         "counter",
         "Merge requests, by who made them (operator, autonomy, queue).",

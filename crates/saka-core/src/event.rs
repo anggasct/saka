@@ -19,8 +19,8 @@ use crate::ids::{
 };
 use crate::job::JobKind;
 use crate::model::{
-    Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, FixRound, ProjectRepo,
-    RegressionRun, RunOwner, SpecLink, ToolchainUse,
+    Budget, Coded, ContextRef, DependsOn, DocsCheckout, DraftDocument, FixRound, PassedAfterRerun,
+    ProjectRepo, RegressionRun, RunOwner, SpecLink, ToolchainUse,
 };
 use crate::review::Finding;
 use crate::time::Timestamp;
@@ -477,6 +477,26 @@ pub enum Event {
         head_sha: String,
         outcome: GateOutcome,
         checks: Vec<Check>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passed_after_rerun: Option<PassedAfterRerun>,
+    },
+    #[serde(rename = "delivery.gate.rerun_requested")]
+    CiRerunRequested {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        head_sha: String,
+        number: u32,
+        checks: Vec<String>,
+        manual: bool,
+    },
+    #[serde(rename = "delivery.gate.rerun_settled")]
+    CiRerunSettled {
+        work_item_id: WorkItemId,
+        stage_run_id: StageRunId,
+        head_sha: String,
+        number: u32,
+        rerun: Vec<String>,
+        unsupported: Vec<String>,
     },
     #[serde(rename = "delivery.gate.started")]
     GateStarted {
@@ -1333,6 +1353,8 @@ impl Event {
             | E::RegressionDelivered { work_item_id, .. }
             | E::RegressionBranchReset { work_item_id, .. }
             | E::GateObserved { work_item_id, .. }
+            | E::CiRerunRequested { work_item_id, .. }
+            | E::CiRerunSettled { work_item_id, .. }
             | E::GateStarted { work_item_id, .. }
             | E::MergeRequested { work_item_id, .. }
             | E::MergeRebased { work_item_id, .. }
