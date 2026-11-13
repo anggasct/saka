@@ -9,6 +9,7 @@ import { Skeleton } from "@/ui/skeleton";
 import type { ProjectItem, SpecItem } from "./queries";
 import { useWorkItems } from "./queries";
 import { ExternalGroup } from "./external-group";
+import { RevertGroup } from "./revert-group";
 import { SpecGroup } from "./spec-group";
 
 export function ProjectSection({
@@ -24,6 +25,7 @@ export function ProjectSection({
   const outside = (workItems.data ?? []).filter(
     (w) => w.origin === "external_change",
   );
+  const reverts = (workItems.data ?? []).filter((w) => w.origin === "revert");
   return (
     <Card aria-labelledby={headingId}>
       <header className="p-4">
@@ -66,9 +68,11 @@ export function ProjectSection({
             />
           ))}
           <ExternalGroup projectId={project.id} tasks={outside} />
+          <RevertGroup projectId={project.id} tasks={reverts} />
           <IssueGroup project={project} />
           {specs.length === 0 &&
             outside.length === 0 &&
+            reverts.length === 0 &&
             project.workflow.issue == null && (
               <p className="border-t border-border p-4 text-sm text-muted-foreground">
                 {t("delivery.noSpecs")}

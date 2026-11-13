@@ -47,9 +47,15 @@ export function chipOf(t: T, task: WorkItem): ChipView {
     base = label(t, "task.state", task.state);
   }
   const number = task.change_request?.number;
-  const shown =
+  const numbered =
     number === undefined ? base : t("docs.chip.change", { text: base, number });
-  return { text: shown, tone: toneOf(task.state) };
+  const revert = task.reverted_by;
+  if (revert) {
+    const key =
+      revert.state === "done" ? "docs.chip.reverted" : "docs.chip.reverting";
+    return { text: t(key, { text: numbered }), tone: "blocked" };
+  }
+  return { text: numbered, tone: toneOf(task.state) };
 }
 
 function toneOf(state: string): ChipTone {

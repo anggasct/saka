@@ -696,6 +696,42 @@ describe("specs in the editor", () => {
     expect(view.state.lineBreak).toBe("\r\n");
   });
 
+  it("marks a step whose task a revert undoes or is undoing", async () => {
+    const link = (state: string) => ({
+      id: "0193f0c4-1b2a-7c3d-9e8f-0011223344a1",
+      key: "tasks-done/s4-R1",
+      state,
+    });
+    const tasks = stepTasks.map((t) => {
+      if (t.step_id === "S4") {
+        return { ...t, reverted_by: link("done") };
+      }
+      if (t.step_id === "S2") {
+        return { ...t, reverted_by: link("in_stage") };
+      }
+      return t;
+    });
+    fakeApi(
+      docsRoutes(undefined, {
+        [SPECS]: { body: page([editorSpec(SPEC_TEXT)]) },
+        [WORK_ITEMS]: { body: page(tasks) },
+      }),
+    );
+    renderApp(`${DOCS}?path=${SPEC_PATH}`);
+    const view = await editorFor(SPEC_PATH);
+    await waitFor(() => {
+      expect(view.dom.querySelectorAll(".cm-chip")).toHaveLength(4);
+    });
+    const chips = [...view.dom.querySelectorAll<HTMLElement>(".cm-chip")];
+    expect(chips.map((c) => c.textContent)).toEqual([
+      "Queued",
+      "Development · agent working · reverting",
+      "Blocked · ci_red · #12",
+      "Done · reverted",
+    ]);
+    expect(chips[3]?.className).toBe("cm-chip cm-chip-blocked");
+  });
+
   it("explains why a saved spec was not registered", async () => {
     fakeApi(
       docsRoutes(undefined, {
