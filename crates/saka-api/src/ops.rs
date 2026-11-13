@@ -262,6 +262,18 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_ci_reruns_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_permission_requests_total",
+        "counter",
+        "Permission requests of agent sessions, by tool and the outcome when decided (allowed, denied, pending).",
+    );
+    for (tool, outcome, n) in &m.permission_requests {
+        t.sample(
+            "saka_permission_requests_total",
+            &[("tool", tool), ("outcome", outcome)],
+            n,
+        );
+    }
+    t.family(
         "saka_merge_requests_total",
         "counter",
         "Merge requests, by who made them (operator, autonomy, queue).",

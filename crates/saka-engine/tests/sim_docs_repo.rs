@@ -109,7 +109,7 @@ fn a_task_in_the_workspace_repo_gets_no_docs_checkout_and_the_same_packet() {
     assert!(sim.world.docs_checkouts().is_empty());
     let sent = sim.world.prompts()[0].clone();
     assert_eq!(docs_line(&sent), None);
-    assert!(sent.contains("variables: none\n\nRules:\n- Work only inside this repository"));
+    assert!(sent.contains("may wait.\n\nRules:\n- Work only inside this repository"));
     let launch = sim.world.launches()[0].clone();
     assert!(launch.extra_dirs.is_empty());
     assert!(!launch.vars.contains_key("SAKA_DOCS_DIR"));

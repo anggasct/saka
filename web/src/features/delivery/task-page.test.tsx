@@ -245,6 +245,14 @@ describe("TaskPage", () => {
     expect(screen.getByText("Strict")).toBeInTheDocument();
   });
 
+  it("counts the permission requests the task's sessions have raised", async () => {
+    const asked = detail(task(1, { permissions_asked: 6 }));
+    fakeApi(routes(asked));
+    renderWithProviders(<TaskPage workItemId={asked.id} />);
+    const label = await screen.findByText("Permission requests");
+    expect(label.nextElementSibling).toHaveTextContent("6");
+  });
+
   it("says when the loop will merge by itself", async () => {
     const auto = detail(
       task(1, {

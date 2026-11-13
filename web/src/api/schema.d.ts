@@ -3212,6 +3212,11 @@ export interface components {
         origin: string;
         /** Format: int32 */
         pending_permission_count: number;
+        /**
+         * Format: int32
+         * @description Permission requests the task's sessions have raised so far, whatever the decision.
+         */
+        permissions_asked: number;
         /** Format: int64 */
         priority: number;
         /** Format: uuid */
@@ -4390,6 +4395,11 @@ export interface components {
       origin: string;
       /** Format: int32 */
       pending_permission_count: number;
+      /**
+       * Format: int32
+       * @description Permission requests the task's sessions have raised so far, whatever the decision.
+       */
+      permissions_asked: number;
       /** Format: int64 */
       priority: number;
       /** Format: uuid */

@@ -108,6 +108,7 @@ export function task(step: number, extra: Partial<WorkItem>): WorkItem {
     blocker: null,
     session: null,
     pending_permission_count: 0,
+    permissions_asked: 0,
     available_actions: ["cancel"],
     version: 1,
     created_at: "2026-10-31T10:01:00.000Z",

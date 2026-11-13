@@ -991,6 +991,8 @@ pub struct WorkItem {
     pub blocker: Option<Blocker>,
     pub session: Option<SessionBrief>,
     pub pending_permission_count: u32,
+    /// Permission requests the task's sessions have raised so far, whatever the decision.
+    pub permissions_asked: u32,
     /// Subset of `merge`, `retry`, `cancel`, `review`, `revert`.
     pub available_actions: Vec<String>,
     /// Use and limits of the running stage run; `null` when no stage run with a session runs.
@@ -1506,6 +1508,7 @@ impl WorkItem {
                     .count(),
             )
             .unwrap_or(u32::MAX),
+            permissions_asked: u32::try_from(t.permissions.len()).unwrap_or(u32::MAX),
             available_actions: available_actions(t).into_iter().map(String::from).collect(),
             budget: budget.map(WorkItemBudget::from_view),
             environment: t.environment.as_ref().map(WorkItemEnvironment::from_env),

@@ -276,6 +276,8 @@
   "task.key": "Task key",
   "task.branch": "Branch",
   "task.autonomy": "Autonomy",
+  "task.permissionsAsked": "Permission requests",
+  "task.permissionsAskedCount": "{count, number}",
   "task.spec": "Spec",
   "task.project": "Project",
   "task.admitted": "Admitted",

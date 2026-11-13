@@ -1721,6 +1721,7 @@ fn a_permission_answer_is_delivered_once_and_a_second_answer_is_refused() {
         items[0]["owner"]["work_item_id"].as_str().unwrap()
     ));
     assert_eq!(work.body["pending_permission_count"], 1);
+    assert_eq!(work.body["permissions_asked"], 1);
     let session = api.get(&format!(
         "/api/v1/sessions/{}",
         items[0]["session_id"].as_str().unwrap()

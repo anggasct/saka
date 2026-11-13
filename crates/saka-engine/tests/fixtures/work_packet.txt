@@ -49,6 +49,12 @@ Environment:
 - Toolchains: go 1.26.2, node 26.13.0
 - Secrets available as environment variables: TEST_API_KEY
 
+Commands:
+- Your working directory is already this repository's worktree. Never `cd` into it or prefix a command with its path.
+- Run one simple command per tool call. Do not use `$(…)`, backticks, subshells `( … )`, loops, `&`, variable assignments, or wrappers such as `nice`, `timeout`, `env`, or `flock`.
+- To use a path or a value that another command prints, run that command by itself, then write the result into the next call as plain text.
+- A command that matches no permission rule waits for the operator, and your turn waits with it. Prefer a simple form of the command over one that may wait.
+
 Rules:
 - Work only inside this repository, and only in the paths you may change.
 - Commit all your changes with a Conventional Commits message before you finish.
