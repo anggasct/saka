@@ -39,9 +39,12 @@ use sha2::{Digest, Sha256};
 use crate::clock::FakeClock;
 
 mod changes;
+mod issues;
 
 use changes::Signals;
 pub use changes::{BOT_AUTHOR, ChangeSpec, PrMeta};
+pub use issues::IssueSpec;
+use issues::Issues;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentOutcome {
@@ -282,6 +285,7 @@ struct State {
     worktrees: BTreeMap<EnvironmentId, Worktree>,
     prs: Vec<Pr>,
     signals: Signals,
+    issues: Issues,
     sessions: BTreeMap<SessionId, FakeSession>,
     events: VecDeque<RunnerEvent>,
     stats: Stats,
@@ -529,6 +533,7 @@ impl FakeWorld {
                 worktrees: BTreeMap::new(),
                 prs: Vec::new(),
                 signals: Signals::default(),
+                issues: Issues::default(),
                 sessions: BTreeMap::new(),
                 events: VecDeque::new(),
                 stats: Stats::default(),
@@ -3008,6 +3013,7 @@ impl Scm for FakeWorld {
                     sha: sha.to_string(),
                 }),
                 _ if t["intake"].as_bool() == Some(true) => Some(WebhookTarget::Intake),
+                _ if t["issue_intake"].as_bool() == Some(true) => Some(WebhookTarget::IssueIntake),
                 _ => None,
             })
             .collect();

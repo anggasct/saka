@@ -2,6 +2,7 @@ pub mod app;
 pub mod ci;
 mod diagnose;
 mod intake;
+mod issues;
 pub mod manifest;
 mod queue;
 pub mod requirements;

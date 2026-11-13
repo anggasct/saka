@@ -454,6 +454,7 @@ pub enum WebhookTarget {
     Change { number: u64 },
     Head { sha: String },
     Intake,
+    IssueIntake,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
