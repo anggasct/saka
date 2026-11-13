@@ -3,16 +3,17 @@ use crate::event::Event;
 use crate::ids::WorkItemId;
 use crate::model::{Task, TaskLink};
 use crate::rejection::Rejection;
-use crate::vocab::{BlockerResolution, ChangeRole, ChangeState, WorkItemOrigin, WorkItemState};
+use crate::vocab::{
+    BlockerCode, BlockerResolution, ChangeRole, ChangeState, WorkItemOrigin, WorkItemState,
+};
 
 pub const PRIORITY: i64 = i32::MAX as i64;
-const DEPLOY_UNVERIFIED: &str = "deploy_unverified";
 
 fn held_by_deploy(task: &Task) -> bool {
     task.item.state == WorkItemState::Blocked
         && task
             .open_blocker()
-            .is_some_and(|b| b.code.as_str() == DEPLOY_UNVERIFIED)
+            .is_some_and(|b| b.code == BlockerCode::DeployUnverified)
 }
 
 fn merged_commit(task: &Task) -> Option<&str> {

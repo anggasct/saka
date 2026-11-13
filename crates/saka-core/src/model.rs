@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::autonomy::RepoPolicy;
 use crate::decision::DecisionOption;
+use crate::environment::VerifySpec;
 use crate::gate::Check;
 use crate::ids::{
     BlockerId, ChangeRequestId, DecisionRequestId, EnvironmentId, GateResultId,
@@ -98,6 +99,7 @@ pub struct Project {
     pub config_error: Option<ConfigError>,
     pub workflow: Workflow,
     pub hook_skip: Vec<String>,
+    pub verify: BTreeMap<String, VerifySpec>,
     pub repos: Vec<ProjectRepo>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,

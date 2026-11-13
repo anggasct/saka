@@ -135,6 +135,7 @@ impl Engine {
             sha256: &sha256,
             workflow: config.workflow.clone(),
             hook_skip: hook_names,
+            verify: config.verify.clone(),
             repos: Vec::new(),
             trigger,
         };

@@ -56,18 +56,7 @@ fn web_host(web_url: &str) -> Option<String> {
     Some(rest.trim_end_matches('/').to_ascii_lowercase())
 }
 
-pub fn branch_ok(branch: &str) -> bool {
-    !branch.is_empty()
-        && branch.len() <= 255
-        && !branch.starts_with('-')
-        && !branch.contains("..")
-        && branch
-            .split('/')
-            .all(|s| !s.is_empty() && !s.ends_with(".lock"))
-        && branch
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
-}
+pub use saka_core::workspace::branch_ok;
 
 pub(crate) fn invalid(field: &'static str, code: &str) -> EngineError {
     EngineError::Invalid {
@@ -381,6 +370,7 @@ impl Engine {
             name: config.name,
             workflow: config.workflow,
             hook_skip: hook_names,
+            verify: config.verify,
             workspace: NewRepo {
                 repo_id: Some(repo_id),
                 integration_id: integration.id.clone(),
@@ -488,10 +478,6 @@ mod tests {
             "https://user@github.com/acme/app",
         ] {
             assert_eq!(parse_repo_url(bad), None, "{bad}");
-        }
-        assert!(branch_ok("release/1.2"));
-        for bad in ["", "-x", "a..b", "a b", "a/", "x.lock"] {
-            assert!(!branch_ok(bad), "{bad}");
         }
     }
 }

@@ -126,7 +126,7 @@ fn the_decision_migration_keeps_blockers_accepts_the_new_code_and_allows_one_ope
     let store = Store::open(&path, &dir.path().join("backups"), Timestamp(10)).unwrap();
     assert_eq!(
         store.migration().applied,
-        vec![35, 36, 37, 38, 39, 40, 41, 42]
+        vec![35, 36, 37, 38, 39, 40, 41, 42, 43]
     );
     drop(store);
 

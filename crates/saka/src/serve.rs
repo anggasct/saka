@@ -1000,6 +1000,14 @@ async fn run(
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    let environments_cfg = match cfg.environments_parsed() {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(code = e.code, detail = %e.detail, "deploy config refused");
+            stop_http(&stop, http).await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let outbound = match saka_notify::HttpWebhooks::new(format!("saka/{VERSION}")) {
         Ok(w) => Arc::new(w),
         Err(e) => {
@@ -1072,6 +1080,7 @@ async fn run(
             config_poll_secs: cfg.workspace.config_poll_secs,
             diagnostics: DiagnosticLimits::default(),
             hooks: hooks_cfg,
+            environments: environments_cfg,
             auth_enabled: cfg.auth.is_some(),
             workflow_policy: saka_core::workflow::WorkflowPolicy {
                 allow_unreviewed_chore: cfg.workflow.allow_unreviewed_chore,

@@ -12,6 +12,7 @@ macro_rules! tri {
 }
 
 pub mod approvals;
+pub mod deployments;
 pub mod drafts;
 pub mod inbox;
 pub mod issue_intakes;

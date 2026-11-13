@@ -160,6 +160,8 @@ pub struct Batch {
     pub replaced_work_item_dependencies: Vec<WorkItemId>,
     pub permission_rules: Vec<PermissionRule>,
     pub hook_runs: Vec<saka_core::hook::HookRun>,
+    pub deployments: Vec<saka_core::deploy::Deployment>,
+    pub deployment_checks: Vec<(saka_core::ids::DeploymentId, saka_core::deploy::CheckRecord)>,
     pub activities: Vec<(ProjectId, SessionActivity)>,
     pub session_offsets: Vec<(saka_core::ids::SessionId, u64)>,
     pub jobs: Vec<NewJob>,
@@ -443,6 +445,12 @@ pub(crate) fn write(
     for r in &b.hook_runs {
         crate::hook_run::upsert(tx, r)?;
     }
+    for d in &b.deployments {
+        crate::deployment::upsert(tx, d)?;
+    }
+    for (id, check) in &b.deployment_checks {
+        crate::deployment::upsert_check(tx, *id, check)?;
+    }
     for p in &b.new_pairings {
         crate::identity::insert_pairing(tx, p, b.now)?;
     }
@@ -579,11 +587,11 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
     let config_error = p.config_error.as_ref().map(to_json).transpose()?;
     tx.execute(
         "INSERT INTO project (id, name, workspace_repo_id, project_path, base_branch, config_commit, config_sha256,
-           config_error, workflow, hook_skip, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+           config_error, workflow, hook_skip, verify, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_branch = excluded.base_branch,
            config_commit = excluded.config_commit, config_sha256 = excluded.config_sha256,
-           config_error = excluded.config_error, workflow = excluded.workflow, hook_skip = excluded.hook_skip, updated_at = excluded.updated_at",
+           config_error = excluded.config_error, workflow = excluded.workflow, hook_skip = excluded.hook_skip, verify = excluded.verify, updated_at = excluded.updated_at",
         params![
             p.id.to_string(),
             p.name,
@@ -595,6 +603,7 @@ fn project(tx: &Transaction<'_>, p: &Project) -> Result<()> {
             config_error,
             to_json(&p.workflow)?,
             to_json(&p.hook_skip)?,
+            to_json(&p.verify)?,
             p.created_at.0,
             p.updated_at.0,
         ],

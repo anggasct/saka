@@ -8,7 +8,8 @@ use crate::model::{AccountQuota, Project};
 use crate::paths::project_config_path;
 use crate::time::Timestamp;
 use crate::vocab::{
-    AuthorizationFailure, CheckId, DiagnosticStatus, HostTool, ReportMode, SubjectKind, Tool,
+    AuthorizationFailure, CheckId, DeployActionKind, DiagnosticStatus, HostTool, ReportMode,
+    SubjectKind, Tool,
 };
 
 pub const INSTANCE: &str = "instance";
@@ -37,7 +38,11 @@ impl CheckId {
                 SubjectKind::Integration
             }
             CheckId::ScmRepoAccess | CheckId::ScmRepoWebhook => SubjectKind::Repo,
-            CheckId::ProjectUserToken | CheckId::ProjectConfig => SubjectKind::Project,
+            CheckId::ProjectUserToken
+            | CheckId::ProjectConfig
+            | CheckId::DeployConfig
+            | CheckId::DeployVerifyMissing
+            | CheckId::DeployReadyMissing => SubjectKind::Project,
             CheckId::ToolchainRepo => SubjectKind::ProjectRepo,
         }
     }
@@ -1269,6 +1274,122 @@ pub fn project_config(project: &Project, overlaps: &[ScopeOverlap]) -> Vec<Findi
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployEnvironmentFacts {
+    pub name: String,
+    pub action: DeployActionKind,
+    pub binding: Result<(String, String), &'static str>,
+    pub branch_found: Option<bool>,
+    pub missing_secrets: Vec<String>,
+    pub verify: Option<VerifyFacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyFacts {
+    pub has_ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeployFacts {
+    pub environments: Vec<DeployEnvironmentFacts>,
+    pub unknown_verify: Vec<String>,
+}
+
+fn none_defined(facts: &DeployFacts) -> Option<Vec<Finding>> {
+    (facts.environments.is_empty() && facts.unknown_verify.is_empty())
+        .then(|| vec![Finding::skip("deploy_not_configured", json!({}))])
+}
+
+pub fn deploy_config(facts: &DeployFacts) -> Vec<Finding> {
+    if let Some(none) = none_defined(facts) {
+        return none;
+    }
+    let mut findings = Vec::new();
+    for env in &facts.environments {
+        match &env.binding {
+            Err(code) => findings.push(Finding::fail(
+                code,
+                json!({ "environment": env.name }),
+                fix("fix_deploy_config", json!({ "environment": env.name })),
+            )),
+            Ok((repo, branch)) if env.branch_found == Some(false) => findings.push(Finding::fail(
+                "deploy_branch_missing",
+                json!({ "environment": env.name, "repo": repo, "branch": branch }),
+                fix("fix_deploy_config", json!({ "environment": env.name })),
+            )),
+            Ok(_) => {}
+        }
+        if !env.missing_secrets.is_empty() {
+            findings.push(Finding::fail(
+                "deploy_secret_missing",
+                json!({ "environment": env.name, "names": env.missing_secrets }),
+                fix("set_secret", json!({ "names": env.missing_secrets })),
+            ));
+        }
+    }
+    for name in &facts.unknown_verify {
+        findings.push(Finding::warn(
+            "verify_environment_unknown",
+            json!({ "environment": name }),
+            fix("fix_saka_toml", json!({ "environment": name })),
+        ));
+    }
+    if findings.is_empty() {
+        return vec![Finding::pass(
+            "deploy_config_ok",
+            json!({ "environments": facts.environments.len() }),
+        )];
+    }
+    findings
+}
+
+pub fn deploy_verify_missing(facts: &DeployFacts) -> Vec<Finding> {
+    if let Some(none) = none_defined(facts) {
+        return none;
+    }
+    let warns: Vec<Finding> = facts
+        .environments
+        .iter()
+        .filter(|env| env.verify.is_none())
+        .map(|env| {
+            Finding::warn(
+                "deploy_verify_missing",
+                json!({ "environment": env.name }),
+                fix("add_verify", json!({ "environment": env.name })),
+            )
+        })
+        .collect();
+    if warns.is_empty() {
+        return vec![Finding::pass("deploy_verify_ok", json!({}))];
+    }
+    warns
+}
+
+pub fn deploy_ready_missing(facts: &DeployFacts) -> Vec<Finding> {
+    if let Some(none) = none_defined(facts) {
+        return none;
+    }
+    let warns: Vec<Finding> = facts
+        .environments
+        .iter()
+        .filter(|env| {
+            env.action == DeployActionKind::Webhook
+                && !env.verify.as_ref().is_some_and(|v| v.has_ready)
+        })
+        .map(|env| {
+            Finding::warn(
+                "deploy_ready_missing",
+                json!({ "environment": env.name }),
+                fix("add_verify_ready", json!({ "environment": env.name })),
+            )
+        })
+        .collect();
+    if warns.is_empty() {
+        return vec![Finding::pass("deploy_ready_ok", json!({}))];
+    }
+    warns
+}
+
 pub fn repo_unreachable(status: Option<u16>) -> Finding {
     Finding::skip("repo_unreachable", json!({ "status": status }))
 }
@@ -1882,6 +2003,7 @@ mod tests {
             config_error,
             workflow: crate::workflow::Workflow::default(),
             hook_skip: Vec::new(),
+            verify: Default::default(),
             repos: Vec::new(),
             created_at: NOW,
             updated_at: NOW,
@@ -2605,6 +2727,9 @@ mod tests {
                 "project.user_token",
                 "project.config",
                 "toolchain.repo",
+                "deploy.config",
+                "deploy.verify_missing",
+                "deploy.ready_missing",
             ]
         );
         assert!(CheckId::server().all(|c| !c.is_client()));
@@ -2992,5 +3117,95 @@ mod tests {
             ..plain
         };
         assert_eq!(judge(with_issues, true)[0].status, Pass);
+    }
+
+    fn facts(envs: Vec<DeployEnvironmentFacts>, unknown: &[&str]) -> DeployFacts {
+        DeployFacts {
+            environments: envs,
+            unknown_verify: unknown.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn env(name: &str, action: DeployActionKind) -> DeployEnvironmentFacts {
+        DeployEnvironmentFacts {
+            name: name.into(),
+            action,
+            binding: Ok(("app".into(), "main".into())),
+            branch_found: Some(true),
+            missing_secrets: Vec::new(),
+            verify: Some(VerifyFacts { has_ready: true }),
+        }
+    }
+
+    fn codes(findings: &[Finding]) -> Vec<(DiagnosticStatus, &str)> {
+        findings
+            .iter()
+            .map(|f| (f.status, f.code.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn deploy_config_reports_each_problem_of_each_environment() {
+        let none = facts(Vec::new(), &[]);
+        assert_eq!(
+            codes(&deploy_config(&none)),
+            [(DiagnosticStatus::Skip, "deploy_not_configured")]
+        );
+        let good = facts(vec![env("staging", DeployActionKind::RunHost)], &[]);
+        assert_eq!(
+            codes(&deploy_config(&good)),
+            [(DiagnosticStatus::Pass, "deploy_config_ok")]
+        );
+        let mut unbound = env("staging", DeployActionKind::RunHost);
+        unbound.binding = Err("deploy_repo_required");
+        let mut gone = env("preview", DeployActionKind::Webhook);
+        gone.branch_found = Some(false);
+        let mut secretless = env("prod", DeployActionKind::Run);
+        secretless.missing_secrets = vec!["DEPLOY_TOKEN".into()];
+        let bad = facts(vec![unbound, gone, secretless], &["qa"]);
+        assert_eq!(
+            codes(&deploy_config(&bad)),
+            [
+                (DiagnosticStatus::Fail, "deploy_repo_required"),
+                (DiagnosticStatus::Fail, "deploy_branch_missing"),
+                (DiagnosticStatus::Fail, "deploy_secret_missing"),
+                (DiagnosticStatus::Warn, "verify_environment_unknown"),
+            ]
+        );
+        let unknown_only = facts(Vec::new(), &["qa"]);
+        assert_eq!(
+            codes(&deploy_config(&unknown_only)),
+            [(DiagnosticStatus::Warn, "verify_environment_unknown")]
+        );
+    }
+
+    #[test]
+    fn missing_verification_and_missing_readiness_are_warnings() {
+        let mut bare = env("staging", DeployActionKind::Webhook);
+        bare.verify = None;
+        let mut no_ready = env("preview", DeployActionKind::Webhook);
+        no_ready.verify = Some(VerifyFacts { has_ready: false });
+        let host = env("prod", DeployActionKind::RunHost);
+        let all = facts(vec![bare, no_ready, host], &[]);
+        assert_eq!(
+            codes(&deploy_verify_missing(&all)),
+            [(DiagnosticStatus::Warn, "deploy_verify_missing")]
+        );
+        assert_eq!(
+            codes(&deploy_ready_missing(&all)),
+            [
+                (DiagnosticStatus::Warn, "deploy_ready_missing"),
+                (DiagnosticStatus::Warn, "deploy_ready_missing"),
+            ]
+        );
+        let ok = facts(vec![env("prod", DeployActionKind::RunHost)], &[]);
+        assert_eq!(
+            codes(&deploy_verify_missing(&ok)),
+            [(DiagnosticStatus::Pass, "deploy_verify_ok")]
+        );
+        assert_eq!(
+            codes(&deploy_ready_missing(&ok)),
+            [(DiagnosticStatus::Pass, "deploy_ready_ok")]
+        );
     }
 }

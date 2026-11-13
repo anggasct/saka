@@ -56,4 +56,5 @@ id_type!(
     LoginSessionId,
     RegressionCheckId,
     IssueIntakeId,
+    DeploymentId,
 );

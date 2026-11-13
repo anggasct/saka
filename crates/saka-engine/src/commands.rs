@@ -75,6 +75,7 @@ pub struct NewProject {
     pub config_sha256: String,
     pub workflow: Workflow,
     pub hook_skip: Vec<String>,
+    pub verify: std::collections::BTreeMap<String, saka_core::environment::VerifySpec>,
     pub bindings: Vec<NewBinding>,
 }
 
@@ -215,6 +216,7 @@ impl Engine {
             config_sha256: p.config_sha256.clone(),
             workflow: p.workflow.clone(),
             hook_skip: p.hook_skip.clone(),
+            verify: p.verify.clone(),
             repos,
         });
         let mut batch = Batch::new(now);

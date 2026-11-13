@@ -1,14 +1,18 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::authorship::SessionAuthor;
 use crate::decision::DecisionOption;
+use crate::deploy::{CheckRecord, Verification};
+use crate::environment::VerifySpec;
 use crate::gate::Check;
 use crate::hook::HookContext;
 use crate::ids::{
-    BlockerId, ChangeRequestId, CredentialId, DecisionRequestId, DeviceId, EnvironmentId,
-    GateResultId, HookRunId, InboxItemId, IssueIntakeId, LoginSessionId, PairingId,
+    BlockerId, ChangeRequestId, CredentialId, DecisionRequestId, DeploymentId, DeviceId,
+    EnvironmentId, GateResultId, HookRunId, InboxItemId, IssueIntakeId, LoginSessionId, PairingId,
     PermissionRequestId, PermissionRuleId, ProjectId, RegressionCheckId, RepoId, ReviewId,
     SessionId, SpecDraftAttemptId, SpecDraftId, SpecId, SpecRevisionId, StageRunId, UsageRecordId,
     UserLinkAuthorizationId, UserLinkId, WorkItemId,
@@ -22,13 +26,13 @@ use crate::review::Finding;
 use crate::time::Timestamp;
 use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
-    ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect,
-    ExternalCause, GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState,
-    InboxSubject, InterruptBy, IssueCause, IssueClosedBy, IssueIntakeState, IssueLane, LintOutcome,
-    MatchKind, MergeMethod, PairingPurpose, PermissionState, RegressionOutcome, RelinkCause,
-    ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome,
-    SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, TargetKind, TokenInvalidCause,
-    Trigger, WorkKind,
+    ChangeCredentialKind, ChangeRole, DeployActionKind, DeployCause, DeployPhase, DeviceKind,
+    DraftFailureCode, DraftLocale, DraftMode, Effect, ExternalCause, GateOutcome, GateSource,
+    HookActionKind, HookEvent, HookMode, HookRunState, InboxSubject, InterruptBy, IssueCause,
+    IssueClosedBy, IssueIntakeState, IssueLane, LintOutcome, MatchKind, MergeMethod,
+    PairingPurpose, PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger, ResumeCause,
+    ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin, Stage,
+    StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -70,6 +74,7 @@ pub enum Event {
         config_sha256: String,
         workflow: Workflow,
         hook_skip: Vec<String>,
+        verify: BTreeMap<String, VerifySpec>,
         repos: Vec<ProjectRepo>,
     },
     #[serde(rename = "workspace.project.config_changed")]
@@ -80,6 +85,7 @@ pub enum Event {
         config_sha256: String,
         workflow: Workflow,
         hook_skip: Vec<String>,
+        verify: BTreeMap<String, VerifySpec>,
         repos: Vec<ProjectRepo>,
         trigger: ReloadTrigger,
     },
@@ -907,6 +913,55 @@ pub enum Event {
         source_event_id: Uuid,
         rerun_of: Option<HookRunId>,
     },
+    #[serde(rename = "deploy.deployment.queued")]
+    DeploymentQueued {
+        deployment_id: DeploymentId,
+        project_id: ProjectId,
+        repo_id: RepoId,
+        environment: String,
+        branch: String,
+        cause: DeployCause,
+        action: DeployActionKind,
+        target_url: Option<String>,
+        actor: Option<String>,
+        reason: Option<String>,
+    },
+    #[serde(rename = "deploy.deployment.joined")]
+    DeploymentJoined {
+        deployment_id: DeploymentId,
+        change_request_id: ChangeRequestId,
+    },
+    #[serde(rename = "deploy.deployment.started")]
+    DeploymentStarted {
+        deployment_id: DeploymentId,
+        sha: String,
+        previous_sha: Option<String>,
+    },
+    #[serde(rename = "deploy.deployment.phase_changed")]
+    DeploymentPhaseChanged {
+        deployment_id: DeploymentId,
+        to: DeployPhase,
+        verification: Option<Verification>,
+    },
+    #[serde(rename = "deploy.deployment.check_finished")]
+    DeploymentCheckFinished {
+        deployment_id: DeploymentId,
+        check: CheckRecord,
+    },
+    #[serde(rename = "deploy.deployment.succeeded")]
+    DeploymentSucceeded { deployment_id: DeploymentId },
+    #[serde(rename = "deploy.deployment.failed")]
+    DeploymentFailed {
+        deployment_id: DeploymentId,
+        phase: DeployPhase,
+        error: Coded,
+    },
+    #[serde(rename = "deploy.deployment.cancelled")]
+    DeploymentCancelled {
+        deployment_id: DeploymentId,
+        reason: String,
+        actor: Option<String>,
+    },
     #[serde(rename = "delivery.inbox_item.dismissed")]
     InboxItemDismissed {
         inbox_item_id: InboxItemId,
@@ -1032,6 +1087,7 @@ pub enum Stream {
     Device(DeviceId),
     Credential(CredentialId),
     IssueIntake(IssueIntakeId),
+    Deployment(DeploymentId),
 }
 
 impl Stream {
@@ -1054,6 +1110,7 @@ impl Stream {
             Stream::Device(_) => "device",
             Stream::Credential(_) => "credential",
             Stream::IssueIntake(_) => "issue_intake",
+            Stream::Deployment(_) => "deployment",
         }
     }
 
@@ -1076,6 +1133,7 @@ impl Stream {
             Stream::Device(id) => id.0,
             Stream::Credential(id) => id.0,
             Stream::IssueIntake(id) => id.0,
+            Stream::Deployment(id) => id.0,
         }
     }
 }
@@ -1239,6 +1297,14 @@ impl Event {
             E::HookRunQueued { hook_run_id, .. } | E::HookRunFinished { hook_run_id, .. } => {
                 Stream::HookRun(*hook_run_id)
             }
+            E::DeploymentQueued { deployment_id, .. }
+            | E::DeploymentJoined { deployment_id, .. }
+            | E::DeploymentStarted { deployment_id, .. }
+            | E::DeploymentPhaseChanged { deployment_id, .. }
+            | E::DeploymentCheckFinished { deployment_id, .. }
+            | E::DeploymentSucceeded { deployment_id }
+            | E::DeploymentFailed { deployment_id, .. }
+            | E::DeploymentCancelled { deployment_id, .. } => Stream::Deployment(*deployment_id),
             E::InboxItemDismissed { inbox_item_id, .. } => Stream::InboxItem(*inbox_item_id),
             E::PairingCreated { pairing_id, .. } => Stream::Pairing(*pairing_id),
             E::DevicePaired { device_id, .. } | E::DeviceRevoked { device_id } => {

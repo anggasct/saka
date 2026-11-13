@@ -165,6 +165,12 @@ pub enum Rejection {
     },
     #[error("the task cannot be reverted: {reason}")]
     RevertNotAllowed { reason: &'static str },
+    #[error("the environment already has a deployment waiting")]
+    DeploymentQueued { deployment_id: String },
+    #[error("the deployment is running its deploy action")]
+    DeploymentRunning,
+    #[error("the deployment already finished")]
+    DeploymentFinished,
     #[error("the task already has a revert in progress")]
     RevertInProgress { work_item_id: String },
     #[error("the task was already reverted")]
@@ -302,6 +308,9 @@ impl Rejection {
             Rejection::StageNotTakeable { .. } => "stage_not_takeable",
             Rejection::ReturnTargetInvalid { .. } => "return_target_invalid",
             Rejection::RevertNotAllowed { .. } => "revert_not_allowed",
+            Rejection::DeploymentQueued { .. } => "deployment_queued",
+            Rejection::DeploymentRunning => "deployment_running",
+            Rejection::DeploymentFinished => "deployment_finished",
             Rejection::RevertInProgress { .. } => "revert_in_progress",
             Rejection::AlreadyReverted { .. } => "already_reverted",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",
@@ -378,6 +387,9 @@ impl Rejection {
             Rejection::RevertInProgress { work_item_id }
             | Rejection::AlreadyReverted { work_item_id } => {
                 json!({ "work_item_id": work_item_id })
+            }
+            Rejection::DeploymentQueued { deployment_id } => {
+                json!({ "deployment_id": deployment_id })
             }
             Rejection::BlockerNotOpen { blocker_id } => json!({ "blocker_id": blocker_id }),
             Rejection::BlockerActionChanged {

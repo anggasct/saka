@@ -23,10 +23,10 @@ pub const MAX_TOTAL: usize = 128;
 pub const MAX_FILTER_ENTRIES: usize = 16;
 pub const MAX_URL_BYTES: usize = 2048;
 pub const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
-const COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
-const COMMAND_TIMEOUT_MAX_SECS: u64 = 3600;
-const CALL_TIMEOUT_DEFAULT_SECS: u64 = 10;
-const CALL_TIMEOUT_MAX_SECS: u64 = 30;
+pub(crate) const COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
+pub(crate) const COMMAND_TIMEOUT_MAX_SECS: u64 = 3600;
+pub(crate) const CALL_TIMEOUT_DEFAULT_SECS: u64 = 10;
+pub(crate) const CALL_TIMEOUT_MAX_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,7 +163,7 @@ pub fn slug_ok(text: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn secret_name_ok(name: &str) -> bool {
+pub(crate) fn secret_name_ok(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes
         .next()

@@ -4940,6 +4940,7 @@ dependencies = [
  "saka-engine",
  "saka-ports",
  "saka-spec",
+ "saka-store",
  "saka-testkit",
  "serde",
  "serde_cbor_2",

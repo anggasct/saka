@@ -4,6 +4,7 @@ mod columns;
 pub mod authorship;
 mod codec;
 mod conn;
+pub mod deployment;
 pub mod draft;
 mod error;
 pub mod hook_run;

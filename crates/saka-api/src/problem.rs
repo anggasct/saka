@@ -142,6 +142,9 @@ fn rejection_status(r: &Rejection) -> StatusCode {
         | R::BlockerNotOpen { .. }
         | R::RevertNotAllowed { .. }
         | R::RevertInProgress { .. }
+        | R::DeploymentQueued { .. }
+        | R::DeploymentRunning
+        | R::DeploymentFinished
         | R::AlreadyReverted { .. }
         | R::InboxItemNotDismissible { .. }
         | R::InboxItemClosed { .. }
