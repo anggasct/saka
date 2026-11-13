@@ -44,8 +44,9 @@ pub use hook::{
     Webhooks,
 };
 pub use intake::{
-    IntakeCapabilities, IntakeSource, Issue, IssueListing, IssueRef, IssueSignal, IssueSignalKind,
-    IssueState, IssueSummary, MAX_ISSUE_BODY_BYTES, MAX_ISSUES, TRUNCATION_MARKER, clip_issue_body,
+    IntakeCapabilities, IntakeSource, Issue, IssueCloseOutcome, IssueListing, IssueRef,
+    IssueSignal, IssueSignalKind, IssueState, IssueSummary, MAX_ISSUE_BODY_BYTES, MAX_ISSUES,
+    TRUNCATION_MARKER, clip_issue_body,
 };
 pub use regressions::{RegressionRefusal, Regressions, Requested};
 pub use scm::{

@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    IntakeCapabilities, IntakeSource, Issue, IssueListing, IssueRef, IssueSignal, IssueSignalKind,
-    IssueState, IssueSummary, MAX_ISSUES, MAX_SIGNALS, PortError, PortResult, RepoRef,
-    check_comment_body, clip_issue_body, clip_text,
+    IntakeCapabilities, IntakeSource, Issue, IssueCloseOutcome, IssueListing, IssueRef,
+    IssueSignal, IssueSignalKind, IssueState, IssueSummary, MAX_ISSUES, MAX_SIGNALS, PortError,
+    PortResult, RepoRef, check_comment_body, clip_issue_body, clip_text,
 };
 use serde_json::{Value, json};
 
@@ -212,6 +212,34 @@ impl IntakeSource for GitLab {
                 ))
             }
             _ => Err(self.client.unexpected("post_issue_comment", &reply)),
+        }
+    }
+
+    async fn close_issue(&self, issue: &IssueRef) -> PortResult<IssueCloseOutcome> {
+        let current = IntakeSource::issue(self, issue).await?;
+        if current.summary.state == IssueState::Closed {
+            return Ok(IssueCloseOutcome::AlreadyClosed);
+        }
+        let n = issue.number.to_string();
+        let reply = self
+            .project_call(
+                &issue.repo.full_name,
+                Method::PUT,
+                &["issues", &n],
+                Some(&json!({ "state_event": "close" })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(IssueCloseOutcome::Closed),
+            StatusCode::NOT_FOUND | StatusCode::GONE => Err(PortError::permanent(
+                "issue_not_found",
+                json!({ "number": issue.number }),
+            )),
+            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => Err(PortError::permanent(
+                "forbidden",
+                json!({ "status": reply.status.as_u16(), "number": issue.number }),
+            )),
+            _ => Err(self.client.unexpected("close_issue", &reply)),
         }
     }
 }

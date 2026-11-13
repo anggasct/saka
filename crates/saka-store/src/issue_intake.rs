@@ -223,6 +223,15 @@ pub fn comment_posted(conn: &Connection, intake_id: IssueIntakeId, event: &str) 
     Ok(found > 0)
 }
 
+pub fn issue_closed(conn: &Connection, intake_id: IssueIntakeId) -> Result<bool> {
+    let found: i64 = conn.query_row(
+        "SELECT count(*) FROM event WHERE kind = 'intake.issue.issue_closed' AND stream_id = ?1",
+        rusqlite::params![intake_id.to_string()],
+        |r| r.get(0),
+    )?;
+    Ok(found > 0)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DraftOutcome {
     pub state: SpecDraftState,

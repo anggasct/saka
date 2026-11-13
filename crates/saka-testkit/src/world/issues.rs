@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use saka_core::time::Timestamp;
 use saka_ports::{
-    Clock, IntakeCapabilities, IntakeSource, Issue, IssueListing, IssueRef, IssueSignal,
-    IssueSignalKind, IssueState, IssueSummary, MAX_ISSUES, MAX_SIGNALS, PortError, PortResult,
-    RepoRef, check_comment_body, clip_issue_body,
+    Clock, IntakeCapabilities, IntakeSource, Issue, IssueCloseOutcome, IssueListing, IssueRef,
+    IssueSignal, IssueSignalKind, IssueState, IssueSummary, MAX_ISSUES, MAX_SIGNALS, PortError,
+    PortResult, RepoRef, check_comment_body, clip_issue_body,
 };
 use serde_json::json;
 
@@ -65,9 +65,11 @@ pub(super) struct Issues {
     signals: Vec<(String, u64, IssueSignal)>,
     next_signal: u64,
     comments: Vec<PostedComment>,
+    closes: Vec<(String, u64)>,
     reads_fail: bool,
     limited_until: Option<Timestamp>,
     comments_refused: bool,
+    closes_refused: bool,
     confidential_issues: bool,
     listings: u32,
 }
@@ -79,9 +81,11 @@ impl Default for Issues {
             signals: Vec::new(),
             next_signal: 0,
             comments: Vec::new(),
+            closes: Vec::new(),
             reads_fail: false,
             limited_until: None,
             comments_refused: false,
+            closes_refused: false,
             confidential_issues: true,
             listings: 0,
         }
@@ -233,6 +237,21 @@ impl FakeWorld {
         self.state().issues.comments.clone()
     }
 
+    pub fn issue_closes(&self) -> Vec<(String, u64)> {
+        self.state().issues.closes.clone()
+    }
+
+    pub fn issue_is_closed(&self, repo: &str, number: u64) -> bool {
+        self.state()
+            .issues
+            .issue_mut(repo, number)
+            .is_some_and(|i| i.state == IssueState::Closed)
+    }
+
+    pub fn refuse_issue_closes(&self, refuse: bool) {
+        self.state().issues.closes_refused = refuse;
+    }
+
     pub fn issue_listings(&self) -> u32 {
         self.state().issues.listings
     }
@@ -369,5 +388,29 @@ impl IntakeSource for FakeWorld {
             body: body.to_string(),
         });
         Ok(())
+    }
+
+    async fn close_issue(&self, issue: &IssueRef) -> PortResult<IssueCloseOutcome> {
+        let now = self.clock.now();
+        let mut s = self.state();
+        s.call("close_issue");
+        if s.issues.closes_refused {
+            return Err(PortError::permanent("forbidden", json!({ "status": 403 })));
+        }
+        let repo = issue.repo.full_name.as_str();
+        let Some(stored) = s.issues.issue_mut(repo, issue.number) else {
+            return Err(PortError::permanent(
+                "issue_not_found",
+                json!({ "number": issue.number }),
+            ));
+        };
+        if stored.state == IssueState::Closed {
+            return Ok(IssueCloseOutcome::AlreadyClosed);
+        }
+        stored.state = IssueState::Closed;
+        s.issues.closes.push((repo.to_string(), issue.number));
+        s.issues
+            .signal(repo, issue.number, now, "saka", IssueSignalKind::Closed);
+        Ok(IssueCloseOutcome::Closed)
     }
 }

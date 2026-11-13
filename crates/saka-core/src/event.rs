@@ -24,10 +24,11 @@ use crate::vocab::{
     AuthorizationState, AuthorshipMode, BlockerCode, BlockerResolution, BudgetDimension,
     ChangeCredentialKind, ChangeRole, DeviceKind, DraftFailureCode, DraftLocale, DraftMode, Effect,
     ExternalCause, GateOutcome, GateSource, HookActionKind, HookEvent, HookMode, HookRunState,
-    InboxSubject, InterruptBy, IssueCause, IssueIntakeState, IssueLane, LintOutcome, MatchKind,
-    MergeMethod, PairingPurpose, PermissionState, RegressionOutcome, RelinkCause, ReloadTrigger,
-    ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome, SessionState, SpecOrigin,
-    Stage, StagePhase, SupersedeReason, TargetKind, TokenInvalidCause, Trigger, WorkKind,
+    InboxSubject, InterruptBy, IssueCause, IssueClosedBy, IssueIntakeState, IssueLane, LintOutcome,
+    MatchKind, MergeMethod, PairingPurpose, PermissionState, RegressionOutcome, RelinkCause,
+    ReloadTrigger, ResumeCause, ResumeReason, ReviewBasis, ReviewEvent, ReviewOutcome,
+    SessionState, SpecOrigin, Stage, StagePhase, SupersedeReason, TargetKind, TokenInvalidCause,
+    Trigger, WorkKind,
 };
 use crate::workflow::Workflow;
 
@@ -224,6 +225,11 @@ pub enum Event {
     IssueIntakeCommentPosted {
         intake_id: IssueIntakeId,
         event: String,
+    },
+    #[serde(rename = "intake.issue.issue_closed")]
+    IssueIntakeIssueClosed {
+        intake_id: IssueIntakeId,
+        by: IssueClosedBy,
     },
 
     #[serde(rename = "spec.draft.requested")]
@@ -1105,7 +1111,8 @@ impl Event {
             | E::IssueIntakeFailed { intake_id, .. }
             | E::IssueIntakeRetried { intake_id, .. }
             | E::IssueIntakeDismissed { intake_id, .. }
-            | E::IssueIntakeCommentPosted { intake_id, .. } => Stream::IssueIntake(*intake_id),
+            | E::IssueIntakeCommentPosted { intake_id, .. }
+            | E::IssueIntakeIssueClosed { intake_id, .. } => Stream::IssueIntake(*intake_id),
             E::SpecDraftRequested { spec_draft_id, .. }
             | E::SpecDraftAttemptStarted { spec_draft_id, .. }
             | E::SpecDraftPacketRendered { spec_draft_id, .. }

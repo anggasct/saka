@@ -10,10 +10,11 @@ use saka_core::job::{Job, JobKind};
 use saka_core::model::Project;
 use saka_core::rejection::Rejection;
 use saka_core::vocab::{
-    IssueCause, IssueLane, SpecDraftState, SpecOrigin, SpecState, WorkItemState, WorkKind,
+    IssueCause, IssueClosedBy, IssueLane, SpecDraftState, SpecOrigin, SpecState, WorkItemState,
+    WorkKind,
 };
 use saka_core::workflow::IssueEntry;
-use saka_ports::{IdsSource, Issue, IssueRef, IssueState, IssueSummary};
+use saka_ports::{IdsSource, Issue, IssueCloseOutcome, IssueRef, IssueState, IssueSummary};
 use saka_spec::{Locale, QuickSpec, quick_slug};
 use saka_store::issue_intake as rows;
 use saka_store::list::Page;
@@ -26,6 +27,7 @@ use crate::views::{Paged, paged, probe};
 use crate::worker::{Effect, Execution, field, internal};
 use crate::{Cause, Engine, EngineError, NewSpecDraft, Result};
 
+const ISSUE_CLOSE_DELAY_MS: i64 = 60_000;
 const SYSTEM_ACTOR: &str = "system:issue_intake";
 const UNTITLED: &str = "(untitled)";
 const URL_MAX: usize = 2048;
@@ -245,7 +247,22 @@ impl Engine {
                         saka_core::vocab::IssueIntakeState::Approved => {
                             (CommentEvent::Approved, "approved")
                         }
-                        saka_core::vocab::IssueIntakeState::Done => (CommentEvent::Done, "done"),
+                        saka_core::vocab::IssueIntakeState::Done => {
+                            let facts = CommentFacts {
+                                base_branch: self.delivery_branch(after)?,
+                                ..CommentFacts::default()
+                            };
+                            self.push_comment(
+                                batch,
+                                after,
+                                CommentEvent::Done,
+                                "done",
+                                Some(facts),
+                                cause,
+                            )?;
+                            self.push_close(batch, after, cause);
+                            continue;
+                        }
                         _ => continue,
                     };
                     self.push_comment(batch, after, comment, key, None, cause)?;
@@ -281,6 +298,32 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    fn delivery_branch(&self, intake: &IssueIntake) -> Result<Option<String>> {
+        let project = self
+            .store
+            .read(|c| read::load_project(c, intake.project_id))?;
+        Ok(project.map(|p| {
+            p.repos
+                .iter()
+                .find(|r| r.repo_id == intake.repo_id)
+                .map_or(p.base_branch.clone(), |r| r.base_branch.clone())
+        }))
+    }
+
+    fn push_close(&self, batch: &mut Batch, intake: &IssueIntake, cause: &Cause) {
+        let job = Job::new(
+            JobKind::ScmIssueClose,
+            format!("{}:close", intake.id),
+            json!({
+                "intake_id": intake.id,
+                "repo_id": intake.repo_id,
+                "number": intake.number,
+            }),
+            self.now().plus_ms(ISSUE_CLOSE_DELAY_MS),
+        );
+        self.push_job(batch, job, Some(intake.project_id), cause);
     }
 
     fn push_render(&self, batch: &mut Batch, intake: &IssueIntake, attempt: u32, cause: &Cause) {
@@ -862,6 +905,52 @@ impl Engine {
             Err(e) => return Err(e),
         }
         Ok(Effect::Nothing)
+    }
+
+    pub(crate) async fn issue_close_job(&self, job: &ClaimedJob) -> Execution {
+        let p = &job.payload;
+        let intake_id: IssueIntakeId = field(p, "intake_id")?;
+        let repo_id: RepoId = field(p, "repo_id")?;
+        let number: u64 = field(p, "number")?;
+        if self
+            .store
+            .read(|c| rows::issue_closed(c, intake_id))
+            .map_err(|e| internal(e.into()))?
+        {
+            return Ok(Effect::Skipped);
+        }
+        let repo = self.repo_ref_of(repo_id)?;
+        match self
+            .ports
+            .intake
+            .close_issue(&IssueRef { repo, number })
+            .await
+        {
+            Ok(outcome) => {
+                let (by, label) = match outcome {
+                    IssueCloseOutcome::Closed => (IssueClosedBy::Saka, "closed"),
+                    IssueCloseOutcome::AlreadyClosed => (IssueClosedBy::Provider, "already_closed"),
+                };
+                self.counters.issue_close(label);
+                let cause = self.cause(SYSTEM_ACTOR);
+                let mut batch = Batch::new(self.now());
+                let recorded = Event::IssueIntakeIssueClosed { intake_id, by };
+                let project = self
+                    .store
+                    .read(|c| rows::load_issue_intake(c, intake_id))
+                    .map_err(|e| internal(e.into()))?
+                    .map(|i| i.project_id);
+                self.push_event(&mut batch, &recorded, project, &cause, self.now());
+                self.commit(&batch).map_err(internal)?;
+                Ok(Effect::Nothing)
+            }
+            Err(e) if e.retryable && job.attempts < job.max_attempts => Err(e),
+            Err(e) => {
+                self.counters.issue_close("failed");
+                tracing::warn!(code = %e.code, number, "intake.issue.close_failed");
+                Ok(Effect::Nothing)
+            }
+        }
     }
 
     pub(crate) async fn issue_comment_job(&self, job: &ClaimedJob) -> Execution {

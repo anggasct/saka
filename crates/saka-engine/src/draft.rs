@@ -985,6 +985,7 @@ impl Engine {
             | K::ScmScanIssues
             | K::IntakeIssueRender
             | K::ScmIssueComment
+            | K::ScmIssueClose
             | K::ScmUserLinkPoll
             | K::ScmUserLinkRefresh
             | K::GateVerify

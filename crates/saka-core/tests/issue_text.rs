@@ -140,6 +140,7 @@ fn status_comments_stay_short_and_carry_no_internal_details() {
         failure_code: Some("spec_lint_failed /home/me/.ssh".into()),
         max_open: Some(20),
         public_url: None,
+        base_branch: Some("develop`\nmain".into()),
     };
     for event in [
         CommentEvent::Accepted,
@@ -178,6 +179,27 @@ fn a_saka_link_appears_only_with_a_public_url() {
         "{text}"
     );
     assert!(!status_comment(CommentEvent::Done, &facts).contains("saka.example.com"));
+}
+
+#[test]
+fn the_done_comment_names_the_base_branch_as_a_code_span() {
+    let facts = CommentFacts {
+        base_branch: Some("release/1.x".into()),
+        ..CommentFacts::default()
+    };
+    assert_eq!(
+        status_comment(CommentEvent::Done, &facts),
+        "The work for this issue is merged into `release/1.x`. Saka will close this issue. Thanks for the report."
+    );
+    let hostile = CommentFacts {
+        base_branch: Some("main`\n@everyone".into()),
+        ..CommentFacts::default()
+    };
+    let text = status_comment(CommentEvent::Done, &hostile);
+    assert!(
+        !text.contains('\n') && text.matches('`').count() == 2,
+        "{text}"
+    );
 }
 
 proptest! {

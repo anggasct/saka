@@ -184,6 +184,7 @@ pub struct CommentFacts {
     pub failure_code: Option<String>,
     pub max_open: Option<u32>,
     pub public_url: Option<String>,
+    pub base_branch: Option<String>,
 }
 
 fn safe_code(code: &str) -> String {
@@ -230,7 +231,13 @@ pub fn status_comment(event: CommentEvent, facts: &CommentFacts) -> String {
             ),
             None => "A change for this issue is open for review.".into(),
         },
-        CommentEvent::Done => "The work for this issue is merged. Thanks for the report.".into(),
+        CommentEvent::Done => match facts.base_branch.as_deref().map(single_line) {
+            Some(branch) if !branch.is_empty() => format!(
+                "The work for this issue is merged into `{}`. Saka will close this issue. Thanks for the report.",
+                branch.replace('`', "")
+            ),
+            _ => "The work for this issue is merged. Saka will close this issue. Thanks for the report.".into(),
+        },
         CommentEvent::Dismissed => match facts.reason.as_deref().map(single_line) {
             Some(reason) if !reason.is_empty() => format!(
                 "Saka will not work on this issue (not planned): {}",

@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    IntakeCapabilities, IntakeSource, Issue, IssueListing, IssueRef, IssueSignal, IssueSignalKind,
-    IssueState, IssueSummary, MAX_ISSUES, MAX_SIGNALS, PortError, PortResult, RepoRef, Scm,
-    clip_issue_body, clip_text,
+    IntakeCapabilities, IntakeSource, Issue, IssueCloseOutcome, IssueListing, IssueRef,
+    IssueSignal, IssueSignalKind, IssueState, IssueSummary, MAX_ISSUES, MAX_SIGNALS, PortError,
+    PortResult, RepoRef, Scm, clip_issue_body, clip_text,
 };
 use serde_json::{Value, json};
 
@@ -190,6 +190,31 @@ impl IntakeSource for GitHub {
 
     async fn post_issue_comment(&self, issue: &IssueRef, body: &str) -> PortResult<()> {
         Scm::post_comment(self, &issue.repo, issue.number, body).await
+    }
+
+    async fn close_issue(&self, issue: &IssueRef) -> PortResult<IssueCloseOutcome> {
+        let current = IntakeSource::issue(self, issue).await?;
+        if current.summary.state == IssueState::Closed {
+            return Ok(IssueCloseOutcome::AlreadyClosed);
+        }
+        let n = issue.number.to_string();
+        let reply = self
+            .repo_call(
+                &issue.repo.full_name,
+                Method::PATCH,
+                &["issues", &n],
+                Some(&json!({ "state": "closed", "state_reason": "completed" })),
+            )
+            .await?;
+        match reply.status {
+            s if s.is_success() => Ok(IssueCloseOutcome::Closed),
+            StatusCode::NOT_FOUND | StatusCode::GONE => Err(not_found(issue.number)),
+            StatusCode::FORBIDDEN => Err(PortError::permanent(
+                "forbidden",
+                json!({ "status": 403, "number": issue.number }),
+            )),
+            _ => Err(self.app.unexpected("close_issue", &reply)),
+        }
     }
 }
 
