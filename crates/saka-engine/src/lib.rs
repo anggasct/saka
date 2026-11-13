@@ -16,6 +16,7 @@ mod hooks;
 mod hooks_run;
 mod identity;
 mod inbox;
+mod incident;
 mod intake;
 mod issue_intake;
 mod issue_scan;
@@ -81,6 +82,7 @@ pub use draft::{
 };
 pub use hooks::HookReport;
 pub use identity::{DeviceIssued, PairingIssued, Principal, Registered, SessionIssued, digest};
+pub use incident::{IncidentDetail, IncidentQuery, IncidentRow, SourceView, Suspect};
 pub use issue_intake::{IssueDraftView, IssueIntakeView, IssueRepoView, IssueSpecView};
 pub use metrics::{MetricsSnapshot, Readiness, SecondsHistogram};
 pub use permission_check::{PREVIEW_SCAN, PreviewChange, PreviewView};
@@ -118,6 +120,7 @@ pub struct EngineConfig {
     pub diagnostics: DiagnosticLimits,
     pub hooks: Vec<saka_core::hook::Hook>,
     pub environments: Vec<saka_core::environment::Environment>,
+    pub incident_sources: Vec<saka_core::incident::Source>,
     pub auth_enabled: bool,
     pub workflow_policy: saka_core::workflow::WorkflowPolicy,
     pub public_url: Option<String>,

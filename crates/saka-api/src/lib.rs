@@ -47,6 +47,7 @@ pub use state::{ApiConfig, AppState};
         routes::issue_intakes::list_issue_intakes, routes::issue_intakes::get_issue_intake,
         routes::issue_intakes::create_issue_intake, routes::issue_intakes::dismiss_issue_intake, routes::issue_intakes::retry_issue_intake,
         routes::deployments::list_environments, routes::deployments::list_deployments, routes::deployments::get_deployment, routes::deployments::deploy_environment, routes::deployments::cancel_deployment, routes::deployments::draft_fix, routes::tasks::accept_unverified,
+        routes::incidents::list_incident_sources, routes::incidents::list_incidents, routes::incidents::get_incident,
         routes::operations::list_project_hooks, routes::operations::list_hook_runs, routes::operations::get_hook_run, routes::inbox::list_inbox, routes::inbox::inbox_summary, routes::dismiss_inbox_item, routes::operations::rerun_hook,
         auth_routes::status, auth_routes::create_pairing, auth_routes::pair, auth_routes::list_devices, auth_routes::revoke_device,
         auth_routes::register_start, auth_routes::register_finish, auth_routes::login_start, auth_routes::login_finish, auth_routes::logout, auth_routes::revoke_credential,
@@ -55,7 +56,7 @@ pub use state::{ApiConfig, AppState};
     ),
     components(schemas(dto::ActivityNotice)),
     tags(
-        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"), (name = "hooks"), (name = "deployments"), (name = "inbox"),
+        (name = "projects"), (name = "accounts"), (name = "specs"), (name = "spec-drafts"), (name = "files"), (name = "delivery"), (name = "runtime"), (name = "hooks"), (name = "deployments"), (name = "incidents"), (name = "inbox"),
         (name = "spec-drafts"), (name = "issue-intakes"), (name = "system"), (name = "ops"), (name = "auth"),
     )
 )]
@@ -150,6 +151,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/deployments/{deployment_id}/actions/cancel",
             post(routes::deployments::cancel_deployment),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/incident-sources",
+            get(routes::incidents::list_incident_sources),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/incidents",
+            get(routes::incidents::list_incidents),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}",
+            get(routes::incidents::get_incident),
         )
         .route("/api/v1/inbox", get(routes::inbox::list_inbox))
         .route("/api/v1/inbox/summary", get(routes::inbox::inbox_summary))

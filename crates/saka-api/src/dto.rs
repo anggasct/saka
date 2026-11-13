@@ -4229,6 +4229,194 @@ impl From<&saka_engine::DeploymentDetail> for Deployment {
     }
 }
 
+/// An incident source an operator defined in the server config. The secret is never sent.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentSource {
+    pub name: String,
+    /// `alertmanager`, `sentry`, or `generic`.
+    pub kind: String,
+    /// The full URL the monitoring tool posts to; `null` when the server has no `public_url`.
+    pub endpoint: Option<String>,
+    pub endpoint_path: String,
+    /// `inbox` or `draft`.
+    pub action: String,
+    /// With `action = draft`, the lowest severity that drafts a fix on its own: `critical`, `high`, `medium`, `low`, or `info`.
+    pub min_severity: String,
+    pub max_open: u32,
+    pub repo: Option<String>,
+    /// Incidents of the source that are `open` or `handling`.
+    pub open: u32,
+}
+
+impl From<&saka_engine::SourceView> for IncidentSource {
+    fn from(v: &saka_engine::SourceView) -> IncidentSource {
+        IncidentSource {
+            name: v.source.name.clone(),
+            kind: v.source.kind.as_str().into(),
+            endpoint: v.endpoint.clone(),
+            endpoint_path: v.endpoint_path.clone(),
+            action: v.source.action.as_str().into(),
+            min_severity: v.source.min_severity.as_str().into(),
+            max_open: v.source.max_open,
+            repo: v.source.repo.clone(),
+            open: v.open,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentSourceList {
+    pub items: Vec<IncidentSource>,
+}
+
+/// An incident raised by a signal from a monitoring tool. The text fields come from the source and are untrusted: they are redacted and cleaned, and a client shows them as plain text.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Incident {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub source: String,
+    pub fingerprint: String,
+    /// `open`, `handling`, `resolved`, or `dismissed`.
+    pub state: String,
+    /// `fixed`, `reverted`, or `signal_resolved`; set when the state is `resolved`.
+    pub resolution: Option<String>,
+    /// What the source last said: `firing` or `resolved`.
+    pub signal_status: String,
+    /// `critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open.
+    pub severity: String,
+    pub title: String,
+    pub summary: String,
+    pub environment: Option<String>,
+    pub url: Option<String>,
+    pub labels: BTreeMap<String, String>,
+    pub occurrences: u32,
+    pub started_at: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    /// The last succeeded deployment of the environment before the incident started; it never changes.
+    pub deployment: Option<DeploymentSummary>,
+    pub dismiss_reason: Option<String>,
+    pub actor: Option<String>,
+    pub resolved_at: Option<String>,
+}
+
+impl From<&saka_engine::IncidentRow> for Incident {
+    fn from(r: &saka_engine::IncidentRow) -> Incident {
+        let i = &r.incident;
+        Incident {
+            id: i.id.0,
+            project_id: i.project_id.0,
+            source: i.source.clone(),
+            fingerprint: i.fingerprint.clone(),
+            state: i.state.as_str().into(),
+            resolution: i.resolution.map(|v| v.as_str().into()),
+            signal_status: i.signal_status.as_str().into(),
+            severity: i.severity.as_str().into(),
+            title: i.title.clone(),
+            summary: i.summary.clone(),
+            environment: i.environment.clone(),
+            url: i.url.clone(),
+            labels: i.labels.clone(),
+            occurrences: i.occurrences,
+            started_at: opt_time(i.started_at),
+            first_seen: time(i.first_seen),
+            last_seen: time(i.last_seen),
+            deployment: r.deployment.as_ref().map(DeploymentSummary::from),
+            dismiss_reason: i.dismiss_reason.clone(),
+            actor: i.actor.clone(),
+            resolved_at: opt_time(i.resolved_at),
+        }
+    }
+}
+
+/// The commits a deployment shipped.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentRange {
+    /// The commit the environment ran before the deployment; `null` for its first deployment.
+    pub previous_sha: Option<String>,
+    pub sha: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentChange {
+    pub number: u64,
+    pub url: String,
+}
+
+/// A task or a merged change the linked deployment shipped.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentSuspect {
+    /// `task` for a task Saka ran, `change` for a merged change Saka did not run.
+    pub kind: String,
+    pub work_item: Option<WorkItemRef>,
+    pub change: Option<IncidentChange>,
+}
+
+impl From<&saka_engine::Suspect> for IncidentSuspect {
+    fn from(s: &saka_engine::Suspect) -> IncidentSuspect {
+        match s {
+            saka_engine::Suspect::Task {
+                work_item_id,
+                key,
+                change,
+            } => IncidentSuspect {
+                kind: "task".into(),
+                work_item: Some(WorkItemRef {
+                    id: work_item_id.0,
+                    key: key.clone(),
+                }),
+                change: change.as_ref().map(|(number, url)| IncidentChange {
+                    number: *number,
+                    url: url.clone(),
+                }),
+            },
+            saka_engine::Suspect::Change { number, url } => IncidentSuspect {
+                kind: "change".into(),
+                work_item: None,
+                change: Some(IncidentChange {
+                    number: *number,
+                    url: url.clone(),
+                }),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IncidentDetail {
+    #[serde(flatten)]
+    pub incident: Incident,
+    /// The commits of the linked deployment; `null` without a linked deployment.
+    pub range: Option<IncidentRange>,
+    pub suspects: Vec<IncidentSuspect>,
+}
+
+impl From<&saka_engine::IncidentDetail> for IncidentDetail {
+    fn from(d: &saka_engine::IncidentDetail) -> IncidentDetail {
+        IncidentDetail {
+            incident: Incident::from(&d.row),
+            range: d.range.as_ref().map(|(previous_sha, sha)| IncidentRange {
+                previous_sha: previous_sha.clone(),
+                sha: sha.clone(),
+            }),
+            suspects: d.suspects.iter().map(IncidentSuspect::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct IncidentQuery {
+    /// `open`, `handling`, `resolved`, or `dismissed`.
+    pub state: Option<String>,
+    /// `critical`, `high`, `medium`, `low`, or `info`.
+    pub severity: Option<String>,
+    pub environment: Option<String>,
+    pub source: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct EnvironmentList {
     pub items: Vec<DeployEnvironment>,

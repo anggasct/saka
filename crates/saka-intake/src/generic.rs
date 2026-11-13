@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use saka_core::time::Timestamp;
 use saka_ports::{
-    DecodedDelivery, IncidentSignal, PortResult, SignalDecoder, SignalRequest, SignalSeverity,
+    DecodedDelivery, IncidentSeverity, IncidentSignal, PortResult, SignalDecoder, SignalRequest,
     SignalStatus, TIMESTAMP_WINDOW_SECS,
 };
 use serde::Deserialize;
@@ -83,11 +83,11 @@ impl SignalDecoder for GenericDecoder {
             status: body
                 .status
                 .parse::<SignalStatus>()
-                .map_err(|()| malformed("status"))?,
+                .map_err(|_| malformed("status"))?,
             severity: body
                 .severity
-                .parse::<SignalSeverity>()
-                .map_err(|()| malformed("severity"))?,
+                .parse::<IncidentSeverity>()
+                .map_err(|_| malformed("severity"))?,
             summary: body
                 .summary
                 .as_deref()

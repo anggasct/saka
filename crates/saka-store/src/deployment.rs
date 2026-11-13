@@ -245,6 +245,7 @@ pub fn checks(conn: &Connection, id: DeploymentId) -> Result<Vec<CheckRecord>> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeRef {
     pub change_request_id: ChangeRequestId,
+    pub work_item_id: WorkItemId,
     pub number: u64,
     pub url: String,
     pub merge_commit_sha: Option<String>,
@@ -252,7 +253,8 @@ pub struct MergeRef {
 
 pub fn merge_refs(conn: &Connection, id: DeploymentId) -> Result<Vec<MergeRef>> {
     let mut stmt = conn.prepare(
-        "SELECT c.id AS id, c.number AS number, c.url AS url, c.merge_commit_sha AS merge_commit_sha
+        "SELECT c.id AS id, c.work_item_id AS work_item_id, c.number AS number, c.url AS url,
+           c.merge_commit_sha AS merge_commit_sha
          FROM deployment_merge m JOIN change_request c ON c.id = m.change_request_id
          WHERE m.deployment_id = ?1 ORDER BY c.created_at, c.id",
     )?;
@@ -261,6 +263,7 @@ pub fn merge_refs(conn: &Connection, id: DeploymentId) -> Result<Vec<MergeRef>> 
     while let Some(row) = rows.next()? {
         out.push(MergeRef {
             change_request_id: ChangeRequestId(uuid(row, "id")?),
+            work_item_id: WorkItemId(uuid(row, "work_item_id")?),
             number: crate::codec::u64_col(row, "number")?,
             url: row.get("url")?,
             merge_commit_sha: row.get("merge_commit_sha")?,

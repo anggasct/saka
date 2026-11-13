@@ -177,6 +177,10 @@ pub enum Rejection {
     DeploymentRunning,
     #[error("the deployment already finished")]
     DeploymentFinished,
+    #[error("the incident already has a recovery in progress")]
+    IncidentHandling,
+    #[error("the incident is closed")]
+    IncidentClosed,
     #[error("the task already has a revert in progress")]
     RevertInProgress { work_item_id: String },
     #[error("the task was already reverted")]
@@ -320,6 +324,8 @@ impl Rejection {
             Rejection::FixDraftInProgress { .. } => "fix_draft_in_progress",
             Rejection::DeploymentRunning => "deployment_running",
             Rejection::DeploymentFinished => "deployment_finished",
+            Rejection::IncidentHandling => "incident_handling",
+            Rejection::IncidentClosed => "incident_closed",
             Rejection::RevertInProgress { .. } => "revert_in_progress",
             Rejection::AlreadyReverted { .. } => "already_reverted",
             Rejection::BlockerNotOpen { .. } => "blocker_not_open",

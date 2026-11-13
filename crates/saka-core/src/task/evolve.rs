@@ -805,6 +805,10 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
         | E::DeploymentSucceeded { .. }
         | E::DeploymentFailed { .. }
         | E::DeploymentCancelled { .. }
+        | E::IncidentOpened { .. }
+        | E::IncidentUpdated { .. }
+        | E::IncidentStateChanged { .. }
+        | E::IncidentLinked { .. }
         | E::InboxItemDismissed { .. }
         | E::PairingCreated { .. }
         | E::DevicePaired { .. }

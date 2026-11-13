@@ -420,6 +420,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/incidents/{incident_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_incident"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/issue-intakes/{intake_id}": {
     parameters: {
       query?: never;
@@ -732,6 +748,38 @@ export interface paths {
       cookie?: never;
     };
     get: operations["list_project_hooks"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/incident-sources": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_incident_sources"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/projects/{project_id}/incidents": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["list_incidents"];
     put?: never;
     post?: never;
     delete?: never;
@@ -2340,6 +2388,85 @@ export interface components {
       /** @description The task the item is about, when it is about one. */
       task_key?: string | null;
     };
+    /** @description An incident raised by a signal from a monitoring tool. The text fields come from the source and are untrusted: they are redacted and cleaned, and a client shows them as plain text. */
+    Incident: {
+      actor?: string | null;
+      deployment?: components["schemas"]["DeploymentSummary"] | null;
+      dismiss_reason?: string | null;
+      environment?: string | null;
+      fingerprint: string;
+      first_seen: string;
+      /** Format: uuid */
+      id: string;
+      labels: {
+        [key: string]: string;
+      };
+      last_seen: string;
+      /** Format: int32 */
+      occurrences: number;
+      /** Format: uuid */
+      project_id: string;
+      /** @description `fixed`, `reverted`, or `signal_resolved`; set when the state is `resolved`. */
+      resolution?: string | null;
+      resolved_at?: string | null;
+      /** @description `critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open. */
+      severity: string;
+      /** @description What the source last said: `firing` or `resolved`. */
+      signal_status: string;
+      source: string;
+      started_at?: string | null;
+      /** @description `open`, `handling`, `resolved`, or `dismissed`. */
+      state: string;
+      summary: string;
+      title: string;
+      url?: string | null;
+    };
+    IncidentChange: {
+      /** Format: int64 */
+      number: number;
+      url: string;
+    };
+    IncidentDetail: components["schemas"]["Incident"] & {
+      range?: components["schemas"]["IncidentRange"] | null;
+      suspects: components["schemas"]["IncidentSuspect"][];
+    };
+    /** @description The commits a deployment shipped. */
+    IncidentRange: {
+      /** @description The commit the environment ran before the deployment; `null` for its first deployment. */
+      previous_sha?: string | null;
+      sha: string;
+    };
+    /** @description An incident source an operator defined in the server config. The secret is never sent. */
+    IncidentSource: {
+      /** @description `inbox` or `draft`. */
+      action: string;
+      /** @description The full URL the monitoring tool posts to; `null` when the server has no `public_url`. */
+      endpoint?: string | null;
+      endpoint_path: string;
+      /** @description `alertmanager`, `sentry`, or `generic`. */
+      kind: string;
+      /** Format: int32 */
+      max_open: number;
+      /** @description With `action = draft`, the lowest severity that drafts a fix on its own: `critical`, `high`, `medium`, `low`, or `info`. */
+      min_severity: string;
+      name: string;
+      /**
+       * Format: int32
+       * @description Incidents of the source that are `open` or `handling`.
+       */
+      open: number;
+      repo?: string | null;
+    };
+    IncidentSourceList: {
+      items: components["schemas"]["IncidentSource"][];
+    };
+    /** @description A task or a merged change the linked deployment shipped. */
+    IncidentSuspect: {
+      change?: components["schemas"]["IncidentChange"] | null;
+      /** @description `task` for a task Saka ran, `change` for a merged change Saka did not run. */
+      kind: string;
+      work_item?: components["schemas"]["WorkItemRef"] | null;
+    };
     IssueBugfixCommands: {
       done_when: string[];
       regression: string[];
@@ -2631,6 +2758,42 @@ export interface components {
         title: components["schemas"]["InboxTitle"];
         /** Format: uuid */
         work_item_id?: string | null;
+      }[];
+      next_cursor?: string | null;
+    };
+    /** @description A list page. */
+    Page_Incident: {
+      items: {
+        actor?: string | null;
+        deployment?: components["schemas"]["DeploymentSummary"] | null;
+        dismiss_reason?: string | null;
+        environment?: string | null;
+        fingerprint: string;
+        first_seen: string;
+        /** Format: uuid */
+        id: string;
+        labels: {
+          [key: string]: string;
+        };
+        last_seen: string;
+        /** Format: int32 */
+        occurrences: number;
+        /** Format: uuid */
+        project_id: string;
+        /** @description `fixed`, `reverted`, or `signal_resolved`; set when the state is `resolved`. */
+        resolution?: string | null;
+        resolved_at?: string | null;
+        /** @description `critical`, `high`, `medium`, `low`, or `info`. It only goes up while the incident stays open. */
+        severity: string;
+        /** @description What the source last said: `firing` or `resolved`. */
+        signal_status: string;
+        source: string;
+        started_at?: string | null;
+        /** @description `open`, `handling`, `resolved`, or `dismissed`. */
+        state: string;
+        summary: string;
+        title: string;
+        url?: string | null;
       }[];
       next_cursor?: string | null;
     };
@@ -5029,6 +5192,35 @@ export interface operations {
       };
     };
   };
+  get_incident: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        incident_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncidentDetail"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
   get_issue_intake: {
     parameters: {
       query?: never;
@@ -5913,6 +6105,81 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_incident_sources: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncidentSourceList"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  list_incidents: {
+    parameters: {
+      query?: {
+        /** @description `open`, `handling`, `resolved`, or `dismissed`. */
+        state?: string;
+        /** @description `critical`, `high`, `medium`, `low`, or `info`. */
+        severity?: string;
+        environment?: string;
+        source?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        project_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_Incident"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      422: {
         headers: {
           [name: string]: unknown;
         };

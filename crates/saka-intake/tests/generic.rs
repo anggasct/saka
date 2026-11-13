@@ -8,7 +8,7 @@ mod support;
 
 use saka_core::time::Timestamp;
 use saka_intake::GenericDecoder;
-use saka_ports::{SignalDecoder, SignalSeverity, SignalStatus, TIMESTAMP_WINDOW_SECS};
+use saka_ports::{IncidentSeverity, SignalDecoder, SignalStatus, TIMESTAMP_WINDOW_SECS};
 use support::{NOW, SECRET, fixture, headers, hmac_hex, request};
 
 fn signed_at(timestamp_secs: i64, delivery: &str, body: &[u8]) -> Vec<(String, String)> {
@@ -39,7 +39,7 @@ fn a_signed_body_decodes_to_one_signal() {
     let signal = &delivery.signals[0];
     assert_eq!(signal.fingerprint, "queue-depth-orders");
     assert_eq!(signal.status, SignalStatus::Firing);
-    assert_eq!(signal.severity, SignalSeverity::High);
+    assert_eq!(signal.severity, IncidentSeverity::High);
     assert_eq!(signal.title, "Orders queue depth above 10k");
     assert_eq!(signal.environment.as_deref(), Some("prod"));
     assert_eq!(signal.started_at, Some(Timestamp(1_794_563_100_000)));

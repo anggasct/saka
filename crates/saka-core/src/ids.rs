@@ -57,4 +57,5 @@ id_type!(
     RegressionCheckId,
     IssueIntakeId,
     DeploymentId,
+    IncidentId,
 );

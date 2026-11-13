@@ -9,7 +9,7 @@ mod support;
 use saka_core::time::Timestamp;
 use saka_intake::{AlertmanagerDecoder, AlertmanagerOptions};
 use saka_ports::{
-    BODY_DEDUP_WINDOW_SECS, MAX_SIGNALS_PER_DELIVERY, SignalDecoder, SignalSeverity, SignalStatus,
+    BODY_DEDUP_WINDOW_SECS, IncidentSeverity, MAX_SIGNALS_PER_DELIVERY, SignalDecoder, SignalStatus,
 };
 use serde_json::json;
 use support::{SECRET, fixture, headers, request};
@@ -41,7 +41,7 @@ fn a_firing_group_becomes_one_signal_per_alert() {
     let first = &delivery.signals[0];
     assert_eq!(first.fingerprint, "3f2c9a1b7d5e4c60");
     assert_eq!(first.status, SignalStatus::Firing);
-    assert_eq!(first.severity, SignalSeverity::Critical);
+    assert_eq!(first.severity, IncidentSeverity::Critical);
     assert_eq!(first.title, "Checkout error rate above 5%");
     assert!(first.summary.starts_with("5xx responses on checkout"));
     assert!(first.summary.contains('\n'));
@@ -58,7 +58,7 @@ fn a_firing_group_becomes_one_signal_per_alert() {
 
     let second = &delivery.signals[1];
     assert_eq!(second.title, "DiskAlmostFull");
-    assert_eq!(second.severity, SignalSeverity::Medium);
+    assert_eq!(second.severity, IncidentSeverity::Medium);
     assert_eq!(second.environment.as_deref(), Some("staging"));
     assert_eq!(second.url, None);
 }
@@ -98,7 +98,7 @@ fn custom_label_names_and_default_names_are_honoured() {
         .decode(&request(&bearer(), body.as_bytes()))
         .unwrap();
     assert_eq!(delivery.signals[0].environment.as_deref(), Some("prod"));
-    assert_eq!(delivery.signals[0].severity, SignalSeverity::Critical);
+    assert_eq!(delivery.signals[0].severity, IncidentSeverity::Critical);
 
     let by_other_label = decoder()
         .decode(&request(&bearer(), body.as_bytes()))
@@ -109,14 +109,14 @@ fn custom_label_names_and_default_names_are_honoured() {
 #[test]
 fn severity_labels_map_to_the_scale() {
     let cases = [
-        ("critical", SignalSeverity::Critical),
-        ("page", SignalSeverity::Critical),
-        ("high", SignalSeverity::High),
-        ("error", SignalSeverity::High),
-        ("warning", SignalSeverity::Medium),
-        ("low", SignalSeverity::Low),
-        ("info", SignalSeverity::Info),
-        ("whatever", SignalSeverity::Info),
+        ("critical", IncidentSeverity::Critical),
+        ("page", IncidentSeverity::Critical),
+        ("high", IncidentSeverity::High),
+        ("error", IncidentSeverity::High),
+        ("warning", IncidentSeverity::Medium),
+        ("low", IncidentSeverity::Low),
+        ("info", IncidentSeverity::Info),
+        ("whatever", IncidentSeverity::Info),
     ];
     for (label, expected) in cases {
         let body = json!({

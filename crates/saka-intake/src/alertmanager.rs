@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use saka_ports::{
-    BODY_DEDUP_WINDOW_SECS, DecodedDelivery, IncidentSignal, MAX_SIGNALS_PER_DELIVERY, PortResult,
-    SignalDecoder, SignalRequest, SignalSeverity, SignalStatus,
+    BODY_DEDUP_WINDOW_SECS, DecodedDelivery, IncidentSeverity, IncidentSignal,
+    MAX_SIGNALS_PER_DELIVERY, PortResult, SignalDecoder, SignalRequest, SignalStatus,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -61,16 +61,16 @@ struct Alert {
     generator_url: Option<String>,
 }
 
-fn severity(label: Option<&String>) -> SignalSeverity {
+fn severity(label: Option<&String>) -> IncidentSeverity {
     let Some(label) = label else {
-        return SignalSeverity::Medium;
+        return IncidentSeverity::Medium;
     };
     match label.to_ascii_lowercase().as_str() {
-        "critical" | "page" => SignalSeverity::Critical,
-        "high" | "error" => SignalSeverity::High,
-        "warning" | "medium" => SignalSeverity::Medium,
-        "low" => SignalSeverity::Low,
-        _ => SignalSeverity::Info,
+        "critical" | "page" => IncidentSeverity::Critical,
+        "high" | "error" => IncidentSeverity::High,
+        "warning" | "medium" => IncidentSeverity::Medium,
+        "low" => IncidentSeverity::Low,
+        _ => IncidentSeverity::Info,
     }
 }
 
@@ -82,7 +82,7 @@ impl AlertmanagerDecoder {
         let status = alert
             .status
             .parse::<SignalStatus>()
-            .map_err(|()| malformed("status"))?;
+            .map_err(|_| malformed("status"))?;
         let title = [
             alert.annotations.get("summary"),
             alert.labels.get("alertname"),

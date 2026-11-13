@@ -741,7 +741,10 @@ pub fn serve(cfg: &Config) -> ExitCode {
         tracing::error!(code = "config_listen_not_loopback", listen = %listen, "listening beyond loopback needs an [auth] section");
         return ExitCode::from(EXIT_REFUSED);
     }
-    if let Err(e) = cfg.check_key_files() {
+    if let Err(e) = cfg
+        .check_key_files()
+        .and_then(|()| cfg.check_incident_secrets())
+    {
         return refuse(&e);
     }
     let hooks = match cfg.hooks.as_ref().map(|_| cfg.hooks_listen()).transpose() {
@@ -1008,6 +1011,14 @@ async fn run(
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    let incident_sources_cfg = match cfg.incident_sources_parsed() {
+        Ok(sources) => sources,
+        Err(e) => {
+            tracing::error!(code = e.code, detail = %e.detail, "incident config refused");
+            stop_http(&stop, http).await;
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let outbound = match saka_notify::HttpWebhooks::new(format!("saka/{VERSION}")) {
         Ok(w) => Arc::new(w),
         Err(e) => {
@@ -1081,6 +1092,7 @@ async fn run(
             diagnostics: DiagnosticLimits::default(),
             hooks: hooks_cfg,
             environments: environments_cfg,
+            incident_sources: incident_sources_cfg,
             auth_enabled: cfg.auth.is_some(),
             workflow_policy: saka_core::workflow::WorkflowPolicy {
                 allow_unreviewed_chore: cfg.workflow.allow_unreviewed_chore,

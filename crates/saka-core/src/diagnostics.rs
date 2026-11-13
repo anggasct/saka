@@ -33,7 +33,8 @@ impl CheckId {
             | CheckId::RuntimeSupervisor
             | CheckId::ToolchainCache
             | CheckId::ToolchainSources
-            | CheckId::AuthConfig => SubjectKind::Instance,
+            | CheckId::AuthConfig
+            | CheckId::IncidentSource => SubjectKind::Instance,
             CheckId::ScmCredential | CheckId::ScmWebhook | CheckId::ScmUserLink => {
                 SubjectKind::Integration
             }
@@ -1390,6 +1391,62 @@ pub fn deploy_ready_missing(facts: &DeployFacts) -> Vec<Finding> {
     warns
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretFileState {
+    Private,
+    Missing,
+    Empty,
+    WrongMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncidentSourceFacts {
+    pub name: String,
+    pub project_known: bool,
+    pub binding: Result<(), &'static str>,
+    pub secret: SecretFileState,
+}
+
+pub fn incident_source(sources: &[IncidentSourceFacts]) -> Vec<Finding> {
+    if sources.is_empty() {
+        return vec![Finding::skip("incident_not_configured", json!({}))];
+    }
+    let mut findings = Vec::new();
+    for source in sources {
+        let params = json!({ "source": source.name });
+        let fix_config = || fix("fix_incident_config", params.clone());
+        if !source.project_known {
+            findings.push(Finding::fail(
+                "incident_project_unknown",
+                params.clone(),
+                fix_config(),
+            ));
+        } else if let Err(code) = source.binding {
+            findings.push(Finding::fail(code, params.clone(), fix_config()));
+        }
+        let secret_code = match source.secret {
+            SecretFileState::Private => None,
+            SecretFileState::Missing => Some("incident_secret_unreadable"),
+            SecretFileState::Empty => Some("incident_secret_empty"),
+            SecretFileState::WrongMode => Some("incident_secret_mode"),
+        };
+        if let Some(code) = secret_code {
+            findings.push(Finding::fail(
+                code,
+                params.clone(),
+                fix("fix_incident_secret_file", params.clone()),
+            ));
+        }
+    }
+    if findings.is_empty() {
+        return vec![Finding::pass(
+            "incident_source_ok",
+            json!({ "sources": sources.len() }),
+        )];
+    }
+    findings
+}
+
 pub fn repo_unreachable(status: Option<u16>) -> Finding {
     Finding::skip("repo_unreachable", json!({ "status": status }))
 }
@@ -2730,6 +2787,7 @@ mod tests {
                 "deploy.config",
                 "deploy.verify_missing",
                 "deploy.ready_missing",
+                "incident.source",
             ]
         );
         assert!(CheckId::server().all(|c| !c.is_client()));
@@ -3142,6 +3200,46 @@ mod tests {
             .iter()
             .map(|f| (f.status, f.code.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn incident_source_reports_each_problem_of_each_source() {
+        use crate::diagnostics::SecretFileState as File;
+        let source = |name: &str, project_known, binding, secret| IncidentSourceFacts {
+            name: name.into(),
+            project_known,
+            binding,
+            secret,
+        };
+        assert_eq!(
+            codes(&incident_source(&[])),
+            [(DiagnosticStatus::Skip, "incident_not_configured")]
+        );
+        let good = [source("prod", true, Ok(()), File::Private)];
+        assert_eq!(
+            codes(&incident_source(&good)),
+            [(DiagnosticStatus::Pass, "incident_source_ok")]
+        );
+        let bad = [
+            source("a", false, Ok(()), File::WrongMode),
+            source(
+                "b",
+                true,
+                Err("incident_source_repo_required"),
+                File::Missing,
+            ),
+            source("c", true, Ok(()), File::Empty),
+        ];
+        assert_eq!(
+            codes(&incident_source(&bad)),
+            [
+                (DiagnosticStatus::Fail, "incident_project_unknown"),
+                (DiagnosticStatus::Fail, "incident_secret_mode"),
+                (DiagnosticStatus::Fail, "incident_source_repo_required"),
+                (DiagnosticStatus::Fail, "incident_secret_unreadable"),
+                (DiagnosticStatus::Fail, "incident_secret_empty"),
+            ]
+        );
     }
 
     #[test]

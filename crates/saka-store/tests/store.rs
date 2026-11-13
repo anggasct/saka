@@ -1224,10 +1224,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         w.store.migration().applied,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(45));
+    assert_eq!(w.store.schema_version().unwrap(), Some(46));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());
@@ -2004,6 +2004,163 @@ fn deployments_round_trip_and_an_environment_keeps_one_queued_and_one_active() {
         })
         .unwrap();
     assert_eq!(listed.len(), 2);
+}
+
+fn incident_signal(
+    fingerprint: &str,
+    status: saka_core::vocab::SignalStatus,
+    severity: saka_core::vocab::IncidentSeverity,
+) -> saka_core::incident::IncidentSignal {
+    saka_core::incident::IncidentSignal {
+        fingerprint: fingerprint.into(),
+        status,
+        severity,
+        title: "Checkout down".into(),
+        summary: "5xx".into(),
+        environment: Some("staging".into()),
+        url: Some("https://alerts.example.com/1".into()),
+        started_at: Some(Timestamp(5)),
+        labels: [("team".to_string(), "web".to_string())].into(),
+    }
+}
+
+fn open_incident(
+    w: &mut World,
+    source: &str,
+    fingerprint: &str,
+    severity: saka_core::vocab::IncidentSeverity,
+) -> saka_core::incident::Incident {
+    use saka_core::incident::{Arrival, Observed, observe};
+    let signal = incident_signal(
+        fingerprint,
+        saka_core::vocab::SignalStatus::Firing,
+        severity,
+    );
+    let arrival = Arrival {
+        project_id: w.project.id,
+        source,
+        max_open: 50,
+        live_in_source: 0,
+        deployment_id: None,
+    };
+    let mut ctx = Ctx {
+        now: w.now,
+        ids: &mut w.ids,
+    };
+    let Observed::Opened(events) = observe(None, &signal, &arrival, &mut ctx) else {
+        panic!("expected an opened incident");
+    };
+    saka_core::incident::evolve_all(None, &events, w.now).unwrap()
+}
+
+#[test]
+fn incidents_round_trip_keep_one_live_per_fingerprint_and_list_by_filter() {
+    use saka_core::incident::{Input, decide, evolve_all};
+    use saka_core::vocab::{IncidentSeverity, IncidentState};
+    let mut w = World::new();
+    let first = open_incident(&mut w, "prod-alerts", "fp-1", IncidentSeverity::High);
+    let mut batch = Batch::new(w.now);
+    batch.incidents.push(first.clone());
+    w.store.commit(&batch).unwrap();
+    let stored = w
+        .store
+        .read(|c| saka_store::incident::load(c, first.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, first);
+
+    let twin = open_incident(&mut w, "prod-alerts", "fp-1", IncidentSeverity::Low);
+    let mut dup = Batch::new(w.now);
+    dup.incidents.push(twin.clone());
+    assert!(
+        w.store.commit(&dup).is_err(),
+        "a second live incident for the same source and fingerprint is refused"
+    );
+
+    let other = open_incident(&mut w, "prod-alerts", "fp-2", IncidentSeverity::Critical);
+    let elsewhere = open_incident(&mut w, "sentry-web", "fp-1", IncidentSeverity::Low);
+    let mut more = Batch::new(w.now);
+    more.incidents.push(other.clone());
+    more.incidents.push(elsewhere.clone());
+    w.store.commit(&more).unwrap();
+
+    let events = decide(
+        &first,
+        Input::Dismiss {
+            reason: "noise".into(),
+            actor: None,
+        },
+    )
+    .unwrap();
+    let dismissed = evolve_all(Some(first.clone()), &events, w.now).unwrap();
+    let mut closing = Batch::new(w.now);
+    closing.incidents.push(dismissed.clone());
+    w.store.commit(&closing).unwrap();
+
+    let again = open_incident(&mut w, "prod-alerts", "fp-1", IncidentSeverity::High);
+    let mut reopen = Batch::new(w.now);
+    reopen.incidents.push(again.clone());
+    w.store
+        .commit(&reopen)
+        .expect("a dismissed incident frees its fingerprint");
+
+    let page = saka_store::list::Page {
+        after: None,
+        limit: 10,
+    };
+    let find = |filter: saka_store::incident::IncidentFilter| {
+        w.store
+            .read(|c| saka_store::incident::list(c, &filter, &page))
+            .unwrap()
+            .into_iter()
+            .map(|(incident, _)| incident.id)
+            .collect::<Vec<_>>()
+    };
+    let project = Some(w.project.id);
+    assert_eq!(
+        find(saka_store::incident::IncidentFilter {
+            project,
+            ..Default::default()
+        })
+        .len(),
+        4
+    );
+    assert_eq!(
+        find(saka_store::incident::IncidentFilter {
+            project,
+            state: Some(IncidentState::Dismissed),
+            ..Default::default()
+        }),
+        vec![first.id]
+    );
+    assert_eq!(
+        find(saka_store::incident::IncidentFilter {
+            project,
+            severity: Some(IncidentSeverity::Critical),
+            ..Default::default()
+        }),
+        vec![other.id]
+    );
+    assert_eq!(
+        find(saka_store::incident::IncidentFilter {
+            project,
+            source: Some("sentry-web".into()),
+            environment: Some("staging".into()),
+            ..Default::default()
+        }),
+        vec![elsewhere.id]
+    );
+    let counts = w
+        .store
+        .read(|c| saka_store::incident::live_counts(c, w.project.id))
+        .unwrap();
+    assert_eq!(
+        counts,
+        vec![
+            ("prod-alerts".to_string(), 2),
+            ("sentry-web".to_string(), 1)
+        ]
+    );
 }
 
 fn without_review() -> saka_core::workflow::Workflow {

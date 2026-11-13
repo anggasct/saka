@@ -255,6 +255,7 @@ vocab!(CheckId {
     DeployConfig => "deploy.config",
     DeployVerifyMissing => "deploy.verify_missing",
     DeployReadyMissing => "deploy.ready_missing",
+    IncidentSource => "incident.source",
 });
 vocab!(HostTool { Rust => "rust", Python => "python" });
 vocab!(DiagnosticStatus { Pass => "pass", Warn => "warn", Fail => "fail", Skip => "skip" });
@@ -290,6 +291,23 @@ vocab!(DeploymentState {
     Succeeded => "succeeded",
     Failed => "failed",
     Cancelled => "cancelled",
+});
+vocab!(IncidentState { Open => "open", Handling => "handling", Resolved => "resolved", Dismissed => "dismissed" });
+vocab!(IncidentResolution { Fixed => "fixed", Reverted => "reverted", SignalResolved => "signal_resolved" });
+vocab!(IncidentSeverity { Info => "info", Low => "low", Medium => "medium", High => "high", Critical => "critical" });
+vocab!(SignalStatus { Firing => "firing", Resolved => "resolved" });
+vocab!(IncidentSourceKind { Alertmanager => "alertmanager", Sentry => "sentry", Generic => "generic" });
+vocab!(IncidentAction { Inbox => "inbox", Draft => "draft" });
+vocab!(IncidentCause {
+    SignalResolved => "signal_resolved",
+    DraftFix => "draft_fix",
+    Revert => "revert",
+    DraftFailed => "draft_failed",
+    SpecWithdrawn => "spec_withdrawn",
+    RevertCancelled => "revert_cancelled",
+    Fixed => "fixed",
+    Reverted => "reverted",
+    Dismissed => "dismissed",
 });
 vocab!(VerifyMode { Commands => "commands", None => "none" });
 vocab!(DeployPhase { Deploy => "deploy", Ready => "ready", Verify => "verify" });

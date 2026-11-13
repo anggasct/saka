@@ -126,6 +126,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
         ("deploy.config", "tasks"),
         ("deploy.verify_missing", "tasks"),
         ("deploy.ready_missing", "tasks"),
+        ("incident.source", "instance"),
     ]
     .iter()
     .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -206,7 +207,7 @@ fn the_report_holds_every_check_in_catalog_order_and_changes_nothing() {
     );
     assert_eq!(
         r.body["summary"],
-        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 11 })
+        json!({ "pass": 10, "warn": 0, "fail": 1, "skip": 12 })
     );
     assert_eq!(
         rows(&sim),
@@ -330,7 +331,7 @@ fn checks_still_queued_at_the_report_limit_time_out_too() {
         .iter()
         .filter(|c| c["code"] == "check_timed_out")
         .collect();
-    assert_eq!(timed_out.len(), 5, "{}", r.body);
+    assert_eq!(timed_out.len(), 6, "{}", r.body);
     assert!(
         timed_out.iter().any(|c| c["params"]["timeout_ms"] == 300),
         "a check that starts after the report limit names it: {}",
@@ -405,7 +406,7 @@ fn a_report_is_counted_in_metrics_and_logged() {
         "\"pass\":10",
         "\"warn\":0",
         "\"fail\":1",
-        "\"skip\":11",
+        "\"skip\":12",
         "\"duration_ms\":",
     ] {
         assert!(text.contains(field), "{field} in {text}");
