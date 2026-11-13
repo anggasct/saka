@@ -26,10 +26,10 @@ use saka_ports::BestEffort;
 use saka_ports::{
     ChangeOpening, ChangeSignal, ChangeSnapshot, ChangeSummary, Clock, DeviceCode, DevicePoll,
     EnqueueOutcome, GitAccess, GitRemote, IdentityLookup, Ids, IntakeCapabilities, IntakeSource,
-    Issue, IssueListing, IssueRef, IssueSignal, MergeOutcome, MergeRequest, OpenChangeRequest,
-    PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess, RepoInfo, RepoRef,
-    Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh, UnitLimits, UpdateOutcome,
-    WebhookDelivery,
+    Issue, IssueCloseOutcome, IssueListing, IssueRef, IssueSignal, MergeOutcome, MergeRequest,
+    OpenChangeRequest, PortError, PortResult, PostedReview, PushOutcome, PushRequest, RepoAccess,
+    RepoInfo, RepoRef, Repos, ReviewPost, Scm, ScmCapabilities, StatusReport, TokenRefresh,
+    UnitLimits, UpdateOutcome, WebhookDelivery,
 };
 use saka_scm::{GitHub, GitHubApp, GitHubConfig, GitLab, GitLabClient, GitLabConfig};
 use saka_store::{Store, StoreError};
@@ -113,6 +113,11 @@ impl IntakeSource for IntakeRouter {
     async fn post_issue_comment(&self, issue: &IssueRef, body: &str) -> PortResult<()> {
         self.get(&issue.repo.integration_id)?
             .post_issue_comment(issue, body)
+            .await
+    }
+    async fn close_issue(&self, issue: &IssueRef) -> PortResult<IssueCloseOutcome> {
+        self.get(&issue.repo.integration_id)?
+            .close_issue(issue)
             .await
     }
 }

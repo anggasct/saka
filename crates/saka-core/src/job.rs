@@ -74,6 +74,7 @@ job_kinds! {
     ScmScanIssues => "scm.scan_issues", 3;
     IntakeIssueRender => "intake.issue_render", 3;
     ScmIssueComment => "scm.issue_comment", 5;
+    ScmIssueClose => "scm.issue_close", 5;
 }
 
 pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
@@ -135,6 +136,7 @@ pub fn exhausted_code(kind: JobKind) -> Option<(BlockerCode, Value)> {
         | JobKind::ScmScanIssues
         | JobKind::IntakeIssueRender
         | JobKind::ScmIssueComment
+        | JobKind::ScmIssueClose
         | JobKind::ScmPostComment => None,
     }
 }
@@ -226,5 +228,6 @@ fn key_prefix(kind: JobKind) -> &'static str {
         JobKind::ScmScanIssues => "scm.scan_issues",
         JobKind::IntakeIssueRender => "intake.issue_render",
         JobKind::ScmIssueComment => "scm.issue_comment",
+        JobKind::ScmIssueClose => "scm.issue_close",
     }
 }

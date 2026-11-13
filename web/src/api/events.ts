@@ -111,6 +111,7 @@ export const EVENT_KINDS = [
   "intake.issue.retried",
   "intake.issue.dismissed",
   "intake.issue.comment_posted",
+  "intake.issue.issue_closed",
   "identity.pairing.created",
   "identity.device.paired",
   "identity.device.revoked",

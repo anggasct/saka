@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
 use saka_core::time::Timestamp;
 use saka_ports::{
-    IntakeCapabilities, IntakeSource, IssueRef, IssueSignalKind, IssueState, MAX_ISSUE_BODY_BYTES,
-    MAX_ISSUES, RepoRef, Scm, TRUNCATION_MARKER, WebhookTarget,
+    IntakeCapabilities, IntakeSource, IssueCloseOutcome, IssueRef, IssueSignalKind, IssueState,
+    MAX_ISSUE_BODY_BYTES, MAX_ISSUES, RepoRef, Scm, TRUNCATION_MARKER, WebhookTarget,
 };
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -107,6 +107,7 @@ trait IssueHarness: Sync {
     async fn comment_accepted(&self, number: u64, body: &str);
     async fn comment_refused(&self, number: u64, status: u16);
     async fn rate_limited(&self);
+    async fn close_answers(&self, number: u64, status: u16, expected_calls: u64);
     fn webhook(&self, hook: Hook) -> (Vec<(String, String)>, Vec<u8>);
 }
 
@@ -294,6 +295,18 @@ impl IssueHarness for GitHubHarness {
                     .insert_header("retry-after", RETRY_AFTER_SECS.to_string().as_str())
                     .set_body_json(json!({ "message": "secondary rate limit" })),
             )
+            .mount(&self.w.server)
+            .await;
+    }
+
+    async fn close_answers(&self, number: u64, status: u16, expected_calls: u64) {
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/acme/app/issues/{number}").as_str()))
+            .and(body_json(
+                json!({ "state": "closed", "state_reason": "completed" }),
+            ))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({ "number": number })))
+            .expect(expected_calls)
             .mount(&self.w.server)
             .await;
     }
@@ -518,6 +531,18 @@ impl IssueHarness for GitLabHarness {
             .await;
     }
 
+    async fn close_answers(&self, number: u64, status: u16, expected_calls: u64) {
+        Mock::given(method("PUT"))
+            .and(path(
+                format!("/projects/acme%2Fapp/issues/{number}").as_str(),
+            ))
+            .and(body_json(json!({ "state_event": "close" })))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({ "iid": number })))
+            .expect(expected_calls)
+            .mount(&self.w.server)
+            .await;
+    }
+
     fn webhook(&self, hook: Hook) -> (Vec<(String, String)>, Vec<u8>) {
         let project = json!({ "path_with_namespace": "acme/app" });
         let payload = match hook {
@@ -729,6 +754,59 @@ async fn an_oversized_comment_is_refused_before_it_is_sent(h: &dyn IssueHarness)
     assert_eq!(err.code, "git_argument_invalid");
 }
 
+async fn an_open_issue_is_closed(h: &dyn IssueHarness) {
+    h.issue(&Listed::new(7, T1), "body").await;
+    h.close_answers(7, 200, 1).await;
+    assert_eq!(
+        h.source().close_issue(&issue_ref(h, 7)).await.unwrap(),
+        IssueCloseOutcome::Closed
+    );
+}
+
+async fn a_closed_issue_is_left_alone(h: &dyn IssueHarness) {
+    let mut listed = Listed::new(7, T1);
+    listed.closed = true;
+    h.issue(&listed, "body").await;
+    h.close_answers(7, 200, 0).await;
+    assert_eq!(
+        h.source().close_issue(&issue_ref(h, 7)).await.unwrap(),
+        IssueCloseOutcome::AlreadyClosed
+    );
+}
+
+async fn closing_a_missing_issue_is_permanent(h: &dyn IssueHarness) {
+    h.missing_issue(8).await;
+    let err = h.source().close_issue(&issue_ref(h, 8)).await.unwrap_err();
+    assert_eq!(
+        (err.code.as_str(), err.retryable),
+        ("issue_not_found", false)
+    );
+    h.issue(&Listed::new(9, T1), "body").await;
+    h.close_answers(9, 404, 1).await;
+    let err = h.source().close_issue(&issue_ref(h, 9)).await.unwrap_err();
+    assert_eq!(
+        (err.code.as_str(), err.retryable),
+        ("issue_not_found", false)
+    );
+}
+
+async fn a_refused_close_is_permanent(h: &dyn IssueHarness) {
+    h.issue(&Listed::new(7, T1), "body").await;
+    h.close_answers(7, 403, 1).await;
+    let err = h.source().close_issue(&issue_ref(h, 7)).await.unwrap_err();
+    assert_eq!((err.code.as_str(), err.retryable), ("forbidden", false));
+}
+
+async fn a_failing_provider_makes_the_close_retryable(h: &dyn IssueHarness) {
+    h.issue(&Listed::new(7, T1), "body").await;
+    h.close_answers(7, 502, 1).await;
+    let err = h.source().close_issue(&issue_ref(h, 7)).await.unwrap_err();
+    assert_eq!(
+        (err.code.as_str(), err.retryable),
+        ("scm_unavailable", true)
+    );
+}
+
 async fn a_rate_limited_listing_names_when_to_retry(h: &dyn IssueHarness) {
     h.rate_limited().await;
     let err = h
@@ -792,6 +870,11 @@ conformance!(github_issue_conformance, GitHubHarness:
     write_access_is_checked,
     a_comment_is_posted_on_the_issue,
     a_refused_comment_is_permanent,
+    an_open_issue_is_closed,
+    a_closed_issue_is_left_alone,
+    closing_a_missing_issue_is_permanent,
+    a_refused_close_is_permanent,
+    a_failing_provider_makes_the_close_retryable,
     an_oversized_comment_is_refused_before_it_is_sent,
     a_rate_limited_listing_names_when_to_retry,
     capabilities_declare_confidential_issues,
@@ -808,6 +891,11 @@ conformance!(gitlab_issue_conformance, GitLabHarness:
     write_access_is_checked,
     a_comment_is_posted_on_the_issue,
     a_refused_comment_is_permanent,
+    an_open_issue_is_closed,
+    a_closed_issue_is_left_alone,
+    closing_a_missing_issue_is_permanent,
+    a_refused_close_is_permanent,
+    a_failing_provider_makes_the_close_retryable,
     an_oversized_comment_is_refused_before_it_is_sent,
     a_rate_limited_listing_names_when_to_retry,
     capabilities_declare_confidential_issues,

@@ -364,6 +364,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         t.sample("saka_issue_comments_total", &[("outcome", outcome)], n);
     }
     t.family(
+        "saka_issue_close_total",
+        "counter",
+        "Issues Saka closed after their work merged, by outcome (closed, already_closed, failed).",
+    );
+    for (outcome, n) in &m.issue_closes {
+        t.sample("saka_issue_close_total", &[("outcome", outcome)], n);
+    }
+    t.family(
         "saka_user_link_authorizations_total",
         "counter",
         "Device-flow authorizations that link an SCM account, by integration and the state reached.",

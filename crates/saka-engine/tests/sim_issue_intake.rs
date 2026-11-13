@@ -851,3 +851,170 @@ fn a_step_in_another_repo_names_the_issue_with_its_full_reference() {
     assert!(body.contains(&format!("Closes {SHOP_REPO}#1")), "{body}");
     assert!(!body.contains("Closes #1"), "{body}");
 }
+
+fn shipped_intake(sim: &mut Sim) -> u64 {
+    sim.world.script_draft(vec![saka_testkit::DraftTurn::Write {
+        path: "docs/specs/add-a-flag-1.md".into(),
+        bytes: two_steps(),
+    }]);
+    let number = sim.world.open_issue(
+        SHOP_REPO,
+        IssueSpec::new("Add a flag", "alice").body("A --dry-run flag."),
+    );
+    sim.world
+        .label_issue(SHOP_REPO, number, "maintainer", "saka:intake");
+    assert!(sim.run_until(STEPS, |s| reached(
+        s,
+        number,
+        IssueIntakeState::AwaitingApproval
+    )));
+    let spec_id = intake(sim, number).unwrap().spec_id.unwrap();
+    let revision = sim.engine().spec(spec_id).unwrap().unwrap().revision.id;
+    sim.approve_spec(spec_id, revision).unwrap();
+    assert!(sim.run_until(STEPS, |s| reached(s, number, IssueIntakeState::Done)));
+    number
+}
+
+fn close_jobs(sim: &Sim) -> Vec<(i64, i64)> {
+    sim.engine()
+        .store()
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT created_at, run_at FROM job WHERE kind = 'scm.issue_close' ORDER BY created_at",
+            )?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+fn close_outcomes(sim: &Sim) -> Vec<(String, u64)> {
+    sim.engine().metrics().unwrap().issue_closes
+}
+
+#[test]
+fn a_done_intake_comments_then_closes_its_issue_once_after_the_delay() {
+    let mut sim = sim(DRAFTS_ONLY);
+    let number = shipped_intake(&mut sim);
+    let done_at = intake(&sim, number).unwrap().updated_at.0;
+
+    let jobs = close_jobs(&sim);
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(jobs[0].1 - jobs[0].0, 60_000);
+    assert!(sim.world.issue_closes().is_empty());
+
+    assert!(sim.run_until(STEPS, |s| !s.world.issue_closes().is_empty()));
+    assert_eq!(sim.world.issue_closes(), [(SHOP_REPO.to_string(), number)]);
+    let closed = sim.events_of("intake.issue.issue_closed");
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].payload["by"], "saka");
+    assert!(closed[0].occurred_at.0 >= done_at + 60_000);
+    assert_eq!(close_outcomes(&sim), [("closed".to_string(), 1)]);
+
+    let posted = comments(&sim);
+    let merged: Vec<&String> = posted.iter().filter(|c| c.contains("is merged")).collect();
+    assert_eq!(merged.len(), 1, "{posted:?}");
+    assert!(merged[0].contains("merged into `main`"), "{merged:?}");
+    assert!(
+        merged[0].contains("Saka will close this issue"),
+        "{merged:?}"
+    );
+}
+
+#[test]
+fn a_close_job_that_runs_again_after_a_crash_closes_nothing_twice() {
+    let mut sim = sim(DRAFTS_ONLY);
+    let number = shipped_intake(&mut sim);
+    let ready_at = close_jobs(&sim)[0].1;
+    assert!(sim.run_until(STEPS, |s| s.engine().now().0 >= ready_at));
+    for _ in 0..40 {
+        if !sim.world.issue_closes().is_empty() {
+            break;
+        }
+        sim.crash_mid_job();
+    }
+    assert_eq!(sim.world.issue_closes().len(), 1);
+    quiet(&mut sim, 300_000);
+    assert_eq!(sim.world.issue_closes(), [(SHOP_REPO.to_string(), number)]);
+    assert_eq!(sim.events_of("intake.issue.issue_closed").len(), 1);
+}
+
+#[test]
+fn an_issue_the_provider_already_closed_is_recorded_without_a_second_close() {
+    let mut sim = sim(DRAFTS_ONLY);
+    let number = shipped_intake(&mut sim);
+    sim.world.close_issue(SHOP_REPO, number, "github-actions");
+    quiet(&mut sim, 120_000);
+    assert!(sim.world.issue_closes().is_empty());
+    let closed = sim.events_of("intake.issue.issue_closed");
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].payload["by"], "provider");
+    assert_eq!(close_outcomes(&sim), [("already_closed".to_string(), 1)]);
+}
+
+#[test]
+fn a_refused_close_leaves_the_intake_done_and_raises_nothing_for_the_operator() {
+    let mut sim = sim(DRAFTS_ONLY);
+    sim.world.refuse_issue_closes(true);
+    let number = shipped_intake(&mut sim);
+    let before = inbox(&sim).len();
+    quiet(&mut sim, 300_000);
+    assert!(sim.world.issue_closes().is_empty());
+    assert!(sim.events_of("intake.issue.issue_closed").is_empty());
+    assert_eq!(close_outcomes(&sim), [("failed".to_string(), 1)]);
+    assert!(reached(&sim, number, IssueIntakeState::Done));
+    assert_eq!(inbox(&sim).len(), before);
+}
+
+#[test]
+fn an_intake_that_does_not_reach_done_never_schedules_a_close() {
+    let mut dismissed = sim(BUGFIX);
+    let a = dismissed
+        .world
+        .open_issue(SHOP_REPO, crash_report(&["bug"]));
+    dismissed
+        .world
+        .label_issue(SHOP_REPO, a, "maintainer", "saka:intake");
+    assert!(dismissed.run_until(STEPS, |s| reached(s, a, IssueIntakeState::AwaitingApproval)));
+    let id = intake(&dismissed, a).unwrap().id;
+    let engine = dismissed.engine();
+    let cause = engine.cause("human:operator:local");
+    dismissed
+        .block_on(engine.dismiss_issue_intake_with(id, None, &cause, None))
+        .unwrap();
+    assert!(reached(&dismissed, a, IssueIntakeState::Dismissed));
+    quiet(&mut dismissed, 120_000);
+    assert!(close_jobs(&dismissed).is_empty());
+
+    let mut closed = sim(BUGFIX);
+    let b = closed.world.open_issue(SHOP_REPO, crash_report(&["bug"]));
+    closed
+        .world
+        .label_issue(SHOP_REPO, b, "maintainer", "saka:intake");
+    assert!(closed.run_until(STEPS, |s| reached(s, b, IssueIntakeState::AwaitingApproval)));
+    closed.world.close_issue(SHOP_REPO, b, "maintainer");
+    assert!(closed.run_until(STEPS, |s| reached(s, b, IssueIntakeState::Closed)));
+    quiet(&mut closed, 120_000);
+    assert!(close_jobs(&closed).is_empty());
+
+    let mut failed = Sim::multi_repo(
+        SimConfig {
+            agent: saka_testkit::AgentScript {
+                outcome: saka_testkit::AgentOutcome::Fail("boom".into()),
+                ..saka_testkit::AgentScript::default()
+            },
+            ..SimConfig::default()
+        },
+        &layout(DRAFTS_ONLY),
+    );
+    failed.world.set_write_access("maintainer", true);
+    let c = failed.world.open_issue(SHOP_REPO, crash_report(&[]));
+    failed
+        .world
+        .label_issue(SHOP_REPO, c, "maintainer", "saka:intake");
+    assert!(failed.run_until(STEPS, |s| reached(s, c, IssueIntakeState::Failed)));
+    quiet(&mut failed, 120_000);
+    assert!(close_jobs(&failed).is_empty());
+}

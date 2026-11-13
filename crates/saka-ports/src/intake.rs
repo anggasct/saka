@@ -19,6 +19,12 @@ pub enum IssueState {
     Closed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueCloseOutcome {
+    Closed,
+    AlreadyClosed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueSummary {
     pub number: u64,
@@ -99,6 +105,8 @@ pub trait IntakeSource: Send + Sync {
     async fn can_write(&self, repo: &RepoRef, login: &str) -> PortResult<bool>;
 
     async fn post_issue_comment(&self, issue: &IssueRef, body: &str) -> PortResult<()>;
+
+    async fn close_issue(&self, issue: &IssueRef) -> PortResult<IssueCloseOutcome>;
 }
 
 #[cfg(test)]

@@ -376,6 +376,9 @@ impl Engine {
         if job.kind == JobKind::ScmIssueComment {
             return self.issue_comment_job(job).await;
         }
+        if job.kind == JobKind::ScmIssueClose {
+            return self.issue_close_job(job).await;
+        }
         if job.kind == JobKind::ScmUserLinkPoll {
             return self.user_link_poll_job(job).await;
         }
@@ -459,6 +462,7 @@ impl Engine {
             | JobKind::ScmScanIssues
             | JobKind::IntakeIssueRender
             | JobKind::ScmIssueComment
+            | JobKind::ScmIssueClose
             | JobKind::ScmUserLinkPoll
             | JobKind::ScmUserLinkRefresh
             | JobKind::HookRun => Ok(Effect::Skipped),

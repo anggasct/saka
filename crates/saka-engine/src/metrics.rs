@@ -40,6 +40,7 @@ pub struct Counters {
     issue_intakes: Mutex<BTreeMap<(String, String, String), u64>>,
     issue_denied: Mutex<BTreeMap<(String, String), u64>>,
     issue_comments: Mutex<BTreeMap<(String, String), u64>>,
+    issue_closes: Mutex<BTreeMap<(String, String), u64>>,
     user_link_authorizations: Mutex<BTreeMap<(String, String), u64>>,
     user_link_refreshes: Mutex<BTreeMap<(String, String), u64>>,
     change_requests_opened: Mutex<BTreeMap<(String, String), u64>>,
@@ -198,6 +199,10 @@ impl Counters {
 
     pub(crate) fn issue_comment(&self, outcome: &str) {
         bump(&self.issue_comments, outcome, "");
+    }
+
+    pub(crate) fn issue_close(&self, outcome: &str) {
+        bump(&self.issue_closes, outcome, "");
     }
 
     pub(crate) fn quick_spec(&self, kind: &str, outcome: &str) {
@@ -429,6 +434,7 @@ pub struct MetricsSnapshot {
     pub issue_intakes: Vec<(String, String, String, u64)>,
     pub issue_denied: u64,
     pub issue_comments: Vec<(String, u64)>,
+    pub issue_closes: Vec<(String, u64)>,
     pub user_link_authorizations: Vec<(String, String, u64)>,
     pub user_link_refreshes: Vec<(String, String, u64)>,
     pub change_requests_opened: Vec<(String, u64)>,
@@ -644,6 +650,10 @@ impl Engine {
                 .map(|(_, _, n)| n)
                 .sum(),
             issue_comments: copy(&self.counters.issue_comments)
+                .into_iter()
+                .map(|(outcome, _, n)| (outcome, n))
+                .collect(),
+            issue_closes: copy(&self.counters.issue_closes)
                 .into_iter()
                 .map(|(outcome, _, n)| (outcome, n))
                 .collect(),

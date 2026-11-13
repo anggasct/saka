@@ -75,6 +75,7 @@ vocab!(IssueIntakeState {
     Closed => "closed",
     Failed => "failed",
 });
+vocab!(IssueClosedBy { Saka => "saka", Provider => "provider" });
 vocab!(IssueLane { Bugfix => "bugfix", Draft => "draft" });
 vocab!(IssueCause { Label => "label", Comment => "comment", Author => "author", Operator => "operator" });
 vocab!(IssueTrigger default Label { Label => "label", Auto => "auto" });
