@@ -135,6 +135,14 @@ pub async fn metrics(State(s): State<AppState>) -> Response {
         );
     }
     t.family(
+        "saka_job_panics_total",
+        "counter",
+        "Jobs whose execution panicked, per kind.",
+    );
+    for (kind, n) in &m.job_panics {
+        t.sample("saka_job_panics_total", &[("kind", kind)], n);
+    }
+    t.family(
         "saka_sessions_active",
         "gauge",
         "Sessions not in a terminal state.",

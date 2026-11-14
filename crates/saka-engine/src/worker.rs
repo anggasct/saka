@@ -8,6 +8,10 @@ mod sessions;
 mod updating;
 mod verification;
 
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
+
+use futures_util::FutureExt;
 use saka_core::authorship::UserLink;
 use saka_core::draft::DraftInput;
 use saka_core::event::Event;
@@ -37,6 +41,20 @@ use crate::{Cause, Engine, EngineError, Extra, Mode, Result};
 
 pub const VERIFY_ROUNDS: u32 = 3;
 const DOCS_TITLE_MAX: usize = 256;
+const PANIC_MESSAGE_MAX: usize = 1024;
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("panic payload is not a string");
+    let end = (0..=PANIC_MESSAGE_MAX.min(text.len()))
+        .rev()
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(0);
+    text[..end].to_string()
+}
 
 pub(crate) fn docs_branch(branch: &str) -> String {
     format!("{branch}-docs")
@@ -335,12 +353,14 @@ impl Engine {
     }
 
     async fn execute_leased(&self, job: &ClaimedJob) -> Execution {
-        let run = self.execute(job);
+        let run = AssertUnwindSafe(self.execute(job)).catch_unwind();
         tokio::pin!(run);
         let period = std::time::Duration::from_millis(LEASE_EXTEND_MS.unsigned_abs());
         loop {
             tokio::select! {
-                result = &mut run => return result,
+                result = &mut run => {
+                    return result.unwrap_or_else(|payload| Err(self.panicked(job, payload.as_ref())));
+                }
                 _ = tokio::time::sleep(period) => {
                     if let Err(e) = self.store.extend_lease(job.id, &self.cfg.worker_id, self.now()) {
                         tracing::warn!(job_id = %job.id, error = %e, "lease extension failed");
@@ -348,6 +368,20 @@ impl Engine {
                 }
             }
         }
+    }
+
+    fn panicked(&self, job: &ClaimedJob, payload: &(dyn Any + Send)) -> PortError {
+        let message = panic_message(payload);
+        let work_item = saka_core::job::work_item_of(&job.payload);
+        tracing::error!(
+            job_id = %job.id,
+            kind = job.kind.as_str(),
+            work_item_id = work_item.as_ref().map(tracing::field::display),
+            panic = %message,
+            "job.panicked"
+        );
+        self.counters.job_panic(job.kind);
+        PortError::permanent("job_panicked", json!({ "message": message }))
     }
 
     pub async fn execute(&self, job: &ClaimedJob) -> Execution {

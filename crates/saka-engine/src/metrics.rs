@@ -17,6 +17,7 @@ use crate::{Engine, Result};
 #[derive(Debug, Default)]
 pub struct Counters {
     job_runs: Mutex<BTreeMap<(String, String), u64>>,
+    job_panics: Mutex<BTreeMap<(String, String), u64>>,
     adapter_requests: Mutex<BTreeMap<(String, String), u64>>,
     waiting: Mutex<BTreeMap<WorkItemId, Vec<Waiting>>>,
     packet_bytes: Mutex<Vec<u64>>,
@@ -371,6 +372,10 @@ impl Counters {
         }
     }
 
+    pub(crate) fn job_panic(&self, kind: JobKind) {
+        bump(&self.job_panics, kind.as_str(), "");
+    }
+
     pub(crate) fn job(&self, kind: JobKind, result: &JobResult, adapter_ok: Option<bool>) {
         let outcome = match result {
             JobResult::Retrying { .. } => "retry",
@@ -441,6 +446,7 @@ pub struct MetricsSnapshot {
     pub jobs: Vec<(String, String, i64)>,
     pub oldest_ready_job_age_ms: Option<i64>,
     pub job_runs: Vec<(String, String, u64)>,
+    pub job_panics: Vec<(String, u64)>,
     pub sessions_active: Vec<(String, i64)>,
     pub permission_requests_pending: i64,
     pub environments_teardown_failed: i64,
@@ -617,6 +623,10 @@ impl Engine {
             jobs,
             oldest_ready_job_age_ms: oldest,
             job_runs: copy(&self.counters.job_runs),
+            job_panics: copy(&self.counters.job_panics)
+                .into_iter()
+                .map(|(kind, _, n)| (kind, n))
+                .collect(),
             sessions_active: sessions,
             permission_requests_pending: pending,
             environments_teardown_failed: leftover,
