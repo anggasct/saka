@@ -203,6 +203,7 @@ pub fn evolve(task: Option<Task>, event: &Event, now: Timestamp) -> Option<Task>
             base_branch: base_branch.clone(),
             head_sha: head_sha.clone(),
             update_head_sha: None,
+            replaced_head_sha: None,
             ci_rerun: None,
             state: ChangeState::Open,
             merge_commit_sha: None,
@@ -775,6 +776,7 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 base_branch: base_branch.clone(),
                 head_sha: head_sha.clone(),
                 update_head_sha: None,
+                replaced_head_sha: None,
                 ci_rerun: None,
                 state: ChangeState::Open,
                 merge_commit_sha: None,
@@ -789,19 +791,36 @@ pub(super) fn apply(t: &mut Task, event: &Event, now: Timestamp) {
                 ChangeRole::Docs => t.docs_change = cr,
             }
         }
-        E::ChangeRequestUpdated { role, head_sha, .. } => {
+        E::ChangeRequestUpdated {
+            role,
+            head_sha,
+            replaced_head_sha,
+            ..
+        } => {
             if let Some(cr) = t.change_of(*role) {
                 cr.head_sha.clone_from(head_sha);
+                cr.replaced_head_sha.clone_from(replaced_head_sha);
                 if cr.update_head_sha.as_ref() != Some(head_sha) {
                     cr.update_head_sha = None;
                 }
                 cr.updated_at = now;
             }
         }
+        E::ChangeRequestHeadConfirmed { role, .. } => {
+            if let Some(cr) = t.change_of(*role) {
+                cr.replaced_head_sha = None;
+                cr.updated_at = now;
+            }
+        }
         E::ChangeRequestUpdateRequested { .. } => {}
-        E::ChangeRequestBranchUpdated { head_sha, .. } => {
+        E::ChangeRequestBranchUpdated {
+            from_head_sha,
+            head_sha,
+            ..
+        } => {
             if let Some(cr) = t.change_of(ChangeRole::Code) {
                 cr.head_sha.clone_from(head_sha);
+                cr.replaced_head_sha = (from_head_sha != head_sha).then(|| from_head_sha.clone());
                 cr.update_head_sha = Some(head_sha.clone());
                 cr.updated_at = now;
             }

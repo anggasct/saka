@@ -38,10 +38,10 @@ use crate::vocab::{
 
 pub use evolve::evolve;
 pub use queries::{
-    auto_merge, auto_merge_enabled, auto_retry_due, auto_retryable, available_actions, can_retry,
-    count_retry, docs_open, docs_pending, gate_policy, gates_clear, merge_allowed, merge_ready,
-    merge_status, needs_docs_change, needs_tick, run_view, update_merge, watches_change,
-    watches_docs_change,
+    StaleInput, auto_merge, auto_merge_enabled, auto_retry_due, auto_retryable, available_actions,
+    can_retry, count_retry, docs_open, docs_pending, gate_head, gate_policy, gates_clear,
+    merge_allowed, merge_ready, merge_status, needs_docs_change, needs_tick, run_view, stale_input,
+    update_merge, watches_change, watches_docs_change,
 };
 pub use recovery::{retry_entry, retry_target};
 
@@ -354,6 +354,21 @@ pub enum TaskInput {
 }
 
 pub fn decide(
+    task: &Task,
+    input: TaskInput,
+    cfg: &LoopConfig,
+    ctx: &mut Ctx<'_>,
+) -> Result<Vec<Event>, Rejection> {
+    if stale_input(task, &input).is_some() {
+        return Ok(Vec::new());
+    }
+    let confirmed = queries::confirmed_head(task, &input);
+    let mut events = decide_input(task, input, cfg, ctx)?;
+    events.splice(0..0, confirmed);
+    Ok(events)
+}
+
+fn decide_input(
     task: &Task,
     input: TaskInput,
     cfg: &LoopConfig,

@@ -170,6 +170,7 @@ impl Decider<'_> {
                 change_request_id: cr.id,
                 role: ChangeRole::Code,
                 head_sha: head_sha.clone(),
+                replaced_head_sha: None,
             });
         }
         events.push(Event::MergeDequeued {
@@ -273,6 +274,7 @@ impl Decider<'_> {
                         change_request_id: cr.id,
                         role: ChangeRole::Code,
                         head_sha: head_sha.clone(),
+                        replaced_head_sha: Some(cr.head_sha.clone()),
                     });
                 }
                 if rebased {
@@ -341,6 +343,7 @@ impl Decider<'_> {
                         change_request_id: cr.id,
                         role: ChangeRole::Code,
                         head_sha,
+                        replaced_head_sha: None,
                     });
                 }
                 events.push(Event::MergeDequeued {

@@ -94,6 +94,10 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         50,
         include_str!("../migrations/0050_architect_code_access.sql"),
     ),
+    (
+        51,
+        include_str!("../migrations/0051_change_replaced_head.sql"),
+    ),
 ];
 
 pub(crate) fn checksum(sql: &str) -> String {

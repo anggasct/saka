@@ -223,6 +223,73 @@ fn a_head_pushed_from_outside_while_queued_drops_the_request_without_blocking() 
     );
 }
 
+fn updated_to(sim: &Sim, sha: &str) -> usize {
+    sim.events_of("scm.change_request.updated")
+        .iter()
+        .filter(|e| e.payload["head_sha"] == sha)
+        .count()
+}
+
+#[test]
+fn a_read_that_lags_behind_the_rebase_does_not_move_the_head_back() {
+    let mut pair = Pair::new(
+        SimConfig::default(),
+        vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
+    );
+    assert!(pair.sim.run_until(STEPS, |s| {
+        !s.events_of("delivery.merge.rebased").is_empty()
+    }));
+    let rebased = pair.sim.events_of("delivery.merge.rebased")[0]
+        .payload
+        .clone();
+    let from = rebased["from_sha"].as_str().unwrap().to_string();
+    let head = rebased["head_sha"].as_str().unwrap().to_string();
+    let before = updated_to(&pair.sim, &from);
+    pair.sim.world.lag_change_reads(&from, 3);
+
+    assert!(pair.run(|_| {}));
+    assert_eq!(updated_to(&pair.sim, &from), before);
+    assert_eq!(pair.sim.events_of("delivery.merge.dequeued").len(), 0);
+    assert!(
+        pair.sim
+            .world
+            .prs()
+            .iter()
+            .any(|p| p.merged_head.as_deref() == Some(head.as_str()))
+    );
+    assert_eq!(pair.sim.stats().merges, 2);
+}
+
+#[test]
+fn a_lagging_read_after_a_restart_is_still_ignored() {
+    let mut pair = Pair::new(
+        SimConfig::default(),
+        vec![edit("a.txt", "a\n"), edit("b.txt", "b\n")],
+    );
+    assert!(pair.sim.run_until(STEPS, |s| {
+        !s.events_of("delivery.merge.rebased").is_empty()
+    }));
+    let from = pair.sim.events_of("delivery.merge.rebased")[0].payload["from_sha"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let before = updated_to(&pair.sim, &from);
+    pair.sim.restart();
+    let replaced = pair
+        .sim
+        .all_tasks()
+        .into_iter()
+        .filter_map(|t| t.change_request)
+        .filter_map(|cr| cr.replaced_head_sha)
+        .collect::<Vec<_>>();
+    assert_eq!(replaced, std::slice::from_ref(&from));
+    pair.sim.world.lag_change_reads(&from, 3);
+
+    assert!(pair.run(|_| {}));
+    assert_eq!(updated_to(&pair.sim, &from), before);
+    assert_eq!(pair.sim.events_of("delivery.merge.dequeued").len(), 0);
+}
+
 #[test]
 fn a_crash_in_the_middle_of_a_rebase_converges_on_the_same_head() {
     let mut pair = Pair::new(

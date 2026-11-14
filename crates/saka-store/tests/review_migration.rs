@@ -95,7 +95,7 @@ fn the_review_migration_keeps_rows_and_opens_the_review_phases_and_a_branchless_
         store.migration().applied,
         vec![
             23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-            45, 46, 47, 48, 49, 50
+            45, 46, 47, 48, 49, 50, 51
         ]
     );
     drop(store);

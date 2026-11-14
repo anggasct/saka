@@ -471,6 +471,7 @@ pub struct ChangeRequest {
     pub base_branch: String,
     pub head_sha: String,
     pub update_head_sha: Option<String>,
+    pub replaced_head_sha: Option<String>,
     pub ci_rerun: Option<CiRerun>,
     pub state: ChangeState,
     pub merge_commit_sha: Option<String>,
@@ -816,6 +817,13 @@ impl DeployGate {
 }
 
 impl Task {
+    pub fn change_ref(&self, role: ChangeRole) -> Option<&ChangeRequest> {
+        match role {
+            ChangeRole::Code => self.change_request.as_ref(),
+            ChangeRole::Docs => self.docs_change.as_ref(),
+        }
+    }
+
     pub fn change_of(&mut self, role: ChangeRole) -> Option<&mut ChangeRequest> {
         match role {
             ChangeRole::Code => self.change_request.as_mut(),

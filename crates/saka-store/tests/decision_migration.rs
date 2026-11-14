@@ -127,7 +127,7 @@ fn the_decision_migration_keeps_blockers_accepts_the_new_code_and_allows_one_ope
     assert_eq!(
         store.migration().applied,
         vec![
-            35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50
+            35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51
         ]
     );
     drop(store);

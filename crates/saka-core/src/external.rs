@@ -321,6 +321,7 @@ fn request(
             change_request_id: cr.id,
             role: ChangeRole::Code,
             head_sha: head_sha.to_string(),
+            replaced_head_sha: None,
         });
     }
     events.extend(cancel_open(task, "head_moved", ctx.now));
@@ -357,6 +358,7 @@ fn observe(
         change_request_id: cr.id,
         role: ChangeRole::Code,
         head_sha: head_sha.to_string(),
+        replaced_head_sha: None,
     };
     let mut events = Vec::new();
     if let (true, ChangeState::Merged | ChangeState::Closed, Some(b)) =

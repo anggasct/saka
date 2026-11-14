@@ -562,6 +562,7 @@ impl Decider<'_> {
                         change_request_id: cr.id,
                         role: ChangeRole::Code,
                         head_sha: head.clone(),
+                        replaced_head_sha: None,
                     });
                 }
                 Some(head)

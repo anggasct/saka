@@ -199,6 +199,30 @@ fn a_moved_worktree_fails_the_gate_without_running_commands() {
 }
 
 #[test]
+fn a_worktree_moved_while_the_commands_ran_is_not_reported_and_the_verify_runs_again() {
+    let mut sim = sim(CiScript::Pass, None);
+    sim.world
+        .script_command(STEP_COMMAND, CommandScript::MovesWorktree);
+    assert!(sim.run_until(STEPS, awaiting_merge));
+
+    let ran = gate_commands(&sim)
+        .iter()
+        .filter(|c| c.as_str() == STEP_COMMAND)
+        .count();
+    assert_eq!(ran, 2);
+    let head = sim.task(1).change_request.unwrap().head_sha;
+    let observed: Vec<_> = sim
+        .events_of("delivery.gate.observed")
+        .into_iter()
+        .filter(|e| e.payload["source"] == "saka")
+        .collect();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(observed[0].payload["head_sha"], head.as_str());
+    assert_eq!(observed[0].payload["outcome"], "passed");
+    assert!(sim.events_of("delivery.work_item.blocked").is_empty());
+}
+
+#[test]
 fn a_crashing_runner_ends_as_runner_failed() {
     let mut sim = sim(CiScript::Pass, None);
     for _ in 0..3 {

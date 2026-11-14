@@ -1115,6 +1115,68 @@ fn enqueue(w: &mut World, key: &str) {
     w.store.commit(&batch).unwrap();
 }
 
+fn enqueue_kind(w: &mut World, kind: JobKind, key: &str, work_item: &str) {
+    let mut batch = Batch::new(w.now);
+    batch.jobs.push(NewJob {
+        id: w.ids.next_id(),
+        job: Job::new(kind, key, json!({ "work_item_id": work_item }), w.now),
+        project_id: Some(w.project.id),
+        causation_id: None,
+        correlation_id: Uuid::from_u128(1),
+    });
+    w.store.commit(&batch).unwrap();
+}
+
+fn succeed(w: &mut World, job: &saka_store::ClaimedJob) {
+    let done = Batch {
+        job_outcome: Some(JobOutcome::Succeeded {
+            id: job.id,
+            owner: job.lease_owner.clone(),
+        }),
+        ..Batch::new(w.now)
+    };
+    w.store.commit(&done).unwrap();
+}
+
+#[test]
+fn a_task_verifies_one_head_at_a_time() {
+    let mut w = World::new();
+    enqueue_kind(&mut w, JobKind::GateVerify, "run:a", "task-1");
+    enqueue_kind(&mut w, JobKind::GateVerify, "run:b", "task-1");
+    enqueue_kind(&mut w, JobKind::GateVerify, "run:c", "task-2");
+    enqueue_kind(&mut w, JobKind::EnvPrepare, "prepare", "task-1");
+
+    let first = w.store.claim_job("w1", w.now).unwrap().unwrap();
+    assert_eq!(first.idempotency_key, "gate.verify:run:a");
+    let other_task = w.store.claim_job("w2", w.now).unwrap().unwrap();
+    assert_eq!(other_task.idempotency_key, "gate.verify:run:c");
+    let other_kind = w.store.claim_job("w3", w.now).unwrap().unwrap();
+    assert_eq!(other_kind.idempotency_key, "env.prepare:prepare");
+    assert!(
+        w.store.claim_job("w4", w.now).unwrap().is_none(),
+        "the second verify of a task waits while the first holds its lease"
+    );
+
+    succeed(&mut w, &first);
+    let second = w.store.claim_job("w4", w.now).unwrap().unwrap();
+    assert_eq!(second.idempotency_key, "gate.verify:run:b");
+}
+
+#[test]
+fn a_verify_whose_lease_ran_out_is_reclaimed_before_the_next_one_starts() {
+    let mut w = World::new();
+    enqueue_kind(&mut w, JobKind::GateVerify, "run:a", "task-1");
+    enqueue_kind(&mut w, JobKind::GateVerify, "run:b", "task-1");
+
+    let first = w.store.claim_job("w1", w.now).unwrap().unwrap();
+    assert_eq!(first.idempotency_key, "gate.verify:run:a");
+
+    w.tick(saka_store::LEASE_MS + 1);
+    let reclaimed = w.store.claim_job("w2", w.now).unwrap().unwrap();
+    assert_eq!((reclaimed.id, reclaimed.attempts), (first.id, 2));
+    assert!(w.store.claim_job("w3", w.now).unwrap().is_none());
+}
+
 #[test]
 fn job_queue_leases_reclaims_retries_and_dies_with_its_blocker() {
     let mut w = World::new();
@@ -1320,10 +1382,10 @@ fn reopening_applies_nothing_and_reads_the_same_rows() {
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
             25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-            47, 48, 49, 50
+            47, 48, 49, 50, 51
         ]
     );
-    assert_eq!(w.store.schema_version().unwrap(), Some(50));
+    assert_eq!(w.store.schema_version().unwrap(), Some(51));
     let path = w.store.path().to_path_buf();
     let reopened = Store::open(&path, &path.with_file_name("backups"), w.now).unwrap();
     assert!(reopened.migration().applied.is_empty());

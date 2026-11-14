@@ -147,6 +147,7 @@ fn task_at_merge(workflow: Workflow) -> Task {
         base_branch: "main".into(),
         head_sha: HEAD.into(),
         update_head_sha: None,
+        replaced_head_sha: None,
         ci_rerun: None,
         state: ChangeState::Open,
         merge_commit_sha: None,
@@ -426,4 +427,121 @@ fn a_merge_is_allowed_only_at_the_recorded_head_with_clear_gates_and_a_verdict_o
     let mut no_gate = task;
     no_gate.gates.clear();
     assert!(!task::merge_allowed(&no_gate, HEAD));
+}
+
+const THIRD: &str = "3333333333333333333333333333333333333333";
+
+fn replaced(head: &str, replaced: &str) -> Task {
+    let mut task = ready(full(Trigger::Auto));
+    let cr = task.change_request.as_mut().unwrap();
+    cr.head_sha = head.into();
+    cr.replaced_head_sha = Some(replaced.into());
+    task
+}
+
+#[test]
+fn a_read_of_the_head_the_loop_just_replaced_is_ignored() {
+    let task = replaced(HEAD, OTHER);
+    assert!(observe(&task, OTHER).is_empty());
+
+    let stale = TaskInput::ChangeObserved {
+        role: ChangeRole::Code,
+        state: ChangeState::Open,
+        head_sha: OTHER.into(),
+        merge_commit_sha: None,
+        merged_at: None,
+        checks: Vec::new(),
+    };
+    assert!(matches!(
+        task::stale_input(&task, &stale),
+        Some(task::StaleInput::HeadRead {
+            read: OTHER,
+            current: HEAD
+        })
+    ));
+}
+
+#[test]
+fn a_read_of_the_new_head_clears_the_replaced_one_and_a_later_read_of_it_is_a_move() {
+    let task = replaced(HEAD, OTHER);
+    let events = observe(&task, HEAD);
+    assert!(
+        matches!(
+            events.first(),
+            Some(Event::ChangeRequestHeadConfirmed { .. })
+        ),
+        "{events:?}"
+    );
+    let after = events.iter().fold(task, evolved);
+    assert_eq!(
+        after.change_request.as_ref().unwrap().replaced_head_sha,
+        None
+    );
+
+    let moved = observe(&after, OTHER);
+    assert!(
+        moved.iter().any(
+            |e| matches!(e, Event::ChangeRequestUpdated { head_sha, .. } if head_sha == OTHER)
+        ),
+        "{moved:?}"
+    );
+}
+
+#[test]
+fn a_third_head_is_a_move_from_outside_and_clears_the_replaced_one() {
+    let mut task = merging(false);
+    task.change_request.as_mut().unwrap().replaced_head_sha = Some(OTHER.into());
+    let events = observe(&task, THIRD);
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                Event::ChangeRequestUpdated { head_sha, replaced_head_sha: None, .. },
+                Event::MergeDequeued { reason, .. },
+                Event::StagePhaseChanged { phase: StagePhase::AwaitingCi, .. },
+            ] if head_sha == THIRD && reason == "head_moved"
+        ),
+        "{events:?}"
+    );
+    let after = events.iter().fold(task, evolved);
+    let cr = after.change_request.as_ref().unwrap();
+    assert_eq!(
+        (cr.head_sha.as_str(), cr.replaced_head_sha.as_deref()),
+        (THIRD, None)
+    );
+}
+
+#[test]
+fn a_gate_result_for_another_head_writes_nothing_and_leaves_the_current_result_standing() {
+    let mut task = ready(full(Trigger::Auto));
+    task.gates.push(gate(GateSource::Saka, HEAD, 10));
+    let mut ids = Ids(3_000);
+    let result = |head: &str| TaskInput::SakaGateObserved {
+        head_sha: head.into(),
+        checks: Vec::new(),
+        failure: None,
+    };
+    let events = task::decide(
+        &task,
+        result(OTHER),
+        &cfg(),
+        &mut Ctx {
+            now: NOW,
+            ids: &mut ids,
+        },
+    )
+    .unwrap();
+    assert!(events.is_empty(), "{events:?}");
+    assert!(matches!(
+        task::stale_input(&task, &result(OTHER)),
+        Some(task::StaleInput::GateResult {
+            head_sha: OTHER,
+            gate_head: Some(HEAD)
+        })
+    ));
+    assert!(task::stale_input(&task, &result(HEAD)).is_none());
+    assert_eq!(
+        task.gate_for(GateSource::Saka, HEAD).unwrap().outcome,
+        GateOutcome::Passed
+    );
 }

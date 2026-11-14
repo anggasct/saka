@@ -865,6 +865,13 @@ pub enum Event {
         change_request_id: ChangeRequestId,
         role: ChangeRole,
         head_sha: String,
+        replaced_head_sha: Option<String>,
+    },
+    #[serde(rename = "scm.change_request.head_confirmed")]
+    ChangeRequestHeadConfirmed {
+        work_item_id: WorkItemId,
+        change_request_id: ChangeRequestId,
+        role: ChangeRole,
     },
     #[serde(rename = "delivery.change_request.update_requested")]
     ChangeRequestUpdateRequested {
@@ -1376,6 +1383,7 @@ impl Event {
             | E::BranchPushed { work_item_id, .. }
             | E::ChangeRequestOpened { work_item_id, .. }
             | E::ChangeRequestUpdated { work_item_id, .. }
+            | E::ChangeRequestHeadConfirmed { work_item_id, .. }
             | E::ChangeRequestUpdateRequested { work_item_id, .. }
             | E::ChangeRequestBranchUpdated { work_item_id, .. }
             | E::ChangeRequestMerged { work_item_id, .. }
