@@ -285,6 +285,7 @@ struct State {
     rerun: RerunScript,
     commit_ci: CiScript,
     commit_reads_fail: bool,
+    panics: BTreeMap<&'static str, (u32, String)>,
     lagging_change_reads: Option<(String, u32)>,
     doc_opens_fail: bool,
     checkouts: Vec<(EnvironmentId, String)>,
@@ -506,6 +507,7 @@ impl FakeWorld {
                 rerun: RerunScript::default(),
                 commit_ci: CiScript::Silent,
                 commit_reads_fail: false,
+                panics: BTreeMap::new(),
                 lagging_change_reads: None,
                 doc_opens_fail: false,
                 checkouts: Vec::new(),
@@ -1042,6 +1044,26 @@ impl FakeWorld {
 
     pub fn fail_commit_reads(&self, fail: bool) {
         self.state().commit_reads_fail = fail;
+    }
+
+    pub fn panic_on(&self, op: &'static str, times: u32, message: &str) {
+        self.state().panics.insert(op, (times, message.to_string()));
+    }
+
+    fn trip(&self, op: &'static str) {
+        let due = {
+            let mut s = self.state();
+            match s.panics.get_mut(op) {
+                Some((left, message)) if *left > 0 => {
+                    *left -= 1;
+                    Some(message.clone())
+                }
+                _ => None,
+            }
+        };
+        if let Some(message) = due {
+            panic!("{message}");
+        }
     }
 
     pub fn fail_doc_opens(&self, fail: bool) {
@@ -2800,6 +2822,7 @@ impl Scm for FakeWorld {
     }
 
     async fn push_branch(&self, request: &PushRequest) -> PortResult<PushOutcome> {
+        self.trip("push");
         let mut s = self.state();
         s.call("push");
         if s.push_outages > 0 {
@@ -2822,6 +2845,7 @@ impl Scm for FakeWorld {
     }
 
     async fn open_change_request(&self, request: &OpenChangeRequest) -> PortResult<ChangeOpening> {
+        self.trip("open_change_request");
         let credential = match &request.credential {
             ChangeCredential::App => APP_CREDENTIAL.to_string(),
             ChangeCredential::User(token) => token.expose().to_string(),
@@ -3103,6 +3127,7 @@ impl Scm for FakeWorld {
     }
 
     async fn merge(&self, request: &MergeRequest) -> PortResult<MergeOutcome> {
+        self.trip("merge");
         let mut s = self.state();
         s.call("merge");
         s.merge_calls
