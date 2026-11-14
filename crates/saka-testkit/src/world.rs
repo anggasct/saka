@@ -285,6 +285,7 @@ struct State {
     rerun: RerunScript,
     commit_ci: CiScript,
     commit_reads_fail: bool,
+    lagging_change_reads: Option<(String, u32)>,
     doc_opens_fail: bool,
     checkouts: Vec<(EnvironmentId, String)>,
     lose_merges: bool,
@@ -471,6 +472,7 @@ pub enum CommandScript {
     Exit(i32),
     Timeout,
     Crash,
+    MovesWorktree,
 }
 
 pub const BASE_BRANCH: &str = "main";
@@ -504,6 +506,7 @@ impl FakeWorld {
                 rerun: RerunScript::default(),
                 commit_ci: CiScript::Silent,
                 commit_reads_fail: false,
+                lagging_change_reads: None,
                 doc_opens_fail: false,
                 checkouts: Vec::new(),
                 lose_merges: false,
@@ -1031,6 +1034,10 @@ impl FakeWorld {
 
     pub fn set_commit_ci(&self, ci: CiScript) {
         self.state().commit_ci = ci;
+    }
+
+    pub fn lag_change_reads(&self, head_sha: &str, times: u32) {
+        self.state().lagging_change_reads = Some((head_sha.to_string(), times));
     }
 
     pub fn fail_commit_reads(&self, fail: bool) {
@@ -2193,6 +2200,11 @@ impl Environments for FakeWorld {
                 json!({ "detail": "simulated crash" }),
             ));
         }
+        if script == CommandScript::MovesWorktree
+            && let Some(w) = s.worktrees.get_mut(&env.environment_id)
+        {
+            w.head.clone_from(&w.base_sha);
+        }
         s.recipe_runs.push(RecipeRun {
             environment_id: env.environment_id,
             phase: command.phase.as_str(),
@@ -2206,6 +2218,7 @@ impl Environments for FakeWorld {
         Ok(RecipeCommandOutcome {
             exit_code: match script {
                 CommandScript::Exit(code) => Some(code),
+                CommandScript::MovesWorktree => Some(0),
                 _ => None,
             },
             timed_out: script == CommandScript::Timeout,
@@ -2938,6 +2951,18 @@ impl Scm for FakeWorld {
                 .get(&pr.head_branch)
                 .cloned()
                 .unwrap_or_default(),
+        };
+        let head = match s.lagging_change_reads.take() {
+            Some((lagging, times)) if pr.state == ChangeState::Open => {
+                if times > 1 {
+                    s.lagging_change_reads = Some((lagging.clone(), times - 1));
+                }
+                lagging
+            }
+            other => {
+                s.lagging_change_reads = other;
+                head
+            }
         };
         Ok(ChangeSnapshot {
             state: pr.state,

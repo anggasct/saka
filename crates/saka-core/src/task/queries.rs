@@ -9,7 +9,7 @@ use super::{
 };
 use crate::Ctx;
 use crate::autonomy::Ceilings;
-use crate::event::Prompt;
+use crate::event::{Event, Prompt};
 use crate::external;
 use crate::gate::GatePolicy;
 use crate::model::{Blocker, Coded, GateResult, Retries, RunOwner, Session, Task};
@@ -19,6 +19,75 @@ use crate::vocab::{
     Autonomy, BlockerCode, ChangeState, GateOutcome, Stage, StagePhase, Trigger, WorkItemOrigin,
     WorkItemState,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleInput<'a> {
+    HeadRead {
+        read: &'a str,
+        current: &'a str,
+    },
+    GateResult {
+        head_sha: &'a str,
+        gate_head: Option<&'a str>,
+    },
+}
+
+pub fn gate_head(task: &Task) -> Option<&str> {
+    if task.is_at(Stage::Merge, StagePhase::AwaitingCi)
+        || task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
+    {
+        return task.change_request.as_ref().map(|c| c.head_sha.as_str());
+    }
+    if task.is_at(Stage::Sync, StagePhase::Verifying) {
+        return task.stage_run.as_ref()?.head_sha.as_deref();
+    }
+    None
+}
+
+pub fn stale_input<'a>(task: &'a Task, input: &'a TaskInput) -> Option<StaleInput<'a>> {
+    match input {
+        TaskInput::ChangeObserved {
+            role,
+            state: ChangeState::Open,
+            head_sha,
+            ..
+        } => {
+            let cr = task.change_ref(*role)?;
+            (cr.state == ChangeState::Open && cr.replaced_head_sha.as_deref() == Some(head_sha))
+                .then_some(StaleInput::HeadRead {
+                    read: head_sha,
+                    current: &cr.head_sha,
+                })
+        }
+        TaskInput::SakaGateObserved { head_sha, .. } => {
+            let gate_head = gate_head(task);
+            (gate_head != Some(head_sha.as_str())).then_some(StaleInput::GateResult {
+                head_sha,
+                gate_head,
+            })
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn confirmed_head(task: &Task, input: &TaskInput) -> Option<Event> {
+    let TaskInput::ChangeObserved {
+        role,
+        state: ChangeState::Open,
+        head_sha,
+        ..
+    } = input
+    else {
+        return None;
+    };
+    let cr = task.change_ref(*role)?;
+    (cr.state == ChangeState::Open && cr.replaced_head_sha.is_some() && cr.head_sha == *head_sha)
+        .then_some(Event::ChangeRequestHeadConfirmed {
+            work_item_id: task.item.id,
+            change_request_id: cr.id,
+            role: *role,
+        })
+}
 
 pub fn merge_ready(task: &Task) -> bool {
     let reviewed = task

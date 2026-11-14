@@ -238,6 +238,27 @@ pub struct Engine {
     incident_limits: Mutex<std::collections::BTreeMap<String, (i64, u32)>>,
 }
 
+fn log_stale(id: WorkItemId, stale: Option<task::StaleInput<'_>>) {
+    match stale {
+        Some(task::StaleInput::HeadRead { read, current }) => tracing::debug!(
+            work_item_id = %id,
+            read_sha = %read,
+            head_sha = %current,
+            "scm.change.stale_head"
+        ),
+        Some(task::StaleInput::GateResult {
+            head_sha,
+            gate_head,
+        }) => tracing::info!(
+            work_item_id = %id,
+            head_sha = %head_sha,
+            gate_head_sha = gate_head.unwrap_or_default(),
+            "gate.verify.stale"
+        ),
+        None => {}
+    }
+}
+
 impl Engine {
     pub fn new(store: Arc<Store>, ports: Ports, cfg: EngineConfig) -> Engine {
         let boot = ports.ids.new_id();
@@ -309,6 +330,7 @@ impl Engine {
         let task = self.load_task(id)?;
         let events = match input {
             Some(input) => {
+                log_stale(id, task::stale_input(&task, &input));
                 let mut ids = IdsSource(&*self.ports.ids);
                 let mut ctx = Ctx { now, ids: &mut ids };
                 match task::decide(&task, input, &self.cfg.loop_cfg, &mut ctx) {

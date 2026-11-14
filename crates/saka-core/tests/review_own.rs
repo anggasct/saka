@@ -144,6 +144,7 @@ fn task_at_merge(workflow: Workflow) -> Task {
         base_branch: "main".into(),
         head_sha: HEAD.into(),
         update_head_sha: None,
+        replaced_head_sha: None,
         ci_rerun: None,
         state: ChangeState::Open,
         merge_commit_sha: None,

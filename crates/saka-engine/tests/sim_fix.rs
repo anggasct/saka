@@ -156,6 +156,38 @@ fn a_rejected_verdict_is_fixed_by_the_author_and_judged_again_at_the_new_head() 
 }
 
 #[test]
+fn a_read_that_lags_behind_the_fix_push_does_not_move_the_head_back() {
+    let mut sim = Sim::new(hand_merge());
+    fresh_commits(&sim);
+    sim.world.script_reviews(vec![
+        ReviewReply::request_changes("Cover the empty list."),
+        ReviewReply::approve(),
+    ]);
+    sim.approve();
+    assert!(sim.run_until(STEPS, fixing));
+    let rejected = head(&sim.task(1));
+    let pushes = sim.events_of("scm.branch.pushed").len();
+    assert!(sim.run_until(STEPS, |s| {
+        s.events_of("scm.branch.pushed").len() > pushes
+    }));
+    let updates = |sim: &Sim| {
+        sim.events_of("scm.change_request.updated")
+            .iter()
+            .filter(|e| e.payload["head_sha"] == rejected.as_str())
+            .count()
+    };
+    let before = updates(&sim);
+    sim.world.lag_change_reads(&rejected, 3);
+
+    assert!(sim.run_until(STEPS, awaiting_merge));
+    assert_eq!(updates(&sim), before);
+    let task = sim.task(1);
+    assert_ne!(head(&task), rejected);
+    assert!(task.approved_at(&head(&task)));
+    assert_eq!(task.fix_rounds_used(), 1);
+}
+
+#[test]
 fn after_the_last_round_the_task_stops_and_each_retry_buys_one_more_until_cancel() {
     let mut sim = Sim::new(hand_merge());
     fresh_commits(&sim);

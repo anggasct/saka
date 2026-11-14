@@ -100,19 +100,7 @@ impl Decider<'_> {
     }
 
     pub(super) fn gate_head(&self) -> Option<&str> {
-        if self.task.is_at(Stage::Merge, StagePhase::AwaitingCi)
-            || self.task.is_at(Stage::Merge, StagePhase::AwaitingMerge)
-        {
-            return self
-                .task
-                .change_request
-                .as_ref()
-                .map(|c| c.head_sha.as_str());
-        }
-        if self.task.is_at(Stage::Sync, StagePhase::Verifying) {
-            return self.task.stage_run.as_ref()?.head_sha.as_deref();
-        }
-        None
+        super::queries::gate_head(self.task)
     }
 
     pub(super) fn verdict(

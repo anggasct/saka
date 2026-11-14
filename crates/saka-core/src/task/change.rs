@@ -33,6 +33,7 @@ impl Decider<'_> {
                         change_request_id: cr.id,
                         role: ChangeRole::Code,
                         head_sha: sha.clone(),
+                        replaced_head_sha: Some(cr.head_sha.clone()),
                     });
                 }
                 if needs_docs_change(self.task) {
@@ -74,6 +75,7 @@ impl Decider<'_> {
                 change_request_id: cr.id,
                 role: ChangeRole::Docs,
                 head_sha: sha,
+                replaced_head_sha: Some(cr.head_sha.clone()),
             });
         }
         events
@@ -232,6 +234,7 @@ impl Decider<'_> {
                     change_request_id: cr.id,
                     role: ChangeRole::Docs,
                     head_sha,
+                    replaced_head_sha: None,
                 }];
             }
             ChangeState::Open => return vec![],
@@ -360,6 +363,7 @@ impl Decider<'_> {
                 change_request_id: cr.id,
                 role: ChangeRole::Code,
                 head_sha: head_sha.clone(),
+                replaced_head_sha: None,
             });
         }
         let holding = self.task.is_queued()
@@ -439,6 +443,7 @@ impl Decider<'_> {
             change_request_id: cr.id,
             role: ChangeRole::Code,
             head_sha: head_sha.clone(),
+            replaced_head_sha: None,
         }];
         if self.reviewing_ours() {
             events.extend(self.end_session(SessionState::Ended, "head_moved", json!({})));

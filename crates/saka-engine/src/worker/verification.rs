@@ -164,6 +164,17 @@ impl Engine {
                 break;
             }
         }
+        let after = self.ports.env.inspect(&env_ref, &base).await?;
+        if after.head_sha != head {
+            let current = self.load_task(task.item.id).map_err(internal)?;
+            if saka_core::task::gate_head(&current) == Some(head.as_str()) {
+                return Err(PortError::retryable(
+                    "worktree_moved",
+                    json!({ "head_sha": head, "found_sha": after.head_sha }),
+                ));
+            }
+            return Ok(Effect::Skipped);
+        }
         let outcome = if failure.is_some() {
             "failed"
         } else {

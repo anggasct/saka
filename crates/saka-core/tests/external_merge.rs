@@ -320,6 +320,7 @@ fn a_merge_request_needs_the_approval_at_the_exact_head_and_is_never_automatic()
         change_request_id: moved.task.change_request.as_ref().unwrap().id,
         role: ChangeRole::Code,
         head_sha: MOVED.into(),
+        replaced_head_sha: None,
     }];
     apply(&mut moved, &events);
     let run = moved.task.stage_run.as_ref().unwrap().id;

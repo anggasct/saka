@@ -44,12 +44,22 @@ pub(crate) fn claim(conn: &Connection, owner: &str, now: Timestamp) -> Result<Op
         "UPDATE job SET state = 'leased', lease_owner = ?1, lease_until = ?2, attempts = attempts + 1, updated_at = ?3
          WHERE id = (
            SELECT id FROM job
-           WHERE (state IN ('queued', 'failed') AND run_at <= ?3) OR (state = 'leased' AND lease_until < ?3)
+           WHERE ((state IN ('queued', 'failed') AND run_at <= ?3) OR (state = 'leased' AND lease_until < ?3))
+             AND NOT (kind = ?4 AND EXISTS (
+               SELECT 1 FROM job running
+               WHERE running.kind = job.kind AND running.id <> job.id
+                 AND running.state = 'leased' AND running.lease_until >= ?3
+                 AND json_extract(running.payload, '$.work_item_id') = json_extract(job.payload, '$.work_item_id')))
            ORDER BY run_at, id LIMIT 1)
          RETURNING id, kind, idempotency_key, project_id, payload, attempts, max_attempts, last_error, causation_id,
            correlation_id, lease_owner, lease_until",
     )?;
-    let mut q = stmt.query(params![owner, now.0 + LEASE_MS, now.0])?;
+    let mut q = stmt.query(params![
+        owner,
+        now.0 + LEASE_MS,
+        now.0,
+        JobKind::GateVerify.as_str()
+    ])?;
     let Some(row) = q.next()? else {
         return Ok(None);
     };
