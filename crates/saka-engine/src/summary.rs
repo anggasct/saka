@@ -78,12 +78,12 @@ fn strip_comments(text: &str) -> String {
 
 fn code_span_end(rest: &str, ticks: usize) -> Option<usize> {
     let mut at = 0;
-    while at < rest.len() {
+    while let Some(first) = rest[at..].chars().next() {
         let run = rest[at..].chars().take_while(|c| *c == '`').count();
         if run == ticks {
             return Some(at + run);
         }
-        at += run.max(1);
+        at += if run == 0 { first.len_utf8() } else { run };
     }
     None
 }
@@ -278,6 +278,29 @@ mod tests {
         assert!(out.contains("`Vec<String>` stays."));
         assert!(out.contains("<div>kept</div>"));
         assert_eq!(out.matches("<!--").count(), 2);
+    }
+
+    #[test]
+    fn text_after_a_code_span_keeps_its_multibyte_characters() {
+        let text =
+            "Ran `go test ./...` → ok… and `make check` — all green ✅\nAn open `span … stays";
+        let out = block(&rounds(&[Some(text)]), &redactor());
+        assert!(out.contains(text), "{out}");
+    }
+
+    #[test]
+    fn no_mix_of_backticks_and_multibyte_characters_breaks_the_stripping() {
+        let parts = ["`", "``", "…", "é", "→", "✅", "<b>", "x", " "];
+        for a in parts {
+            for b in parts {
+                for c in parts {
+                    for d in parts {
+                        let line = format!("{a}{b}{c}{d}{a}");
+                        let _ = strip_tags(&line);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
